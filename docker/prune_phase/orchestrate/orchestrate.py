@@ -23,10 +23,17 @@ Overlaps are fine; intersection files are for human inspection.
 """
 
 from __future__ import annotations
-import argparse, os, shlex, subprocess, sys, textwrap, time
+
+import argparse
+import os
+import shlex
+import subprocess
+import sys
+import textwrap
+import time
+from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Set, Tuple
 
 # ────────────────────────────────────────── CLI
 ap = argparse.ArgumentParser(
@@ -49,7 +56,7 @@ ap.add_argument('--runtime-chdir', default='/var/tmp/testing-dir',
                 help='Directory the *runtime* sandbox should chdir into (overrides any per‑exercise chdir seen during pruning).')
 args = ap.parse_args()
 
-langs: List[str] = [l.strip() for l in args.langs.split(',') if l.strip()]
+langs: list[str] = [l.strip() for l in args.langs.split(',') if l.strip()]
 PATH_DIR = Path(args.path_dir);            PATH_DIR.mkdir(parents=True, exist_ok=True)
 CORE_DIR = Path('/var/tmp/opt/core/config'); CORE_DIR.mkdir(parents=True, exist_ok=True)
 INTERSECT_DIR = CORE_DIR / 'debug'
@@ -61,12 +68,16 @@ MAKE_LANG_SETS = HELPERS_DIR / 'make_lang_sets.py'
 
 # ────────────────────────────────────────── helpers
 
-def run(cmd: Sequence[str] | str, tag: str = '') -> None:
-    """Run *cmd* streaming output; raise if exit‑status != 0."""
-    pretty = cmd if isinstance(cmd, str) else ' '.join(shlex.quote(str(c)) for c in cmd)
+def run(cmd: Sequence[str], tag: str = '') -> None:
+    """Run *cmd* streaming output; raise if exit‑status != 0.
+
+    Always executed without a shell: every caller passes an argument list, so a
+    string form was dead code and only widened the injection surface.
+    """
+    pretty = ' '.join(shlex.quote(str(c)) for c in cmd)
     print(f'\033[34m[{tag or "cmd"}]\033[0m', pretty)
     t0 = time.time()
-    rc = subprocess.call(cmd, shell=isinstance(cmd, str))
+    rc = subprocess.call(cmd)
     dt = time.time() - t0
     if rc:
         raise RuntimeError(f'{tag} failed (rc={rc}, {dt:.1f}s)')
@@ -81,7 +92,7 @@ def prune_language(lang: str) -> None:
         return
     if not PRUNE_SCRIPT.exists():
         raise FileNotFoundError(f'pruning script not found: {PRUNE_SCRIPT}')
-    cmd: List[str] = [str(PRUNE_SCRIPT)]
+    cmd: list[str] = [str(PRUNE_SCRIPT)]
     if args.verbose:
         cmd.append('--verbose')
     # NOTE: PRUNE_SCRIPT infers EX_ROOT from /var/tmp/testing-dir/<lang>.  It
@@ -107,7 +118,7 @@ def gen_lang_sets(lang: str) -> None:
 
 # ────────────────────────────────────────── utilities
 
-def _read_union(path: Path) -> Tuple[Set[str], Set[str]]:
+def _read_union(path: Path) -> tuple[set[str], set[str]]:
     """Return (readonly_set, write_set) from a *_union.paths file.
 
     Lines are expected in the form `r /abs/path` or `w /abs/path` as written by
@@ -129,8 +140,8 @@ def _read_union(path: Path) -> Tuple[Set[str], Set[str]]:
     return readonly, write
 
 
-def collect_language_data(langs: Iterable[str]) -> Dict[str, Dict[str, Set[str]]]:
-    data: Dict[str, Dict[str, Set[str]]] = {}
+def collect_language_data(langs: Iterable[str]) -> dict[str, dict[str, set[str]]]:
+    data: dict[str, dict[str, set[str]]] = {}
     for lang in langs:
         union_file = PATH_DIR / f'{lang}_union.paths'
         if not union_file.exists():
@@ -143,7 +154,7 @@ def collect_language_data(langs: Iterable[str]) -> Dict[str, Dict[str, Set[str]]
 
 # ────────────────────────────────────────── tail handling
 
-def _sanitize_tail_tokens(tokens: List[str], runtime_chdir: str) -> List[str]:
+def _sanitize_tail_tokens(tokens: list[str], runtime_chdir: str) -> list[str]:
     """Drop any per‑exercise --chdir tokens and inject the runtime one.
 
     During pruning each exercise ran with `--chdir <exercise-workdir>` in the
@@ -151,7 +162,7 @@ def _sanitize_tail_tokens(tokens: List[str], runtime_chdir: str) -> List[str]:
     meaningless at runtime.  We therefore discard them and append a stable
     `--chdir runtime_chdir` token.  We preserve other flags (e.g., --share-net).
     """
-    out: List[str] = []
+    out: list[str] = []
     it = iter(tokens)
     for tok in it:
         if tok == '--chdir':
@@ -223,7 +234,9 @@ with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         lang = fut2lang[fut]
         try:
             fut.result()
-        except Exception as exc:
+        # Deliberately broad: fut.result() re-raises whatever the worker hit, and
+        # one failing language must not abort the runs for the others.
+        except Exception as exc:  # noqa: BLE001
             print(f'\033[31m{lang} prune failed:\033[0m', exc)
 
 # 2) generate per‑language union/intersection files
@@ -244,8 +257,8 @@ for info in lang_data.values():
     read_union |= (info['r'] - write_union)
 write_cfg_path = CORE_DIR / 'BasePhobos.cfg'
 
-def _write_cfg(read_set: Set[str], write_set: Set[str], dest: Path) -> None:
-    lines: List[str] = []
+def _write_cfg(read_set: set[str], write_set: set[str], dest: Path) -> None:
+    lines: list[str] = []
     if read_set:
         lines += ['[readonly]', *sorted(read_set), '']
     if write_set:

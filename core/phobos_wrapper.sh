@@ -190,7 +190,6 @@ done
 export NETBLOCKER_CONF="$allowed_file"
 export LD_PRELOAD="$core/libnetblocker.so"
 
-rlimit_arg=(); [[ $mem_mb -gt 0 ]] && rlimit_arg=( --rlimit-as=$((mem_mb*1024*1024)) )
 timeout_cmd=( timeout --kill-after=5s "${timeout_s}s" )
 
 cmd=( "${timeout_cmd[@]}" bwrap "${bwrap_args[@]}" -- "$build_script" "$@" )

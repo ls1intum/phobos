@@ -34,4 +34,4 @@ regardingTheSupervisedCode:
     regardingPackageImports: [ ]
 
     regardingResourceLimits:
-      timeout:   120
+      timeout: 120

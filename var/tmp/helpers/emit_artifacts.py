@@ -22,8 +22,15 @@ Parse a `final_bindings.txt` log produced by `detect_minimal_fs.sh` and emit:
 """
 
 from __future__ import annotations
-import argparse, hashlib, json, pathlib, re, subprocess, sys, time
-from typing import Dict, List, Tuple
+
+import argparse
+import hashlib
+import json
+import pathlib
+import re
+import subprocess
+import sys
+import time
 
 # -----------------------------------------------------------------------------
 # Regex and helpers
@@ -39,33 +46,34 @@ def canon(p: str) -> str:
             text=True,
         ).strip()
         return out or p
-    except Exception:
+    # Deliberately broad: any failure of the external realpath must fall back to
+    # the pure-Python resolution rather than abort the artefact run.
+    except Exception:  # noqa: BLE001
         return str(pathlib.Path(p).resolve(strict=False))
 
 
 # -----------------------------------------------------------------------------
 # Parse detect_minimal_fs log
 # -----------------------------------------------------------------------------
-def parse_log(path: pathlib.Path, workdir, runtime_root) -> Tuple[List[Tuple[str, str]],
-Dict[str, str],
-List[str]]:
+def parse_log(path: pathlib.Path, workdir, runtime_root) -> tuple[list[tuple[str, str]],
+dict[str, str],
+list[str]]:
     """
     Returns:
         dyn_pairs  – [('r'|'w'|'n', /path), ...] from per-path lines
         base_modes – {path: 'r'|'w'} from 'Base options:' line
         tail_flags – ['--flag', 'value', ...] from 'Tail options:' line
     """
-    dyn_pairs: List[Tuple[str, str]] = []
-    base_modes: Dict[str, str] = {}
-    tail_flags: List[str] = []
+    dyn_pairs: list[tuple[str, str]] = []
+    base_modes: dict[str, str] = {}
+    tail_flags: list[str] = []
 
     with path.open(encoding="utf-8") as fh:
         for raw in fh:
             line = raw.strip()
             if not line:
                 continue
-            if line.startswith("[LOG] "):  # strip detect’s log prefix
-                line = line[6:]
+            line = line.removeprefix("[LOG] ")  # strip detect's log prefix
 
             # per-path detail block
             m = RX_DETAIL.match(line)
@@ -108,9 +116,9 @@ List[str]]:
 # -----------------------------------------------------------------------------
 # Merge dynamic + base (w overrides r)
 # -----------------------------------------------------------------------------
-def merge_pairs(dyn: List[Tuple[str, str]],
-                base: Dict[str, str]) -> List[Tuple[str, str]]:
-    merged: Dict[str, str] = dict(base)  # start with static
+def merge_pairs(dyn: list[tuple[str, str]],
+                base: dict[str, str]) -> list[tuple[str, str]]:
+    merged: dict[str, str] = dict(base)  # start with static
     for mode, path in dyn:
         if mode == "n":
             continue
@@ -125,7 +133,7 @@ def merge_pairs(dyn: List[Tuple[str, str]],
 # Writers
 # -----------------------------------------------------------------------------
 def write_paths(lang: str, ex: str,
-                pairs: List[Tuple[str, str]],
+                pairs: list[tuple[str, str]],
                 out_dir: pathlib.Path) -> pathlib.Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     dest = out_dir / f"{lang}_{ex}.paths"
@@ -134,10 +142,10 @@ def write_paths(lang: str, ex: str,
 
 
 def write_json(lang: str, ex: str,
-               dyn_pairs: List[Tuple[str, str]],
-               base_modes: Dict[str, str],
-               merged_pairs: List[Tuple[str, str]],
-               tail: List[str],
+               dyn_pairs: list[tuple[str, str]],
+               base_modes: dict[str, str],
+               merged_pairs: list[tuple[str, str]],
+               tail: list[str],
                log_path: pathlib.Path,
                out_dir: pathlib.Path) -> pathlib.Path:
     data = {
@@ -161,12 +169,12 @@ def write_json(lang: str, ex: str,
 _TAIL_ALLOW = {"--share-net", "--unshare-uts", "--unshare-ipc"}
 
 
-def _filter_tail(tokens: List[str]) -> List[str]:
+def _filter_tail(tokens: list[str]) -> list[str]:
     """
 Drop any (--chdir <path>) pairs and keep only allow‑listed tail flags.
 We do this so ephemeral per‑exercise workdirs never end up in TailPhobos.cfg.
 """
-    out: List[str] = []
+    out: list[str] = []
     it = iter(tokens)
     for t in it:
         if t == "--chdir":
@@ -177,11 +185,11 @@ We do this so ephemeral per‑exercise workdirs never end up in TailPhobos.cfg.
     return out
 
 
-def merge_tail(flags: List[str], out_dir: pathlib.Path) -> pathlib.Path | None:
+def merge_tail(flags: list[str], out_dir: pathlib.Path) -> pathlib.Path | None:
     if not flags and not (out_dir / "TailPhobos.cfg").exists():
         return None
     dest = out_dir / "TailPhobos.cfg"
-    existing_tokens: List[str] = []
+    existing_tokens: list[str] = []
     if dest.exists():
         existing_tokens = dest.read_text().split()
     new_tokens = _filter_tail(flags)

@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
+# This file is a library: every variable it defines is read by the scripts that
+# source it, never here, so SC2034 would fire on all of them by design.
+# shellcheck disable=SC2034
 set -euo pipefail
 PHB_OK=0
 PHB_EPOLICY=11
@@ -112,13 +115,13 @@ merge_fs_per_path() {
   if [[ -s "$cur_rw_ref"  ]]; then while IFS= read -r p; do [[ -z "$p" ]] && continue; CUR_RW["$p"]=1; done < "$cur_rw_ref"; fi
   if [[ -s "$cur_hide_ref" ]]; then while IFS= read -r p; do [[ -z "$p" ]] && continue; CUR_HIDE["$p"]=1; done < "$cur_hide_ref"; fi
   if [[ -s "$add_hide" ]]; then
-    while IFS= read -r p; do [[ -z "$p" ]] && continue; CUR_HIDE["$p"]=1; unset CUR_RO["$p"]; unset CUR_RW["$p"]; done < <(canon_paths < "$add_hide" | uniq_keep_order)
+    while IFS= read -r p; do [[ -z "$p" ]] && continue; CUR_HIDE["$p"]=1; unset "CUR_RO[$p]"; unset "CUR_RW[$p]"; done < <(canon_paths < "$add_hide" | uniq_keep_order)
   fi
   if [[ -s "$add_ro" ]]; then
     while IFS= read -r p; do
       [[ -z "$p" ]] && continue
       if [[ -n "${BASE_RO["$p"]:-}" || -n "${BASE_RW["$p"]:-}" ]]; then
-        CUR_RO["$p"]=1; unset CUR_RW["$p"]; unset CUR_HIDE["$p"]
+        CUR_RO["$p"]=1; unset "CUR_RW[$p]"; unset "CUR_HIDE[$p]"
       else
         report "Policy merge failed: path '$p' requested RO but base does not allow access. (PHB-EMERGE)"; exit "${PHB_EMERGE}"
       fi
@@ -128,7 +131,7 @@ merge_fs_per_path() {
     while IFS= read -r p; do
       [[ -z "$p" ]] && continue
       if [[ -n "${BASE_RW["$p"]:-}" ]]; then
-        CUR_RW["$p"]=1; unset CUR_RO["$p"]; unset CUR_HIDE["$p"]
+        CUR_RW["$p"]=1; unset "CUR_RO[$p]"; unset "CUR_HIDE[$p]"
       else
         report "Policy merge failed: path '$p' requested RW but base forbids write. (PHB-EMERGE)"; exit "${PHB_EMERGE}"
       fi

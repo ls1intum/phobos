@@ -177,7 +177,8 @@ static int phase_one(const char *self, const char *scenario) {
     argv[n++] = args[i];
   }
   for (int i = 0; i < PORTS_V6; i++) {
-    snprintf(args[PORTS_V4 + i], sizeof args[PORTS_V4 + i], "%u", have_v6 ? v6[i].port : 0);
+    snprintf(args[PORTS_V4 + i], sizeof args[PORTS_V4 + i], "%u",
+             (unsigned int) (have_v6 ? v6[i].port : 0));
     argv[n++] = args[PORTS_V4 + i];
   }
   argv[n] = NULL;
