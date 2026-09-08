@@ -63,6 +63,8 @@ reviews:
     - "squid/**"
     - "var/tmp/helpers/**"
     - "var/tmp/pruning/**"
+    - "assets/**"
+    - "docker-compose.yaml"
     - "README.md"
     - "renovate.json"
     - "!**/*.so"
@@ -175,6 +177,12 @@ reviews:
           unknown, malformed, null, or partially resolved security-sensitive inputs,
           and refuse to run rather than run unprotected when the mechanism is
           unavailable at the requested level.
+      - name: Trusted boundary preservation
+        mode: error
+        instructions: >-
+          Pass only if changes preserve separation between the trusted Phobos runtime
+          (the layer scripts, the enforcement helper and the policies it applies), the
+          test fixtures, and the supervised code a run confines.
       - name: Both directions tested
         mode: error
         instructions: >-
