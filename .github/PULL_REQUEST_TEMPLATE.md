@@ -160,12 +160,66 @@
   sandbox that denies everything passes every one-sided manual.
 
   Have the reviewer look at the result, not only at an exit code. A command that exits
-  zero says the command ran. It does not say that what it produced is right.
+  zero says the command ran. It does not say that what it produced is right, and a
+  manual made of green commands asks a reviewer to review your exit codes rather than
+  your change. Every claim in section 2 needs a step where the thing itself is in front
+  of them: the denial in the log, the file that could or could not be written, the exit
+  status the caller sees. Name what they must see there, and name what would be wrong.
 
-  This section is always required. If this pull request cannot be tested by hand
-  (documentation or CI configuration only), write "No manual testing possible" and say
-  why.
+  This matters most where a run cannot see the defect. A build passes cleanly while the
+  sandbox was never applied, a policy is read without complaint while the rule it was
+  meant to express is not enforced, and a suite reports passes while only ever asserting
+  denials. Where a suite in this repository already looks at such a result for you, run
+  it as a step and say what it covers, rather than leaving a reviewer to assume the run
+  covered it.
+
+  Negative case: equally important for a sandbox. State what must still be rejected, and
+  how a reviewer confirms that Phobos has not become more permissive.
+
+  A step nobody can follow is a step nobody runs.
+
+  The limit below covers this whole section, the layers at the end of it included.
+
+  This section is always required. If the change cannot be exercised from a run (for
+  example a CI workflow or documentation change), write "Not reproducible from a run"
+  under Steps and describe instead how a reviewer verifies the change, for example which
+  workflow run to inspect.
+
+  Limit: 5000 characters, counted over the text left once every instruction comment such
+  as this one is removed, so keeping the comment costs nothing.
+
+  Simple words: write this so that an instructor who does not know the inside of Phobos
+  can follow it. Spell out any Phobos term you cannot avoid. Say less, not more: a
+  reviewer who cannot follow a short answer will ask, and the detail belongs in the code
+  or in the linked issue.
 -->
+
+**Prerequisites**
+
+1.
+
+**Steps**
+
+1.
+
+**Expected result**
+
+**Negative case (what must still be rejected)**
+
+**Layers exercised**
+
+<!--
+  Phobos composes three layers, and each can be disabled on its own. Tick the ones you
+  verified, and say below why a subset is sufficient if you did not verify all of them.
+
+  This part is always required. If the change cannot alter layer-specific behaviour,
+  tick nothing and write "No layer-specific behaviour changed".
+-->
+
+- [ ] Filesystem layer
+- [ ] Network layer
+- [ ] Timeout layer
+- [ ] All three together, as a run uses them by default
 
 ## 5. Test case coverage regarding this PR
 
