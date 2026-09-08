@@ -130,7 +130,10 @@
 
   Fewest steps, fewest tools. Count what you are asking for before you ask: every
   install, every image build, every command line is a reason the manual goes untried,
-  and a change nobody tested is a change nobody reviewed.
+  and a change nobody tested is a change nobody reviewed. Ask for one tool rather than
+  three, name every tool the steps assume, and give each command in full, including how
+  to produce whatever it needs: a reviewer who has to invent a file, a number or a flag
+  you left out is writing the manual for you.
 
   State the container invocation in full, and state it exactly. Phobos is a sandbox, so
   whether a run used --privileged, --cap-add or --security-opt is not a detail: a manual
@@ -155,7 +158,8 @@
 
   Expected result: state it per step, not once for the whole scenario. Say what must be
   observable, and where: name the log line, the exit code or the file the reviewer
-  should read. Give both directions. A sandbox change is only tested when a reviewer has
+  should read. If a claim cannot be observed anywhere, either add the diagnostic that
+  makes it observable, or do not ask for it. Give both directions. A sandbox change is only tested when a reviewer has
   seen the forbidden thing denied AND the permitted thing still working, because a
   sandbox that denies everything passes every one-sided manual.
 

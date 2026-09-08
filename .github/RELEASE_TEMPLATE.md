@@ -56,13 +56,26 @@ None.
 ## Problems
 
 <!--
-  What was wrong before this release, aggregated over every change in it. Group by the
-  layer at fault where that helps a reader: the filesystem sandbox, the network filter,
-  the timeout wrapper, the policy parser, the prune phase or the images.
-  For anything that concerned the sandbox boundary, say which way round it went: Phobos
-  let a submission reach something the policy forbids, or it blocked something a correct
-  submission legitimately needs.
-  This section is always required. If this release fixes nothing, write "None".
+  What was wrong before this release, in enough depth that a reader can judge whether it
+  affected them. One block per problem, most significant first.
+
+  For each, useful to cover:
+  - What behaviour was observed, and under which configuration (language image, base
+    policy, kernel, container runtime, and which layers were enabled)?
+  - Where the root cause sits. Phobos is itself the security boundary, so say whether it
+    was in the filesystem sandbox, the network filter, the timeout wrapper, the policy
+    parser, the prune phase or the images.
+  - Which way it failed. A false negative let a submission reach something the policy
+    forbids, a false positive blocked something a correct submission legitimately needs.
+    Say which, because the two carry very different weight for anyone deciding whether
+    to upgrade.
+
+  Group the routine maintenance (dependency bumps, CI configuration, documentation) into
+  one short block rather than one block each.
+
+  If a release fixes no defect, describe the gaps, limitations or maintenance burden it
+  addresses instead. Never write "None" here: a release with nothing to say under
+  Problems does not need notes.
 -->
 
 ## Improvements from the user's perspective
@@ -72,7 +85,15 @@ None.
   inside the sandbox, tutors who have to make sense of a run that was cut short or
   denied something, and instructors who write the policy files and ship Phobos inside an
   exercise image.
-  This section is always required. If this release gains this side nothing, write "None".
+  Describe the concrete benefit, for example clearer denial messages, fewer correct
+  submissions stopped by mistake, a rule that was previously impossible to express, a
+  faster run, or a newly supported language environment.
+
+  State any limitation that bounds what the improvement is worth, in particular where a
+  hardening is partial. A reader who upgrades expecting a guarantee that does not hold
+  is worse off than one who was told the boundary.
+
+  If this side does not benefit from this release, write "No Improvement".
 -->
 
 ## Improvements from the maintainer's perspective
@@ -81,7 +102,12 @@ None.
   Maintainers are everyone who works on Phobos itself: contributors who change the
   scripts, the enforcement helper or the images, reviewers who have to judge whether the
   sandbox boundary still holds, and whoever publishes the images an exercise depends on.
-  This section is always required. If this release gains this side nothing, write "None".
+  Describe the benefit for them, for example reduced duplication, a clearer abstraction,
+  a flaky test removed, better diagnostics when a run is denied, less manual release
+  work, or a dependency or CI simplification.
+  Close with the dependency and tooling updates in one line.
+
+  If this side does not benefit from this release, write "No Improvement".
 -->
 
 ## Breaking changes and migration
@@ -94,13 +120,20 @@ None.
   - the exit codes a caller relies on
   - the paths a policy has to name, or the paths that have to exist before a run
   - the kernel, container runtime or image requirements
-  If it does, give the upgrade steps an instructor has to follow for an existing
-  exercise. This is the section they read before upgrading.
-  This section is always required. If the release is fully backwards compatible, write
-  "No breaking changes or migration".
+  For each one that changed, say what an instructor has to do to upgrade an existing
+  exercise, and show the before and the after where a configuration snippet makes it
+  concrete. An instructor reads this section to size the work, so an unquantified
+  "policies must be updated" is worth little.
+
+  A change that fails closed belongs here even when it is technically a fix: a policy
+  that used to be accepted and is now rejected breaks a working exercise, whatever the
+  reason. Removals belong here in full, listed by name, since a path that silently stops
+  being granted is found at run time by the person least able to explain it.
+
+  If the release is fully backwards compatible, write "None".
 -->
 
-No breaking changes or migration.
+None.
 
 ## Coordinates
 
