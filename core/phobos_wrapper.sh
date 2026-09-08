@@ -58,6 +58,25 @@ readonly_paths=(); write_paths=(); tmpfs_paths=()
 network_rules=(); timeout_s=0; mem_mb=0
 restricted_cmds=()
 
+# Timeout values are seconds: either a whole number, or seconds with
+# millisecond precision written as exactly three decimal places.
+# The value is handed to GNU timeout with an explicit seconds suffix below,
+# so it is stored here without any unit conversion.
+# An unusable value aborts instead of being ignored, because silently dropping
+# it would run the build with no limit at all.
+set_timeout_s() {
+  local value=$1
+  [[ $value =~ ^[[:space:]]*([0-9]+(\.[0-9]{3})?)[[:space:]]*$ ]] \
+    || err "invalid timeout '$value': expected seconds, either whole or with exactly three decimals"
+  local parsed=${BASH_REMATCH[1]}
+  # Every accepted spelling of zero (0, 0.000, ...) leaves the timeout disabled.
+  if [[ -z ${parsed//[0.]/} ]]; then
+    timeout_s=0
+  else
+    timeout_s=$parsed
+  fi
+}
+
 load_cfg() {
   local file=$1 section=
   [[ -f $file ]] || err "cfg not found: $file"
@@ -70,8 +89,10 @@ load_cfg() {
         tmpfs)                 tmpfs_paths+=("$ln") ;;
         network)               network_rules+=("$ln") ;;
         limits)
-          [[ $ln =~ timeout=([0-9]+) ]] && timeout_s=${BASH_REMATCH[1]}
-          [[ $ln =~ mem_mb=([0-9]+)  ]] && mem_mb=${BASH_REMATCH[1]} ;;
+          # Separate if-statements: a section whose last line sets only one of
+          # the two keys must still leave load_cfg with a success status.
+          if [[ $ln =~ ^[[:space:]]*timeout[[:space:]]*=(.*)$ ]]; then set_timeout_s "${BASH_REMATCH[1]}"; fi
+          if [[ $ln =~ mem_mb=([0-9]+) ]]; then mem_mb=${BASH_REMATCH[1]}; fi ;;
         restricted-commands)   restricted_cmds+=("$ln") ;;
       esac
   done < "$file"

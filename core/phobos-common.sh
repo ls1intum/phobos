@@ -43,6 +43,28 @@ validate_config_file_keys() {
     exit "${PHB_EPOLICY}"
   fi
 }
+# Timeout values are seconds: either a whole number, or seconds with
+# millisecond precision written as exactly three decimal places.
+# GNU timeout receives the value with an explicit seconds suffix, so no unit
+# conversion happens after this point.
+PHB_TIMEOUT_PATTERN='^[0-9]+(\.[0-9]{3})?$'
+
+# Validates one configured timeout value and stores it in PARSED_TIMEOUT.
+# An unusable value is a policy error rather than an ignored line, because
+# silently dropping it would run the command with no limit at all.
+set_parsed_timeout() {
+  local value="$1"
+  if [[ ! "$value" =~ $PHB_TIMEOUT_PATTERN ]]; then
+    report "Policy invalid: timeout '${value}' must be seconds, either whole or with exactly three decimals. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  # Every accepted spelling of zero (0, 0.000, ...) disables the timeout.
+  if [[ -z "${value//[0.]/}" ]]; then
+    PARSED_TIMEOUT=""
+  else
+    PARSED_TIMEOUT="$value"
+  fi
+}
 parse_cfg_policy() {
   local cfg="$1"
   local tdir; tdir="$(mktemp -d -t phobos-cfg.XXXXXX)"
@@ -65,10 +87,13 @@ parse_cfg_policy() {
           host="${host#[}"; host="${host%]}"; printf '%s %s\n' "$host" "$port" >>"$net"
         fi ;;
       limits|timeout)
-        if [[ "$line" =~ ^timeout[[:space:]]*=[[:space:]]*([0-9]+)$ ]]; then
-          local t="${BASH_REMATCH[1]}"; [[ "$t" -eq 0 ]] && PARSED_TIMEOUT="" || PARSED_TIMEOUT="$t"
-        elif [[ "$line" =~ ^[0-9]+$ ]]; then
-          local t="$line"; [[ "$t" -eq 0 ]] && PARSED_TIMEOUT="" || PARSED_TIMEOUT="$t"
+        # Lines carrying another key (mem_mb=...) stay untouched. An explicit
+        # timeout, or a bare value on its own line, is the timeout and is
+        # validated; an unusable one is reported rather than ignored.
+        if [[ "$line" =~ ^timeout[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+          set_parsed_timeout "${BASH_REMATCH[1]}"
+        elif [[ "$line" != *=* ]]; then
+          set_parsed_timeout "$line"
         fi ;;
       *) ;;
     esac

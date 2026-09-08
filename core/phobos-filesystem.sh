@@ -25,7 +25,7 @@ if [[ "$enable_fs" != "1" ]]; then
 
   if [[ -n "${PHB_TIMEOUT_SEC:-}" ]]; then
     set +e
-    "${TIMEOUT_BIN}" "--kill-after=5s" "${PHB_TIMEOUT_SEC}" "${CMD[@]}"
+    "${TIMEOUT_BIN}" "--kill-after=5s" "${PHB_TIMEOUT_SEC}s" "${CMD[@]}"
     rc=$?
     set -e
     if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
@@ -80,7 +80,7 @@ trap 'rm -f "$OUTLOG" "$ERRLOG"' EXIT
 set +e
 (
   if [[ -n "${PHB_TIMEOUT_SEC:-}" ]]; then
-    "${TIMEOUT_BIN}" "--kill-after=5s" "${PHB_TIMEOUT_SEC}" "${BWRAP}" "${args[@]}" -- "${CMD[@]}"
+    "${TIMEOUT_BIN}" "--kill-after=5s" "${PHB_TIMEOUT_SEC}s" "${BWRAP}" "${args[@]}" -- "${CMD[@]}"
   else
     "${BWRAP}" "${args[@]}" -- "${CMD[@]}"
   fi
