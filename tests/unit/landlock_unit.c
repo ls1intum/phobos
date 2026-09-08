@@ -168,7 +168,9 @@ static void expect_exit(const char *what, int want, char **argv) {
     fflush(NULL);
     pid_t pid = fork();
     if (pid == 0) {
-        freopen("/dev/null", "w", stderr);
+        if (freopen("/dev/null", "w", stderr) == NULL) {
+            _exit(98); /* cannot silence the child, so do not judge its output */
+        }
         sut_main(argc, argv);
         _exit(99);
     }
