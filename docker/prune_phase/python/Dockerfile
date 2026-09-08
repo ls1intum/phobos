@@ -10,7 +10,7 @@
 #     by docker-compose and already contains the shared  pruning/  folder.
 ################################################################################
 
-FROM ubuntu:20.04
+FROM ubuntu:26.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 
