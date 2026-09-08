@@ -1,0 +1,162 @@
+name: Lint
+
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: lint-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  shell:
+    name: Shell (shellcheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # -x follows the "source" directives, otherwise the library file is
+      # analysed in isolation and every caller reports phantom findings.
+      - name: Run shellcheck
+        run: |
+          find . -name '*.sh' -type f -print0 \
+            | xargs -0 docker run --rm -v "$PWD:/mnt" -w /mnt \
+                koalaman/shellcheck:v0.11.0 -x -S warning
+
+  c:
+    name: C (compiler warnings and cppcheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install cppcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends cppcheck
+
+      # -fanalyzer costs nothing here and catches memory and null-pointer
+      # problems that plain -Wall does not see.
+      - name: Compiler warnings
+        run: |
+          failed=0
+          while IFS= read -r f; do
+            echo "::group::$f"
+            gcc -fsyntax-only -Wall -Wextra -Werror -fanalyzer "$f" || failed=1
+            echo "::endgroup::"
+          done < <(find . -name '*.c' -type f)
+          exit "$failed"
+
+      # Only "warning": the "style" category is largely taste and its findings
+      # differ between cppcheck versions, which would make the gate unstable.
+      - name: Run cppcheck
+        run: |
+          find . -name '*.c' -type f -print0 \
+            | xargs -0 cppcheck --enable=warning --quiet --error-exitcode=1
+
+  python:
+    name: Python (ruff and bandit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install linters
+        run: pip install --quiet ruff==0.16.6 bandit==1.9.4
+
+      - name: Run ruff
+        run: ruff check --no-cache --output-format github .
+
+      # The prune orchestrator starts processes and its output becomes the
+      # sandbox allow-list, so the security lint is not optional here.
+      - name: Run bandit
+        run: bandit --recursive --ini .bandit --severity-level medium
+             docker/prune_phase/orchestrate var/tmp/helpers
+
+  yaml:
+    name: YAML (yamllint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install yamllint
+        run: pip install --quiet yamllint==1.38.0
+
+      - name: Run yamllint
+        run: yamllint --strict --format github .
+
+  docker:
+    name: Dockerfiles (hadolint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The threshold and the DL3008 exception live in .hadolint.yaml.
+      - name: Run hadolint
+        run: |
+          failed=0
+          while IFS= read -r f; do
+            echo "::group::$f"
+            docker run --rm -i -v "$PWD/.hadolint.yaml:/cfg.yaml:ro" \
+              hadolint/hadolint:v2.15.1 hadolint --config /cfg.yaml - < "$f" || failed=1
+            echo "::endgroup::"
+          done < <(find . -name 'Dockerfile*' -type f)
+          exit "$failed"
+
+  workflows:
+    name: Workflows (actionlint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run actionlint
+        env:
+          # Update the checksum together with the version; it pins the exact release asset.
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          curl --fail --silent --show-error --location \
+            --output actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file actionlint.tar.gz actionlint
+          ./actionlint -color
