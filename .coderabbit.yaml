@@ -1,0 +1,244 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+---
+language: en-GB
+tone_instructions: >-
+  Be direct, precise, and security-focused. Dogmatically enforce current British English in all prose,
+  comments, documentation, workflow text, labels, messages, and review suggestions. Prefer actionable
+  findings over style comments.
+early_access: true
+enable_free_tier: true
+
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  review_status: true
+  review_details: true
+  commit_status: true
+  fail_commit_status: true
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: true
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+  suggested_labels: true
+  auto_apply_labels: false
+  labeling_instructions:
+    - label: security fix
+      instructions: >-
+        Apply when a change fixes or mitigates a sandbox escape, policy bypass, unsafe default,
+        dependency vulnerability, or repository security issue.
+    - label: filesystem
+      instructions: >-
+        Apply when a change touches the filesystem sandbox layer, the enforcement helper, or the path
+        rules a run is confined by.
+    - label: network
+      instructions: Apply when a change touches the LD_PRELOAD network filter, its rule format, or the address cache.
+    - label: timeout
+      instructions: Apply when a change touches the timeout wrapper or the deadline a run is stopped by.
+    - label: policy
+      instructions: >-
+        Apply when a change touches configuration parsing, the per-path merge, the base or tail
+        configuration files, or permission modelling.
+    - label: prune
+      instructions: >-
+        Apply when a change touches the prune phase, its orchestrator, or the helpers that turn run
+        results into path sets.
+    - label: images
+      instructions: Apply when a change touches a Dockerfile, a compose file, or the contents of a language image.
+    - label: tests
+      instructions: Apply when a change primarily touches the suites under tests/, fixtures, or test utilities.
+    - label: docs
+      instructions: Apply when a change primarily touches documentation, manuals, or Markdown.
+  path_filters:
+    - ".coderabbit.yaml"
+    - ".github/**"
+    - "core/**"
+    - "ld_preloader/**"
+    - "docker/**"
+    - "tests/**"
+    - "squid/**"
+    - "var/tmp/helpers/**"
+    - "var/tmp/pruning/**"
+    - "README.md"
+    - "renovate.json"
+    - "!**/*.so"
+    - "!**/*.log"
+    - "!**/*.png"
+    - "!**/*.jpg"
+    - "!var/tmp/path_sets/**"
+    - "!var/tmp/testing-dir/**"
+  path_instructions:
+    - path: "**/*"
+      instructions: >-
+        Dogmatically check all reviewed files for current British English in prose,
+        comments, documentation, workflow names, step names, issue/PR text, labels,
+        user-facing messages, and review suggestions. Flag American spellings and
+        grammar such as behavior, color, initialize, authorization, canceled, and
+        program when they are natural-language text. Do not flag programming-language
+        syntax, API names, function names, paths, URLs, quoted external identifiers,
+        or other literals where American English is required by the technology.
+    - path: "core/**"
+      instructions: >-
+        Review as the runtime of a sandbox that confines untrusted student submissions
+        inside a build container. Prioritise anything that widens what a supervised run
+        may reach: an allow-list entry broader than the policy asked for, a path that
+        stops being denied, a rule that cannot be enforced but is reported as if it
+        were, and any silent degradation where the mechanism is unavailable. Treat
+        unknown, malformed or partially resolved inputs as a fail-closed requirement:
+        refusing to run is correct, running unprotected is not. Flag unquoted
+        expansions, unquoted array subscripts and word splitting on paths, since paths
+        are attacker-influenced here.
+    - path: "core/*.sh"
+      instructions: >-
+        These scripts compose the layers and hand the effective policy to the
+        enforcement step. Check that the order of the layers is preserved, that a
+        disabled layer cannot silently disable another, that exit codes keep their
+        documented meaning, and that every path reaching a command line is quoted.
+    - path: "core/*.c"
+      instructions: >-
+        This is the enforcement helper: it applies the kernel-side policy and then
+        execs the build command. Check that the restriction is applied before the exec
+        and can no longer be relaxed afterwards, that a kernel unable to enforce the
+        requested level aborts rather than degrades, that every path is opened in a way
+        an attacker cannot redirect, and that no buffer is written past its bounds.
+        Prefer one declaration per line.
+    - path: "core/config/*.cfg"
+      instructions: >-
+        These are the base policies a run is confined by. Question every added path:
+        an entry here grants a whole subtree. Check that a write path is not granted
+        execute permission unless it must be, and that nothing outside the run needs
+        is listed.
+    - path: "ld_preloader/**"
+      instructions: >-
+        This is the network filter, and it works by interposing on library calls.
+        Check that its guarantees are not overstated: statically linked programs,
+        direct system calls and runtimes that bypass libc are not covered by it. Focus
+        on the rule parser, the address cache and whether a cached entry can carry a
+        port authorisation it was never granted.
+    - path: "tests/**"
+      instructions: >-
+        Require every sandbox assertion to cover both directions: the forbidden case
+        stays denied and the permitted case still works. A suite that only shows
+        denials passes even when the sandbox denies everything. Check that a test
+        cannot pass because of file permissions or a missing fixture rather than
+        because of the mechanism under test, and that skipped checks are not counted
+        as passing.
+    - path: "docker/**"
+      instructions: >-
+        Review image changes for what they add to the environment untrusted code runs
+        in. Flag added packages that are not needed at run time, and any change to the
+        container invocation that relaxes confinement, in particular privileged mode,
+        added capabilities or a custom security profile. Note when a base image change
+        alters the kernel-facing requirements of the sandbox.
+    - path: "docker/prune_phase/**"
+      instructions: >-
+        The prune phase produces the allow-list a run is later confined by, so a fault
+        here widens the sandbox silently. Check that a failed or skipped run cannot be
+        recorded as a successful one, that path sets are merged deterministically, and
+        that no external command is assembled through a shell.
+    - path: "var/tmp/helpers/**"
+      instructions: >-
+        These helpers turn run results into path sets and artefacts. Check that path
+        handling is exact, that a partial result is not silently treated as complete,
+        and that broad exception handling is deliberate and stated rather than
+        accidental.
+    - path: ".github/workflows/**/*.yml"
+      instructions: >-
+        Review GitHub Actions for least-privilege permissions, safe event choice,
+        pinned third-party actions, safe pull_request_target usage, no secret exposure
+        to untrusted code, and branch-protection compatibility.
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 0
+    ignore_title_keywords:
+      - WIP
+      - DO NOT REVIEW
+    drafts: false
+    base_branches:
+      - main
+  pre_merge_checks:
+    title:
+      mode: warning
+      requirements: "The title should be concise and describe the security or automation impact."
+    description:
+      mode: warning
+    custom_checks:
+      - name: Sandbox fail-closed behaviour
+        mode: error
+        instructions: >-
+          Pass only if changes to enforcement code preserve fail-closed behaviour for
+          unknown, malformed, null, or partially resolved security-sensitive inputs,
+          and refuse to run rather than run unprotected when the mechanism is
+          unavailable at the requested level.
+      - name: Both directions tested
+        mode: error
+        instructions: >-
+          Pass only if a change to what the sandbox permits or denies is covered in
+          both directions: the forbidden case denied and the permitted case still
+          working. A one-sided test passes even for a sandbox that denies everything.
+      - name: Container invocation stated
+        mode: error
+        instructions: >-
+          Pass only if a change that affects confinement states the container
+          invocation it was exercised with, including whether privileged mode, added
+          capabilities or a custom security profile were used.
+      - name: GitHub workflow least privilege
+        mode: error
+        instructions: >-
+          Pass only if workflow changes use minimal permissions, do not expose secrets
+          to untrusted PR code, and avoid unsafe pull_request_target checkout patterns.
+  tools:
+    ast-grep:
+      essential_rules: true
+    shellcheck:
+      enabled: true
+    cppcheck:
+      enabled: true
+    clang:
+      enabled: true
+    ruff:
+      enabled: true
+    hadolint:
+      enabled: true
+    yamllint:
+      enabled: true
+    actionlint:
+      enabled: true
+    markdownlint:
+      enabled: true
+    zizmor:
+      enabled: true
+    github-checks:
+      enabled: true
+      timeout_ms: 900000
+    opengrep:
+      enabled: true
+    semgrep:
+      enabled: true
+    gitleaks:
+      enabled: true
+    trufflehog:
+      enabled: true
+    osvScanner:
+      enabled: true
+    trivy:
+      enabled: true
+    presidio:
+      enabled: true
+    skillspector:
+      enabled: true
+
+chat:
+  auto_reply: true
+  allow_non_org_members: false
+
+knowledge_base:
+  learnings:
+    scope: auto
+  issues:
+    scope: auto
