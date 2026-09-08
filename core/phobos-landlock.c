@@ -131,17 +131,17 @@ static void vlog(const char *fmt, ...) {
     va_end(ap);
 }
 
-static void fail(const char *msg) {
+_Noreturn static void fail(const char *msg) {
     fprintf(stderr, "[phobos-landlock] %s: %s\n", msg, strerror(errno));
     exit(EXIT_POLICY);
 }
 
-static void fail_msg(const char *msg) {
+_Noreturn static void fail_msg(const char *msg) {
     fprintf(stderr, "[phobos-landlock] %s\n", msg);
     exit(EXIT_POLICY);
 }
 
-static void usage(void) {
+_Noreturn static void usage(void) {
     fprintf(stderr,
             "Usage: phobos-landlock [--ro P] [--rox P] [--rw P] [--rwx P]\n"
             "                       [--connect-tcp N] [--bind-tcp N]\n"
@@ -217,7 +217,9 @@ static void record_path_rule(struct options *opts, const char *flag, const char 
     }
     struct path_rule *rule = &opts->rules[opts->rule_count];
     rule->path = path;
-    rule->write = (flag[3] == 'w' || flag[4] == 'w');
+    /* The flags are --ro, --rox, --rw and --rwx, so position 3 is the one that
+     * says writable and a trailing x says executable. */
+    rule->write = (flag[3] == 'w');
     rule->exec = (flag[strlen(flag) - 1] == 'x');
     opts->rule_count++;
 }
@@ -442,7 +444,7 @@ static void apply_restriction(int ruleset_fd) {
 
 /* ------------------------------------------------------- stage: run the build */
 
-static void exec_command(const struct options *opts) {
+_Noreturn static void exec_command(const struct options *opts) {
     execvp(opts->command[0], opts->command);
     fprintf(stderr, "[phobos-landlock] exec %s: %s\n", opts->command[0],
             strerror(errno));
@@ -462,6 +464,4 @@ int main(int argc, char *argv[]) {
     enter_working_directory(&opts);
     apply_restriction(ruleset_fd);
     exec_command(&opts);
-
-    return 127; /* not reached: exec_command never returns */
 }
