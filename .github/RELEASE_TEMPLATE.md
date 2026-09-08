@@ -103,8 +103,8 @@ None.
   scripts, the enforcement helper or the images, reviewers who have to judge whether the
   sandbox boundary still holds, and whoever publishes the images an exercise depends on.
   Describe the benefit for them, for example reduced duplication, a clearer abstraction,
-  a flaky test removed, better diagnostics when a run is denied, less manual release
-  work, or a dependency or CI simplification.
+  a flaky test removed, better diagnostics, less manual release work, or a dependency
+  or CI simplification.
   Close with the dependency and tooling updates in one line.
 
   If this side does not benefit from this release, write "No Improvement".

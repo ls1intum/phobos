@@ -107,8 +107,8 @@
   have to judge whether the sandbox boundary still holds, and whoever publishes the
   images an exercise then depends on.
   Say what gets better for them, for example less duplicated code, a clearer structure,
-  a flaky test removed, better diagnostics when a run is denied, less manual release
-  work, or a simpler CI setup.
+  a flaky test removed, better error output, less manual release work, or a simpler
+  dependency or CI setup.
 
   This section is always required. If this side gains nothing from this pull request,
   write "No Improvement from the maintainer's perspective".
@@ -157,13 +157,13 @@
   are commands. A step a reviewer cannot check the outcome of is setup, not a step.
 
   Expected result: state it per step, not once for the whole scenario. Say what must be
-  observable, and where: name the log line, the exit code or the file the reviewer
-  should read. If a claim cannot be observed anywhere, either add the diagnostic that
+  observable, and where it is observable: name the log line, the report file or the
+  run output the reviewer should read. If a claim cannot be observed anywhere, either add the diagnostic that
   makes it observable, or do not ask for it. Give both directions. A sandbox change is only tested when a reviewer has
   seen the forbidden thing denied AND the permitted thing still working, because a
   sandbox that denies everything passes every one-sided manual.
 
-  Have the reviewer look at the result, not only at an exit code. A command that exits
+  Have the reviewer look at the result, not at an exit code. A command that exits
   zero says the command ran. It does not say that what it produced is right, and a
   manual made of green commands asks a reviewer to review your exit codes rather than
   your change. Every claim in section 2 needs a step where the thing itself is in front
@@ -214,7 +214,7 @@
 
 <!--
   Phobos composes three layers, and each can be disabled on its own. Tick the ones you
-  verified, and say below why a subset is sufficient if you did not verify all of them.
+  verified, and say below why a subset is sufficient if you did not verify all four.
 
   This part is always required. If the change cannot alter layer-specific behaviour,
   tick nothing and write "No layer-specific behaviour changed".
