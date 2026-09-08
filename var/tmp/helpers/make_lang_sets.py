@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-import sys, pathlib, functools
+import functools
+import pathlib
+import sys
 
 lang = sys.argv[1]
 P    = pathlib.Path(sys.argv[2])

@@ -33,7 +33,11 @@ jobs:
     # The login is only compared inside an expression and never reaches the shell, so the
     # untrusted-input rule below still holds.
     env:
-      IS_DEPENDENCY_BOT_PR: ${{ github.event.pull_request.user.login == 'renovate[bot]' || github.event.pull_request.user.login == 'dependabot[bot]' }}
+      # Folded to stay inside the line length yamllint enforces; the folded scalar
+      # produces exactly the same one-line expression.
+      IS_DEPENDENCY_BOT_PR: >-
+        ${{ github.event.pull_request.user.login == 'renovate[bot]'
+        || github.event.pull_request.user.login == 'dependabot[bot]' }}
     steps:
       - name: Report the exemption for automated dependency pull requests
         if: env.IS_DEPENDENCY_BOT_PR == 'true'

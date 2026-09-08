@@ -1,0 +1,7 @@
+# DL3008 (pin apt package versions) is ignored on purpose: Ubuntu keeps only the
+# current version of a package in its archive, so a pin breaks the image build
+# the moment a security update ships. The base image tag is pinned instead, and
+# Renovate keeps it current.
+ignored:
+  - DL3008
+failure-threshold: warning

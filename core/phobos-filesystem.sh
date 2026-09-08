@@ -63,7 +63,13 @@ if [[ -s "${RW}" ]]; then
   done < "${RW}"
 fi
 if [[ -s "${TAIL}" ]]; then
-  args+=( $(<"${TAIL}") )
+  # Splitting is intended: tail.flags holds whitespace-separated arguments.
+  # Read line by line so a multi-line file works too.
+  while IFS= read -r tail_line || [[ -n "$tail_line" ]]; do
+    [[ -z "$tail_line" ]] && continue
+    read -ra tail_parts <<< "$tail_line"
+    args+=( "${tail_parts[@]}" )
+  done < "${TAIL}"
 fi
 
 if [[ -n "${PHOBOS_DEBUG:-}" ]]; then

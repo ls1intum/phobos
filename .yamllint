@@ -1,0 +1,10 @@
+# Relaxed base: this repository has three YAML files, and enforcing document
+# starts or 80-column lines on compose files buys nothing.
+extends: relaxed
+
+rules:
+  line-length:
+    max: 120
+  # Line endings must stay LF: a CRLF compose file breaks tooling on Linux.
+  new-lines:
+    type: unix

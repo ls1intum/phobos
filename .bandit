@@ -1,0 +1,5 @@
+# B108 (hardcoded_tmp_directory) is skipped on purpose: the /var/tmp paths are
+# not temporary files but the agreed-upon mount points inside the Phobos
+# containers, and they are argparse defaults that any caller can override.
+[bandit]
+skips = B108
