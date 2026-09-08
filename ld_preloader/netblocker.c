@@ -39,9 +39,14 @@ static pthread_rwlock_t rules_lock = PTHREAD_RWLOCK_INITIALIZER;
 
 /*=======================  <IP,port> cache  ==================*/
 
+/* One authorisation for a resolved address. An entry always carries the port
+   authorisation a policy rule granted: either a single port, or any_port for a
+   rule that deliberately permits every port. The port a name lookup happens to
+   report is never an authorisation in itself. */
 typedef struct ip_node {
   char ip[INET6_ADDRSTRLEN];
   unsigned short port;
+  int any_port;
   struct ip_node * next;
 } ip_t;
 static ip_t * ip_cache = NULL;
@@ -54,7 +59,7 @@ static int ip_cache_contains(const char *ip, unsigned short port)
     pthread_mutex_lock(&ip_lock);
     for (ip_t *n = ip_cache; n; n = n->next) {
         if (!strcasecmp(n->ip, ip) &&
-            (n->port == 0 || port == 0 || n->port == port)) {
+            (n->any_port || n->port == port)) {
             pthread_mutex_unlock(&ip_lock);
             return 1;
         }
@@ -63,12 +68,31 @@ static int ip_cache_contains(const char *ip, unsigned short port)
     return 0;
 }
 
+/* Exact-entry lookup used before inserting, so that an any-port authorisation
+   and a single-port authorisation for the same address stay distinguishable
+   instead of one hiding the other. */
+static int ip_cache_has_entry(const char *ip, unsigned short port, int any_port)
+{
+    pthread_mutex_lock(&ip_lock);
+    for (ip_t *n = ip_cache; n; n = n->next) {
+        if (!strcasecmp(n->ip, ip) && n->any_port == any_port && n->port == port) {
+            pthread_mutex_unlock(&ip_lock);
+            return 1;
+        }
+    }
+    pthread_mutex_unlock(&ip_lock);
+    return 0;
+}
 
-static void ip_cache_insert(const char * ip, unsigned short port) {
-  if (ip_cache_contains(ip, port)) return;
+static void ip_cache_insert(const char * ip, unsigned short port, int any_port) {
+  if (ip_cache_has_entry(ip, port, any_port)) return;
   ip_t * n = calloc(1, sizeof * n);
+  /* An address without an entry is re-evaluated against the rules, so a failed
+     allocation withholds an authorisation rather than granting one. */
+  if (!n) return;
   strncpy(n -> ip, ip, sizeof n -> ip - 1);
   n -> port = port;
+  n -> any_port = any_port;
   pthread_mutex_lock( & ip_lock);
   n -> next = ip_cache;
   ip_cache = n;
@@ -221,6 +245,21 @@ static int host_allowed(const char * h, unsigned short port) {
   return 0;
 }
 
+/* Records, against one address a hostname resolved to, the ports the policy
+   grants that hostname. A resolver reply carries no service of its own, so the
+   authorisation is read from the matching rules; resolving a host can
+   therefore never widen a single-port rule into access on every port. */
+static void cache_authorised_ports(const char * host,
+  const char * ip) {
+  pthread_rwlock_rdlock( & rules_lock);
+  for (rule_t * r = rules; r; r = r -> next) {
+    if (r -> cidr_bits) continue;
+    if (!host_match(host, r)) continue;
+    ip_cache_insert(ip, r -> port, r -> port == 0);
+  }
+  pthread_rwlock_unlock( & rules_lock);
+}
+
 static int ip_allowed(const char *ip, unsigned short port)
 {
     if (ip_cache_contains(ip, port))
@@ -284,8 +323,9 @@ static int ip_allowed(const char *ip, unsigned short port)
                 getnameinfo(ai->ai_addr, ai->ai_addrlen,
                             buf, sizeof buf, NULL, 0, NI_NUMERICHOST);
 
-                /* cache each discovered IP for speed */
-                ip_cache_insert(buf, r->port);
+                /* cache each discovered IP for speed, under the port this rule
+                   authorises */
+                ip_cache_insert(buf, r->port, r->port == 0);
 
                 if (!strcasecmp(buf, canon_ip)) {
                     freeaddrinfo(res);
@@ -327,13 +367,9 @@ int getaddrinfo(const char * node,
   if (rc == 0 && node && host_allowed(node, svc_port)) {
     for (struct addrinfo * ai = * res; ai; ai = ai -> ai_next) {
       char buf[INET6_ADDRSTRLEN] = "";
-      getnameinfo(ai -> ai_addr, ai -> ai_addrlen, buf, sizeof buf, NULL, 0, NI_NUMERICHOST);
-      unsigned short ptmp = svc_port;
-      if (!ptmp) {
-        if (ai -> ai_family == AF_INET) ptmp = ntohs(((struct sockaddr_in * ) ai -> ai_addr) -> sin_port);
-        else if (ai -> ai_family == AF_INET6) ptmp = ntohs(((struct sockaddr_in6 * ) ai -> ai_addr) -> sin6_port);
-      }
-      ip_cache_insert(buf, ptmp);
+      if (getnameinfo(ai -> ai_addr, ai -> ai_addrlen, buf, sizeof buf, NULL, 0, NI_NUMERICHOST) != 0)
+        continue;
+      cache_authorised_ports(node, buf);
     }
   }
   return rc;
