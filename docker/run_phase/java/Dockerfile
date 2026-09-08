@@ -13,8 +13,16 @@ COPY phobos-landlock.c            ${PHOBOS_HOME}/
 COPY config/BaseLanguage-java.cfg                     ${PHOBOS_HOME}/
 COPY config/TailPhobos.cfg                     ${PHOBOS_HOME}/
 COPY allowedList.cfg                  ${PHOBOS_HOME}/
-RUN gcc -fPIC -shared -o ${PHOBOS_HOME}/libnetblocker.so ${PHOBOS_HOME}/netblocker.c
-RUN gcc -O2 -Wall -Wextra -static -o ${PHOBOS_HOME}/phobos-landlock ${PHOBOS_HOME}/phobos-landlock.c
+# -O2 is what switches on _FORTIFY_SOURCE: without any optimisation level it is
+# off entirely, and this library sits on every connection a submission makes.
+# -Wl,-z,now completes RELRO, so the relocation table is read-only once loaded.
+RUN gcc -O2 -Wall -Wextra -fPIC -shared -Wl,-z,now \
+    -o ${PHOBOS_HOME}/libnetblocker.so ${PHOBOS_HOME}/netblocker.c
+# -static-pie rather than -static: plain -static overrides the -fPIE default and
+# produces a fixed-address executable, so the binary that applies the sandbox
+# would be the one part of the image without address randomisation.
+RUN gcc -O2 -Wall -Wextra -static-pie -Wl,-z,now \
+    -o ${PHOBOS_HOME}/phobos-landlock ${PHOBOS_HOME}/phobos-landlock.c
 RUN chmod +x ${PHOBOS_HOME}/*.sh ${PHOBOS_HOME}/*.cfg \
  && chmod +w ${PHOBOS_HOME}/allowedList.cfg && ln -sf phobos.sh ${PHOBOS_HOME}/phobos
 ENV PATH=${PHOBOS_HOME}:$PATH

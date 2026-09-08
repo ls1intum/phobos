@@ -151,10 +151,26 @@ landlock_args=()
 for p in "${readonly_paths[@]}"; do landlock_args+=( --rox "$p" ); done
 for p in "${write_paths[@]}";    do landlock_args+=( --rw  "$p" ); done
 
-# Paths that bubblewrap used to mask (tmpfs overlay or /dev/null shadow) are
-# simply left off the allow-list: denied, but still visible by name.
-for p in "${tmpfs_paths[@]}";     do warn "hide: '$p' denied but stays visible"; done
-for p in "${restricted_paths[@]}"; do warn "mask: '$p' denied but stays visible"; done
+# Paths that bubblewrap used to mask (tmpfs overlay or /dev/null shadow) are left
+# off the allow-list instead: Landlock withholds access, it cannot overlay a path
+# with emptiness. That is weaker, because the path stays visible by name, and it
+# fails entirely once an allow-listed ancestor covers the path, since Landlock
+# grants a whole subtree and cannot except anything inside it. The same check as
+# in phobos-filesystem.sh applies, so both entry points refuse a policy they
+# cannot enforce rather than warning and continuing.
+covering_allow() {
+    local target=$1 a
+    for a in "${readonly_paths[@]}" "${write_paths[@]}"; do
+        if [[ $target == "$a" || $target == "${a%/}/"* ]]; then printf '%s' "$a"; return 0; fi
+    done
+    return 1
+}
+for p in "${tmpfs_paths[@]}" "${restricted_paths[@]}"; do
+    if cover=$(covering_allow "$p"); then
+        err "policy unenforceable: '$p' is hidden but lies beneath allowed path '$cover'; Landlock cannot except a path inside an allowed subtree"
+    fi
+    warn "hide: '$p' is denied but stays visible (Landlock cannot mask paths)"
+done
 
 # tail flags (share-net, runtime chdir etc.)
 if [[ -f $tail_cfg ]]; then
