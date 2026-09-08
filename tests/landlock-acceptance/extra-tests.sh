@@ -76,6 +76,51 @@ else
   bad "symbolischer Schreibpfad wurde akzeptiert"
 fi
 
+hdr "G. Optionen des Wrappers, die keine Policy-Datei erreicht"
+LL=$CORE/phobos-landlock
+$LL --min-abi 99 --rox /usr -- /bin/true >/dev/null 2>&1
+[[ $? -eq 125 ]] && ok "--min-abi ueber der Kernel-ABI bricht ab statt ungeschuetzt zu laufen" \
+                 || bad "--min-abi 99 lief durch"
+$LL --min-abi 1 --rox /usr -- /bin/true >/dev/null 2>&1
+[[ $? -eq 0 ]] && ok "--min-abi unterhalb der Kernel-ABI laeuft" || bad "--min-abi 1 schlug fehl"
+$LL --unbekannte-option x --rox /usr -- /bin/true >/dev/null 2>&1
+[[ $? -eq 2 ]] && ok "unbekannte Option wird abgewiesen" || bad "unbekannte Option akzeptiert"
+# Netzregeln: der erlaubte Port kommt durch, ein anderer nicht
+NETDIR=$(mktemp -d); cat > "$NETDIR/N.java" <<'JAVA'
+import java.net.*;
+public class N {
+  public static void main(String[] a) throws Exception {
+    if (a[0].equals("serve")) {
+      ServerSocket s1 = new ServerSocket(19001);
+      ServerSocket s2 = new ServerSocket(19002);
+      new Thread(() -> { try { while (true) { s1.accept(); } } catch (Exception e) { } }).start();
+      new Thread(() -> { try { while (true) { s2.accept(); } } catch (Exception e) { } }).start();
+      System.out.println("ready");
+      Thread.sleep(60000L);
+    } else {
+      try (Socket s = new Socket()) {
+        s.connect(new InetSocketAddress("127.0.0.1", Integer.parseInt(a[0])), 2000);
+        System.out.println("CONNECTED");
+      } catch (Exception e) {
+        System.out.println("DENIED");
+      }
+    }
+  }
+}
+JAVA
+javac -d "$NETDIR" "$NETDIR/N.java" 2>/dev/null
+java -cp "$NETDIR" N serve > "$NETDIR/srv.log" 2>&1 &
+NETSRV=$!
+for _ in $(seq 1 40); do grep -q ready "$NETDIR/srv.log" 2>/dev/null && break; sleep 0.2; done
+NB="--rox /opt/java --rox /usr --ro /etc --rw /tmp --rw /dev/null --rox $NETDIR"
+if $LL $NB --connect-tcp 19001 -- java -cp "$NETDIR" N 19001 2>/dev/null | grep -q CONNECTED; then
+  ok "--connect-tcp: der erlaubte Port ist erreichbar"
+else bad "--connect-tcp: erlaubter Port wurde blockiert"; fi
+if $LL $NB --connect-tcp 19001 -- java -cp "$NETDIR" N 19002 2>/dev/null | grep -q DENIED; then
+  ok "--connect-tcp: ein nicht erlaubter Port bleibt gesperrt"
+else bad "--connect-tcp: nicht erlaubter Port war erreichbar"; fi
+kill $NETSRV 2>/dev/null; rm -rf "$NETDIR"
+
 hdr "E. Kontrollprobe: ohne Sandbox ist die Datei fuer denselben Benutzer lesbar"
 if su -s /bin/bash "$SU" -c "cat /var/tmp/secret/secret.txt" >/dev/null 2>&1; then
   ok "ohne Sandbox lesbar -> die Sperre oben kam von Landlock, nicht von Dateirechten"
