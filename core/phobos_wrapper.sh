@@ -116,7 +116,7 @@ if (( sandbox_enabled )); then
     load_cfg "$base_cfg"
     for c in "${extra_cfgs[@]}"; do load_cfg "$c"; done
 else
-    # Fallback: run build script directly (no bwrap, no timeout)
+    # Fallback: run build script directly (no sandbox, no timeout)
     cd /var/tmp/testing-dir 2>/dev/null || true
     printf '\e[34m[no-sandbox]\e[0m exec %q ' "$build_script" "$@"; echo
     exec "$build_script" "$@"
@@ -142,25 +142,26 @@ if ((${#restricted_cmds[@]})); then
 fi
 
 # ---------------------------------------------------------------------
-# Bubblewrap argument assembly
+# Landlock argument assembly
 # ---------------------------------------------------------------------
-bwrap_args=( --proc /proc --dev /dev )
+# No --proc/--dev here: those are mount-namespace concepts. Landlock does not
+# build a new filesystem view, it only withholds access to the existing one.
+landlock_args=()
 
-for p in "${readonly_paths[@]}"; do bwrap_args+=( --ro-bind "$p" "$p" ); done
-for p in "${write_paths[@]}";    do bwrap_args+=( --bind    "$p" "$p" ); done
-for p in "${tmpfs_paths[@]}";    do bwrap_args+=( --tmpfs   "$p"     ); done
+for p in "${readonly_paths[@]}"; do landlock_args+=( --rox "$p" ); done
+for p in "${write_paths[@]}";    do landlock_args+=( --rw  "$p" ); done
 
-# append restricted-command masks (shadow earlier binds)
-for p in "${restricted_paths[@]}"; do
-    bwrap_args+=( --ro-bind /dev/null "$p" )
-done
+# Paths that bubblewrap used to mask (tmpfs overlay or /dev/null shadow) are
+# simply left off the allow-list: denied, but still visible by name.
+for p in "${tmpfs_paths[@]}";     do warn "hide: '$p' denied but stays visible"; done
+for p in "${restricted_paths[@]}"; do warn "mask: '$p' denied but stays visible"; done
 
 # tail flags (share-net, runtime chdir etc.)
 if [[ -f $tail_cfg ]]; then
     while read -r line || [[ -n $line ]]; do
         read -ra parts <<<"$line"
         (( ${#parts[@]} )) || continue
-        bwrap_args+=("${parts[@]}")
+        landlock_args+=("${parts[@]}")
     done < "$tail_cfg"
 fi
 
@@ -193,7 +194,7 @@ export LD_PRELOAD="$core/libnetblocker.so"
 rlimit_arg=(); [[ $mem_mb -gt 0 ]] && rlimit_arg=( --rlimit-as=$((mem_mb*1024*1024)) )
 timeout_cmd=( timeout --kill-after=5s "${timeout_s}s" )
 
-cmd=( "${timeout_cmd[@]}" bwrap "${bwrap_args[@]}" -- "$build_script" "$@" )
-printf '\e[34m[bwrap]\e[0m '; printf '%q ' "${cmd[@]}"; echo
+cmd=( "${timeout_cmd[@]}" "${PHOBOS_LANDLOCK_BIN:-$core/phobos-landlock}" "${landlock_args[@]}" -- "$build_script" "$@" )
+printf '\e[34m[landlock]\e[0m '; printf '%q ' "${cmd[@]}"; echo
 ulimit -v $((mem_mb*1024*5))
 exec "${cmd[@]}"

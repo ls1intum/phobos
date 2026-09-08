@@ -4,9 +4,6 @@ services:
       context: ../../..
       dockerfile: Dockerfile
     image: ajayvir/phobos
-    security_opt:
-      - "seccomp:../../../security_config/seccomp_allow_bwrap.json"
-      - "apparmor=docker-bwrap"
     stdin_open: true
     tty: true
     entrypoint: /bin/bash
