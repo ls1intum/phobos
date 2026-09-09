@@ -13,9 +13,36 @@
  * failure can be injected without a special kernel. Cases that end in exit()
  * run in a forked child and are judged by the exit status.
  */
+/* The system headers this file needs itself. They used to arrive indirectly,
+ * through the single large source file; now that it is split, the test states
+ * its own. */
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/prctl.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+/* Only the stage sequence is included, so that its main can be called from
+ * here under another name. The modules beside it are linked in the normal way,
+ * which is what the split into files bought: their functions no longer have to
+ * be reached through an include. */
 #define main sut_main
 #include "../../core/phobos-landlock.c"
 #undef main
+
+#include "../../core/phobos-landlock-diagnostics.h"
+#include "../../core/phobos-landlock-options.h"
+#include "../../core/phobos-landlock-path-rule.h"
+#include "../../core/phobos-landlock-ruleset.h"
 
 #include <sys/wait.h>
 

@@ -11,6 +11,14 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# The stage sequence is included by the test file; its modules are linked.
+MODULES=(
+  "${HERE}/../../core/phobos-landlock-diagnostics.c"
+  "${HERE}/../../core/phobos-landlock-path-rule.c"
+  "${HERE}/../../core/phobos-landlock-options.c"
+  "${HERE}/../../core/phobos-landlock-ruleset.c"
+)
+
 # Every syscall the tool makes is wrapped so a failure can be injected.
 # The commas belong to the -Wl, linker flags, not to the array syntax.
 # shellcheck disable=SC2054
@@ -25,14 +33,18 @@ WRAPS=(
 )
 
 if [[ "${1:-}" == "--coverage" ]]; then
-  gcc -O0 -g --coverage -o "$WORK/unit" "${HERE}/landlock_unit.c" "${WRAPS[@]}"
+  gcc -O0 -g --coverage -o "$WORK/unit" "${HERE}/landlock_unit.c" "${MODULES[@]}" "${WRAPS[@]}"
   ( cd "$WORK" && ./unit )
-  # Report only the file under test; gcov also prints a block for the test file.
-  ( cd "$WORK" && gcov -b -o "$WORK/unit-landlock_unit.gcno" "${HERE}/landlock_unit.c" ) \
-    | awk '/^File .*phobos-landlock\.c/ { show = 1 }
-           show && /^(File|Lines|Branches|Taken)/ { print }
-           show && /^Taken/ { exit }' 
+  # One gcov run per compiled module. gcov also knows the test file itself,
+  # which is not what is under test here, so only the modules are reported.
+  ( cd "$WORK" && for notes in unit-*.gcno; do
+      gcov -b -o "$notes" "${notes%.gcno}" 2>/dev/null
+    done ) \
+    | awk '/^File .*phobos-landlock/ { show = 1; print; next }
+           /^File / { show = 0 }
+           show && /^(Lines|Branches|Taken)/ { print }
+           show && /^Taken/ { show = 0 }'
 else
-  gcc -O0 -g -Wall -Wextra -o "$WORK/unit" "${HERE}/landlock_unit.c" "${WRAPS[@]}"
+  gcc -O0 -g -Wall -Wextra -o "$WORK/unit" "${HERE}/landlock_unit.c" "${MODULES[@]}" "${WRAPS[@]}"
   "$WORK/unit"
 fi

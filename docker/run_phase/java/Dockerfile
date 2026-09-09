@@ -9,7 +9,8 @@ ENV PHOBOS_HOME=/var/tmp/opt/core
 RUN mkdir -p "${PHOBOS_HOME}"
 COPY *.sh                ${PHOBOS_HOME}/
 COPY netblocker.c                 ${PHOBOS_HOME}/
-COPY phobos-landlock.c            ${PHOBOS_HOME}/
+COPY phobos-landlock*.c           ${PHOBOS_HOME}/
+COPY phobos-landlock*.h           ${PHOBOS_HOME}/
 COPY config/BaseLanguage-java.cfg                     ${PHOBOS_HOME}/
 COPY config/TailPhobos.cfg                     ${PHOBOS_HOME}/
 COPY allowedList.cfg                  ${PHOBOS_HOME}/
@@ -22,7 +23,7 @@ RUN gcc -O2 -Wall -Wextra -fPIC -shared -Wl,-z,now \
 # produces a fixed-address executable, so the binary that applies the sandbox
 # would be the one part of the image without address randomisation.
 RUN gcc -O2 -Wall -Wextra -static-pie -Wl,-z,now \
-    -o ${PHOBOS_HOME}/phobos-landlock ${PHOBOS_HOME}/phobos-landlock.c
+    -o ${PHOBOS_HOME}/phobos-landlock ${PHOBOS_HOME}/phobos-landlock*.c
 RUN chmod +x ${PHOBOS_HOME}/*.sh ${PHOBOS_HOME}/*.cfg \
  && chmod +w ${PHOBOS_HOME}/allowedList.cfg && ln -sf phobos.sh ${PHOBOS_HOME}/phobos
 ENV PATH=${PHOBOS_HOME}:$PATH
