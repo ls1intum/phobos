@@ -29,6 +29,11 @@ breaks a build repeatedly, and `deploy_seccomp_apparmor.sh` changes host configu
 3. **Open a pull request** against `main` once the work is complete, with your branch up to
    date with `main`.
 
+We align these expectations with the
+[GitHub Acceptable Use Policies](https://docs.github.com/en/site-policy/acceptable-use-policies).
+For general background on contributing to open source, see the
+[Open Source Guides](https://opensource.guide/).
+
 ## Prerequisites
 
 Phobos runs on Linux, because it depends on user namespaces and on `LD_PRELOAD`. Docker is
@@ -89,4 +94,5 @@ rather than a public issue, as set out in [SECURITY.md](SECURITY.md).
 
 ## Code of conduct
 
-This project follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+Participation in this project is governed by the
+[Code of Conduct](CODE_OF_CONDUCT.md). By taking part you are expected to uphold it.
