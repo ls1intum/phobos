@@ -56,11 +56,23 @@ Out of scope: the deliberately dangerous code listed above, the need for privile
 host profiles, and anything that follows from running the discovery phase against a project
 you were not willing to have repeatedly broken.
 
+## Reporting a bug
+
+If the problem relates to a bug that is associated with unexpected behaviour or
+inconvenience or something non-critical is broken, simply report it as a bug and use the
+[issues](https://github.com/ls1intum/phobos/issues) for that.
+
 ## Reporting a Vulnerability
 
-Report privately through [GitHub's private vulnerability
-reporting](https://github.com/ls1intum/phobos/security/advisories/new), which is enabled on
-this repository. Do not open a public issue for a suspected vulnerability.
+If the problem relates to a vulnerability that could be used maliciously or is in another
+way a security issue, please do not make the issue public. Instead, collect the following
+information first:
+- as with a bug report, describe how the vulnerability can be reproduced
+- state the commit, the allow-list in use and the language environment the run used
+- state the kernel and whether the run was inside a container, since the enforcement
+  mechanism depends on both
+- provide any additional information and context, if possible
 
-Please include the commit, the allow-list and the language environment in use, and the steps
-that produced the result. An expected response follows within 14 days.
+Then report it through [GitHub's private vulnerability
+reporting](https://github.com/ls1intum/phobos/security/advisories/new), which is enabled
+on this repository. The report stays private while it is assessed and remediated.

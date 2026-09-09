@@ -22,4 +22,5 @@
 # rule here would silently rewrite them all. A CRLF Dockerfile is worth fixing, because a
 # trailing carriage return ends up inside the RUN command, but that is a behaviour change
 # that needs a Docker build to verify and belongs in its own pull request rather than in a
-# repository hygiene change. See the linked issue.
+# repository hygiene change. Tracked in ls1intum/phobos#15, which lists every
+# affected file.
