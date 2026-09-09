@@ -200,7 +200,7 @@ def merge_tail(flags: list[str], out_dir: pathlib.Path) -> pathlib.Path | None:
     for t in old_tokens + new_tokens:
         if t not in seen:
             seen.add(t)
-        merged.append(t)
+            merged.append(t)
     dest.write_text(" ".join(merged) + "\n")
     return dest
 

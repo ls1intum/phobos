@@ -98,7 +98,7 @@ for d in /bin /usr/bin /lib /lib64 /usr/lib /lib/x86_64-linux-gnu; do
 done
 [[ -d /etc ]] && BASE_OPTIONS+=( --ro-bind /etc /etc )
 
-TAIL_OPTIONS=( --proc /proc --dev /dev --share-net --unshare-pid --unshare-utc --unshare-ipc --chdir "$SANDBOX_WORKDIR" )
+TAIL_OPTIONS=( --proc /proc --dev /dev --share-net --unshare-pid --unshare-uts --unshare-ipc --chdir "$SANDBOX_WORKDIR" )
 
 # ── init candidate config ────────────────────────────────────────────────────
 init_config() {
