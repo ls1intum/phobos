@@ -21,7 +21,7 @@
 
 /* ------------------------------------------------------------------- mocks */
 
-static long mock_abi = 8; /* what the kernel reports */
+static long mock_landlock_version = 8; /* what the kernel reports */
 static int fail_create = 0;
 static int fail_add_path = 0;
 static int fail_add_port = 0;
@@ -63,13 +63,13 @@ long __wrap_syscall(long number, ...) {
     unsigned a3 = va_arg(ap, unsigned);
     va_end(ap);
 
-    if (number == __NR_landlock_create_ruleset) {
+    if (number == SYSCALL_NUMBER_LANDLOCK_CREATE_RULESET) {
         if (a1 == NULL && a2 == 0 && a3 == LANDLOCK_CREATE_RULESET_VERSION) {
-            if (mock_abi < 0) {
+            if (mock_landlock_version < 0) {
                 errno = ENOSYS;
                 return -1;
             }
-            return mock_abi;
+            return mock_landlock_version;
         }
         if (fail_create) {
             errno = EINVAL;
@@ -77,19 +77,19 @@ long __wrap_syscall(long number, ...) {
         }
         return 42; /* a plausible descriptor */
     }
-    if (number == __NR_landlock_add_rule) {
+    if (number == SYSCALL_NUMBER_LANDLOCK_ADD_RULE) {
         int type = (int)(size_t)a2;
         if (type == LANDLOCK_RULE_PATH_BENEATH && fail_add_path) {
             errno = EINVAL;
             return -1;
         }
-        if (type == LANDLOCK_RULE_NET_PORT && fail_add_port) {
+        if (type == LANDLOCK_RULE_NETWORK_PORT && fail_add_port) {
             errno = EINVAL;
             return -1;
         }
         return 0;
     }
-    if (number == __NR_landlock_restrict_self) {
+    if (number == SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF) {
         if (fail_restrict) {
             errno = EPERM;
             return -1;
@@ -138,7 +138,7 @@ static int passed = 0;
 static int failed = 0;
 
 static void reset_mocks(void) {
-    mock_abi = 8;
+    mock_landlock_version = 8;
     fail_create = 0;
     fail_add_path = 0;
     fail_add_port = 0;
@@ -204,16 +204,16 @@ static void test_rights_tables(void) {
     printf("\nAccess rights per Landlock version\n");
     check("version 1 has neither REFER nor TRUNCATE nor IOCTL_DEV",
           (filesystem_rights_for_version(1) &
-           (LANDLOCK_ACCESS_FS_REFER | LANDLOCK_ACCESS_FS_TRUNCATE |
-            LANDLOCK_ACCESS_FS_IOCTL_DEV)) == 0);
+           (LANDLOCK_ACCESS_FILESYSTEM_REFER | LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE |
+            LANDLOCK_ACCESS_FILESYSTEM_IOCTL_DEVICE)) == 0);
     check("version 2 adds REFER",
-          (filesystem_rights_for_version(2) & LANDLOCK_ACCESS_FS_REFER) != 0);
+          (filesystem_rights_for_version(2) & LANDLOCK_ACCESS_FILESYSTEM_REFER) != 0);
     check("version 3 adds TRUNCATE",
-          (filesystem_rights_for_version(3) & LANDLOCK_ACCESS_FS_TRUNCATE) != 0);
+          (filesystem_rights_for_version(3) & LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE) != 0);
     check("version 4 adds nothing over version 3",
           filesystem_rights_for_version(4) == filesystem_rights_for_version(3));
     check("version 5 adds IOCTL_DEV",
-          (filesystem_rights_for_version(5) & LANDLOCK_ACCESS_FS_IOCTL_DEV) != 0);
+          (filesystem_rights_for_version(5) & LANDLOCK_ACCESS_FILESYSTEM_IOCTL_DEVICE) != 0);
     check("version 8 equals version 5",
           filesystem_rights_for_version(8) == filesystem_rights_for_version(5));
 
@@ -221,31 +221,31 @@ static void test_rights_tables(void) {
     struct path_rule rox = {.path = "/x", .writable = 0, .executable = 1};
     struct path_rule rw = {.path = "/x", .writable = 1, .executable = 0};
     check("read-only grants no write",
-          (rights_granted_for(&ro, 8) & LANDLOCK_ACCESS_FS_WRITE_FILE) == 0);
+          (rights_granted_for(&ro, 8) & LANDLOCK_ACCESS_FILESYSTEM_WRITE_FILE) == 0);
     check("read-only grants no execute",
-          (rights_granted_for(&ro, 8) & LANDLOCK_ACCESS_FS_EXECUTE) == 0);
+          (rights_granted_for(&ro, 8) & LANDLOCK_ACCESS_FILESYSTEM_EXECUTE) == 0);
     check("rox grants execute",
-          (rights_granted_for(&rox, 8) & LANDLOCK_ACCESS_FS_EXECUTE) != 0);
-    check("rw grants write", (rights_granted_for(&rw, 8) & LANDLOCK_ACCESS_FS_WRITE_FILE) != 0);
+          (rights_granted_for(&rox, 8) & LANDLOCK_ACCESS_FILESYSTEM_EXECUTE) != 0);
+    check("rw grants write", (rights_granted_for(&rw, 8) & LANDLOCK_ACCESS_FILESYSTEM_WRITE_FILE) != 0);
     check("a writable rule on version 1 grants neither REFER nor TRUNCATE",
           (rights_granted_for(&rw, 1) &
-           (LANDLOCK_ACCESS_FS_REFER | LANDLOCK_ACCESS_FS_TRUNCATE)) == 0);
+           (LANDLOCK_ACCESS_FILESYSTEM_REFER | LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE)) == 0);
     check("a writable rule on version 2 grants REFER",
-          (rights_granted_for(&rw, 2) & LANDLOCK_ACCESS_FS_REFER) != 0);
+          (rights_granted_for(&rw, 2) & LANDLOCK_ACCESS_FILESYSTEM_REFER) != 0);
     check("a writable rule on version 3 grants TRUNCATE",
-          (rights_granted_for(&rw, 3) & LANDLOCK_ACCESS_FS_TRUNCATE) != 0);
+          (rights_granted_for(&rw, 3) & LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE) != 0);
     check("a granted_rights never exceeds what the version handles",
           (rights_granted_for(&rw, 1) & ~filesystem_rights_for_version(1)) == 0);
 
     check("version below 4 sends the smallest struct",
           ruleset_attributes_size_for_version(3) ==
-              offsetof(struct landlock_ruleset_attr, handled_access_net));
+              offsetof(struct landlock_ruleset_attributes, handled_access_network));
     check("version 4 and 5 send the middle struct",
           ruleset_attributes_size_for_version(4) ==
-                  offsetof(struct landlock_ruleset_attr, scoped) &&
+                  offsetof(struct landlock_ruleset_attributes, scoped) &&
               ruleset_attributes_size_for_version(5) == ruleset_attributes_size_for_version(4));
     check("version 6 and above send the whole struct",
-          ruleset_attributes_size_for_version(6) == sizeof(struct landlock_ruleset_attr) &&
+          ruleset_attributes_size_for_version(6) == sizeof(struct landlock_ruleset_attributes) &&
               ruleset_attributes_size_for_version(8) == ruleset_attributes_size_for_version(6));
 
     check("a writable path is opened without following a symlink",
@@ -311,24 +311,27 @@ static void test_limits(void) {
     expect_exit("one bind port more than the table holds", EXIT_CODE_POLICY_ERROR, binds);
 }
 
-static void test_abi_gate(void) {
+static void test_version_gate(void) {
     printf("\nWhat the kernel can enforce\n");
     char *plain[] = {"phobos-landlock", "--ro", "/usr", "--", "/bin/true", NULL};
 
-    mock_abi = -1;
+    mock_landlock_version = -1;
     expect_exit("no Landlock at all refuses to run", EXIT_CODE_POLICY_ERROR, plain);
 
+    /* The demanded version has to be one this build knows, otherwise it is
+     * refused while the arguments are read and the comparison below is never
+     * reached. */
     char *demanding[] = {"phobos-landlock",
                          "--minimum-landlock-version",
-                         "9",
+                         "5",
                          "--ro",
                          "/usr",
                          "--",
                          "/bin/true",
                          NULL};
-    mock_abi = 8;
-    expect_exit("--minimum-landlock-version above the kernel refuses to run",
-                EXIT_CODE_POLICY_ERROR, demanding);
+    mock_landlock_version = 3;
+    expect_exit("a kernel below the demanded version refuses to run", EXIT_CODE_POLICY_ERROR,
+                demanding);
 
     char *lenient[] = {"phobos-landlock",
                        "--minimum-landlock-version",
@@ -338,20 +341,79 @@ static void test_abi_gate(void) {
                        "--",
                        "/bin/true",
                        NULL};
-    mock_abi = 8;
+    mock_landlock_version = 8;
     expect_exit("--minimum-landlock-version below the kernel runs", 0, lenient);
 
-    mock_abi = 99;
+    mock_landlock_version = 99;
     expect_exit("a version newer than this build warns but runs", 0, plain);
 
     char *net[] = {
         "phobos-landlock", "--connect-tcp", "443", "--ro", "/usr", "--", "/bin/true", NULL};
-    mock_abi = 3;
+    mock_landlock_version = 3;
     expect_exit("network rules on an version below 4 refuse to run", EXIT_CODE_POLICY_ERROR,
                 net);
 
-    mock_abi = 3;
+    mock_landlock_version = 3;
     expect_exit("an old version without network rules still runs", 0, plain);
+}
+
+/* Numbers that are not numbers, or outside what the option can mean. Before
+ * these were checked, atoi answered 0 and a typo quietly weakened the policy. */
+static void test_number_parsing(void) {
+    printf("\nValues that are not usable numbers\n");
+    char *not_a_number[] = {"phobos-landlock", "--connect-tcp", "https", "--ro",
+                            "/usr", "--", "/bin/true", NULL};
+    expect_exit("a port that is not a number", EXIT_CODE_POLICY_ERROR, not_a_number);
+
+    char *empty[] = {"phobos-landlock", "--connect-tcp", "", "--ro",
+                     "/usr", "--", "/bin/true", NULL};
+    expect_exit("an empty port value", EXIT_CODE_POLICY_ERROR, empty);
+
+    char *trailing[] = {"phobos-landlock", "--connect-tcp", "443x", "--ro",
+                        "/usr", "--", "/bin/true", NULL};
+    expect_exit("a port with something after the digits", EXIT_CODE_POLICY_ERROR, trailing);
+
+    char *too_low[] = {"phobos-landlock", "--connect-tcp", "0", "--ro",
+                       "/usr", "--", "/bin/true", NULL};
+    expect_exit("port zero", EXIT_CODE_POLICY_ERROR, too_low);
+
+    char *too_high[] = {"phobos-landlock", "--connect-tcp", "65536", "--ro",
+                        "/usr", "--", "/bin/true", NULL};
+    expect_exit("a port above 65535", EXIT_CODE_POLICY_ERROR, too_high);
+
+    char *overflowing[] = {"phobos-landlock", "--connect-tcp", "99999999999999999999",
+                           "--ro", "/usr", "--", "/bin/true", NULL};
+    expect_exit("a port that overflows the conversion", EXIT_CODE_POLICY_ERROR, overflowing);
+
+    char *bad_version[] = {"phobos-landlock", "--minimum-landlock-version", "none",
+                           "--ro", "/usr", "--", "/bin/true", NULL};
+    expect_exit("a version that is not a number", EXIT_CODE_POLICY_ERROR, bad_version);
+
+    char *unknown_version[] = {"phobos-landlock", "--minimum-landlock-version", "99",
+                               "--ro", "/usr", "--", "/bin/true", NULL};
+    expect_exit("a version this build does not know", EXIT_CODE_POLICY_ERROR, unknown_version);
+}
+
+/* The four path flags are all at least four characters, so a shorter one can
+ * only come from a future edit. The guard says so rather than reading before
+ * the start of the string. */
+static void test_short_flag_guard(void) {
+    printf("\nA path rule flag that is too short\n");
+    fflush(NULL);
+    pid_t pid = fork();
+    if (pid == 0) {
+        if (freopen("/dev/null", "w", stderr) == NULL) {
+            _exit(98);
+        }
+        static struct options options;
+        memset(&options, 0, sizeof(options));
+        remember_path_rule(&options, "--r", "/usr");
+        _exit(99);
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    int got = WIFEXITED(status) ? WEXITSTATUS(status) : -WTERMSIG(status);
+    check("a flag shorter than --ro is refused", got == EXIT_CODE_POLICY_ERROR);
 }
 
 static void test_syscall_failures(void) {
@@ -471,12 +533,12 @@ static void test_success_paths(void) {
 static void test_file_versus_directory(void) {
     printf("\nA file is not a directory\n");
     check("directory-only rights are named",
-          (DIRECTORY_ONLY_ACCESS_RIGHTS & LANDLOCK_ACCESS_FS_READ_DIR) != 0 &&
-              (DIRECTORY_ONLY_ACCESS_RIGHTS & LANDLOCK_ACCESS_FS_MAKE_DIR) != 0);
+          (DIRECTORY_ONLY_ACCESS_RIGHTS & LANDLOCK_ACCESS_FILESYSTEM_READ_DIRECTORY) != 0 &&
+              (DIRECTORY_ONLY_ACCESS_RIGHTS & LANDLOCK_ACCESS_FILESYSTEM_MAKE_DIRECTORY) != 0);
     check("directory-only rights exclude reading a file",
-          (DIRECTORY_ONLY_ACCESS_RIGHTS & LANDLOCK_ACCESS_FS_READ_FILE) == 0);
+          (DIRECTORY_ONLY_ACCESS_RIGHTS & LANDLOCK_ACCESS_FILESYSTEM_READ_FILE) == 0);
     check("directory-only rights exclude executing",
-          (DIRECTORY_ONLY_ACCESS_RIGHTS & LANDLOCK_ACCESS_FS_EXECUTE) == 0);
+          (DIRECTORY_ONLY_ACCESS_RIGHTS & LANDLOCK_ACCESS_FILESYSTEM_EXECUTE) == 0);
 }
 
 int main(void) {
@@ -485,7 +547,9 @@ int main(void) {
     test_file_versus_directory();
     test_usage_errors();
     test_limits();
-    test_abi_gate();
+    test_version_gate();
+    test_number_parsing();
+    test_short_flag_guard();
     test_syscall_failures();
     test_success_paths();
     printf("\n%d passed, %d failed\n", passed, failed);
