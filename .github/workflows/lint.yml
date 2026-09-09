@@ -16,7 +16,7 @@ concurrency:
 jobs:
   shell:
     name: Shell (shellcheck)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -36,7 +36,7 @@ jobs:
 
   c:
     name: C (compiler warnings and cppcheck)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -72,7 +72,7 @@ jobs:
 
   python:
     name: Python (ruff and bandit)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -96,7 +96,7 @@ jobs:
 
   yaml:
     name: YAML (yamllint)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -114,7 +114,7 @@ jobs:
 
   docker:
     name: Dockerfiles (hadolint)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -138,7 +138,7 @@ jobs:
 
   workflows:
     name: Workflows (actionlint)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read

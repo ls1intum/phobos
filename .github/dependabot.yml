@@ -1,0 +1,36 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Renovate owns routine version updates in this repository. Without this line
+    # Dependabot opens its own version-update pull requests for the same manifests.
+    # A limit of 0 suppresses version updates only; security updates, and the group
+    # below, are unaffected by it.
+    open-pull-requests-limit: 0
+    groups:
+      github-actions-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  # `directories` rather than `directory`, because `directory` names a single
+  # directory and is not searched recursively. Every Dockerfile in this repository
+  # is nested: docker/prune_phase/{c,java,orchestrate,python} and
+  # docker/run_phase/java. A plain `directory: "/"` would therefore have found the
+  # root docker-compose.yaml and none of the five images the sandbox actually runs
+  # in. The glob keeps a newly added language environment covered without an edit
+  # here; "/" stays in the list for the root compose file.
+  - package-ecosystem: "docker"
+    directories:
+      - "/"
+      - "/docker/**"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    groups:
+      docker-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
