@@ -6,7 +6,7 @@ container: no `--privileged`, no `--cap-add`, no `--security-opt`.
 ```bash
 # 1. build context (Dockerfile expects core/ plus netblocker.c side by side)
 mkdir -p /tmp/ctx/config
-cp core/*.sh core/phobos-landlock.c core/allowedList.cfg /tmp/ctx/
+cp core/*.sh core/phobos-landlock*.c core/phobos-landlock*.h core/allowedList.cfg /tmp/ctx/
 cp core/config/*.cfg /tmp/ctx/config/
 cp ld_preloader/netblocker.c /tmp/ctx/
 
