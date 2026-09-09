@@ -75,6 +75,8 @@ struct syscall_record {
     size_t opened_path_count;
     char opened_path[RECORDED_RULE_LIMIT][RECORDED_PATH_LENGTH];
     char entered_directory[RECORDED_PATH_LENGTH];
+    size_t closed_descriptor_count;
+    int closed_descriptor[RECORDED_RULE_LIMIT];
 };
 
 static struct syscall_record *record;
@@ -263,7 +265,10 @@ int __wrap_execvp(const char *file, char *const argv[]) {
 }
 
 int __wrap_close(int fd) {
-    (void)fd;
+    if (record->closed_descriptor_count < RECORDED_RULE_LIMIT) {
+        record->closed_descriptor[record->closed_descriptor_count] = fd;
+    }
+    record->closed_descriptor_count++;
     return 0;
 }
 
@@ -276,6 +281,51 @@ static int failed = 0;
  * read what the child handed over. */
 static void reset_record(void) {
     memset(record, 0, sizeof(*record));
+}
+
+/* The child's diagnostics used to go to /dev/null, so a case could only judge
+ * how a run ended, never what it said. Several mutations changed nothing else:
+ * a warning that appears one version too early, a refusal that names the wrong
+ * reason. The message is what a person reads when a policy is turned down, so
+ * it is worth as much as the exit code. */
+static FILE *captured_stderr;
+static char captured_stderr_text[8192];
+
+static void reset_captured_stderr(void) {
+    captured_stderr_text[0] = '\0';
+    rewind(captured_stderr);
+    if (ftruncate(fileno(captured_stderr), 0) != 0) {
+        perror("ftruncate");
+        exit(1);
+    }
+}
+
+static void collect_captured_stderr(void) {
+    rewind(captured_stderr);
+    size_t length =
+        fread(captured_stderr_text, 1, sizeof(captured_stderr_text) - 1, captured_stderr);
+    captured_stderr_text[length] = '\0';
+}
+
+static int stderr_says(const char *fragment) {
+    return strstr(captured_stderr_text, fragment) != NULL;
+}
+
+/* Asked about one descriptor rather than about the whole list. A coverage build
+ * links libgcov into the same binary, and the dump it makes on the way out adds
+ * eight closes of its own behind the tool's. Those come last, so the tool's own
+ * closes are the ones the record keeps, but the count is not the tool's to
+ * promise. */
+static int descriptor_was_closed(int descriptor) {
+    size_t limit = record->closed_descriptor_count < RECORDED_RULE_LIMIT
+                       ? record->closed_descriptor_count
+                       : RECORDED_RULE_LIMIT;
+    for (size_t index = 0; index < limit; index++) {
+        if (record->closed_descriptor[index] == descriptor) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static void reset_mocks(void) {
@@ -299,6 +349,7 @@ static void reset_mocks(void) {
 /* Runs sut_main in a child so that a case ending in exit() can be judged. */
 static void expect_exit(const char *what, int want, char **argv) {
     reset_record();
+    reset_captured_stderr();
     int argc = 0;
     while (argv[argc] != NULL) {
         argc++;
@@ -310,14 +361,15 @@ static void expect_exit(const char *what, int want, char **argv) {
     fflush(NULL);
     pid_t pid = fork();
     if (pid == 0) {
-        if (freopen("/dev/null", "w", stderr) == NULL) {
-            _exit(98); /* cannot silence the child, so do not judge its output */
+        if (dup2(fileno(captured_stderr), STDERR_FILENO) < 0) {
+            _exit(98); /* cannot collect the child's output, so do not judge it */
         }
         sut_main(argc, argv);
         _exit(99);
     }
     int status = 0;
     waitpid(pid, &status, 0);
+    collect_captured_stderr();
     int got = WIFEXITED(status) ? WEXITSTATUS(status) : -WTERMSIG(status);
     if (got == want) {
         printf("  ok    %-58s exit=%d\n", what, got);
@@ -406,6 +458,7 @@ static void test_usage_errors(void) {
     printf("\nCalls that are refused before anything is applied\n");
     char *no_args[] = {"phobos-landlock", NULL};
     expect_exit("no arguments at all", 2, no_args);
+    check("a call with no arguments says how to call it", stderr_says("Usage: phobos-landlock"));
 
     char *unknown[] = {"phobos-landlock", "--nonsense", "x", "--", "/bin/true", NULL};
     expect_exit("an unknown option", 2, unknown);
@@ -474,6 +527,16 @@ static void test_version_gate(void) {
 
     mock_landlock_version = -1;
     expect_exit("no Landlock at all refuses to run", EXIT_CODE_POLICY_ERROR, plain);
+    check("a kernel without Landlock is named as the reason",
+          stderr_says("[phobos-landlock] Landlock is not available on this kernel"));
+
+    /* Version 0 is a kernel that answers the question but has nothing to
+     * offer. It is too old, which is not the same as having no Landlock, and
+     * the two must not be reported as one another. */
+    mock_landlock_version = 0;
+    expect_exit("a kernel offering version 0 refuses to run", EXIT_CODE_POLICY_ERROR, plain);
+    check("version 0 is reported as too old rather than as absent",
+          stderr_says("kernel offers Landlock version 0 but version 1 is required"));
 
     /* The demanded version has to be one this build knows, otherwise it is
      * refused while the arguments are read and the comparison below is never
@@ -489,6 +552,8 @@ static void test_version_gate(void) {
     mock_landlock_version = 3;
     expect_exit("a kernel below the demanded version refuses to run", EXIT_CODE_POLICY_ERROR,
                 demanding);
+    check("the refusal names both the version there is and the one that was asked for",
+          stderr_says("kernel offers Landlock version 3 but version 5 is required"));
 
     char *lenient[] = {"phobos-landlock",
                        "--minimum-landlock-version",
@@ -503,6 +568,8 @@ static void test_version_gate(void) {
 
     mock_landlock_version = 99;
     expect_exit("a version newer than this build warns but runs", 0, plain);
+    check("a newer kernel is reported as only partly restricted",
+          stderr_says("warning: kernel offers Landlock version 99"));
 
     char *net[] = {
         "phobos-landlock", "--connect-tcp", "443", "--ro", "/usr", "--", "/bin/true", NULL};
@@ -521,10 +588,16 @@ static void test_number_parsing(void) {
     char *not_a_number[] = {"phobos-landlock", "--connect-tcp", "https", "--ro",
                             "/usr", "--", "/bin/true", NULL};
     expect_exit("a port that is not a number", EXIT_CODE_POLICY_ERROR, not_a_number);
+    check("the refusal quotes what was given", stderr_says("not a TCP port: 'https'"));
 
     char *empty[] = {"phobos-landlock", "--connect-tcp", "", "--ro",
                      "/usr", "--", "/bin/true", NULL};
     expect_exit("an empty port value", EXIT_CODE_POLICY_ERROR, empty);
+    /* Only that message. Without the abort behind it the value would fall
+     * through to the conversion, which reports the same input a second time
+     * and as something else. */
+    check("an empty value is named as empty, and only that",
+          stderr_says("not a TCP port: empty value") && !stderr_says("not a TCP port: ''"));
 
     char *trailing[] = {"phobos-landlock", "--connect-tcp", "443x", "--ro",
                         "/usr", "--", "/bin/true", NULL};
@@ -545,6 +618,8 @@ static void test_number_parsing(void) {
     char *bad_version[] = {"phobos-landlock", "--minimum-landlock-version", "none",
                            "--ro", "/usr", "--", "/bin/true", NULL};
     expect_exit("a version that is not a number", EXIT_CODE_POLICY_ERROR, bad_version);
+    check("the refusal names the option it came from",
+          stderr_says("not a usable Landlock version: 'none'"));
 
     char *unknown_version[] = {"phobos-landlock", "--minimum-landlock-version", "99",
                                "--ro", "/usr", "--", "/bin/true", NULL};
@@ -592,42 +667,64 @@ static void test_syscall_failures(void) {
 
     fail_create = 1;
     expect_exit("creating the ruleset fails", EXIT_CODE_POLICY_ERROR, plain);
+    check("the failing call and the reason are both named",
+          stderr_says("[phobos-landlock] landlock_create_ruleset: Invalid argument"));
 
     char *missing[] = {"phobos-landlock", "--ro", "/no/such/path/at/all", "--",
                        "/bin/true",       NULL};
     expect_exit("a path on the allow-list does not exist", EXIT_CODE_POLICY_ERROR, missing);
+    check("the path that could not be opened is named",
+          stderr_says("cannot open /no/such/path/at/all: No such file or directory"));
 
     fail_fstat = 1;
     expect_exit("stat on an opened path fails", EXIT_CODE_POLICY_ERROR, plain);
+    check("a failing fstat is named", stderr_says("[phobos-landlock] fstat: Input/output error"));
 
     force_symlink = 1;
     expect_exit("a writable path that is a symlink is refused", EXIT_CODE_POLICY_ERROR,
                 writable);
+    check("the refusal explains that a link could redirect the rule",
+          stderr_says("refusing writable path /tmp: it is a symbolic link"));
 
     fail_add_path = 1;
     expect_exit("the kernel rejects a path rule", EXIT_CODE_POLICY_ERROR, plain);
+    check("the rejected rule is named with its path",
+          stderr_says("add_rule failed for /usr: Invalid argument"));
 
     fail_add_port = 1;
     expect_exit("the kernel rejects a port rule", EXIT_CODE_POLICY_ERROR, net);
+    check("the rejected port rule is named by its direction",
+          stderr_says("[phobos-landlock] connect: Invalid argument"));
 
     fail_chdir = 1;
     expect_exit("--chdir names a directory that cannot be entered", EXIT_CODE_POLICY_ERROR,
                 moving);
+    check("the directory that could not be entered is named",
+          stderr_says("chdir /tmp: No such file or directory"));
 
     fail_prctl = 1;
     expect_exit("no_new_privs cannot be set", EXIT_CODE_POLICY_ERROR, plain);
+    check("the call that could not be made is named",
+          stderr_says("prctl(PR_SET_NO_NEW_PRIVS): Operation not permitted"));
 
     fail_restrict = 1;
     expect_exit("the restriction itself is refused", EXIT_CODE_POLICY_ERROR, plain);
+    check("the refused restriction is named",
+          stderr_says("landlock_restrict_self: Operation not permitted"));
 
     fail_exec = 1;
     expect_exit("the command cannot be executed", 127, plain);
+    check("the command that could not be run is named",
+          stderr_says("exec /bin/true: No such file or directory"));
 }
 
 static void test_success_paths(void) {
     printf("\nCalls that go all the way through\n");
     char *ro[] = {"phobos-landlock", "--ro", "/usr", "--", "/bin/true", NULL};
     expect_exit("a read-only rule", 0, ro);
+    /* Nothing at all, which is also how a kernel exactly at the highest known
+     * version proves it triggers no warning about unrestricted rights. */
+    check("a run that goes through says nothing", captured_stderr_text[0] == '\0');
 
     char *rox[] = {"phobos-landlock", "--rox", "/usr", "--", "/bin/true", NULL};
     expect_exit("a read-and-execute rule", 0, rox);
@@ -674,6 +771,11 @@ static void test_success_paths(void) {
                     "/bin/true",
                     NULL};
     expect_exit("--verbose reports every rule", 0, loud);
+    check("--verbose names the version that was found", stderr_says("Landlock version 8"));
+    check("--verbose names each path rule with its rights",
+          stderr_says("allow /usr\n") && stderr_says("allow /tmp +w"));
+    check("--verbose names each port rule with its direction",
+          stderr_says("allow connect tcp/443") && stderr_says("allow bind tcp/8080"));
 
     char *bare[] = {"phobos-landlock", "--", "/bin/true", NULL};
     expect_exit("no rules at all, only a command", 0, bare);
@@ -818,6 +920,8 @@ static void test_boundaries(void) {
     expect_exit("a path opened as descriptor 0", 0, read_only);
     check("the rule points at the descriptor the path was opened with",
           record->path_rule_parent_fd[0] == 0);
+    check("the path descriptor is closed again", descriptor_was_closed(0));
+    check("the ruleset descriptor is closed again", descriptor_was_closed(42));
 
     /* A table filled to the brim must still be accepted whole. Handing out
      * descriptor 0 keeps this from opening four thousand real files. */
@@ -857,6 +961,11 @@ int main(void) {
         return 1;
     }
     reset_record();
+    captured_stderr = tmpfile();
+    if (captured_stderr == NULL) {
+        perror("tmpfile");
+        return 1;
+    }
     printf("phobos-landlock unit tests\n");
     test_rights_tables();
     test_file_versus_directory();
