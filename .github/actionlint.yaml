@@ -1,0 +1,7 @@
+# Configuration for rhysd/actionlint.
+#
+# Phobos currently runs every job on GitHub-hosted runners, so no self-hosted label is
+# declared here. Add a label together with the workflow that needs it: an entry no
+# workflow references would quietly accept a typo of that exact label.
+self-hosted-runner:
+  labels: []
