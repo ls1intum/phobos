@@ -14,8 +14,18 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
+
+  # `directories` rather than `directory`, because `directory` names a single
+  # directory and is not searched recursively. Every Dockerfile in this repository
+  # is nested: docker/prune_phase/{c,java,orchestrate,python} and
+  # docker/run_phase/java. A plain `directory: "/"` would therefore have found the
+  # root docker-compose.yaml and none of the five images the sandbox actually runs
+  # in. The glob keeps a newly added language environment covered without an edit
+  # here; "/" stays in the list for the root compose file.
   - package-ecosystem: "docker"
-    directory: "/"
+    directories:
+      - "/"
+      - "/docker/**"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 0
