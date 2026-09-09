@@ -78,11 +78,11 @@ fi
 
 hdr "G. Optionen des Wrappers, die keine Policy-Datei erreicht"
 LL=$CORE/phobos-landlock
-$LL --min-abi 99 --rox /usr -- /bin/true >/dev/null 2>&1
-[[ $? -eq 125 ]] && ok "--min-abi ueber der Kernel-ABI bricht ab statt ungeschuetzt zu laufen" \
-                 || bad "--min-abi 99 lief durch"
-$LL --min-abi 1 --rox /usr -- /bin/true >/dev/null 2>&1
-[[ $? -eq 0 ]] && ok "--min-abi unterhalb der Kernel-ABI laeuft" || bad "--min-abi 1 schlug fehl"
+$LL --minimum-landlock-version 99 --rox /usr -- /bin/true >/dev/null 2>&1
+[[ $? -eq 125 ]] && ok "--minimum-landlock-version ueber der Kernel-Version bricht ab statt ungeschuetzt zu laufen" \
+                 || bad "--minimum-landlock-version 99 lief durch"
+$LL --minimum-landlock-version 1 --rox /usr -- /bin/true >/dev/null 2>&1
+[[ $? -eq 0 ]] && ok "--minimum-landlock-version unterhalb der Kernel-Version laeuft" || bad "--minimum-landlock-version 1 schlug fehl"
 $LL --unbekannte-option x --rox /usr -- /bin/true >/dev/null 2>&1
 [[ $? -eq 2 ]] && ok "unbekannte Option wird abgewiesen" || bad "unbekannte Option akzeptiert"
 # Netzregeln: der erlaubte Port kommt durch, ein anderer nicht
