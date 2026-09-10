@@ -1,6 +1,38 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "description": [
+    "pinDigests keeps every managed image reference as tag@sha256:..., squid excepted, since that file neither builds nor lints, so a build resolves to the bytes that were reviewed rather than to whatever the tag points at that day. Phobos is a sandbox: the image is the boundary, and a base image that moves under its tag moves the boundary with it. A pinned digest does go stale, which is the point, because Renovate then opens the pull request that moves it and a reviewer sees the change.",
+    "helpers:pinGitHubActionDigests does the same for actions. This organisation already refuses an action that is not pinned to a full-length commit SHA, so the preset changes nothing today; it is here so that a tag added by hand is corrected rather than merged.",
+    "The two lint container images are named in env values of a run step, and Renovate's github-actions manager reads only uses: docker://, container: and services:, so pinDigests would leave both digests frozen for good. The custom manager below extracts them as docker dependencies. It matches image:tag@sha256:... rather than any string, so it cannot claim an unrelated value, and it is scoped to the workflow directory.",
+    "The second custom manager exists for the same reason as the first: Renovate reads no Python dependency out of a shell command, so the versions pinned in the lint workflow's pip install lines and in the python prune image would rot exactly as a lock nobody could regenerate would. It matches name==version only where there is no space around the ==, which is what keeps it off the workflow expressions that compare with == and spaces."
+  ],
+  "pinDigests": true,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        ".github/workflows/*.yml"
+      ],
+      "matchStrings": [
+        "(?<depName>[a-z0-9][a-z0-9._/-]*)\\:(?<currentValue>[\\w][\\w.-]*)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        ".github/workflows/lint.yml",
+        "docker/prune_phase/python/Dockerfile"
+      ],
+      "matchStrings": [
+        "(?<depName>[a-zA-Z0-9][a-zA-Z0-9._-]*)==(?<currentValue>[0-9][^\\s\\\\\"']*)"
+      ],
+      "datasourceTemplate": "pypi",
+      "versioningTemplate": "pep440"
+    }
   ]
 }
