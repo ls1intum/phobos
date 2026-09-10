@@ -23,6 +23,7 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+.ruff_cache/
 
 # Output of a prune run. The path sets that are meant to be kept are committed under
 # core/config; everything a run drops beside them is scratch.
