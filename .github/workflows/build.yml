@@ -46,57 +46,12 @@ jobs:
       - name: Run the unit tests
         run: bash tests/unit/run.sh
 
-      - name: Install gcovr
-        if: ${{ !cancelled() }}
-        run: python3 -m pip install --quiet gcovr==8.3
-
-      # The instrumented build is kept, rather than left in a directory that the script
-      # removes on its way out, so there is something to make a report from.
-      - name: Measure coverage
-        if: ${{ !cancelled() }}
-        run: |
-          bash tests/unit/run.sh --coverage "${RUNNER_TEMP}/coverage"
-          gcovr --root . --gcov-object-directory "${RUNNER_TEMP}/coverage" \
-            --filter 'core/phobos-landlock.*' \
-            --html-details "${RUNNER_TEMP}/coverage/report.html" \
-            --json-summary "${RUNNER_TEMP}/coverage/summary.json" \
-            --print-summary
-
-      # No coverage threshold is enforced. A gcovr failure still fails the job; it is the
-      # percentage that nothing is held to, because the four wrapper modules are not the
-      # whole of Phobos and a figure over them should not be read as one.
-      - name: Write the coverage summary
-        if: ${{ !cancelled() }}
-        run: |
-          summary="${RUNNER_TEMP}/coverage/summary.json"
-          if [ ! -f "${summary}" ]; then
-            echo "No coverage summary was produced." >> "${GITHUB_STEP_SUMMARY}"
-            exit 0
-          fi
-          {
-            echo "## Coverage of the Landlock wrapper modules"
-            echo
-            echo "| Counter | Covered |"
-            echo "| --- | ---: |"
-            python3 -c "
-          import json, sys
-          data = json.load(open(sys.argv[1]))
-          for label, key in (('Line', 'line_percent'), ('Branch', 'branch_percent'), ('Function', 'function_percent')):
-              value = data.get(key)
-              print('| {} | {} |'.format(label, '%.2f%%' % value if value is not None else 'n/a'))
-          " "${summary}"
-            echo
-            echo "Measured over \`core/phobos-landlock*\` only, not over the shell or the"
-            echo "netblocker library. No coverage threshold is enforced."
-          } >> "${GITHUB_STEP_SUMMARY}"
-
-      - name: Upload the coverage report
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-report
-          path: ${{ runner.temp }}/coverage/report*.html
-          if-no-files-found: warn
+      # No coverage step, deliberately. The suite interposes open and close, which is
+      # also how the gcov runtime writes its .gcda files, so an instrumented run has
+      # gcov's own diagnostics landing on stderr. That breaks the test asserting that a
+      # run which goes through says nothing, and it means the figures come from a
+      # perturbed run in the first place. tests/unit/mutation.sh is the stronger measure
+      # of this suite and already runs weekly below.
 
   images:
     name: Build the ${{ matrix.name }} image
