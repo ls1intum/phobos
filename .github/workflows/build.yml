@@ -126,11 +126,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-
-      # A scope per entry. The default scope is shared, so parallel builds would each
-      # overwrite the cache the others had just written.
+      # docker build rather than docker/build-push-action: this organisation allows
+      # only actions it owns and actions GitHub publishes, so every third-party one is
+      # refused before the run starts. Docker and buildx are on the runner already.
       #
       # The run-phase image is deliberately absent: the job below builds it and then
       # tests that exact image, and building it here as well would prove nothing twice.
@@ -139,18 +137,20 @@ jobs:
       # cannot build. It copies test-repos, student-exercises, pruning and helpers from a
       # repository root that holds none of them. A green run here says nothing about it.
       - name: Build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: ${{ matrix.context }}
-          push: false
-          cache-from: type=gha,scope=${{ matrix.slug }}
-          cache-to: type=gha,scope=${{ matrix.slug }},mode=max
+        env:
           # The weekly run is the one that has to notice a moved base image or a changed
-          # apt package, and a cache hit is precisely what would hide that. no-cache
-          # reruns the layers, pull re-resolves the base image; neither does the other's
-          # half.
-          pull: ${{ github.event_name == 'schedule' }}
-          no-cache: ${{ github.event_name == 'schedule' }}
+          # apt package, and a layer that is simply reused is precisely what would hide
+          # that. --no-cache reruns the layers, --pull re-resolves the base image;
+          # neither does the other's half.
+          FRESH: ${{ github.event_name == 'schedule' && '--pull --no-cache' || '' }}
+          # Through the environment rather than interpolated into the command. These two
+          # values come from the matrix above and are safe, but a run block that pastes
+          # an expression into a shell is the shape to avoid having anywhere.
+          IMAGE_SLUG: ${{ matrix.slug }}
+          BUILD_CONTEXT: ${{ matrix.context }}
+        run: |
+          # shellcheck disable=SC2086
+          docker build ${FRESH} -t "phobos-${IMAGE_SLUG}:ci" "${BUILD_CONTEXT}"
 
   run-phase:
     name: Build the run-phase image and hold it to the acceptance suites
@@ -164,30 +164,25 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-
       # The Dockerfile copies flat names that live in two directories, so the context is
       # put together first. The acceptance README calls this same script, which is what
       # keeps the documented build and this one from drifting apart.
       - name: Assemble the build context
         run: .github/scripts/assemble-run-phase-context.sh "${RUNNER_TEMP}/run-phase-context"
 
-      # load: true, so the image lands in this runner's Docker daemon and the steps
-      # below run the image this job just built rather than one they built themselves.
+      # A plain docker build, so the image lands in this runner's own daemon and the
+      # steps below run the image this job just built rather than one they built
+      # themselves. Third-party actions are refused in this organisation anyway.
       - name: Build the run-phase image
         id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: ${{ runner.temp }}/run-phase-context
-          file: docker/run_phase/java/Dockerfile
-          push: false
-          load: true
-          tags: phobos-run-phase:ci
-          cache-from: type=gha,scope=run-phase
-          cache-to: type=gha,scope=run-phase,mode=max
-          pull: ${{ github.event_name == 'schedule' }}
-          no-cache: ${{ github.event_name == 'schedule' }}
+        env:
+          FRESH: ${{ github.event_name == 'schedule' && '--pull --no-cache' || '' }}
+        run: |
+          # shellcheck disable=SC2086
+          docker build ${FRESH} \
+            -f docker/run_phase/java/Dockerfile \
+            -t phobos-run-phase:ci \
+            "${RUNNER_TEMP}/run-phase-context"
 
       # No --privileged, no --cap-add, no --security-opt, in any of the three. That is
       # the claim these suites exist to make, and CI is where it stops being a claim.
