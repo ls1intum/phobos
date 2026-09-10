@@ -1,0 +1,60 @@
+# EditorConfig helps developers define and maintain consistent
+# coding styles between different editors and IDEs
+# editorconfig.org
+#
+# NOTE, deliberately absent: an `end_of_line` under `[*]`.
+#
+# .gitattributes explains why this repository has no blanket line-ending rule: eight files
+# are stored with CRLF, and normalising them is a behaviour change that needs a Docker
+# build to verify. It is tracked in ls1intum/phobos#15. A global `end_of_line = lf` here
+# would have an editor rewrite one of those files on the first save, which is the same
+# change arriving without the verification. The rules below therefore pin LF only where
+# something already depends on it.
+
+root = true
+
+[*]
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+indent_style = space
+indent_size = 2
+
+# Markdown treats two trailing spaces as a hard line break, so they must survive.
+[*.md]
+trim_trailing_whitespace = false
+
+# CRLF makes a script fail with "bad interpreter". These are also what shellcheck reads.
+[{*.sh,*.bash}]
+end_of_line = lf
+indent_size = 2
+
+# .yamllint sets new-lines: unix, so a CRLF file here fails the lint job outright.
+[{*.yml,*.yaml}]
+end_of_line = lf
+indent_size = 2
+
+# ruff and bandit read these. Four spaces, as PEP 8 asks.
+[*.py]
+end_of_line = lf
+indent_size = 4
+
+# The preload library and the wrapper. cppcheck and the compiler warnings gate them.
+[{*.c,*.h}]
+end_of_line = lf
+indent_size = 2
+
+# The path sets and the tail flags are read line by line by core/phobos-filesystem.sh with
+# `while IFS= read -r`. A carriage return would end up inside a bind path and the mount
+# would fail, so LF here is load-bearing rather than cosmetic.
+[{*.cfg,*.paths,*.flags,*.rules}]
+end_of_line = lf
+
+[*.json]
+indent_size = 2
+
+# Deliberately no end_of_line: docker/run_phase/java/Dockerfile and
+# squid/HTTP_PROXY_SQUID_Dockerfile are two of the eight CRLF files, and hadolint accepts
+# them today. Pin this once ls1intum/phobos#15 has normalised them.
+[Dockerfile*]
+indent_size = 4
