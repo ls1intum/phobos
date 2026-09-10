@@ -65,7 +65,9 @@ body:
     id: kernel
     attributes:
       label: Kernel and distribution
-      description: Output of `uname -a`, plus the distribution. The sandbox depends on kernel features, so this decides most reports.
+      description: >-
+        Output of `uname -a`, plus the distribution. The sandbox depends on kernel
+        features, so this decides most reports.
       placeholder: e.g. Linux 6.8.0-51-generic, Ubuntu 24.04
     validations:
       required: true
