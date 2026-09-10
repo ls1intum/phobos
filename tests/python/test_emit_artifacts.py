@@ -58,3 +58,30 @@ def test_a_flag_outside_the_allow_list_is_dropped(tmp_path):
     no such option, and the allow-list here has always named the real one."""
     emit_artifacts.merge_tail(["--unshare-utc", "--share-net"], tmp_path)
     assert tail_tokens(tmp_path) == ["--share-net"]
+
+
+def test_the_mount_flags_keep_their_operands(tmp_path):
+    """--proc and --dev name where to mount, so the pair has to survive together.
+    Losing them leaves a generated policy without /proc and /dev at all."""
+    emit_artifacts.merge_tail(["--proc", "/proc", "--dev", "/dev", "--share-net"], tmp_path)
+    assert tail_tokens(tmp_path) == ["--proc", "/proc", "--dev", "/dev", "--share-net"]
+
+
+def test_the_pid_namespace_is_not_dropped(tmp_path):
+    """The pruner measures the build inside its own PID namespace. A policy that
+    leaves --unshare-pid out is weaker than the sandbox the measurement was made in."""
+    emit_artifacts.merge_tail(["--unshare-pid", "--unshare-ipc"], tmp_path)
+    assert tail_tokens(tmp_path) == ["--unshare-pid", "--unshare-ipc"]
+
+
+def test_every_flag_the_pruner_passes_survives(tmp_path):
+    """The full tail the pruner uses, minus the per-exercise chdir it strips."""
+    emit_artifacts.merge_tail(
+        ["--proc", "/proc", "--dev", "/dev", "--share-net", "--unshare-pid",
+         "--unshare-uts", "--unshare-ipc", "--chdir", "/tmp/exercise-1"],
+        tmp_path,
+    )
+    assert tail_tokens(tmp_path) == [
+        "--proc", "/proc", "--dev", "/dev", "--share-net", "--unshare-pid",
+        "--unshare-uts", "--unshare-ipc",
+    ]

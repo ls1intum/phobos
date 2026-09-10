@@ -185,7 +185,17 @@ def _sanitize_tail_tokens(tokens: list[str], runtime_chdir: str) -> list[str]:
     out += ['--chdir', runtime_chdir]
     return out
 
-_ALLOWED_TAIL_FLAGS = {"--share-net", "--unshare-net", "--unshare-uts", "--unshare-ipc"}
+# Every tail flag a prune can produce. Four were missing, so a generated policy ran
+# without /proc, without /dev, without a PID namespace of its own and without a new
+# session, which is weaker than the sandbox the pruning run measured.
+_ALLOWED_TAIL_FLAGS = {"--share-net", "--unshare-net", "--unshare-uts", "--unshare-ipc",
+                       "--unshare-pid", "--new-session"}
+
+# The mount options, each with the one operand it may carry. Read before the rule that
+# discards a stray absolute path, which would otherwise eat the operand and leave the
+# flag dangling. An unexpected operand is dropped rather than passed on: a half-checked
+# mount in a security policy is worse than no mount.
+_TAIL_MOUNTS = {"--proc": "/proc", "--dev": "/dev"}
 
 # ────────────────────────────────────────── tail handling
 
@@ -210,23 +220,30 @@ def build_runtime_tail(runtime_chdir: str) -> None:
 
     tokens: list[str] = shlex.split(src_tail.read_text())
 
-    cleaned: list[str] = []
+    cleaned: list[tuple[str, ...]] = []
     it = iter(tokens)
     for tok in it:
         if tok == '--chdir':
             next(it, None)
             continue
+        if tok in _TAIL_MOUNTS:
+            operand = next(it, None)
+            if operand == _TAIL_MOUNTS[tok]:
+                cleaned.append((tok, operand))
+            continue
         if tok.startswith('/'):        # orphan absolute path -> junk, drop
             continue
         if tok in _ALLOWED_TAIL_FLAGS:
-            cleaned.append(tok)
+            cleaned.append((tok,))
 
+    # Over whole options, not over tokens: deduplicating "--proc" and "/proc" apart
+    # would drop the operand of a repeated mount and leave the flag dangling.
     deduped: list[str] = []
     seen = set()
-    for t in cleaned:
-        if t not in seen:
-            seen.add(t)
-            deduped.append(t)
+    for option in cleaned:
+        if option not in seen:
+            seen.add(option)
+            deduped.extend(option)
 
     deduped += ['--chdir', runtime_chdir]
 

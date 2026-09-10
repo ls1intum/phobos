@@ -166,7 +166,19 @@ def write_json(lang: str, ex: str,
     return dest
 
 
-_TAIL_ALLOW = {"--share-net", "--unshare-uts", "--unshare-ipc"}
+# Every tail flag the pruner actually passes, so that the generated policy is the
+# sandbox the pruning run measured. It used to allow three of these, which quietly
+# dropped /proc, /dev, the PID namespace and the new session from any generated policy.
+# Kept identical to _ALLOWED_TAIL_FLAGS in orchestrate.py. They are two implementations
+# of one rule, and they had already drifted: --unshare-net survived orchestration and was
+# then dropped when artefacts were merged on the next run.
+_TAIL_ALLOW = {"--share-net", "--unshare-net", "--unshare-uts", "--unshare-ipc",
+               "--unshare-pid", "--new-session"}
+
+# The mount options, each with the one operand it is allowed to carry. A different
+# operand is not a variation worth keeping: it did not come from this pruner, and a
+# half-checked mount in a security policy is worse than no mount at all.
+_TAIL_MOUNTS = {"--proc": "/proc", "--dev": "/dev"}
 
 
 def _filter_tail(tokens: list[str]) -> list[str]:
@@ -174,14 +186,19 @@ def _filter_tail(tokens: list[str]) -> list[str]:
 Drop any (--chdir <path>) pairs and keep only allow‑listed tail flags.
 We do this so ephemeral per‑exercise workdirs never end up in TailPhobos.cfg.
 """
-    out: list[str] = []
+    out: list[tuple[str, ...]] = []
     it = iter(tokens)
     for t in it:
         if t == "--chdir":
             next(it, None)  # discard operand and add correct runtime chdir later (path to test repository)
             continue
+        if t in _TAIL_MOUNTS:
+            operand = next(it, None)
+            if operand == _TAIL_MOUNTS[t]:
+                out.append((t, operand))
+            continue
         if t in _TAIL_ALLOW:
-            out.append(t)
+            out.append((t,))
     return out
 
 
@@ -195,12 +212,14 @@ def merge_tail(flags: list[str], out_dir: pathlib.Path) -> pathlib.Path | None:
     new_tokens = _filter_tail(flags)
     old_tokens = _filter_tail(existing_tokens)
     # merge & distinct, preserve order (old first)
-    merged = []
+    # Over whole options, not over tokens. Deduplicating "--proc" and "/proc"
+    # separately would drop the operand of a repeated mount and leave the flag dangling.
+    merged: list[str] = []
     seen = set()
-    for t in old_tokens + new_tokens:
-        if t not in seen:
-            seen.add(t)
-            merged.append(t)
+    for option in old_tokens + new_tokens:
+        if option not in seen:
+            seen.add(option)
+            merged.extend(option)
     dest.write_text(" ".join(merged) + "\n")
     return dest
 

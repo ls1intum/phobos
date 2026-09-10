@@ -2,7 +2,11 @@ name: Lint
 
 on:
   pull_request:
-    branches: ["main"]
+    # fix/prune-and-helper-defects is here because this change is stacked on that
+    # branch, and a base-branch filter is matched against the pull request's base.
+    # Without the entry this workflow does not run on that pull request at all.
+    # Remove it once that branch has landed.
+    branches: ["main", "fix/prune-and-helper-defects"]
   push:
     branches: ["main"]
   workflow_dispatch:

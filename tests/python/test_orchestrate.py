@@ -90,6 +90,11 @@ def run_orchestrator(
     )
 
 
+def runtime_tail(tmp_path: pathlib.Path) -> str:
+    """The tail the orchestrator writes for the runtime to use."""
+    return (tmp_path / "core" / "TailPhobos.cfg").read_text()
+
+
 def base_policy(tmp_path: pathlib.Path) -> pathlib.Path:
     """The union policy the orchestrator writes when it gets that far."""
     return tmp_path / "core" / "BasePhobos.cfg"
@@ -116,6 +121,7 @@ def test_a_failing_language_stops_the_merge(tmp_path):
 
 def test_the_failing_language_is_named(tmp_path):
     result = run_orchestrator(tmp_path, failing="python")
+    assert result.returncode != 0
     assert "pruning failed for: python" in result.stdout
 
 
@@ -129,6 +135,7 @@ def test_pruning_still_runs_for_the_other_languages(tmp_path):
     """A failure must not cancel the others, only the merge that follows them.
     The stub prints this line itself, so it is proof the stub ran to the end."""
     result = run_orchestrator(tmp_path, failing="java")
+    assert result.returncode != 0
     assert "stub: pruned python" in result.stdout
 
 
@@ -161,3 +168,36 @@ def test_a_language_whose_result_names_nothing_stops_the_merge(tmp_path):
     assert result.returncode != 0
     assert "no usable pruning result for: python" in result.stdout
     assert not base_policy(tmp_path).exists()
+
+
+def test_the_runtime_tail_keeps_the_mounts_and_the_namespaces(tmp_path):
+    """What the orchestrator writes has to be the sandbox the prune was measured in.
+    It kept a subset, so a generated policy ran without /proc, without /dev, without a
+    PID namespace of its own and without a new session."""
+    path_dir = tmp_path / "path_sets"
+    path_dir.mkdir(parents=True)
+    (path_dir / "TailPhobos.cfg").write_text(
+        "--proc /proc --dev /dev --share-net --new-session --unshare-pid "
+        "--unshare-uts --unshare-ipc --chdir /tmp/exercise-1\n"
+    )
+    result = run_orchestrator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    written = runtime_tail(tmp_path)
+    for option in ("--proc /proc", "--dev /dev", "--new-session", "--unshare-pid"):
+        assert option in written, f"{option} missing from {written!r}"
+    assert "/tmp/exercise-1" not in written
+
+
+def test_a_repeated_mount_does_not_lose_its_operand(tmp_path):
+    """Deduplicating tokens rather than options would leave a dangling --proc."""
+    path_dir = tmp_path / "path_sets"
+    path_dir.mkdir(parents=True)
+    (path_dir / "TailPhobos.cfg").write_text(
+        "--proc /proc --proc /proc --dev /dev --chdir /tmp/exercise-1\n"
+    )
+    result = run_orchestrator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    written = runtime_tail(tmp_path).split()
+    assert written.count("--proc") == 1
+    assert written[written.index("--proc") + 1] == "/proc"
+    assert written[written.index("--dev") + 1] == "/dev"

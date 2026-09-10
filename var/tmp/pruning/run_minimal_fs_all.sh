@@ -77,7 +77,10 @@ for ex_dir in "${exercises[@]}"; do
   info "=== Processing $ex_name ($lang) ==="
 
   # per-exercise scratch (host), then copy exercise there
-  workroot=$(mktemp -d "/tmp/prune_${lang}_${ex_name}_XXXX")
+  # Under TMPDIR where one is set, rather than always /tmp. A caller that points TMPDIR
+  # somewhere of its own then really gets its scratch there, which is what lets a test
+  # keep the copied exercise inside its own fixture instead of in a shared directory.
+  workroot=$(mktemp -d "${TMPDIR:-/tmp}/prune_${lang}_${ex_name}_XXXX")
   host_workdir="$workroot/exercise"
   mkdir -p "$host_workdir"
   cp -a "$ex_dir"/. "$host_workdir"/
@@ -90,7 +93,10 @@ for ex_dir in "${exercises[@]}"; do
   IN_SB_TESTS="$IN_SB_ROOT"
 
   pushd "$host_workdir" >/dev/null
-  PRUNE_ARGS=( --script "$IN_SB_SCRIPT" --lang "$lang"
+  # --target is no longer optional, and defaults here to the whole filesystem because
+  # that is what a production prune inspects. A test points PRUNE_TARGET at a fixture
+  # tree instead, so it never asks what the machine it runs on happens to need.
+  PRUNE_ARGS=( --script "$IN_SB_SCRIPT" --lang "$lang" --target "${PRUNE_TARGET:-/}"
                --assignment-dir "$IN_SB_ASSIGN" --test-dir "$IN_SB_TESTS" )
   (( LOG_ENABLED )) && PRUNE_ARGS=( --verbose "${PRUNE_ARGS[@]}" )
 

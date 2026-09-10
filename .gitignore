@@ -2,3 +2,5 @@
 /rebuild_image.ps1
 /.idea
 /test-repos/**
+__pycache__/
+*.pyc
