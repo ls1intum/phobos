@@ -1,0 +1,80 @@
+# Reports what the runner can actually do, for the CI that is not written yet.
+#
+# Two planned jobs depend on the machine rather than on this repository: running the
+# Landlock acceptance suites inside an ordinary container, and running the pruner, which
+# needs Bubblewrap and therefore unprivileged user namespaces. A runner image can withdraw
+# either without notice, so the question is asked here, in one place, and asked the same
+# way every time.
+#
+# Manual on purpose. It is a diagnostic, not a gate: the two assert steps are allowed to
+# fail and the verdict is written to the run summary, so one dispatch answers both
+# questions without turning a red check into the answer.
+name: Runner Capabilities
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: runner-capabilities-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  capabilities:
+    name: Probe the runner
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Not preinstalled on the hosted image, and the Bubblewrap assertion needs the real
+      # binary rather than a check for its absence.
+      - name: Install bubblewrap
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+
+      - name: Survey
+        run: bash tests/runner-capability-probe.sh --report
+
+      # A capability this repository does not yet use being absent is a fact to record, not
+      # a broken run, so "no" is a green dispatch. A probe that could not reach a verdict
+      # is not a fact about anything, so it is carried to the last step, which fails.
+      - name: Assert that Landlock enforces
+        id: landlock
+        run: ./.github/scripts/record-capability.sh landlock --assert-landlock
+
+      - name: Assert that Bubblewrap sandboxes
+        id: bwrap
+        if: ${{ !cancelled() }}
+        run: ./.github/scripts/record-capability.sh bwrap --assert-bwrap
+
+      - name: Write the verdict
+        if: ${{ !cancelled() }}
+        env:
+          LANDLOCK_VERDICT: ${{ steps.landlock.outputs.verdict }}
+          BWRAP_VERDICT: ${{ steps.bwrap.outputs.verdict }}
+        run: |
+          landlock="${LANDLOCK_VERDICT:-indeterminate}"
+          bwrap="${BWRAP_VERDICT:-indeterminate}"
+          {
+            echo "## Runner capabilities"
+            echo
+            echo "| Capability | Verdict | What depends on it |"
+            echo "| --- | --- | --- |"
+            echo "| Landlock enforces, host and plain container | ${landlock} | the acceptance suites |"
+            echo "| Bubblewrap builds a production-shaped sandbox | ${bwrap} | the prune phase |"
+            echo
+            echo "Read the survey step for the kernel, the Landlock ABI and the AppArmor settings"
+            echo "behind these two answers."
+          } >> "${GITHUB_STEP_SUMMARY}"
+          if [ "${landlock}" = "indeterminate" ] || [ "${bwrap}" = "indeterminate" ]; then
+            echo "::error::A probe could not reach a verdict, so this run answers nothing."
+            exit 1
+          fi
