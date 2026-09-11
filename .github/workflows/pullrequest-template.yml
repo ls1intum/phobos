@@ -5,11 +5,7 @@ on:
     # No `paths` filter on purpose. The job is written to work as a required status check,
     # and such a check leaves a pull request blocked rather than passing when it never runs.
     # `main` requires no status check today, so this costs nothing and holds if that changes.
-    # fix/prune-and-helper-defects is here because this change is stacked on that
-    # branch, and a base-branch filter is matched against the pull request's base.
-    # Without the entry this workflow does not run on that pull request at all.
-    # Remove it once that branch has landed.
-    branches: [ "main", "fix/prune-and-helper-defects" ]
+    branches: [ "main" ]
     types: [ opened, edited, reopened, ready_for_review, synchronize ]
 
 permissions: {}
@@ -55,7 +51,7 @@ jobs:
 
       - name: Set up JDK 21
         if: env.IS_DEPENDENCY_BOT_PR != 'true'
-        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           java-version: '21'
           distribution: 'temurin'
