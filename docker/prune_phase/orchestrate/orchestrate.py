@@ -54,16 +54,20 @@ ap.add_argument('--skip-prune', action='store_true',
 ap.add_argument('--verbose', action='store_true')
 ap.add_argument('--runtime-chdir', default='/var/tmp/testing-dir',
                 help='Directory the *runtime* sandbox should chdir into (overrides any per‑exercise chdir seen during pruning).')
+ap.add_argument('--prune-script', default='/var/tmp/pruning/run_minimal_fs_all.sh',
+                help='Pruning entry point to run per language (the path the compose file mounts it at).')
+ap.add_argument('--core-dir', default='/var/tmp/opt/core/config',
+                help='Where the generated policy files are written.')
 args = ap.parse_args()
 
 langs: list[str] = [l.strip() for l in args.langs.split(',') if l.strip()]
 PATH_DIR = Path(args.path_dir);            PATH_DIR.mkdir(parents=True, exist_ok=True)
-CORE_DIR = Path('/var/tmp/opt/core/config'); CORE_DIR.mkdir(parents=True, exist_ok=True)
+CORE_DIR = Path(args.core_dir);            CORE_DIR.mkdir(parents=True, exist_ok=True)
 INTERSECT_DIR = CORE_DIR / 'debug'
 INTERSECT_DIR.mkdir(parents=True, exist_ok=True)
 
 HELPERS_DIR = Path(args.helpers_dir)
-PRUNE_SCRIPT = Path('/var/tmp/pruning/run_minimal_fs_all.sh')
+PRUNE_SCRIPT = Path(args.prune_script)
 MAKE_LANG_SETS = HELPERS_DIR / 'make_lang_sets.py'
 
 # ────────────────────────────────────────── helpers
@@ -148,6 +152,13 @@ def collect_language_data(langs: Iterable[str]) -> dict[str, dict[str, set[str]]
             print(f'\033[33m[warn]\033[0m missing {union_file.name}')
             continue
         r_set, w_set = _read_union(union_file)
+        # A union naming nothing is not a language that needs nothing, it is a
+        # language whose pruning produced a file and no content: an unreadable log,
+        # or an emitter that wrote an empty artefact. Every real exercise contributes
+        # the base bindings, so an empty union is a failure wearing a success's file.
+        if not r_set and not w_set:
+            print(f'\033[33m[warn]\033[0m {union_file.name} names no path at all')
+            continue
         data[lang] = {'r': r_set, 'w': w_set}
     return data
 
@@ -228,6 +239,17 @@ def build_runtime_tail(runtime_chdir: str) -> None:
 print('\n\033[1mOrchestrating for:\033[0m', ', '.join(langs), '\n')
 
 # 1) prune in parallel (creates per‑exercise artifacts in PATH_DIR)
+# Artefacts of an earlier run would otherwise be indistinguishable from this run's.
+# That matters because the completeness check further down asks whether a language
+# produced a result: a leftover union file from last week would answer yes for a
+# language that produced nothing today. Skipped on --skip-prune, whose whole purpose
+# is to consume artefacts that an earlier run left behind on purpose.
+if not args.skip_prune:
+    for lang in langs:
+        for stale in PATH_DIR.glob(f'{lang}_*'):
+            stale.unlink()
+
+failed_languages: list[str] = []
 with ThreadPoolExecutor(max_workers=args.jobs) as pool:
     fut2lang = {pool.submit(prune_language, l): l for l in langs}
     for fut in as_completed(fut2lang):
@@ -235,9 +257,20 @@ with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         try:
             fut.result()
         # Deliberately broad: fut.result() re-raises whatever the worker hit, and
-        # one failing language must not abort the runs for the others.
+        # one failing language must not abort the runs for the others. Every
+        # failure is collected instead, so one run names all of them.
         except Exception as exc:  # noqa: BLE001
             print(f'\033[31m{lang} prune failed:\033[0m', exc)
+            failed_languages.append(lang)
+
+# The files below are a security policy: everything not in them is denied. Built
+# from the languages that happened to succeed, they would be a narrower policy
+# than anyone asked for, and nothing downstream could tell that from a correct
+# one. Refuse instead, and leave whatever is already on disk untouched.
+if failed_languages:
+    print('\033[31m[error]\033[0m pruning failed for:', ', '.join(sorted(failed_languages)))
+    print('        Refusing to merge a policy from only the languages that succeeded.')
+    sys.exit(1)
 
 # 2) generate per‑language union/intersection files
 for L in langs:
@@ -245,8 +278,16 @@ for L in langs:
 
 # 3) gather *_union.paths
 lang_data = collect_language_data(langs)
-if not lang_data:
-    print('\033[31m[error]\033[0m no union.paths present – abort')
+
+# Every requested language, not merely one of them. A language whose pruning exited
+# zero without producing anything, because every exercise was skipped or because
+# emit_artifacts.py failed and was only warned about, drops out silently here. The
+# merge below would then write a policy for the languages that happened to work, and
+# nothing downstream could tell that from a policy for all of them.
+missing_languages = sorted(set(langs) - set(lang_data))
+if missing_languages:
+    print('\033[31m[error]\033[0m no usable pruning result for:', ', '.join(missing_languages))
+    print('        Refusing to merge a policy that is missing a language that was asked for.')
     sys.exit(1)
 
 # 4) BasePhobos (UNION across langs)
