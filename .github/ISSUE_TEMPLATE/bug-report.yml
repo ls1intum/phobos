@@ -9,7 +9,9 @@ body:
         Thanks for taking the time to fill out this bug report!
 
         If you believe you have found a way out of the sandbox itself, do not describe it
-        here. Read [SECURITY.md](../../SECURITY.md) and report it privately.
+        here. Read
+        [SECURITY.md](https://github.com/ls1intum/phobos/blob/main/SECURITY.md)
+        and report it privately.
 
   - type: input
     id: bug_title

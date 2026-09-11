@@ -66,7 +66,7 @@ There is no build system. The shell runs as it is, and the C is compiled inside 
 core/phobos.sh --config core/config/BaseLanguage-java.cfg -- ./gradlew test
 
 # Layer switches, for isolating which layer a failure belongs to
-core/phobos.sh --no-timeout --config ... -- <command>
+core/phobos.sh --no-timeout --config core/config/BaseLanguage-java.cfg -- <command>
 ```
 
 ### The linters, which are the gate
@@ -75,13 +75,24 @@ core/phobos.sh --no-timeout --config ... -- <command>
 opening a pull request.
 
 ```
-shellcheck -x -S warning core/*.sh tests/*.sh    # or the pinned container image
-cppcheck --enable=warning --error-exitcode=1 ld_preloader/*.c tests/*.c
-ruff check .
-bandit --recursive --ini .bandit --severity-level medium
+# Same file sets as CI. Each of these is the whole job, not a sample of it.
+find . -name '*.sh'  -type f -print0 | xargs -0 shellcheck -x -S warning
+find . -name '*.c'   -type f -print0 | xargs -0 cppcheck --enable=warning --quiet --error-exitcode=1
+ruff check --no-cache .
+bandit --recursive --ini .bandit --severity-level medium docker/prune_phase/orchestrate var/tmp/helpers
 yamllint --strict .
-hadolint --config .hadolint.yaml docker/*/*/Dockerfile
+find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 ```
+
+Two of those are narrower than they look. `bandit` runs over exactly two directories, not the
+whole tree, because everything else Python here is fixture. `hadolint` matches `Dockerfile*` at
+any depth, but `-name` anchors at the start of the base name, so it reaches the five under
+`docker/` and not `squid/HTTP_PROXY_SQUID_Dockerfile`. That exclusion is deliberate: that file
+fails hadolint and cannot build either, because it copies directories this repository does not
+have. Repairing or deleting it is a decision about the file rather than about linting. CI runs
+shellcheck, cppcheck and hadolint inside pinned container images; the commands above assume the
+tools are installed locally and will differ in version, which is the usual reason a local run
+and CI disagree.
 
 `.bandit`, `.yamllint` and `.hadolint.yaml` at the repository root carry the thresholds and
 the exceptions. A finding is fixed rather than suppressed unless the suppression carries a
