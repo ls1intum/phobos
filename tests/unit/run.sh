@@ -3,13 +3,30 @@
 # coverage. Needs gcc only: the syscalls are interposed through the linker, so
 # no Landlock-capable kernel is required and no container flags are involved.
 #
-#   tests/unit/run.sh            build and run
-#   tests/unit/run.sh --coverage build instrumented, run, print the summary
+#   tests/unit/run.sh                  build and run
+#   tests/unit/run.sh --coverage       build instrumented, run, print the summary
+#   tests/unit/run.sh --coverage DIR   the same, but build in DIR and leave it
+#                                      there, so a report can be made from it
+#
+# Without a directory the build happens in a temporary one that is removed on the
+# way out, which is why asking for coverage and then looking for the .gcda files
+# used to find nothing.
 set -euo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+
+COVERAGE_DIR=""
+if [[ "${1:-}" == "--coverage" ]]; then
+  COVERAGE_DIR="${2:-}"
+fi
+
+if [[ -n "$COVERAGE_DIR" ]]; then
+  mkdir -p "$COVERAGE_DIR"
+  WORK="$(cd -- "$COVERAGE_DIR" && pwd)"
+else
+  WORK="$(mktemp -d)"
+  trap 'rm -rf "$WORK"' EXIT
+fi
 
 # The stage sequence is included by the test file; its modules are linked.
 MODULES=(

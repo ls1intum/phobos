@@ -20,8 +20,13 @@ RUN apt-get update && \
         bubblewrap tree && \
     rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir \
-        pytest==8.* \
+# --break-system-packages because Ubuntu 26.04 ships a PEP 668 Python, which
+# refuses to let pip write into the system installation. This is a disposable
+# build container with no other Python in it, so there is nothing to protect and
+# nothing a virtual environment would buy. Without the flag the image does not
+# build at all: pip stops with externally-managed-environment.
+RUN pip3 install --no-cache-dir --break-system-packages \
+        pytest==8.4.2 \
         ruff==0.8.1
 
 RUN useradd -m sandboxuser

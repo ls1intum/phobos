@@ -15,7 +15,11 @@ cat > $P/pom.xml <<'POM'
 <groupId>de.tum</groupId><artifactId>probe</artifactId><version>1.0</version>
 <properties><maven.compiler.source>17</maven.compiler.source>
 <maven.compiler.target>17</maven.compiler.target>
-<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties></project>
+<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties>
+<build><pluginManagement><plugins>
+<plugin><groupId>org.apache.maven.plugins</groupId>
+<artifactId>maven-compiler-plugin</artifactId><version>3.14.0</version></plugin>
+</plugins></pluginManagement></build></project>
 POM
 echo 'public class App { public static void main(String[] a){ System.out.println("app"); } }' > $P/src/main/java/App.java
 
@@ -37,8 +41,13 @@ probe_read() {
   [[ "$got" == "$want" ]] && ok "$desc: Geheimnis $got (erwartet)" || bad "$desc: Geheimnis $got, erwartet $want"
 }
 
-hdr "Phase 0: Vorbereitung unbeschraenkt (Plugins laden, wie ein realer Agent)"
-(cd $P && mvn -q compile > /tmp/prep.log 2>&1) && ok "Plugins geladen" || { bad "Vorbereitung fehlgeschlagen"; tail -5 /tmp/prep.log; }
+# Offline wie jeder andere Schritt. Das Basis-Image bringt sein Maven-Repository
+# mit, also braucht hier nichts geladen zu werden; die Compiler-Plugin-Version
+# steht oben in der POM, weil Mavens Vorgabe 3.13.0 waere und im Image nur
+# 3.14.0 liegt. Ein Netzzugriff an dieser Stelle koennte den Lauf scheitern
+# lassen, ohne dass es etwas mit Landlock zu tun haette.
+hdr "Phase 0: Vorbereitung unbeschraenkt (Baseline, ohne Beschraenkung)"
+(cd $P && mvn -o -q compile > /tmp/prep.log 2>&1) && ok "Baseline uebersetzt" || { bad "Vorbereitung fehlgeschlagen"; tail -5 /tmp/prep.log; }
 
 hdr "Phase 1: mvn clean, unbeschraenkt"
 (cd $P && mvn -o -q clean) && ok "mvn clean lief durch" || bad "mvn clean fehlgeschlagen"

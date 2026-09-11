@@ -5,7 +5,11 @@ on:
     # No `paths` filter on purpose. The job is written to work as a required status check,
     # and such a check leaves a pull request blocked rather than passing when it never runs.
     # `main` requires no status check today, so this costs nothing and holds if that changes.
-    branches: [ "main" ]
+    # feat/landlock-instead-of-bubblewrap is here because work is currently stacked on
+    # that branch, and a base-branch filter is matched against the pull request's base.
+    # Without the entry this workflow does not run on those pull requests at all.
+    # Remove it once that branch has landed.
+    branches: [ "main", "feat/landlock-instead-of-bubblewrap" ]
     types: [ opened, edited, reopened, ready_for_review, synchronize ]
 
 permissions: {}

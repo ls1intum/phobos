@@ -2,3 +2,4 @@
 /rebuild_image.ps1
 /.idea
 /test-repos/**
+/build/

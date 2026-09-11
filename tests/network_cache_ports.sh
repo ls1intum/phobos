@@ -61,8 +61,11 @@ if ! command -v gcc >/dev/null 2>&1; then
   summary
 fi
 
-# The same build the run-phase image performs.
-if ! gcc -fPIC -shared -o "$WORK/libnetblocker.so" "$SOURCE" 2>"$WORK/lib.log"; then
+# The same build the run-phase image performs, flags included: -O2 is what turns
+# _FORTIFY_SOURCE on, and -Wl,-z,now completes RELRO. Testing an unhardened build
+# of a library that ships hardened would leave the shipped one untested.
+if ! gcc -O2 -Wall -Wextra -fPIC -shared -Wl,-z,now \
+     -o "$WORK/libnetblocker.so" "$SOURCE" 2>"$WORK/lib.log"; then
   bad "build the interposer" "a shared library" "$(cat "$WORK/lib.log")"
   summary
 fi
