@@ -99,7 +99,7 @@ jobs:
       # them: Renovate reads no Python dependency out of a shell command, so without it
       # they would rot for exactly the reason the lock was rejected.
       - name: Install linters
-        run: python3 -m pip install --quiet ruff==0.16.6 bandit==1.9.4
+        run: python3 -m pip install --quiet ruff==0.16.7 bandit==1.9.4
 
       - name: Run ruff
         run: ruff check --no-cache --output-format github .
