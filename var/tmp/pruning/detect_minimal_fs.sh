@@ -24,7 +24,11 @@ EXPLICIT_ENV=()
 TEST_DIR=""
 ASSIGN_DIR=""
 LOG_ENABLED=0
-LANG=""
+# Not LANG. That is the locale variable, and --lang used to assign the programming
+# language to it, so the PRUNE_ENV_PASSTHROUGH list below carried "java" into the
+# sandbox as a locale. The name a caller passes and the locale a build reads are
+# different things.
+PRUNE_LANG=""
 
 IGNORABLE_FAILURE_PATTERNS=${IGNORABLE_FAILURE_PATTERNS:-"There were failing tests|> Task :(compileJava|compileTestJava) NO-SOURCE"}
 UNIGNORABLE_SUCCESS_PATTERNS=${UNIGNORABLE_SUCCESS_PATTERNS:-"> Task :(compileJava|compileTestJava) NO-SOURCE"}
@@ -41,7 +45,7 @@ while [[ $# -gt 0 ]]; do
     --assignment-dir) ASSIGN_DIR="$2"; shift 2;;
     --test-dir)       TEST_DIR="$2"; shift 2;;
     --verbose)        LOG_ENABLED=1; shift;;
-    --lang)           LANG="$2"; shift 2;;
+    --lang)           PRUNE_LANG="$2"; shift 2;;
     *)                echo "Unknown argument: $1" >&2; exit 1;;
   esac
 done
@@ -384,7 +388,7 @@ if ! test_build_script; then
   exit 1
 fi
 
-log "Running pruning for exercises of ${LANG:-<unknown>}..."
+log "Running pruning for exercises of ${PRUNE_LANG:-<unknown>}..."
 prune_tree "$TARGET"
 
 # never fail a successful prune during compaction
