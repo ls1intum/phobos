@@ -84,14 +84,15 @@ yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 ```
 
-Two of those are narrower than they look. `bandit` runs over exactly two directories, not
-the whole tree, because everything else Python here is fixture. `hadolint` matches
-`Dockerfile*` anywhere, which includes `squid/HTTP_PROXY_SQUID_Dockerfile`, not only the
-ones under `docker/`. CI runs shellcheck, cppcheck and hadolint inside pinned container
-images; the commands above assume the tools are installed locally and will differ in
-version, which is the usual reason a local run and CI disagree.
-
-
+Two of those are narrower than they look. `bandit` runs over exactly two directories, not the
+whole tree, because everything else Python here is fixture. `hadolint` matches `Dockerfile*` at
+any depth, but `-name` anchors at the start of the base name, so it reaches the five under
+`docker/` and not `squid/HTTP_PROXY_SQUID_Dockerfile`. That exclusion is deliberate: that file
+fails hadolint and cannot build either, because it copies directories this repository does not
+have. Repairing or deleting it is a decision about the file rather than about linting. CI runs
+shellcheck, cppcheck and hadolint inside pinned container images; the commands above assume the
+tools are installed locally and will differ in version, which is the usual reason a local run
+and CI disagree.
 
 `.bandit`, `.yamllint` and `.hadolint.yaml` at the repository root carry the thresholds and
 the exceptions. A finding is fixed rather than suppressed unless the suppression carries a
