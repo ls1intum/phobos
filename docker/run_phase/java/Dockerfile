@@ -1,4 +1,4 @@
-FROM ls1tum/artemis-maven-template:java17-25
+FROM ls1tum/artemis-maven-template:java17-25@sha256:521f4dd3f3c6d81f403e84f2e2af3c459cd42dfd0345886aac1d1032527b07f8
 
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
