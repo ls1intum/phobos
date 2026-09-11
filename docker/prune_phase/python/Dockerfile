@@ -27,7 +27,7 @@ RUN apt-get update && \
 # build at all: pip stops with externally-managed-environment.
 RUN pip3 install --no-cache-dir --break-system-packages \
         pytest==8.4.2 \
-        ruff==0.8.1
+        ruff==0.16.7
 
 RUN useradd -m sandboxuser
 
