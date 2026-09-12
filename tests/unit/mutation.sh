@@ -58,10 +58,10 @@ mkdir -p /tmp/objects
 for source in tests/unit/landlock_unit.c core/phobos-landlock-diagnostics.c \
               core/phobos-landlock-path-rule.c core/phobos-landlock-options.c \
               core/phobos-landlock-ruleset.c; do
-  "clang-${LLVM_VERSION}" "-fpass-plugin=/usr/lib/mull-ir-frontend-${LLVM_VERSION}" \
+  "clang-${LLVM_VERSION}" -std=gnu23 "-fpass-plugin=/usr/lib/mull-ir-frontend-${LLVM_VERSION}" \
     -g -grecord-command-line -O0 -c -o "/tmp/objects/$(basename "${source%.c}").o" "$source"
 done
-"clang-${LLVM_VERSION}" -g -o /tmp/unit-mutated /tmp/objects/*.o \
+"clang-${LLVM_VERSION}" -std=gnu23 -g -o /tmp/unit-mutated /tmp/objects/*.o \
   -Wl,--wrap=open -Wl,--wrap=fstat -Wl,--wrap=syscall -Wl,--wrap=prctl \
   -Wl,--wrap=chdir -Wl,--wrap=execvp -Wl,--wrap=close
 

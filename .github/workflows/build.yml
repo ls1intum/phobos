@@ -41,8 +41,15 @@ jobs:
         with:
           persist-credentials: false
 
-      # gcc and nothing else. The syscalls are interposed through the linker, so this
-      # needs no Landlock, no container and no elevated permission.
+      # gcc-14 and nothing else. The syscalls are interposed through the linker, so
+      # this needs no Landlock, no container and no elevated permission. The runner
+      # ships gcc 13, which does not know -std=gnu23, so the compiler is installed
+      # rather than assumed.
+      - name: Install gcc-14
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends gcc-14
+
       - name: Run the unit tests
         run: bash tests/unit/run.sh
 

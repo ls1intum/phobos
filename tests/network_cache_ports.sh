@@ -55,23 +55,26 @@ summary() {
   exit 0
 }
 
-if ! command -v gcc >/dev/null 2>&1; then
+# Named rather than inherited: the sources are C23 and Ubuntu 24.04's default
+# gcc 13 knows that standard only under its draft name.
+COMPILER="${COMPILER:-gcc-14}"
+if ! command -v "$COMPILER" >/dev/null 2>&1; then
   skip "network cache port restrictions" \
-       "no C compiler on this platform; these checks run on Linux"
+       "no $COMPILER on this platform; these checks run on Linux"
   summary
 fi
 
 # The same build the run-phase image performs, flags included: -O2 is what turns
 # _FORTIFY_SOURCE on, and -Wl,-z,now completes RELRO. Testing an unhardened build
 # of a library that ships hardened would leave the shipped one untested.
-if ! gcc -O2 -Wall -Wextra -fPIC -shared -Wl,-z,now \
+if ! "$COMPILER" -std=gnu23 -O2 -Wall -Wextra -fPIC -shared -Wl,-z,now \
      -o "$WORK/libnetblocker.so" "$SOURCE" 2>"$WORK/lib.log"; then
   bad "build the interposer" "a shared library" "$(cat "$WORK/lib.log")"
   summary
 fi
 ok "build the interposer"
 
-if ! gcc -O0 -g -o "$WORK/probe" "$PROBE_SOURCE" 2>"$WORK/probe.log"; then
+if ! "$COMPILER" -std=gnu23 -O0 -g -o "$WORK/probe" "$PROBE_SOURCE" 2>"$WORK/probe.log"; then
   bad "build the probe client" "an executable" "$(cat "$WORK/probe.log")"
   summary
 fi
