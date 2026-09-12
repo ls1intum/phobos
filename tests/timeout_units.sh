@@ -177,16 +177,16 @@ exit 0
 FAKE
 chmod +x "$WORK/fake-timeout"
 
-cat > "$WORK/fake-bwrap" <<'FAKE'
+cat > "$WORK/fake-landlock" <<'FAKE'
 #!/usr/bin/env bash
 exit 0
 FAKE
-chmod +x "$WORK/fake-bwrap"
+chmod +x "$WORK/fake-landlock"
 
 # The legacy wrapper resolves these two through PATH. Shadowing them keeps the
 # checks below from running the real sandbox tools on the host.
 cp "$WORK/fake-timeout" "$WORK/timeout"
-cp "$WORK/fake-bwrap" "$WORK/bwrap"
+cp "$WORK/fake-landlock" "$WORK/phobos-landlock"
 
 SPEC="$WORK/spec"
 mkdir -p "$SPEC"
@@ -204,7 +204,7 @@ timeout_arg_for() {
   PHB_ENABLE_FILESYSTEM="$enable_fs" \
   PHB_TIMEOUT_SEC="$value" \
   TIMEOUT_BIN="$WORK/fake-timeout" \
-  BWRAP_BIN="$WORK/fake-bwrap" \
+  PHOBOS_LANDLOCK_BIN="$WORK/fake-landlock" \
   PHB_TEST_RECORD="$WORK/record" \
     bash "$CORE/phobos-filesystem.sh" "$SPEC" -- /bin/true >/dev/null 2>&1
   rc=$?

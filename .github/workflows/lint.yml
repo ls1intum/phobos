@@ -2,7 +2,11 @@ name: Lint
 
 on:
   pull_request:
-    branches: ["main"]
+    # feat/landlock-instead-of-bubblewrap is here because work is currently stacked on
+    # that branch, and a base-branch filter is matched against the pull request's base.
+    # Without the entry this workflow does not run on those pull requests at all.
+    # Remove it once that branch has landed.
+    branches: ["main", "feat/landlock-instead-of-bubblewrap"]
   push:
     branches: ["main"]
   workflow_dispatch:
@@ -53,10 +57,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install cppcheck
+      - name: Install cppcheck and gcc-14
         run: |
           sudo apt-get update -qq
-          sudo apt-get install --yes --no-install-recommends cppcheck
+          sudo apt-get install --yes --no-install-recommends cppcheck gcc-14
 
       # -fanalyzer costs nothing here and catches memory and null-pointer
       # problems that plain -Wall does not see.
@@ -65,7 +69,7 @@ jobs:
           failed=0
           while IFS= read -r f; do
             echo "::group::$f"
-            gcc -fsyntax-only -Wall -Wextra -Werror -fanalyzer "$f" || failed=1
+            gcc-14 -std=gnu23 -fsyntax-only -Wall -Wextra -Werror -fanalyzer "$f" || failed=1
             echo "::endgroup::"
           done < <(find . -name '*.c' -type f)
           exit "$failed"
@@ -75,7 +79,7 @@ jobs:
       - name: Run cppcheck
         run: |
           find . -name '*.c' -type f -print0 \
-            | xargs -0 cppcheck --enable=warning --quiet --error-exitcode=1
+            | xargs -0 cppcheck --std=c23 --enable=warning --quiet --error-exitcode=1
 
   python:
     name: Python (ruff and bandit)

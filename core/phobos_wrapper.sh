@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The translation from a parsed policy into phobos-landlock arguments lives in
+# one place, path rights and TCP ports alike, so this entry point and
+# phobos-filesystem.sh cannot drift apart. They already had, once.
+PHOBOS_WRAPPER_HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=phobos-common.sh
+source "${PHOBOS_WRAPPER_HERE}/phobos-common.sh"
+
 err()   { echo -e "\e[31m[error]\e[0m $*" >&2; exit 1; }
 warn()  { echo -e "\e[33m[warn]\e[0m  $*" >&2; }
 usage() { cat <<EOF
@@ -116,7 +123,7 @@ if (( sandbox_enabled )); then
     load_cfg "$base_cfg"
     for c in "${extra_cfgs[@]}"; do load_cfg "$c"; done
 else
-    # Fallback: run build script directly (no bwrap, no timeout)
+    # Fallback: run build script directly (no sandbox, no timeout)
     cd /var/tmp/testing-dir 2>/dev/null || true
     printf '\e[34m[no-sandbox]\e[0m exec %q ' "$build_script" "$@"; echo
     exec "$build_script" "$@"
@@ -142,17 +149,40 @@ if ((${#restricted_cmds[@]})); then
 fi
 
 # ---------------------------------------------------------------------
-# Bubblewrap argument assembly
+# Landlock argument assembly
 # ---------------------------------------------------------------------
-bwrap_args=( --proc /proc --dev /dev )
+# No --proc/--dev here: those are mount-namespace concepts. Landlock does not
+# build a new filesystem view, it only withholds access to the existing one.
+landlock_args=()
 
-for p in "${readonly_paths[@]}"; do bwrap_args+=( --ro-bind "$p" "$p" ); done
-for p in "${write_paths[@]}";    do bwrap_args+=( --bind    "$p" "$p" ); done
-for p in "${tmpfs_paths[@]}";    do bwrap_args+=( --tmpfs   "$p"     ); done
+# Same mapping as phobos-filesystem.sh, and for the same reasons: read paths
+# keep execute because the base policies depend on it, write paths lose the
+# ability to create device nodes and symbolic links.
+ro_list="$(mktemp)"; rw_list="$(mktemp)"
+printf '%s\n' "${readonly_paths[@]}" > "$ro_list"
+printf '%s\n' "${write_paths[@]}"    > "$rw_list"
+build_path_args landlock_args "" "$ro_list" "$rw_list"
+rm -f "$ro_list" "$rw_list"
 
-# append restricted-command masks (shadow earlier binds)
-for p in "${restricted_paths[@]}"; do
-    bwrap_args+=( --ro-bind /dev/null "$p" )
+# Paths that bubblewrap used to mask (tmpfs overlay or /dev/null shadow) are left
+# off the allow-list instead: Landlock withholds access, it cannot overlay a path
+# with emptiness. That is weaker, because the path stays visible by name, and it
+# fails entirely once an allow-listed ancestor covers the path, since Landlock
+# grants a whole subtree and cannot except anything inside it. The same check as
+# in phobos-filesystem.sh applies, so both entry points refuse a policy they
+# cannot enforce rather than warning and continuing.
+covering_allow() {
+    local target=$1 a
+    for a in "${readonly_paths[@]}" "${write_paths[@]}"; do
+        if [[ $target == "$a" || $target == "${a%/}/"* ]]; then printf '%s' "$a"; return 0; fi
+    done
+    return 1
+}
+for p in "${tmpfs_paths[@]}" "${restricted_paths[@]}"; do
+    if cover=$(covering_allow "$p"); then
+        err "policy unenforceable: '$p' is hidden but lies beneath allowed path '$cover'; Landlock cannot except a path inside an allowed subtree"
+    fi
+    warn "hide: '$p' is denied but stays visible (Landlock cannot mask paths)"
 done
 
 # tail flags (share-net, runtime chdir etc.)
@@ -160,7 +190,7 @@ if [[ -f $tail_cfg ]]; then
     while read -r line || [[ -n $line ]]; do
         read -ra parts <<<"$line"
         (( ${#parts[@]} )) || continue
-        bwrap_args+=("${parts[@]}")
+        landlock_args+=("${parts[@]}")
     done < "$tail_cfg"
 fi
 
@@ -182,17 +212,32 @@ parse_hostport() {                       # $1 = host[:port] (IPv6 ok)
     echo "$host $port"
 }
 
+# Two readers, two conventions for "any port": libnetblocker reads a 0, while
+# the policy language and phobos-common.sh spell it with a star. The same rules
+# are therefore written twice rather than one file being reinterpreted, so
+# neither reader has to guess what the other meant.
+landlock_net_rules="$(mktemp)"
 for rule in "${network_rules[@]}"; do
     [[ $rule =~ ^allow[[:space:]]+(.+)$ ]] || continue
-    parse_hostport "${BASH_REMATCH[1]}" >> "$allowed_file"
+    hostport_line="$(parse_hostport "${BASH_REMATCH[1]}")"
+    printf '%s\n' "$hostport_line" >> "$allowed_file"
+    read -r net_host net_port <<<"$hostport_line"
+    [[ "$net_port" == "0" ]] && net_port="*"
+    printf '%s %s\n' "$net_host" "$net_port" >> "$landlock_net_rules"
 done
+
+# The same translation phobos-filesystem.sh uses, so a policy that names concrete
+# ports is enforced by the kernel through either entry point and not only by the
+# preload library, which a submission can step around.
+build_network_args landlock_args "$landlock_net_rules"
+rm -f "$landlock_net_rules"
 
 export NETBLOCKER_CONF="$allowed_file"
 export LD_PRELOAD="$core/libnetblocker.so"
 
 timeout_cmd=( timeout --kill-after=5s "${timeout_s}s" )
 
-cmd=( "${timeout_cmd[@]}" bwrap "${bwrap_args[@]}" -- "$build_script" "$@" )
-printf '\e[34m[bwrap]\e[0m '; printf '%q ' "${cmd[@]}"; echo
+cmd=( "${timeout_cmd[@]}" "${PHOBOS_LANDLOCK_BIN:-$core/phobos-landlock}" "${landlock_args[@]}" -- "$build_script" "$@" )
+printf '\e[34m[landlock]\e[0m '; printf '%q ' "${cmd[@]}"; echo
 ulimit -v $((mem_mb*1024*5))
 exec "${cmd[@]}"

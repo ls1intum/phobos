@@ -1,12 +1,16 @@
 services:
   phobos-runner:
     build:
-      context: ../../..
-      dockerfile: Dockerfile
-    image: ajayvir/phobos
-    security_opt:
-      - "seccomp:../../../security_config/seccomp_allow_bwrap.json"
-      - "apparmor=docker-bwrap"
+      # The Dockerfile copies flat names that live in two directories of this
+      # repository, so the context has to be assembled first. Compose cannot
+      # express that, and pointing it at the repository root, as this file used
+      # to, gives a context with no Dockerfile and no file the COPY lines match.
+      #
+      # Run this from the repository root before `docker compose build`:
+      #   .github/scripts/assemble-run-phase-context.sh build/run-phase-context
+      context: ../../../build/run-phase-context
+      dockerfile: ../../docker/run_phase/java/Dockerfile
+    image: phobos-run-phase-java
     stdin_open: true
     tty: true
     entrypoint: /bin/bash

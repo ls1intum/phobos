@@ -1,0 +1,198 @@
+# Builds the images this repository can build, and tests the one it ships.
+#
+# The run-phase image is the artefact: it is where both C products are compiled and it
+# is what an exercise actually runs in. Nothing was building it, so the acceptance
+# suites had only ever run by hand.
+#
+# The image is built and exercised in ONE job on purpose. Loading an image populates
+# the Docker daemon of that runner and no other, so a separate acceptance job would
+# quietly build a second image and test that instead.
+name: Build
+
+on:
+  pull_request:
+    # feat/landlock-instead-of-bubblewrap is here because this change is stacked on
+    # that branch, and a base-branch filter is matched against the pull request's base.
+    # Without the entry this workflow would not run on the pull request introducing it.
+    # Remove it once that branch has landed.
+    branches: [ "main", "feat/landlock-instead-of-bubblewrap" ]
+  push:
+    branches: [ "main" ]
+  schedule:
+    - cron: "0 17 * * 0"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  unit:
+    name: Unit tests for the Landlock wrapper
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # gcc-14 and nothing else. The syscalls are interposed through the linker, so
+      # this needs no Landlock, no container and no elevated permission. The runner
+      # ships gcc 13, which does not know -std=gnu23, so the compiler is installed
+      # rather than assumed.
+      - name: Install gcc-14
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends gcc-14
+
+      - name: Run the unit tests
+        run: bash tests/unit/run.sh
+
+      # No coverage step, deliberately. The suite interposes open and close, which is
+      # also how the gcov runtime writes its .gcda files, so an instrumented run has
+      # gcov's own diagnostics landing on stderr. That breaks the test asserting that a
+      # run which goes through says nothing, and it means the figures come from a
+      # perturbed run in the first place. tests/unit/mutation.sh is the stronger measure
+      # of this suite and already runs weekly below.
+
+  images:
+    name: Build the ${{ matrix.name }} image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: prune c
+            slug: prune-c
+            context: docker/prune_phase/c
+          - name: prune java
+            slug: prune-java
+            context: docker/prune_phase/java
+          - name: prune python
+            slug: prune-python
+            context: docker/prune_phase/python
+          - name: prune orchestrate
+            slug: prune-orchestrate
+            context: docker/prune_phase/orchestrate
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # docker build rather than docker/build-push-action: this organisation allows
+      # only actions it owns and actions GitHub publishes, so every third-party one is
+      # refused before the run starts. Docker and buildx are on the runner already.
+      #
+      # The run-phase image is deliberately absent: the job below builds it and then
+      # tests that exact image, and building it here as well would prove nothing twice.
+      #
+      # squid/HTTP_PROXY_SQUID_Dockerfile is absent too, and for a worse reason: it
+      # cannot build. It copies test-repos, student-exercises, pruning and helpers from a
+      # repository root that holds none of them. A green run here says nothing about it.
+      - name: Build
+        env:
+          # The weekly run is the one that has to notice a moved base image or a changed
+          # apt package, and a layer that is simply reused is precisely what would hide
+          # that. --no-cache reruns the layers, --pull re-resolves the base image;
+          # neither does the other's half.
+          FRESH: ${{ github.event_name == 'schedule' && '--pull --no-cache' || '' }}
+          # Through the environment rather than interpolated into the command. These two
+          # values come from the matrix above and are safe, but a run block that pastes
+          # an expression into a shell is the shape to avoid having anywhere.
+          IMAGE_SLUG: ${{ matrix.slug }}
+          BUILD_CONTEXT: ${{ matrix.context }}
+        run: |
+          # shellcheck disable=SC2086
+          docker build ${FRESH} -t "phobos-${IMAGE_SLUG}:ci" "${BUILD_CONTEXT}"
+
+  run-phase:
+    name: Build the run-phase image and hold it to the acceptance suites
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The Dockerfile copies flat names that live in two directories, so the context is
+      # put together first. The acceptance README calls this same script, which is what
+      # keeps the documented build and this one from drifting apart.
+      - name: Assemble the build context
+        run: .github/scripts/assemble-run-phase-context.sh "${RUNNER_TEMP}/run-phase-context"
+
+      # A plain docker build, so the image lands in this runner's own daemon and the
+      # steps below run the image this job just built rather than one they built
+      # themselves. Third-party actions are refused in this organisation anyway.
+      - name: Build the run-phase image
+        id: build
+        env:
+          FRESH: ${{ github.event_name == 'schedule' && '--pull --no-cache' || '' }}
+        run: |
+          # shellcheck disable=SC2086
+          docker build ${FRESH} \
+            -f docker/run_phase/java/Dockerfile \
+            -t phobos-run-phase:ci \
+            "${RUNNER_TEMP}/run-phase-context"
+
+      # No --privileged, no --cap-add, no --security-opt, in any of the three. That is
+      # the claim these suites exist to make, and CI is where it stops being a claim.
+      #
+      # --network none for the same reason. Every Maven call in the suites is offline
+      # and the checks are meant to hold without a network, so the gate says so instead
+      # of trusting that nobody drops an -o later. Loopback survives it, which is what
+      # the socket assertions need.
+      #
+      # Nothing is mounted over /root/.m2 either. The base image ships a populated
+      # Maven repository, and a cache volume mounted there hides it: the offline
+      # `mvn clean` steps in the phase test then fail for want of a plugin, which looks
+      # like a sandbox failure and is not one.
+      - name: The five guarantees
+        run: |
+          docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
+            phobos-run-phase:ci bash /testsuite/run-tests.sh
+
+      - name: Inheritance, non-root and the control probe
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
+            phobos-run-phase:ci bash /testsuite/extra-tests.sh
+
+      # Its own step because it is the one suite that resolves Maven plugins, and a
+      # failure here is a dependency problem rather than a Landlock regression. It still
+      # fails the job: naming the cause is for diagnosis, not for excusing it.
+      - name: Tightening and widening rights across phases
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
+            phobos-run-phase:ci bash /testsuite/phase-test.sh
+
+  # Mutation testing installs clang and mull into a container and then runs the suite
+  # once per mutant, which is minutes rather than seconds. Weekly and on request, so it
+  # reports on the suite's strength without being in the way of a pull request.
+  mutation:
+    name: Mutation score of the wrapper suite
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run mutation testing
+        run: bash tests/unit/mutation.sh

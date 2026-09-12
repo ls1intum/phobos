@@ -14,7 +14,7 @@ Usage:
 Layer options (all enabled by default):
   --no-timeout       Disable timeout wrapper (phobos-timeout.sh).
   --no-network       Disable network sandbox (libnetblocker / phobos-network.sh).
-  --no-filesystem    Disable filesystem sandbox (bwrap / phobos-filesystem.sh).
+  --no-filesystem    Disable filesystem sandbox (Landlock / phobos-filesystem.sh).
 
 Notes:
 - Base config: any "${HERE}/Base*.cfg" (INI-like) is applied first (sorted).
