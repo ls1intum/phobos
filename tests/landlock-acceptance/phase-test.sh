@@ -25,9 +25,9 @@ echo 'public class App { public static void main(String[] a){ System.out.println
 
 # Rechte-Profile der einzelnen Phasen
 # /dev/null muss explizit erlaubt werden: bwrap lieferte /dev frueher per --dev mit.
-COMMON="--rox /opt/java --rox /usr --ro /etc --rw /tmp --rw /root/.m2 --rw /dev/null"
-COMPILE="$COMMON --rw $P"
-TEST_ONLY="$COMMON --rox $P/target --rox $P/pom.xml --rw $P/target/surefire"
+COMMON="--rights=rx /opt/java --rights=rx /usr --rights=r /etc --rights=rwmd /tmp --rights=rwmd /root/.m2 --rights=rwmd /dev/null"
+COMPILE="$COMMON --rights=rwmd $P"
+TEST_ONLY="$COMMON --rights=rx $P/target --rights=rx $P/pom.xml --rights=rwmd $P/target/surefire"
 
 # probe_read <beschreibung> <erwartung OK|DENIED> <landlock-args...>
 probe_read() {
@@ -72,7 +72,7 @@ probe_read "Phase 4" OK UNRESTRICTED
 
 hdr "Die Falle: was Phase 3 hinterlaesst, laeuft in Phase 4 unbeschraenkt"
 mkdir -p $P/target
-$LL $COMMON --rw $P/target --chdir $P -- /bin/sh -c 'echo "cat /var/tmp/secret/secret.txt" > target/hinterlassen.sh' 2>/dev/null
+$LL $COMMON --rights=rwmd $P/target --chdir $P -- /bin/sh -c 'echo "cat /var/tmp/secret/secret.txt" > target/hinterlassen.sh' 2>/dev/null
 if [[ -f $P/target/hinterlassen.sh ]]; then
   OUT=$(sh $P/target/hinterlassen.sh 2>&1)
   # This is a documented property, not a defect: Landlock binds a process, not

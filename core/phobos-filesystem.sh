@@ -44,7 +44,7 @@ args=()
 # mapping it, otherwise the loader fails before the command starts.
 # PHB_NETBLOCKER_SO is set by phobos-network.sh when the lib exists.
 if [[ -n "${PHB_NETBLOCKER_SO:-}" && -f "${PHB_NETBLOCKER_SO}" ]]; then
-  args+=( --rox "$PHB_NETBLOCKER_SO" )
+  args+=( --rights=rx "$PHB_NETBLOCKER_SO" )
 fi
 
 # Landlock withholds access, it cannot overlay a path with emptiness, and it
@@ -69,32 +69,17 @@ if [[ -s "${HIDE}" ]]; then
     _log "hide: '$p' is denied but stays visible (Landlock cannot mask paths)"
   done < "${HIDE}"
 fi
-# --rox, not --ro: bubblewrap's --ro-bind allowed execution from the bound
-# tree, and the base policies rely on that (the JVM and every build tool live
-# under [readonly] paths). Mapping to --ro would be tighter but would stop the
-# build outright, so behaviour is kept identical here; narrowing it means
-# splitting [readonly] into data and executable paths, which is a policy
-# change rather than a mechanism change.
-if [[ -s "${RO}" ]]; then
-  while IFS= read -r p; do [[ -z "$p" ]] && continue; args+=( --rox "$p" ); done < "${RO}"
-fi
-if [[ -s "${RW}" ]]; then
-  while IFS= read -r p; do
-    [[ -z "$p" ]] && continue
-    # A Landlock rule needs an existing path to open, so materialise the
-    # target first. A trailing slash means "directory" (e.g. target/ after a
-    # clean), anything else is treated as a file, as before.
-    if [[ ! -e "$p" ]]; then
-      if [[ "$p" == */ ]]; then
-        mkdir -p "$p" 2>/dev/null || true
-      else
-        mkdir -p "$(dirname "$p")" 2>/dev/null || true
-        : > "$p" || true
-      fi
-    fi
-    args+=( --rw "$p" )
-  done < "${RW}"
-fi
+# Read paths keep the execute right: bubblewrap's --ro-bind allowed execution
+# from the bound tree, and the base policies rely on it, because the JVM and
+# every build tool live under [readonly] paths. Splitting those into data and
+# programs is a change of policy rather than of mechanism, so it is not made
+# here; phobos-landlock can express it, and the configuration format is where
+# it has to be decided.
+#
+# Write paths get rwmd: write, create, delete. That is what --rw granted before,
+# minus creating device nodes and symbolic links, which no build tool needs and
+# which are the two ways to reach something the policy never named.
+build_path_args args "" "${RO}" "${RW}"
 if [[ -s "${TAIL}" ]]; then
   # Splitting is intended: tail.flags holds whitespace-separated arguments.
   # Read line by line so a multi-line file works too.

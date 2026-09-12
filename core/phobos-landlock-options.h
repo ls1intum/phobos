@@ -12,8 +12,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define MAXIMUM_PATH_RULES 4096
-#define MAXIMUM_PORT_RULES 64
+static constexpr size_t MAXIMUM_PATH_RULES = 4096;
+static constexpr size_t MAXIMUM_PORT_RULES = 64;
+
+/* The letters a --rights= option may carry, one per field of path_rule. */
+static constexpr char RIGHTS_LETTER_READ = 'r';
+static constexpr char RIGHTS_LETTER_WRITE = 'w';
+static constexpr char RIGHTS_LETTER_EXECUTE = 'x';
+static constexpr char RIGHTS_LETTER_MAKE = 'm';
+static constexpr char RIGHTS_LETTER_DELETE = 'd';
+static constexpr char RIGHTS_LETTER_IOCTL = 'i';
 
 struct options {
     struct path_rule rules[MAXIMUM_PATH_RULES];
@@ -32,10 +40,10 @@ void parse_arguments(int argument_count, char *arguments[], struct options *opti
 
 /* True when any network rule was asked for, which decides whether the ruleset
  * handles network access at all. */
-int network_rules_wanted(const struct options *options);
+bool network_rules_wanted(const struct options *options);
 
-/* Records one --ro/--rox/--rw/--rwx option. Exposed for the tests. */
-void remember_path_rule(struct options *options, const char *flag_name, const char *path);
+/* Records one --rights=LETTERS option. Exposed for the tests. */
+void remember_path_rule(struct options *options, const char *letters, const char *path);
 
 /* Reads a number and refuses anything that is not one, or is outside the range
  * the option can mean. Exposed for the tests. */
@@ -43,6 +51,6 @@ unsigned long parse_number(const char *text, unsigned long lowest, unsigned long
                            const char *what);
 
 /* Prints how to call this tool and gives up. */
-_Noreturn void print_usage_and_exit(void);
+[[noreturn]] void print_usage_and_exit(void);
 
 #endif

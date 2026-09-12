@@ -186,3 +186,198 @@ fs_union_files() {
   canon_paths < "${tmpd}/rw.all"   | uniq_keep_order | depth_sort > "$out_rw"   || : > "$out_rw"
   canon_paths < "${tmpd}/hide.all" | uniq_keep_order | depth_sort > "$out_hide" || : > "$out_hide"
 }
+
+# --------------------------------------------------------------------------
+# Translating a parsed policy into phobos-landlock arguments.
+#
+# Both entry points use these, so the two cannot drift apart. That has already
+# happened once in this repository, which is why it lives here and not twice.
+# --------------------------------------------------------------------------
+
+# Rights each section grants, as the letters phobos-landlock understands.
+PHB_RIGHTS_READONLY="r"
+PHB_RIGHTS_EXECUTABLE="rx"
+PHB_RIGHTS_WRITE="rwmd"
+
+# canon_paths deliberately passes --no-symlinks, because the merge logic
+# compares what the policy wrote. The conflict check below needs the opposite:
+# Landlock anchors a rule on the inode it opens, so /bin and /usr/bin are one
+# tree on a merged-usr system even though they are two lines in the policy.
+resolve_symlinks() {
+  if command -v realpath >/dev/null 2>&1; then
+    while IFS= read -r p; do
+      [[ -z "$p" ]] && continue
+      realpath --canonicalize-missing "$p" 2>/dev/null || printf '%s\n' "$p"
+    done
+  else
+    cat
+  fi
+}
+
+# Landlock unions the rights of every rule along a path: a nested rule can only
+# add, never take away. Measured, not assumed.
+#
+# Two consequences, and they are not the same thing:
+#
+#   A policy that declares FEWER rights on a nested path states a restriction
+#   that will not hold. /usr executable with /usr/share read-only leaves
+#   /usr/share executable. That is refused, because the entry would read as a
+#   limit and be none.
+#
+#   A policy that declares DIFFERENT rights, neither side a subset of the other,
+#   is normal and stays allowed: a readable, executable tree with one writable
+#   directory inside it is the ordinary shape of a build workspace. The nested
+#   path still inherits the ancestor's rights on top of its own, so the effective
+#   set is the union, and the union is what gets handed to the kernel and logged.
+#   Emitting the narrower declaration instead would make the verbose output
+#   disagree with what is actually enforced.
+
+# Answers whether every letter of the first string appears in the second.
+rights_subset() {
+  local a="$1" b="$2" i
+  for (( i = 0; i < ${#a}; i++ )); do
+    [[ "$b" == *"${a:$i:1}"* ]] || return 1
+  done
+  return 0
+}
+
+# Deduplicates the letters and puts them in the order the usage text lists them,
+# so two spellings of one set compare equal and the logged form reads the way the
+# documentation does rather than alphabetically.
+PHB_RIGHTS_ORDER="rwxmdi"
+rights_normalise() {
+  local set="$1" out="" i letter
+  for (( i = 0; i < ${#PHB_RIGHTS_ORDER}; i++ )); do
+    letter="${PHB_RIGHTS_ORDER:$i:1}"
+    [[ "$set" == *"$letter"* ]] && out="${out}${letter}"
+  done
+  printf '%s' "$out"
+}
+
+# Reads "rights<TAB>path" lines from the first file, refuses any entry that is a
+# strict narrowing of an ancestor, and writes "effective-rights<TAB>path" for the
+# rest into the second file.
+#
+# The result goes to a named file rather than to stdout on purpose: report()
+# prints on stdout, so a refusal written while stdout is redirected would land in
+# the data file instead of in front of the person the message is for.
+resolve_rights_hierarchy() {
+  local table="$1" output="$2" a_rights a_path d_rights d_path effective
+  : > "$output"
+  while IFS=$'\t' read -r d_rights d_path; do
+    [[ -z "$d_path" ]] && continue
+    effective="$d_rights"
+    while IFS=$'\t' read -r a_rights a_path; do
+      [[ -z "$a_path" ]] && continue
+      [[ "$d_path" == "$a_path" ]] && continue
+      [[ "$d_path" == "${a_path%/}/"* ]] || continue
+      if rights_subset "$d_rights" "$a_rights" && ! rights_subset "$a_rights" "$d_rights"; then
+        report "Policy unenforceable: '$d_path' is granted '$d_rights' but lies beneath '$a_path', which is granted the wider '$a_rights'. Landlock adds the rights of every rule along a path and can never take one away, so the narrower entry would not hold. (PHB-EPOLICY)"
+        exit "${PHB_EPOLICY}"
+      fi
+      effective="${effective}${a_rights}"
+    done < "$table"
+    effective="$(rights_normalise "$effective")"
+    if [[ "$effective" != "$(rights_normalise "$d_rights")" ]]; then
+      _log "rights: '$d_path' is declared '$d_rights' but lies beneath a wider rule, so it effectively holds '$effective'"
+    fi
+    printf '%s\t%s\n' "$effective" "$d_path" >> "$output"
+  done < "$table"
+}
+
+# Fills the named array with one --rights=LETTERS PATH pair per policy entry,
+# after refusing a hierarchy that cannot hold. Write paths are materialised
+# first, because a Landlock rule needs an existing path to open.
+# Usage: build_path_args <array-name> <ro-file> <rx-file> <rw-file>
+build_path_args() {
+  local -n args_ref="$1"
+  local ro="$2" rx="$3" rw="$4"
+  local table; table="$(mktemp -t phobos-rights.XXXXXX)"
+  local section_file section_rights p
+
+  # Parallel lists rather than "file:rights" strings: a path may contain a colon
+  # and splitting on it would quietly cut the file name in half.
+  local -a section_files=( "$ro" "$rx" "$rw" )
+  local -a section_rights_list=( "${PHB_RIGHTS_READONLY}" "${PHB_RIGHTS_EXECUTABLE}" \
+                                 "${PHB_RIGHTS_WRITE}" )
+  local section_index
+  for (( section_index = 0; section_index < ${#section_files[@]}; section_index++ )); do
+    section_file="${section_files[$section_index]}"
+    section_rights="${section_rights_list[$section_index]}"
+    [[ -n "$section_file" && -s "$section_file" ]] || continue
+    while IFS= read -r p; do
+      [[ -z "$p" ]] && continue
+      # A dangling symlink answers false to -e, and the redirection below would
+      # then follow it and create or truncate whatever it points at, outside
+      # anything the policy named. phobos-landlock refuses such a path later,
+      # but by then the damage is done.
+      if [[ -L "$p" && ! -e "$p" ]]; then
+        report "Policy invalid: '$p' is a symbolic link with no target, so materialising it would write wherever it points. (PHB-EPOLICY)"
+        exit "${PHB_EPOLICY}"
+      fi
+      if [[ "$section_rights" == "${PHB_RIGHTS_WRITE}" && ! -e "$p" ]]; then
+        # A trailing slash means "directory" (e.g. target/ after a clean),
+        # anything else is treated as a file, as before.
+        if [[ "$p" == */ ]]; then
+          mkdir -p "$p" 2>/dev/null || true
+        else
+          mkdir -p "$(dirname "$p")" 2>/dev/null || true
+          : > "$p" || true
+        fi
+      fi
+      printf '%s\t%s\t%s\n' "$section_rights" \
+             "$(printf '%s\n' "$p" | resolve_symlinks)" "$p" >> "$table"
+    done < "$section_file"
+  done
+
+  # The hierarchy is judged on resolved paths, so that two spellings of one
+  # directory are recognised as the same tree. The kernel is still handed the
+  # path the policy wrote: resolving is a comparison, not a rewrite.
+  # Two spellings can name one tree: /bin is a symlink to /usr/bin in the run
+  # image. Landlock anchors on the inode, so it sees one target with the union of
+  # both entries' rights. The table is folded the same way before the hierarchy
+  # is judged, otherwise the two rows would skip each other as "the same path"
+  # and a conflict between them would be neither merged nor reported.
+  local resolved_table; resolved_table="$(mktemp -t phobos-rights-r.XXXXXX)"
+  local fold_path fold_rights
+  while IFS=$'\t' read -r fold_rights fold_path _; do
+    [[ -z "$fold_path" ]] && continue
+    printf '%s\t%s\n' "$fold_rights" "$fold_path"
+  done < "$table" \
+    | awk -F'\t' '{ seen[$2] = seen[$2] $1 } END { for (p in seen) printf "%s\t%s\n", seen[p], p }' \
+    > "$resolved_table"
+  # Report where the folding actually widened something, so one spelling silently
+  # granting more than the other is visible rather than absorbed.
+  local folded_rights folded_path original_rights
+  while IFS=$'\t' read -r folded_rights folded_path; do
+    folded_rights="$(rights_normalise "$folded_rights")"
+    while IFS=$'\t' read -r original_rights fold_path _; do
+      [[ "$fold_path" == "$folded_path" ]] || continue
+      if [[ "$(rights_normalise "$original_rights")" != "$folded_rights" ]]; then
+        _log "rights: several policy entries name '$folded_path'; it holds the union '$folded_rights'"
+        break
+      fi
+    done < "$table"
+  done < "$resolved_table"
+  # Called plainly, neither in a pipe nor in a process substitution: those run the
+  # function in a subshell, where its exit on an unenforceable policy would end
+  # only that subshell and leave the run going with no rules at all. A refusal has
+  # to be able to stop the script it is protecting.
+  local effective_table; effective_table="$(mktemp -t phobos-rights-e.XXXXXX)"
+  resolve_rights_hierarchy "$resolved_table" "$effective_table"
+
+  # One rule per line the policy wrote, carrying the rights that actually hold
+  # for its target. Driving the loop from the folded table instead would emit a
+  # single rule for a target two entries name, and silently drop the other
+  # spelling.
+  local written_rights written_resolved written_path effective
+  while IFS=$'\t' read -r written_rights written_resolved written_path; do
+    [[ -n "$written_path" ]] || continue
+    effective="$(awk -F'\t' -v target="$written_resolved" \
+                     '$2 == target { print $1; exit }' "$effective_table")"
+    args_ref+=( "--rights=${effective:-$written_rights}" "$written_path" )
+  done < "$table"
+  rm -f "$effective_table"
+
+  rm -f "$table" "$resolved_table"
+}

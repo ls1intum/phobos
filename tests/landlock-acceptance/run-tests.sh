@@ -17,7 +17,7 @@ echo "  kernel:  $(uname -r) ($(uname -m))"
 # The wrapper names it "Landlock version", which is the same number the kernel calls
 # its ABI version. Matching on "Landlock ABI" printed a blank here and nothing asserts
 # on this line, so the header quietly stopped reporting the ABI it exists to report.
-echo "  landlock ABI: $(phobos-landlock --verbose --rox /usr -- /bin/true 2>&1 | sed -n 's/.*Landlock version \([0-9]*\).*/\1/p')"
+echo "  landlock ABI: $(phobos-landlock --verbose --rights=rx /usr -- /bin/true 2>&1 | sed -n 's/.*Landlock version \([0-9]*\).*/\1/p')"
 echo "  caps:    $(grep CapEff /proc/self/status)"
 
 # --- Testdaten ------------------------------------------------------------

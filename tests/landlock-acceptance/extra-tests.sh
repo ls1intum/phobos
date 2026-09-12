@@ -69,7 +69,7 @@ fi
 ln -sfn /var/tmp/secret $TD/umleitung 2>/dev/null
 # Ausgabe erst einsammeln: unter "set -o pipefail" wuerde der Exit-Code des
 # Wrappers (125, gewollt) die Pipeline scheitern lassen, obwohl grep faendig wird.
-SYM_OUT=$($CORE/phobos-landlock --rox /usr --rw $TD/umleitung -- /bin/true 2>&1)
+SYM_OUT=$($CORE/phobos-landlock --rights=rx /usr --rights=rwmd $TD/umleitung -- /bin/true 2>&1)
 if printf '%s' "$SYM_OUT" | grep -q "symbolic link"; then
   ok "symbolischer Schreibpfad wird abgelehnt (keine Umlenkung der Regel)"
 else
@@ -78,12 +78,12 @@ fi
 
 hdr "G. Optionen des Wrappers, die keine Policy-Datei erreicht"
 LL=$CORE/phobos-landlock
-$LL --minimum-landlock-version 99 --rox /usr -- /bin/true >/dev/null 2>&1
+$LL --minimum-landlock-version 99 --rights=rx /usr -- /bin/true >/dev/null 2>&1
 [[ $? -eq 125 ]] && ok "--minimum-landlock-version ueber der Kernel-Version bricht ab statt ungeschuetzt zu laufen" \
                  || bad "--minimum-landlock-version 99 lief durch"
-$LL --minimum-landlock-version 1 --rox /usr -- /bin/true >/dev/null 2>&1
+$LL --minimum-landlock-version 1 --rights=rx /usr -- /bin/true >/dev/null 2>&1
 [[ $? -eq 0 ]] && ok "--minimum-landlock-version unterhalb der Kernel-Version laeuft" || bad "--minimum-landlock-version 1 schlug fehl"
-$LL --unbekannte-option x --rox /usr -- /bin/true >/dev/null 2>&1
+$LL --unbekannte-option x --rights=rx /usr -- /bin/true >/dev/null 2>&1
 [[ $? -eq 2 ]] && ok "unbekannte Option wird abgewiesen" || bad "unbekannte Option akzeptiert"
 # Netzregeln: der erlaubte Port kommt durch, ein anderer nicht
 NETDIR=$(mktemp -d); cat > "$NETDIR/N.java" <<'JAVA'
@@ -112,7 +112,7 @@ javac -d "$NETDIR" "$NETDIR/N.java" 2>/dev/null
 java -cp "$NETDIR" N serve > "$NETDIR/srv.log" 2>&1 &
 NETSRV=$!
 for _ in $(seq 1 40); do grep -q ready "$NETDIR/srv.log" 2>/dev/null && break; sleep 0.2; done
-NB="--rox /opt/java --rox /usr --ro /etc --rw /tmp --rw /dev/null --rox $NETDIR"
+NB="--rights=rx /opt/java --rights=rx /usr --rights=r /etc --rights=rwmd /tmp --rights=rwmd /dev/null --rights=rx $NETDIR"
 if $LL $NB --connect-tcp 19001 -- java -cp "$NETDIR" N 19001 2>/dev/null | grep -q CONNECTED; then
   ok "--connect-tcp: der erlaubte Port ist erreichbar"
 else bad "--connect-tcp: erlaubter Port wurde blockiert"; fi
@@ -127,6 +127,67 @@ if su -s /bin/bash "$SU" -c "cat /var/tmp/secret/secret.txt" >/dev/null 2>&1; th
 else
   bad "auch ohne Sandbox nicht lesbar -> Test misst Dateirechte statt Landlock"
 fi
+
+# --------------------------------------------------------------------------
+# F. Was der feinere Rechtesatz aendert
+# --------------------------------------------------------------------------
+LL="$CORE/phobos-landlock"
+BASE="--rights=rx /usr --rights=rx /lib --rights=rx /bin --rights=r /etc"
+mkdir -p "$TD/fein"; chmod 777 "$TD/fein"
+
+denied() {
+  local desc="$1"; shift
+  if "$@" >/dev/null 2>&1; then bad "$desc -> erlaubt, erwartet verweigert"
+  else ok "$desc -> verweigert"; fi
+}
+allowed() {
+  local desc="$1"; shift
+  if "$@" >/dev/null 2>&1; then ok "$desc -> erlaubt"
+  else bad "$desc -> verweigert, erwartet erlaubt"; fi
+}
+
+hdr "F. Rechte lassen sich einzeln steuern"
+allowed "w erlaubt das Beschreiben einer vorhandenen Datei" \
+  sh -c "echo alt > $TD/fein/f.txt; $LL $BASE --rights=rw $TD/fein -- /bin/sh -c 'echo neu > $TD/fein/f.txt'"
+denied  "w allein erlaubt kein Anlegen" \
+  $LL $BASE --rights=rw "$TD/fein" -- /bin/sh -c "echo x > $TD/fein/neu1.txt"
+allowed "m erlaubt das Anlegen" \
+  $LL $BASE --rights=rwm "$TD/fein" -- /bin/sh -c "echo x > $TD/fein/neu2.txt"
+denied  "m allein erlaubt kein Loeschen" \
+  $LL $BASE --rights=rwm "$TD/fein" -- /bin/rm -f "$TD/fein/neu2.txt"
+allowed "d erlaubt das Loeschen" \
+  $LL $BASE --rights=rwmd "$TD/fein" -- /bin/rm -f "$TD/fein/neu2.txt"
+
+hdr "G. Was ueberhaupt nicht mehr erteilt wird"
+denied "eine Geraetedatei anlegen" \
+  $LL $BASE --rights=rwmd "$TD/fein" -- /bin/sh -c "mknod $TD/fein/geraet c 1 3"
+denied "einen symbolischen Link anlegen" \
+  $LL $BASE --rights=rwmd "$TD/fein" -- /bin/ln -s /etc/passwd "$TD/fein/link"
+allowed "eine gewoehnliche Datei anlegen geht weiter" \
+  $LL $BASE --rights=rwmd "$TD/fein" -- /bin/sh -c "echo x > $TD/fein/gewoehnlich.txt"
+
+hdr "H. Geerbte Rechte werden gemeldet, nicht verschwiegen"
+# Landlock addiert die Rechte aller Regeln entlang eines Pfades. Ein
+# Unterverzeichnis erbt also, was sein Vorfahr erteilt, und die Politik sagt
+# dann weniger, als tatsaechlich gilt. Das wird gemeldet und die geltende
+# Rechtemenge wird uebergeben, damit die Ausgabe nicht luegt.
+#
+# Der harte Fall, eine echte Verengung unterhalb eines weiteren Vorfahren, ist
+# ueber die Politikdateien noch nicht erreichbar: [readonly] erteilt rx und
+# [write] erteilt rwmd, und keine der beiden Mengen liegt ganz in der anderen.
+# Er wird von den Einheitstests abgedeckt und wird hier pruefbar, sobald das
+# Format einen dritten Abschnitt fuer reine Daten kennt.
+WEITER=$(mktemp -d); for f in ro.paths rw.paths hide.paths tail.flags net.rules; do : > "$WEITER/$f"; done
+printf '%s\n' "$TD/fein" > "$WEITER/ro.paths"
+printf '%s\n' "$TD" > "$WEITER/rw.paths"
+OUT=$(PHB_ENABLE_FILESYSTEM=1 "$CORE/phobos-filesystem.sh" "$WEITER" -- /bin/true 2>&1)
+if printf '%s' "$OUT" | grep -q "effectively holds"; then
+  ok "geerbte Erweiterung wird benannt statt stillschweigend uebernommen"
+else
+  bad "geerbte Erweiterung wurde nicht gemeldet"; printf '%s\n' "$OUT" | sed 's/^/       | /' | tail -3
+fi
+rm -rf "$WEITER"
+
 
 hdr "Ergebnis Zusatztests"
 printf '  bestanden: %d, fehlgeschlagen: %d\n\n' "$PASS" "$FAIL"

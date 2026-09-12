@@ -25,13 +25,13 @@ uint64_t filesystem_rights_for_version(int landlock_version) {
         LANDLOCK_ACCESS_FILESYSTEM_MAKE_SOCKET | LANDLOCK_ACCESS_FILESYSTEM_MAKE_NAMED_PIPE |
         LANDLOCK_ACCESS_FILESYSTEM_MAKE_BLOCK_DEVICE |
         LANDLOCK_ACCESS_FILESYSTEM_MAKE_SYMBOLIC_LINK;
-    if (landlock_version >= 2) {
+    if (landlock_version >= FIRST_VERSION_WITH_REFER) {
         rights |= LANDLOCK_ACCESS_FILESYSTEM_REFER;
     }
-    if (landlock_version >= 3) {
+    if (landlock_version >= FIRST_VERSION_WITH_TRUNCATE) {
         rights |= LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE;
     }
-    if (landlock_version >= 5) {
+    if (landlock_version >= FIRST_VERSION_WITH_IOCTL_DEVICE) {
         rights |= LANDLOCK_ACCESS_FILESYSTEM_IOCTL_DEVICE;
     }
     return rights;
@@ -39,18 +39,18 @@ uint64_t filesystem_rights_for_version(int landlock_version) {
 
 /* Older kernels reject the larger structure, so send only the part they know. */
 size_t ruleset_attributes_size_for_version(int landlock_version) {
-    if (landlock_version < 4) {
+    if (landlock_version < FIRST_VERSION_WITH_NETWORK) {
         return offsetof(struct landlock_ruleset_attributes, handled_access_network);
     }
-    if (landlock_version < 6) {
+    if (landlock_version < FIRST_VERSION_WITH_SCOPED) {
         return offsetof(struct landlock_ruleset_attributes, scoped);
     }
     return sizeof(struct landlock_ruleset_attributes);
 }
 
-int detect_landlock_version(int minimum_landlock_version, int network_rules_wanted) {
+int detect_landlock_version(int minimum_landlock_version, bool network_rules_wanted) {
     long landlock_version =
-        syscall(SYSCALL_NUMBER_LANDLOCK_CREATE_RULESET, NULL, 0, LANDLOCK_CREATE_RULESET_VERSION);
+        syscall(SYSCALL_NUMBER_LANDLOCK_CREATE_RULESET, nullptr, 0, LANDLOCK_CREATE_RULESET_VERSION);
     if (landlock_version < 0) {
         exit_with_message("Landlock is not available on this kernel (refusing to run "
                           "unprotected)");
@@ -70,13 +70,45 @@ int detect_landlock_version(int minimum_landlock_version, int network_rules_want
                 landlock_version, minimum_landlock_version);
         exit(EXIT_CODE_POLICY_ERROR);
     }
-    if (network_rules_wanted && landlock_version < 4) {
+    if (network_rules_wanted && landlock_version < FIRST_VERSION_WITH_NETWORK) {
         exit_with_message("network rules require Landlock version 4 (kernel 6.7)");
     }
     return (int)landlock_version;
 }
 
-int create_ruleset(int landlock_version, int network_rules_wanted) {
+/* Landlock grew over the years. A right the running kernel does not know is
+ * not merely ungranted, it is not handled at all, so it is free for every path
+ * including the ones this policy calls read-only. There is no hook to enforce
+ * it in its place, so the only honest thing left is to say so. Always, not
+ * only under --verbose: nobody reads detail they did not ask for, and this is
+ * the difference between a guarantee and the appearance of one. */
+void report_unenforceable_rights(int landlock_version) {
+    if (landlock_version < FIRST_VERSION_WITH_TRUNCATE) {
+        warn_always("warning: Landlock version %d does not handle TRUNCATE; a file on a "
+                    "read-only path can still be emptied with truncate(2) by anyone the "
+                    "ordinary file permissions allow to write it. Pass "
+                    "--minimum-landlock-version %d to refuse such a kernel instead.",
+                    landlock_version, FIRST_VERSION_WITH_TRUNCATE);
+    }
+    if (landlock_version < FIRST_VERSION_WITH_IOCTL_DEVICE) {
+        warn_always("warning: Landlock version %d does not handle IOCTL_DEVICE; ioctl on a "
+                    "character or block device is unrestricted on every allowed path. Pass "
+                    "--minimum-landlock-version %d to refuse such a kernel instead.",
+                    landlock_version, FIRST_VERSION_WITH_IOCTL_DEVICE);
+    }
+    /* The other direction, and not a gap: without REFER the kernel denies every
+     * rename across directories rather than leaving it free. That breaks builds
+     * loudly instead of weakening the sandbox quietly, so it is worth naming but
+     * it is not a hole. */
+    if (landlock_version < FIRST_VERSION_WITH_REFER) {
+        warn_always("note: Landlock version %d has no REFER; moving a file between two "
+                    "allowed directories is refused with EXDEV even where the policy permits "
+                    "both sides.",
+                    landlock_version);
+    }
+}
+
+int create_ruleset(int landlock_version, bool network_rules_wanted) {
     struct landlock_ruleset_attributes attributes;
     memset(&attributes, 0, sizeof(attributes));
     attributes.handled_access_filesystem = filesystem_rights_for_version(landlock_version);
@@ -108,9 +140,9 @@ void add_path_rule(int ruleset_descriptor, int landlock_version, const struct pa
     /* O_PATH|O_NOFOLLOW opens the link itself instead of failing, so the
      * symlink has to be rejected here. A rule anchored on a link is at best
      * useless and at worst points somewhere the policy never named. */
-    if (rule->writable && S_ISLNK(file_status.st_mode)) {
+    if (rule_can_change_anything(rule) && S_ISLNK(file_status.st_mode)) {
         fprintf(stderr,
-                "[phobos-landlock] refusing writable path %s: it is a symbolic link and could "
+                "[phobos-landlock] refusing changeable path %s: it is a symbolic link and could "
                 "redirect the rule\n",
                 rule->path);
         exit(EXIT_CODE_POLICY_ERROR);
@@ -130,8 +162,10 @@ void add_path_rule(int ruleset_descriptor, int landlock_version, const struct pa
                 strerror(errno));
         exit(EXIT_CODE_POLICY_ERROR);
     }
-    log_verbose("allow %s%s%s", rule->path, rule->writable ? " +w" : "",
-                rule->executable ? " +x" : "");
+    log_verbose("allow %s%s%s%s%s%s%s", rule->path, rule->readable ? " +r" : "",
+                rule->writable ? " +w" : "", rule->executable ? " +x" : "",
+                rule->makeable ? " +m" : "", rule->removable ? " +d" : "",
+                rule->ioctl_device ? " +i" : "");
     close(path_descriptor);
 }
 

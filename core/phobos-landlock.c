@@ -6,10 +6,13 @@
  * may always restrict itself further.
  *
  * Usage:
- *   phobos-landlock [--ro PATH] [--rox PATH] [--rw PATH] [--rwx PATH]
+ *   phobos-landlock --rights=LETTERS PATH [--rights=LETTERS PATH ...]
  *                   [--connect-tcp PORT] [--bind-tcp PORT]
  *                   [--chdir DIRECTORY] [--minimum-landlock-version NUMBER]
  *                   [--verbose] -- COMMAND [ARGUMENTS...]
+ *
+ * LETTERS is any combination of r (read), w (write), x (execute), m (create),
+ * d (delete) and i (ioctl on a device), each at most once.
  *
  * This file is the sequence of stages and nothing else. What each stage works
  * with lives beside it:
@@ -20,7 +23,9 @@
  *   phobos-landlock-diagnostics.h  reporting and giving up
  *
  * Exits 125 on any policy error. It never degrades silently: if the running
- * kernel cannot enforce the requested minimum, it refuses to run the command.
+ * kernel cannot enforce the requested minimum, it refuses to run the command,
+ * and a right the kernel is too old to handle at all is reported before the
+ * command starts rather than left to be discovered.
  */
 
 #define _GNU_SOURCE
@@ -74,7 +79,7 @@ static void enter_working_directory(const struct options *options) {
 
 /* ---------------------------------------------------- stage: run the command */
 
-_Noreturn static void exec_command(const struct options *options) {
+[[noreturn]] static void exec_command(const struct options *options) {
     execvp(options->command[0], options->command);
     fprintf(stderr, "[phobos-landlock] exec %s: %s\n", options->command[0], strerror(errno));
     exit(127);
@@ -88,6 +93,7 @@ int main(int argument_count, char *arguments[]) {
     parse_arguments(argument_count, arguments, &options);
     int landlock_version =
         detect_landlock_version(options.minimum_landlock_version, network_rules_wanted(&options));
+    report_unenforceable_rights(landlock_version);
     int ruleset_descriptor = create_ruleset(landlock_version, network_rules_wanted(&options));
     add_path_rules(ruleset_descriptor, landlock_version, &options);
     add_port_rules(ruleset_descriptor, &options);

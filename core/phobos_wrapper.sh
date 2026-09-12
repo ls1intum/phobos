@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The translation from a parsed policy into phobos-landlock arguments lives in
+# one place, so this entry point and phobos-filesystem.sh cannot drift apart.
+# They already had, once.
+PHOBOS_WRAPPER_HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=phobos-common.sh
+source "${PHOBOS_WRAPPER_HERE}/phobos-common.sh"
+
 err()   { echo -e "\e[31m[error]\e[0m $*" >&2; exit 1; }
 warn()  { echo -e "\e[33m[warn]\e[0m  $*" >&2; }
 usage() { cat <<EOF
@@ -148,8 +155,14 @@ fi
 # build a new filesystem view, it only withholds access to the existing one.
 landlock_args=()
 
-for p in "${readonly_paths[@]}"; do landlock_args+=( --rox "$p" ); done
-for p in "${write_paths[@]}";    do landlock_args+=( --rw  "$p" ); done
+# Same mapping as phobos-filesystem.sh, and for the same reasons: read paths
+# keep execute because the base policies depend on it, write paths lose the
+# ability to create device nodes and symbolic links.
+ro_list="$(mktemp)"; rw_list="$(mktemp)"
+printf '%s\n' "${readonly_paths[@]}" > "$ro_list"
+printf '%s\n' "${write_paths[@]}"    > "$rw_list"
+build_path_args landlock_args "" "$ro_list" "$rw_list"
+rm -f "$ro_list" "$rw_list"
 
 # Paths that bubblewrap used to mask (tmpfs overlay or /dev/null shadow) are left
 # off the allow-list instead: Landlock withholds access, it cannot overlay a path
