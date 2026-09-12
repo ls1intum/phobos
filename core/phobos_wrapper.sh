@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # The translation from a parsed policy into phobos-landlock arguments lives in
-# one place, so this entry point and phobos-filesystem.sh cannot drift apart.
-# They already had, once.
+# one place, path rights and TCP ports alike, so this entry point and
+# phobos-filesystem.sh cannot drift apart. They already had, once.
 PHOBOS_WRAPPER_HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=phobos-common.sh
 source "${PHOBOS_WRAPPER_HERE}/phobos-common.sh"
@@ -212,10 +212,25 @@ parse_hostport() {                       # $1 = host[:port] (IPv6 ok)
     echo "$host $port"
 }
 
+# Two readers, two conventions for "any port": libnetblocker reads a 0, while
+# the policy language and phobos-common.sh spell it with a star. The same rules
+# are therefore written twice rather than one file being reinterpreted, so
+# neither reader has to guess what the other meant.
+landlock_net_rules="$(mktemp)"
 for rule in "${network_rules[@]}"; do
     [[ $rule =~ ^allow[[:space:]]+(.+)$ ]] || continue
-    parse_hostport "${BASH_REMATCH[1]}" >> "$allowed_file"
+    hostport_line="$(parse_hostport "${BASH_REMATCH[1]}")"
+    printf '%s\n' "$hostport_line" >> "$allowed_file"
+    read -r net_host net_port <<<"$hostport_line"
+    [[ "$net_port" == "0" ]] && net_port="*"
+    printf '%s %s\n' "$net_host" "$net_port" >> "$landlock_net_rules"
 done
+
+# The same translation phobos-filesystem.sh uses, so a policy that names concrete
+# ports is enforced by the kernel through either entry point and not only by the
+# preload library, which a submission can step around.
+build_network_args landlock_args "$landlock_net_rules"
+rm -f "$landlock_net_rules"
 
 export NETBLOCKER_CONF="$allowed_file"
 export LD_PRELOAD="$core/libnetblocker.so"

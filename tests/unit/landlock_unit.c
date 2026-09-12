@@ -1055,6 +1055,25 @@ static void test_what_reaches_the_kernel(void) {
           record->handled_access_network ==
               (LANDLOCK_ACCESS_NETWORK_BIND_TCP | LANDLOCK_ACCESS_NETWORK_CONNECT_TCP));
 
+    /* A direction the kernel handles but no rule grants is denied outright. So a
+     * policy that only says where the build may connect must not also stop it
+     * from listening: that would be a prohibition nobody wrote down, and it
+     * would break any exercise whose tests start a local server. */
+    char *connect_only[] = {"phobos-landlock", "--rights=r", "/usr", "--connect-tcp", "443",
+                            "--",              "/bin/true",  NULL};
+    expect_exit("a policy that only names connect ports runs", 0, connect_only);
+    check("connecting is handled", (record->handled_access_network &
+                                    LANDLOCK_ACCESS_NETWORK_CONNECT_TCP) != 0);
+    check("listening is left alone when the policy never mentioned it",
+          (record->handled_access_network & LANDLOCK_ACCESS_NETWORK_BIND_TCP) == 0);
+
+    char *bind_only[] = {"phobos-landlock", "--rights=r", "/usr", "--bind-tcp", "8080",
+                         "--",              "/bin/true",  NULL};
+    expect_exit("a policy that only names bind ports runs", 0, bind_only);
+    check("listening is handled", (record->handled_access_network &
+                                   LANDLOCK_ACCESS_NETWORK_BIND_TCP) != 0);
+    check("connecting is left alone when the policy never mentioned it",
+          (record->handled_access_network & LANDLOCK_ACCESS_NETWORK_CONNECT_TCP) == 0);
 
     char *two_connects[] = {"phobos-landlock", "--connect-tcp", "443", "--connect-tcp",
                             "8443",            "--rights=r",          "/usr", "--",

@@ -38,9 +38,14 @@ struct options {
 /* Reads the command line into options, or refuses the call. */
 void parse_arguments(int argument_count, char *arguments[], struct options *options);
 
-/* True when any network rule was asked for, which decides whether the ruleset
- * handles network access at all. */
+/* True when any network rule was asked for, which decides whether the run needs
+ * a kernel new enough to know about network access at all. */
 bool network_rules_wanted(const struct options *options);
+
+/* The directions the command line actually spoke about. Only these are handed
+ * to the kernel as handled, because a handled direction with no rule is a
+ * blanket denial nobody asked for. */
+uint64_t handled_network_access(const struct options *options);
 
 /* Records one --rights=LETTERS option. Exposed for the tests. */
 void remember_path_rule(struct options *options, const char *letters, const char *path);

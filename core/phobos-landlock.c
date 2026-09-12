@@ -94,7 +94,7 @@ int main(int argument_count, char *arguments[]) {
     int landlock_version =
         detect_landlock_version(options.minimum_landlock_version, network_rules_wanted(&options));
     report_unenforceable_rights(landlock_version);
-    int ruleset_descriptor = create_ruleset(landlock_version, network_rules_wanted(&options));
+    int ruleset_descriptor = create_ruleset(landlock_version, handled_network_access(&options));
     add_path_rules(ruleset_descriptor, landlock_version, &options);
     add_port_rules(ruleset_descriptor, &options);
     enter_working_directory(&options);

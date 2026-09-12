@@ -108,14 +108,11 @@ void report_unenforceable_rights(int landlock_version) {
     }
 }
 
-int create_ruleset(int landlock_version, bool network_rules_wanted) {
+int create_ruleset(int landlock_version, uint64_t handled_network) {
     struct landlock_ruleset_attributes attributes;
     memset(&attributes, 0, sizeof(attributes));
     attributes.handled_access_filesystem = filesystem_rights_for_version(landlock_version);
-    if (network_rules_wanted) {
-        attributes.handled_access_network =
-            LANDLOCK_ACCESS_NETWORK_BIND_TCP | LANDLOCK_ACCESS_NETWORK_CONNECT_TCP;
-    }
+    attributes.handled_access_network = handled_network;
 
     int ruleset_descriptor =
         (int)syscall(SYSCALL_NUMBER_LANDLOCK_CREATE_RULESET, &attributes,

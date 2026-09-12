@@ -169,3 +169,14 @@ void parse_arguments(int argument_count, char *arguments[], struct options *opti
 bool network_rules_wanted(const struct options *options) {
     return options->connect_tcp_port_count > 0 || options->bind_tcp_port_count > 0;
 }
+
+uint64_t handled_network_access(const struct options *options) {
+    uint64_t handled = 0;
+    if (options->connect_tcp_port_count > 0) {
+        handled |= LANDLOCK_ACCESS_NETWORK_CONNECT_TCP;
+    }
+    if (options->bind_tcp_port_count > 0) {
+        handled |= LANDLOCK_ACCESS_NETWORK_BIND_TCP;
+    }
+    return handled;
+}

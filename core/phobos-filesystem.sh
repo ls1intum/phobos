@@ -80,6 +80,7 @@ fi
 # minus creating device nodes and symbolic links, which no build tool needs and
 # which are the two ways to reach something the policy never named.
 build_path_args args "" "${RO}" "${RW}"
+build_network_args args "${SPEC_DIR}/net.rules"
 if [[ -s "${TAIL}" ]]; then
   # Splitting is intended: tail.flags holds whitespace-separated arguments.
   # Read line by line so a multi-line file works too.

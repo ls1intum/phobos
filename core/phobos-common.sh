@@ -381,3 +381,54 @@ build_path_args() {
 
   rm -f "$table" "$resolved_table"
 }
+
+# Fills the named array with the TCP port rules Landlock can actually enforce.
+#
+# The policy language names host and port, Landlock knows only ports. A rule
+# without a concrete port therefore cannot be expressed at all: it is reported
+# and the whole network layer stays off, which is what the shipped policies do
+# today. A policy that mixes the two is refused instead, because an explicit
+# port next to a wildcard looks enforced and would not be.
+# Usage: build_network_args <array-name> <net.rules file>
+build_network_args() {
+  local -n net_ref="$1"
+  local rules="$2"
+  [[ -n "$rules" && -s "$rules" ]] || return 0
+
+  local host port wildcard_line="" concrete_seen=0
+  local -A wanted=()
+  # net.rules holds "host port" pairs, so the default field splitting is wanted
+  # here. With IFS cleared, read puts the whole line into host and leaves port
+  # empty, which made every rule look like a wildcard.
+  while read -r host port; do
+    [[ -z "$host" ]] && continue
+    # Only an explicit star or an omitted port is the documented wildcard.
+    # "host:0" names no port that exists and is a policy mistake, not a licence
+    # to switch the whole layer off.
+    if [[ "$port" == "*" || -z "$port" ]]; then
+      wildcard_line="${host}:${port:-*}"
+      continue
+    fi
+    if [[ ! "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+      report "Policy invalid: '${host}:${port}' names no usable TCP port. (PHB-EPOLICY)"
+      exit "${PHB_EPOLICY}"
+    fi
+    wanted["$port"]=1
+    concrete_seen=1
+  done < "$rules"
+
+  if [[ -n "$wildcard_line" ]]; then
+    if (( concrete_seen )); then
+      report "Policy unenforceable: '${wildcard_line}' names no port, so Landlock cannot express it, while other rules do name one. A half-enforced network policy would look stricter than it is. (PHB-EPOLICY)"
+      exit "${PHB_EPOLICY}"
+    fi
+    # Wildcard-only is the shipped case and stays permitted, but never silently.
+    _log "network: '${wildcard_line}' names no port; the Landlock network layer stays off and only libnetblocker filters this run"
+    return 0
+  fi
+
+  local port_number
+  for port_number in $(printf '%s\n' "${!wanted[@]}" | sort -n); do
+    net_ref+=( --connect-tcp "$port_number" )
+  done
+}

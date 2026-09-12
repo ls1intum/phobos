@@ -144,8 +144,13 @@ int detect_landlock_version(int minimum_landlock_version, bool network_rules_wan
  * to enforce in their place and the gap can only be reported. */
 void report_unenforceable_rights(int landlock_version);
 
-/* Creates a ruleset that denies everything it handles unless a rule allows it. */
-int create_ruleset(int landlock_version, bool network_rules_wanted);
+/* Creates a ruleset that denies everything it handles unless a rule allows it.
+ *
+ * handled_network names the directions the policy actually speaks about. A
+ * direction that is handled but never granted is denied outright, so switching
+ * on both because the policy mentioned one would forbid the other without
+ * anyone asking for that. Pass 0 to leave network access alone entirely. */
+int create_ruleset(int landlock_version, uint64_t handled_network);
 
 /* Adds one allow-listed path. */
 void add_path_rule(int ruleset_descriptor, int landlock_version, const struct path_rule *rule);
