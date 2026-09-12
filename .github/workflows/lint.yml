@@ -20,7 +20,7 @@ concurrency:
 jobs:
   shell:
     name: Shell (shellcheck)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -33,14 +33,21 @@ jobs:
       # -x follows the "source" directives, otherwise the library file is
       # analysed in isolation and every caller reports phantom findings.
       - name: Run shellcheck
+        env:
+          # Folded to stay inside the line length yamllint enforces; a digest plus a tag
+          # does not fit on an indented line. Renovate's github-actions manager reads
+          # only uses:, container: and services:, so a custom manager in renovate.json
+          # is what keeps this digest current.
+          SHELLCHECK_IMAGE: >-
+            koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
         run: |
           find . -name '*.sh' -type f -print0 \
             | xargs -0 docker run --rm -v "$PWD:/mnt" -w /mnt \
-                koalaman/shellcheck:v0.11.0 -x -S warning
+                "${SHELLCHECK_IMAGE}" -x -S warning
 
   c:
     name: C (compiler warnings and cppcheck)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -76,7 +83,7 @@ jobs:
 
   python:
     name: Python (ruff and bandit)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -86,8 +93,17 @@ jobs:
         with:
           persist-credentials: false
 
+      # Exact versions rather than hashes. A hashed lock was tried and removed: pip-tools
+      # writes --no-index into the header of the file it generates, Renovate replays that
+      # header to update it, and the replay then fails to reach the index. A lock nothing
+      # can update rots into a linter set that never gets a security fix, which is worse
+      # than the mutated-wheel risk hashes would have closed.
+      #
+      # These pins are only maintained because a custom manager in renovate.json looks for
+      # them: Renovate reads no Python dependency out of a shell command, so without it
+      # they would rot for exactly the reason the lock was rejected.
       - name: Install linters
-        run: pip install --quiet ruff==0.16.6 bandit==1.9.4
+        run: python3 -m pip install --quiet ruff==0.16.7 bandit==1.9.4
 
       - name: Run ruff
         run: ruff check --no-cache --output-format github .
@@ -100,7 +116,7 @@ jobs:
 
   yaml:
     name: YAML (yamllint)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -111,14 +127,14 @@ jobs:
           persist-credentials: false
 
       - name: Install yamllint
-        run: pip install --quiet yamllint==1.38.0
+        run: python3 -m pip install --quiet yamllint==1.38.0
 
       - name: Run yamllint
         run: yamllint --strict --format github .
 
   docker:
-    name: Dockerfiles (hadolint)
-    runs-on: ubuntu-latest
+    name: Buildable Dockerfiles (hadolint)
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -130,19 +146,30 @@ jobs:
 
       # The threshold and the DL3008 exception live in .hadolint.yaml.
       - name: Run hadolint
+        env:
+          # Folded for the same reason as the shellcheck image above.
+          HADOLINT_IMAGE: >-
+            hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d
         run: |
           failed=0
           while IFS= read -r f; do
             echo "::group::$f"
             docker run --rm -i -v "$PWD/.hadolint.yaml:/cfg.yaml:ro" \
-              hadolint/hadolint:v2.15.1 hadolint --config /cfg.yaml - < "$f" || failed=1
+              "${HADOLINT_IMAGE}" hadolint --config /cfg.yaml - < "$f" || failed=1
             echo "::endgroup::"
+          # -name 'Dockerfile*' does not match squid/HTTP_PROXY_SQUID_Dockerfile, and that
+          # exclusion is left in place rather than widened: that file fails hadolint on a
+          # bare _JAVA_OPTIONS line that is not an instruction at all, on a deprecated
+          # MAINTAINER and on both ADD instructions, and it cannot build either, since it
+          # copies directories this repository does not have. Repairing or deleting it is
+          # a decision about the file, not about linting. The job name says "buildable"
+          # so that a green run is not read as covering it.
           done < <(find . -name 'Dockerfile*' -type f)
           exit "$failed"
 
   workflows:
     name: Workflows (actionlint)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -164,3 +191,37 @@ jobs:
           echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum --check --strict
           tar --extract --gzip --file actionlint.tar.gz actionlint
           ./actionlint -color
+
+  # One check for a branch rule to require, rather than six.
+  #
+  # A rule naming the jobs themselves breaks quietly in two ways: a renamed job leaves the
+  # old name required and forever pending, and a job that never runs, because a path
+  # filter excluded it, does the same. This one always runs and reads the results, so the
+  # rule has a single stable name to point at and a skipped dependency is still a failure
+  # rather than a silent pass.
+  required:
+    name: Lint / required
+    needs: [ shell, c, python, yaml, docker, workflows ]
+    # always(), not !cancelled(). A job that is skipped counts as success towards a
+    # required check, so !cancelled() would let a cancelled run leave the one required
+    # lint check skipped and therefore green.
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Check that every lint job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          failed=0
+          while IFS='=' read -r job result; do
+            printf '%-12s %s\n' "${job}" "${result}"
+            if [ "${result}" != "success" ]; then
+              echo "::error::the ${job} lint job reported ${result}"
+              failed=1
+            fi
+          done <<EOT
+          $(printf '%s' "${RESULTS}" | jq -r 'to_entries[] | "\(.key)=\(.value.result)"')
+          EOT
+          exit "${failed}"

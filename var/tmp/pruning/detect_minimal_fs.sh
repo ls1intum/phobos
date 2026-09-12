@@ -5,20 +5,30 @@ set -euo pipefail
 # ── logging ──────────────────────────────────────────────────────────────────
 err()   { echo -e "\e[31m[error]\e[0m $*" >&2; exit 1; }
 warn()  { echo -e "\e[33m[warn]\e[0m  $*" >&2; }
-log()   { [[ "${LOG_ENABLED:-0}" -eq 1 ]] && echo "[LOG] $*"; }
+# return 0, because without it the && returns 1 whenever logging is off and set -e
+# ends the run at the first call. run_minimal_fs_all.sh carried the same defect: a
+# prune without --verbose could never get past its first log line.
+log()   { [[ "${LOG_ENABLED:-0}" -eq 1 ]] && echo "[LOG] $*"; return 0; }
 error() { err "$@"; }
 
 # returns 0 if $1 has prefix of any subsequent args
-is_in_list() { local p=$1; shift; for x; do [[ $p == "$x"* ]] && return 0; done; return 1; }
+# Whether a path is one of the listed ones, or lives under it. By path component, not
+# by prefix: a child named /proc-secret is not the /proc pseudo-filesystem, and treating
+# it as one silently excludes it from the prune.
+is_in_list() { local p=$1; shift; for x; do [[ $p == "$x" || $p == "$x"/* ]] && return 0; done; return 1; }
 
 # ── CLI / defaults ───────────────────────────────────────────────────────────
-TARGET="/"
+TARGET=""
 BUILD_SCRIPT="/bin/true"
-BUILD_ENV_VARS=""
+EXPLICIT_ENV=()
 TEST_DIR=""
 ASSIGN_DIR=""
 LOG_ENABLED=0
-LANG=""
+# Not LANG. That is the locale variable, and --lang used to assign the programming
+# language to it, so the PRUNE_ENV_PASSTHROUGH list below carried "java" into the
+# sandbox as a locale. The name a caller passes and the locale a build reads are
+# different things.
+PRUNE_LANG=""
 
 IGNORABLE_FAILURE_PATTERNS=${IGNORABLE_FAILURE_PATTERNS:-"There were failing tests|> Task :(compileJava|compileTestJava) NO-SOURCE"}
 UNIGNORABLE_SUCCESS_PATTERNS=${UNIGNORABLE_SUCCESS_PATTERNS:-"> Task :(compileJava|compileTestJava) NO-SOURCE"}
@@ -31,14 +41,23 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --script)         BUILD_SCRIPT="$2"; shift 2;;
     --target)         TARGET="$2"; shift 2;;
-    --env)            BUILD_ENV_VARS="$BUILD_ENV_VARS env $2"; shift 2;;
+    --env)            EXPLICIT_ENV+=("$2"); shift 2;;
     --assignment-dir) ASSIGN_DIR="$2"; shift 2;;
     --test-dir)       TEST_DIR="$2"; shift 2;;
     --verbose)        LOG_ENABLED=1; shift;;
-    --lang)           LANG="$2"; shift 2;;
+    --lang)           PRUNE_LANG="$2"; shift 2;;
     *)                echo "Unknown argument: $1" >&2; exit 1;;
   esac
 done
+
+# --target used to default to "/", so a caller that forgot it scanned the whole host
+# and bound its top-level directories writable while deciding whether they had to be.
+# Naming it is now the caller's job. realpath -e canonicalises it and refuses a path that
+# does not exist; what keeps the run inside it is init_config descending into its
+# children rather than matching its name as a prefix.
+[[ -n "$TARGET" ]] || err "--target is required; name the tree to prune, for example --target /"
+TARGET="$(realpath -e -- "$TARGET" 2>/dev/null)" || err "--target is not a path that exists"
+[[ -d "$TARGET" ]] || err "--target is not a directory: $TARGET"
 
 PERSISTENT_BUILD_HOME="${PERSISTENT_BUILD_HOME:-}"
 BUILD_OPTS="${BUILD_OPTS:-}"
@@ -63,6 +82,13 @@ fi
 # Decide sandbox workdir + script path
 if [[ -e "$BUILD_SCRIPT" ]]; then
   # host path supplied (less common)
+  #
+  # HOST_WORKDIR is required here too, even though this branch does not derive the
+  # workdir from it: build_bwrap_command binds it unconditionally, so without it the
+  # sandbox is built around an empty path and the run fails somewhere further on,
+  # naming neither this branch nor the missing value.
+  [[ -n "$HOST_WORKDIR" && -d "$HOST_WORKDIR" ]] \
+    || err "BUILD_SCRIPT is a host path; set HOST_WORKDIR to the host exercise folder"
   SANDBOX_WORKDIR="$(cd "$(dirname "$BUILD_SCRIPT")" && pwd)"
   IN_SB_SCRIPT="$BUILD_SCRIPT"
 else
@@ -85,12 +111,27 @@ declare -A CONFIG
 PROTECTED_R["$SANDBOX_WORKDIR"]=1   # never hide the mountpoint
 
 BWRAP_COMMAND_COUNT=0
+BWRAP_COMMAND=()
+
+# Where the per-invocation logs go. Configurable so that a test can keep its own inside
+# its fixture: two runs writing build-1.log into a shared /tmp would otherwise read and
+# delete each other's evidence.
+PRUNE_LOG_DIR="${PRUNE_LOG_DIR:-/tmp}"
+mkdir -p "$PRUNE_LOG_DIR"
+
+# What survives --clearenv. A build needs a PATH and a home to run at all; anything
+# beyond that a caller names with --env, so nothing arrives merely because it happened
+# to be set in the shell that started the prune.
+: "${PRUNE_ENV_PASSTHROUGH:=PATH HOME LANG LC_ALL TERM}"
 
 # ── base & tail options ──────────────────────────────────────────────────────
+# --tmpfs /tmp used to be followed by --bind /tmp /tmp, which mounted the host's /tmp
+# straight over it. The sandbox could then read and write everything any other process
+# on the machine had left there, and the tmpfs bought nothing at all.
 BASE_OPTIONS=(
   --tmpfs /
   --tmpfs /tmp
-  --bind /tmp /tmp
+  --clearenv
 )
 
 for d in /bin /usr/bin /lib /lib64 /usr/lib /lib/x86_64-linux-gnu; do
@@ -98,20 +139,52 @@ for d in /bin /usr/bin /lib /lib64 /usr/lib /lib/x86_64-linux-gnu; do
 done
 [[ -d /etc ]] && BASE_OPTIONS+=( --ro-bind /etc /etc )
 
-TAIL_OPTIONS=( --proc /proc --dev /dev --share-net --unshare-pid --unshare-utc --unshare-ipc --chdir "$SANDBOX_WORKDIR" )
+# --new-session detaches the sandbox from the controlling terminal. Without it, and
+# without a seccomp filter, a process inside can push characters back into that terminal
+# with TIOCSTI and have them run outside. Bubblewrap's own guidance asks for one or the
+# other, and this sandbox has no seccomp filter.
+#
+# --unshare-user is deliberately absent, although the committed core/config/TailPhobos.cfg
+# names it. What is generated here has to be the sandbox the measurement was actually made
+# in; adding an option the prune never ran under would produce a policy nobody has tested.
+# Adding it is a change to the sandbox, and belongs with whoever owns that decision.
+TAIL_OPTIONS=( --proc /proc --dev /dev --share-net --new-session --unshare-pid --unshare-uts --unshare-ipc --chdir "$SANDBOX_WORKDIR" )
 
 # ── init candidate config ────────────────────────────────────────────────────
+# The candidates: the children of the target, and nothing else.
+#
+# This used to glob "$TARGET"* , which is a prefix match rather than a descent. A target
+# of /srv/work therefore also caught /srv/work-secrets, a sibling the caller never named,
+# and pulled it into the configuration as writable in every invocation. prune_tree only
+# ever descends into the target, so such a sibling was never revisited either: it entered
+# writable and stayed writable, all the way into the generated policy.
+#
+# The %/ is for a target of "/", where "$TARGET"/* would glob "//*" and leave every path
+# with a doubled leading slash, which would then not match the pseudo-filesystem list.
 init_config() {
-  shopt -s dotglob
-  for item in "$TARGET"*; do
+  shopt -s dotglob nullglob
+  for item in "${TARGET%/}"/*; do
     [[ -d $item ]] || continue
     is_in_list "$item" "${PSEUDO_FS[@]}" && continue
     CONFIG["$item"]="r"
   done
-  shopt -u dotglob
+  shopt -u dotglob nullglob
 }
 
 # ── build bwrap invocation ───────────────────────────────────────────────────
+
+# The invocation, as an argument vector, in BWRAP_COMMAND.
+#
+# It used to be rendered into one string and run through `bash -c`, so every path and
+# every value went through a second round of shell parsing on the way in: a directory
+# whose name held a quote, a dollar or a semicolon was a command waiting for its turn.
+# An array reaches the kernel as it stands, and the build script is now passed as an
+# argument rather than as text for a shell to interpret.
+#
+# The environment is cleared and rebuilt rather than inherited, so nothing the caller
+# happens to be holding, a token or a path to a runner control file, is visible to code
+# the sandbox is meant to contain. PRUNE_ENV_PASSTHROUGH names what survives; --env adds
+# to it.
 build_bwrap_command() {
   local options=("${BASE_OPTIONS[@]}")
   if [[ "$TARGET" != "/" ]]; then
@@ -149,26 +222,36 @@ build_bwrap_command() {
   options+=( --bind "$HOST_WORKDIR" "$SANDBOX_WORKDIR" )
   options+=("${TAIL_OPTIONS[@]}")
 
-  local env_part=""
-  [[ -n "$PERSISTENT_BUILD_HOME" ]] && env_part+=" env BUILD_HOME=$PERSISTENT_BUILD_HOME"
-  [[ -n "$BUILD_OPTS"           ]] && env_part+=" BUILD_OPTS='$BUILD_OPTS'"
-  [[ -n "$BUILD_ENV_VARS"       ]] && env_part+=" $BUILD_ENV_VARS"
+  local name value
+  for name in ${PRUNE_ENV_PASSTHROUGH}; do
+    [[ -n "${!name:-}" ]] && options+=( --setenv "$name" "${!name}" )
+  done
+  [[ -n "$PERSISTENT_BUILD_HOME" ]] && options+=( --setenv BUILD_HOME "$PERSISTENT_BUILD_HOME" )
+  [[ -n "$BUILD_OPTS" ]] && options+=( --setenv BUILD_OPTS "$BUILD_OPTS" )
+  for value in ${EXPLICIT_ENV[@]+"${EXPLICIT_ENV[@]}"}; do
+    options+=( --setenv "${value%%=*}" "${value#*=}" )
+  done
 
-  echo "bwrap $(printf '%s ' "${options[@]}")${env_part} /bin/bash -c '$IN_SB_SCRIPT'"
+  BWRAP_COMMAND=( bwrap "${options[@]}" /bin/bash "$IN_SB_SCRIPT" )
 }
 
 # ── run one attempt ──────────────────────────────────────────────────────────
 test_build_script() {
-  local cmd tmpfile exit_code status
-  cmd=$(build_bwrap_command)
+  local tmpfile exit_code status
+  build_bwrap_command
   ((BWRAP_COMMAND_COUNT++))
   log "Testing command number: $BWRAP_COMMAND_COUNT"
 
-  tmpfile="/tmp/build-${BWRAP_COMMAND_COUNT}.log"
-  { echo "=== Run #${BWRAP_COMMAND_COUNT} Command ==="; echo "$cmd"; echo; } >"$tmpfile"
+  tmpfile="${PRUNE_LOG_DIR}/build-${BWRAP_COMMAND_COUNT}.log"
+  {
+    echo "=== Run #${BWRAP_COMMAND_COUNT} Command ==="
+    printf '%q ' "${BWRAP_COMMAND[@]}"
+    echo
+    echo
+  } >"$tmpfile"
 
   set +e
-  bash -c "$cmd" >>"$tmpfile" 2>&1
+  "${BWRAP_COMMAND[@]}" >>"$tmpfile" 2>&1
   exit_code=$?
   set -e
 
@@ -189,8 +272,8 @@ test_build_script() {
   fi
 
   [[ $exit_code -eq 0 ]] && status="success" || status="fail"
-  mv "$tmpfile" "/tmp/build-${BWRAP_COMMAND_COUNT}-${status}.log"
-  log "Logs for run #${BWRAP_COMMAND_COUNT}: /tmp/build-${BWRAP_COMMAND_COUNT}-${status}.log"
+  mv "$tmpfile" "${PRUNE_LOG_DIR}/build-${BWRAP_COMMAND_COUNT}-${status}.log"
+  log "Logs for run #${BWRAP_COMMAND_COUNT}: ${PRUNE_LOG_DIR}/build-${BWRAP_COMMAND_COUNT}-${status}.log"
   return $exit_code
 }
 
@@ -272,7 +355,7 @@ demote_writable_parents() {
     [[ "${CONFIG[$parent]:-}" == "w" ]] || continue
     any_w=false
     for maybe in "${!CONFIG[@]}"; do
-      [[ "$maybe" == "$parent"* && "$maybe" != "$parent" ]] || continue
+      [[ "$maybe" == "$parent"/* ]] || continue
       [[ "${CONFIG[$maybe]:-}" == "w" ]] && { any_w=true; break; }
     done
     $any_w || CONFIG["$parent"]="r"
@@ -305,7 +388,7 @@ if ! test_build_script; then
   exit 1
 fi
 
-log "Running pruning for exercises of ${LANG:-<unknown>}..."
+log "Running pruning for exercises of ${PRUNE_LANG:-<unknown>}..."
 prune_tree "$TARGET"
 
 # never fail a successful prune during compaction

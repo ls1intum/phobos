@@ -1,8 +1,12 @@
-FROM ls1tum/artemis-maven-template:java17-25
+FROM ls1tum/artemis-maven-template:java17-25@sha256:521f4dd3f3c6d81f403e84f2e2af3c459cd42dfd0345886aac1d1032527b07f8
 
 
-# gcc-14 on top of build-essential: the image ships gcc 13, which knows C23
-# only under its draft name -std=gnu2x. Pinning the language rather than taking
+# No bubblewrap: the filesystem layer is enforced by Landlock now, which needs no
+# privileges, no capabilities and no container flags, so the tool that needed all
+# three is gone from the image rather than left installed and unused.
+#
+# gcc-14 on top of build-essential: the image ships gcc 13, which knows C23 only
+# under its draft name -std=gnu2x. Pinning the language rather than taking
 # whatever the base image happens to default to is the point of the flag, so the
 # compiler that knows the real name is the one that builds both artefacts.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -31,9 +35,15 @@ RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
     -o ${PHOBOS_HOME}/phobos-landlock ${PHOBOS_HOME}/phobos-landlock*.c
 # The hardening is measured, not assumed: a DYN type proves -static-pie kept the
 # binary position independent, and a BIND_NOW entry proves RELRO is complete.
-RUN readelf -h ${PHOBOS_HOME}/phobos-landlock | grep -q 'Type:[[:space:]]*DYN' \
- && readelf -d ${PHOBOS_HOME}/phobos-landlock | grep -q 'BIND_NOW' \
- && readelf -d ${PHOBOS_HOME}/libnetblocker.so | grep -q 'BIND_NOW'
+# Written to files rather than piped into grep, because a pipe here would need
+# pipefail to report a failing readelf and hadolint rejects one without it.
+RUN readelf -h ${PHOBOS_HOME}/phobos-landlock > /tmp/wrapper-header.txt \
+ && readelf -d ${PHOBOS_HOME}/phobos-landlock > /tmp/wrapper-dynamic.txt \
+ && readelf -d ${PHOBOS_HOME}/libnetblocker.so > /tmp/library-dynamic.txt \
+ && grep -q 'Type:[[:space:]]*DYN' /tmp/wrapper-header.txt \
+ && grep -q 'BIND_NOW' /tmp/wrapper-dynamic.txt \
+ && grep -q 'BIND_NOW' /tmp/library-dynamic.txt \
+ && rm -f /tmp/wrapper-header.txt /tmp/wrapper-dynamic.txt /tmp/library-dynamic.txt
 RUN chmod +x ${PHOBOS_HOME}/*.sh ${PHOBOS_HOME}/*.cfg \
  && chmod +w ${PHOBOS_HOME}/allowedList.cfg && ln -sf phobos.sh ${PHOBOS_HOME}/phobos
 ENV PATH=${PHOBOS_HOME}:$PATH

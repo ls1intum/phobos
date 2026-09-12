@@ -1,0 +1,32 @@
+Phobos
+Copyright (c) 2025 Ajayvir Singh
+Copyright (c) 2026 Technical University of Munich, School of Computation,
+Information and Technology, Research Group of Applied Education Technologies,
+and Markus Paulsen
+
+Phobos originated as https://github.com/AjayvirS/artemis-phobos, written by
+Ajayvir Singh. This repository continues that work: of the commits on `main`,
+the large majority are his, and the pruning algorithm, the Bubblewrap
+application phase and the netblocker preload library are his design and his
+code. Later work in this repository added the CI, the linters and the
+repository tooling.
+
+His copyright notice is therefore recorded here and in LICENSE alongside that
+of the research group, as the MIT Licence requires and as the contribution
+deserves.
+
+PROVENANCE NOTE, TO BE RESOLVED BEFORE THIS FILE IS RELIED UPON
+
+The upstream repository carries no licence file. Commit history establishes
+who wrote what, but it does not by itself establish who is entitled to license
+it. Before this LICENSE is treated as settled, one of the following has to be
+on record:
+
+  - a licence granted by the upstream repository, or
+  - a written grant from each rights holder whose contributions are present
+    here, or
+  - a documented basis on which the Technical University of Munich exercises
+    the economic rights in these contributions.
+
+Contributors to this repository, by commit count on `main`: Ajayvir Singh,
+Markus Paulsen, Shudong Cai.

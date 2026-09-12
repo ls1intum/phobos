@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+message: "If you use Phobos in your work, please cite it using the metadata from this file."
+title: "Phobos"
+abstract: >-
+  Phobos is a sandboxing solution for programming exercises on interactive learning
+  platforms. An offline pruning phase discovers the minimal set of files and network
+  hosts a test run actually needs, by iteratively hiding directories and observing which
+  runs break. Student submissions then execute under Bubblewrap with only that allow-list
+  mounted, and a preload library intercepts name resolution and connection calls so that
+  undeclared network access fails.
+type: software
+license: MIT
+version: "0.1.0"
+repository-code: "https://github.com/ls1intum/phobos"
+keywords:
+  - sandbox
+  - security
+  - education
+  - automated-assessment
+  - bubblewrap
+  - linux-namespaces
+  - seccomp
+  - apparmor
+authors:
+  -
+    family-names: Singh
+    given-names: Ajayvir
+    affiliation: "Technical University of Munich"
+  -
+    family-names: Paulsen
+    given-names: Markus
+    email: markus.paulsen@tum.de
+    affiliation: "Technical University of Munich"
+  -
+    family-names: Cai
+    given-names: Shudong
+    affiliation: "Technical University of Munich"

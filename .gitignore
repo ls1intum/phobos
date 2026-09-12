@@ -1,5 +1,31 @@
+# Editor and IDE state.
+/.idea
+/.vscode
+
+# Local Windows helpers, kept out of a repository whose subject is a Linux sandbox.
 /replace_detect_minimal_fs.ps1
 /rebuild_image.ps1
-/.idea
+
+# Scratch checkouts used while trying the prune phase against a real exercise.
 /test-repos/**
+
+# Build output. The C sources are compiled inside the run-phase image, but a contributor
+# who compiles the preload library by hand leaves the object files behind. The two
+# libnetblocker.so files are deliberately tracked, so only the intermediates are ignored
+# here; see .gitattributes, which marks *.so binary so that Git never rewrites them.
 /build/
+*.o
+*.a
+
+# Python. The prune orchestrator and the helpers under var/tmp are run directly.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Output of a prune run. The path sets that are meant to be kept are committed under
+# core/config; everything a run drops beside them is scratch.
+/var/tmp/path_sets/
+/var/tmp/pruning/*.log

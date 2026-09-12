@@ -31,13 +31,13 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n ${lang:-} ]] || usage
 
-log()   { (( LOG_ENABLED )) && echo "[LOG ] $*"; }
+log()   { (( LOG_ENABLED )) && echo "[LOG ] $*"; return 0; }
 info()  { echo "[INFO] $*"; }
 error() { echo "[FAIL] $*" >&2; exit 1; }
 
-EX_ROOT="/var/tmp/testing-dir/$lang"
-PRUNE_SCRIPT="/var/tmp/pruning/detect_minimal_fs.sh"
-OUTPUT_DIR="/var/tmp/path_sets"
+EX_ROOT="${TESTING_DIR:-/var/tmp/testing-dir}/$lang"
+PRUNE_SCRIPT="${PRUNE_SCRIPT:-/var/tmp/pruning/detect_minimal_fs.sh}"
+OUTPUT_DIR="${OUTPUT_DIR:-/var/tmp/path_sets}"
 
 [[ -d "$EX_ROOT"      ]] || error "Language folder not found: $EX_ROOT"
 [[ -x "$PRUNE_SCRIPT" ]] || error "Prune script not exec: $PRUNE_SCRIPT"
@@ -50,6 +50,19 @@ if [[ -n "$CACHE_DIR" ]]; then
 fi
 
 shopt -s nullglob
+
+# This language's artefacts from the previous run, removed before it produces its
+# own. The orchestrator asks afterwards whether each language produced a result, and
+# a file left over from last week answers yes on behalf of a language that produced
+# nothing today. It has to happen here rather than in the orchestrator: the compose
+# pipeline runs the orchestrator with --skip-prune, so anything it cleared would be
+# cleared after these artefacts had already been written.
+stale_artefacts=("$OUTPUT_DIR/${lang}"_*)
+if (( ${#stale_artefacts[@]} )); then
+  log "Removing ${#stale_artefacts[@]} artefact(s) left by an earlier run of $lang"
+  rm -f -- "${stale_artefacts[@]}"
+fi
+
 exercises=("$EX_ROOT"/*)
 [[ ${#exercises[@]} -gt 0 ]] || error "No exercises found for $lang"
 
@@ -64,7 +77,10 @@ for ex_dir in "${exercises[@]}"; do
   info "=== Processing $ex_name ($lang) ==="
 
   # per-exercise scratch (host), then copy exercise there
-  workroot=$(mktemp -d "/tmp/prune_${lang}_${ex_name}_XXXX")
+  # Under TMPDIR where one is set, rather than always /tmp. A caller that points TMPDIR
+  # somewhere of its own then really gets its scratch there, which is what lets a test
+  # keep the copied exercise inside its own fixture instead of in a shared directory.
+  workroot=$(mktemp -d "${TMPDIR:-/tmp}/prune_${lang}_${ex_name}_XXXX")
   host_workdir="$workroot/exercise"
   mkdir -p "$host_workdir"
   cp -a "$ex_dir"/. "$host_workdir"/
@@ -77,7 +93,10 @@ for ex_dir in "${exercises[@]}"; do
   IN_SB_TESTS="$IN_SB_ROOT"
 
   pushd "$host_workdir" >/dev/null
-  PRUNE_ARGS=( --script "$IN_SB_SCRIPT" --lang "$lang"
+  # --target is no longer optional, and defaults here to the whole filesystem because
+  # that is what a production prune inspects. A test points PRUNE_TARGET at a fixture
+  # tree instead, so it never asks what the machine it runs on happens to need.
+  PRUNE_ARGS=( --script "$IN_SB_SCRIPT" --lang "$lang" --target "${PRUNE_TARGET:-/}"
                --assignment-dir "$IN_SB_ASSIGN" --test-dir "$IN_SB_TESTS" )
   (( LOG_ENABLED )) && PRUNE_ARGS=( --verbose "${PRUNE_ARGS[@]}" )
 
@@ -100,8 +119,8 @@ for ex_dir in "${exercises[@]}"; do
          --out-dir "$OUTPUT_DIR"; then
       (( PHOBOS_KEEP_LOG )) && mv "$bindings_src" "$OUTPUT_DIR/final_bindings_${lang}_${ex_name}.txt" || rm -f "$bindings_src"
     else
-      echo "[WARN] emit_artifacts.py failed; copying raw log untouched." >&2
       mv "$bindings_src" "$OUTPUT_DIR/final_bindings_${lang}_${ex_name}.txt"
+      error "emit_artifacts.py failed for $ex_name; raw log kept in $OUTPUT_DIR"
     fi
   else
     log "emit_artifacts helper not found ($EMIT_HELPER); copying raw log."

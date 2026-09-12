@@ -1,0 +1,33 @@
+# Binary files, so that Git never applies text conversion to them. Phobos ships a
+# compiled preload library in version control; a Git that normalised it would corrupt it.
+*.so       binary
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.tar      binary
+*.gz       binary
+*.tgz      binary
+*.zip      binary
+*.7z       binary
+
+# Not exported in an archive.
+.gitattributes export-ignore
+.gitignore     export-ignore
+
+# NOTE, deliberately absent: a `* text=auto eol=lf` line.
+#
+# Several files in this repository are stored with CRLF line endings. A blanket
+# normalisation rule here would silently rewrite them all. A CRLF Dockerfile is worth
+# fixing, because a trailing carriage return ends up inside the RUN command, but that is a
+# behaviour change that needs a Docker build to verify and belongs in its own pull request
+# rather than in a repository hygiene change. Tracked in ls1intum/phobos#15.
+#
+# This comment used to list the affected files by name and had gone stale: it named
+# ld_preloader/netblocker.c, which is stored with LF. Ask Git instead of trusting a list
+# that nothing keeps in step:
+#
+#     git ls-files --eol | grep crlf
+#
+# At the time of writing that reports eight files, under core/, docker/run_phase,
+# ld_preloader/, security_config/, squid/ and var/tmp.

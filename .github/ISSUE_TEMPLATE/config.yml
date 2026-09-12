@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Report a security problem
+    url: https://github.com/ls1intum/phobos/blob/main/SECURITY.md
+    about: Do not open a public issue for a sandbox escape. SECURITY.md says what is in scope and how to report it.

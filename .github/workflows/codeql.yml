@@ -1,0 +1,88 @@
+name: CodeQL
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+  schedule:
+    - cron: "0 16 * * 0"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyse:
+    name: Analyse ${{ matrix.language }}
+    # No fork gate. Code scanning accepts an upload from a pull_request run even though a
+    # fork's token is read-only, and a fork changing a workflow is exactly the case the
+    # actions analysis is most worth having. Nothing here runs fork code beyond javac on
+    # one file of this repository.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: c-cpp
+            build-mode: none
+          - language: python
+            build-mode: none
+          # The workflows themselves. A change to one of them is exactly the kind of
+          # change that is hardest to review by eye.
+          - language: actions
+            build-mode: none
+          # .github/scripts/CheckPullRequestTemplate.java reads the pull request body,
+          # which on a fork pull request an outsider writes verbatim. Nothing compiled
+          # it, so nothing analysed it. CodeQL only sees what a traced build compiles,
+          # hence manual rather than none.
+          - language: java-kotlin
+            build-mode: manual
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # build-mode none wherever there is no build for CodeQL to watch. The C is compiled
+      # inside the run-phase image rather than by anything CodeQL could trace here, so
+      # build-mode none is what reaches those sources at all; it analyses them without
+      # compiling them.
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # security-extended on top of the default suite. The default is tuned to keep a
+          # general project quiet; this one is a sandbox, so the wider suite is the right
+          # trade. It buys reach at the cost of precision, which makes a finding here a
+          # question to answer rather than a defect by itself.
+          queries: security-extended
+
+      - name: Set up JDK 21
+        if: ${{ matrix.language == 'java-kotlin' }}
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: "21"
+          distribution: "temurin"
+
+      # The checker is a single file with no build system, so javac is the whole build.
+      # It has to run between init and analyse, because CodeQL observes the compiler
+      # rather than reading the sources. The class files are scratch and nothing reads
+      # them afterwards.
+      - name: Compile the pull request template checker
+        if: ${{ matrix.language == 'java-kotlin' }}
+        run: javac -d "${RUNNER_TEMP}/pr-template-checker" .github/scripts/CheckPullRequestTemplate.java
+
+      - name: Analyse
+        uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          category: "/language:${{ matrix.language }}"

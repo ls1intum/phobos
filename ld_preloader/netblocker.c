@@ -197,7 +197,19 @@ static void load_rules_inner(void) {
       if (to_canon(tok, NULL, & net6) != 0) continue;
     }
     rule_t * r = calloc(1, sizeof * r);
+    /* Out of memory. Skipping the rule leaves the host it names out of the allow-list, so
+       that host is refused rather than permitted. For a sandbox that is the safe
+       direction, and it beats dereferencing NULL inside a library preloaded into every
+       process a graded run starts. */
+    if (!r) continue;
     r -> host = strdup(tok);
+    /* Same reasoning, plus r would leak. Every reader of host dereferences it without a
+       NULL check (see host_match and the connect hook), so a rule whose host failed to
+       allocate must never enter the list. */
+    if (!r -> host) {
+      free(r);
+      continue;
+    }
     r -> cidr_bits = cidr;
     r -> port = port;
     if (cidr) r -> net6 = net6;

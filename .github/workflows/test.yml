@@ -1,0 +1,85 @@
+# Runs the suites this repository already had and nothing was starting.
+#
+# Everything here needs a compiler, a shell and a Python, and no container, no kernel
+# feature and no elevated permission. That is the whole point of this workflow: the checks
+# that cost seconds run on every pull request, so the ones that need a sandbox can be
+# argued about separately.
+name: Test
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  shell:
+    name: Shell suites
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Both prune images name run_minimal_fs_all.sh as their entry point, and it in turn
+      # refuses to start unless detect_minimal_fs.sh is executable. A mode lost in a commit
+      # therefore stops the prune phase before it runs a line, and nothing else here would
+      # notice, because every suite invokes its script through `bash`.
+      - name: The prune entry points are executable
+        run: |
+          for script in var/tmp/pruning/run_minimal_fs_all.sh var/tmp/pruning/detect_minimal_fs.sh; do
+            if [ ! -x "${script}" ]; then
+              echo "::error file=${script}::not executable, so the prune images cannot start"
+              exit 1
+            fi
+          done
+
+      # Each suite reports its own passed, failed and skipped counts and exits non-zero on
+      # a failure, so they are separate steps: one run then names every suite that broke
+      # rather than only the first.
+      - name: The timeout contract
+        if: ${{ !cancelled() }}
+        run: bash tests/timeout_units.sh
+
+      - name: The address cache's port restrictions
+        if: ${{ !cancelled() }}
+        run: bash tests/network_cache_ports.sh
+
+      # Stubs stand in for the pruner and the emitter, so this needs no bubblewrap and
+      # no exercises. It covers the two ways the prune phase can quietly produce less
+      # than it should: finishing successfully with artefacts missing, and leaving an
+      # earlier run's artefacts in place.
+      - name: What the prune phase produces
+        if: ${{ !cancelled() }}
+        run: bash tests/prune_producer.sh
+
+  python:
+    name: Python helpers
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pytest
+        run: python -m pip install --quiet pytest==8.4.2
+
+      # These two helpers turn a pruning run into the allow-list a sandbox is then built
+      # from, so a defect in either is a defect in a security policy.
+      - name: Run the helper tests
+        run: python -m pytest tests/python -q
