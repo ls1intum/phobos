@@ -62,7 +62,6 @@ run_parser() {
   local rc
   out=$(bash -c '
       source "$1/phobos-common.sh"
-      INI_TMP_DIRS=""
       parse_cfg_policy "$2"
       printf "value=%s" "${PARSED_TIMEOUT}"
     ' _ "$CORE" "$WORK/policy.cfg" 2>&1)
