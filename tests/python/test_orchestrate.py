@@ -170,10 +170,10 @@ def test_a_language_whose_result_names_nothing_stops_the_merge(tmp_path):
     assert not base_policy(tmp_path).exists()
 
 
-def test_the_runtime_tail_keeps_the_mounts_and_the_namespaces(tmp_path):
-    """What the orchestrator writes has to be the sandbox the prune was measured in.
-    It kept a subset, so a generated policy ran without /proc, without /dev, without a
-    PID namespace of its own and without a new session."""
+def test_the_runtime_tail_drops_the_bubblewrap_flags(tmp_path):
+    """The runtime is phobos-landlock, which accepts no Bubblewrap mount or namespace
+    flag and exits on an option it does not know. A pruning run's tail carries those
+    flags, so the orchestrator has to drop every one of them rather than pass it on."""
     path_dir = tmp_path / "path_sets"
     path_dir.mkdir(parents=True)
     (path_dir / "TailPhobos.cfg").write_text(
@@ -182,22 +182,22 @@ def test_the_runtime_tail_keeps_the_mounts_and_the_namespaces(tmp_path):
     )
     result = run_orchestrator(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
-    written = runtime_tail(tmp_path)
-    for option in ("--proc /proc", "--dev /dev", "--new-session", "--unshare-pid"):
-        assert option in written, f"{option} missing from {written!r}"
-    assert "/tmp/exercise-1" not in written
+    written = runtime_tail(tmp_path).split()
+    for flag in ("--proc", "/proc", "--dev", "/dev", "--share-net", "--new-session",
+                 "--unshare-pid", "--unshare-uts", "--unshare-ipc"):
+        assert flag not in written, f"{flag} should have been dropped, got {written!r}"
 
 
-def test_a_repeated_mount_does_not_lose_its_operand(tmp_path):
-    """Deduplicating tokens rather than options would leave a dangling --proc."""
+def test_the_runtime_tail_is_only_the_runtime_chdir(tmp_path):
+    """The pruning run's per-exercise chdir is ephemeral, so the runtime tail is exactly
+    the stable runtime chdir and nothing else."""
     path_dir = tmp_path / "path_sets"
     path_dir.mkdir(parents=True)
     (path_dir / "TailPhobos.cfg").write_text(
-        "--proc /proc --proc /proc --dev /dev --chdir /tmp/exercise-1\n"
+        "--proc /proc --share-net --chdir /tmp/exercise-1\n"
     )
     result = run_orchestrator(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     written = runtime_tail(tmp_path).split()
-    assert written.count("--proc") == 1
-    assert written[written.index("--proc") + 1] == "/proc"
-    assert written[written.index("--dev") + 1] == "/dev"
+    assert written == ["--chdir", "/var/tmp/testing-dir"], written
+    assert "/tmp/exercise-1" not in written

@@ -15,9 +15,10 @@ cumulative `TailPhobos.cfg` emitted upstream by `run_minimal_fs_all.sh` +
   languages).
 * **Base<lang>Intersect.cfg**   – intersection of that language with BasePhobos
   (redundant but useful for auditing).
-* **TailPhobos.cfg**            – merged tail flags suitable for *runtime* use.
-  (Any per‑exercise `--chdir` tokens found during pruning are stripped; a
-  runtime chdir is injected via `--runtime-chdir` CLI argument.)
+* **TailPhobos.cfg**            – the runtime chdir, the only tail option the
+  phobos-landlock runtime accepts. (The pruning run's Bubblewrap mount and
+  namespace flags and its per‑exercise `--chdir` are dropped; the runtime chdir
+  is injected via the `--runtime-chdir` CLI argument.)
 
 Overlaps are fine; intersection files are for human inspection.
 """
@@ -165,51 +166,24 @@ def collect_language_data(langs: Iterable[str]) -> dict[str, dict[str, set[str]]
 
 # ────────────────────────────────────────── tail handling
 
-def _sanitize_tail_tokens(tokens: list[str], runtime_chdir: str) -> list[str]:
-    """Drop any per‑exercise --chdir tokens and inject the runtime one.
-
-    During pruning each exercise ran with `--chdir <exercise-workdir>` in the
-    TAIL_OPTIONS array in detect_minimal_fs.sh.  Those paths are ephemeral and
-    meaningless at runtime.  We therefore discard them and append a stable
-    `--chdir runtime_chdir` token.  We preserve other flags (e.g., --share-net).
-    """
-    out: list[str] = []
-    it = iter(tokens)
-    for tok in it:
-        if tok == '--chdir':
-            try: next(it)
-            except StopIteration: pass
-            continue
-        out.append(tok)
-    # ensure our runtime chdir appears last
-    out += ['--chdir', runtime_chdir]
-    return out
-
-# Every tail flag a prune can produce. Four were missing, so a generated policy ran
-# without /proc, without /dev, without a PID namespace of its own and without a new
-# session, which is weaker than the sandbox the pruning run measured.
-_ALLOWED_TAIL_FLAGS = {"--share-net", "--unshare-net", "--unshare-uts", "--unshare-ipc",
-                       "--unshare-pid", "--new-session"}
-
-# The mount options, each with the one operand it may carry. Read before the rule that
-# discards a stray absolute path, which would otherwise eat the operand and leave the
-# flag dangling. An unexpected operand is dropped rather than passed on: a half-checked
-# mount in a security policy is worse than no mount.
-_TAIL_MOUNTS = {"--proc": "/proc", "--dev": "/dev"}
-
 # ────────────────────────────────────────── tail handling
 
 
 def build_runtime_tail(runtime_chdir: str) -> None:
     """
-    Sanitise PATH_DIR/TailPhobos.cfg into CORE_DIR/TailPhobos.cfg.
+    Write CORE_DIR/TailPhobos.cfg holding only the runtime chdir.
 
-    1. Tokenise with shlex.split().
-    2. Drop every (--chdir <...>) pair.
-    3. Drop any orphan absolute‑path tokens (left‑over temp dirs).
-    4. Keep only flags in _ALLOWED_TAIL_FLAGS.
-    5. Deduplicate flags, preserve first occurrence.
-    6. Append '--chdir', runtime_chdir.
+    A pruning run's TailPhobos.cfg carries the Bubblewrap mount and namespace flags its
+    discovery used (--proc, --dev, --share-net, --unshare-*, --new-session) and a
+    per-exercise --chdir. The runtime is phobos-landlock, and it accepts none of those
+    Bubblewrap flags: they are not Landlock concepts, and it exits on an option it does
+    not know. Both entry points, phobos.sh and phobos_wrapper.sh, append every tail token
+    to phobos-landlock, so a tail carrying a Bubblewrap flag would fail every run.
+
+    Network intent reaches the runtime through the [network] section rather than the tail,
+    and a namespace is the container's boundary rather than Landlock's. So the runtime
+    tail is the stable runtime chdir and nothing else; the pruning run's per-exercise
+    chdir is ephemeral and is discarded.
     """
     src_tail = PATH_DIR / 'TailPhobos.cfg'
     dst_tail = CORE_DIR / 'TailPhobos.cfg'
@@ -218,36 +192,7 @@ def build_runtime_tail(runtime_chdir: str) -> None:
         print('\033[33m[warn]\033[0m TailPhobos.cfg missing in', PATH_DIR)
         return
 
-    tokens: list[str] = shlex.split(src_tail.read_text())
-
-    cleaned: list[tuple[str, ...]] = []
-    it = iter(tokens)
-    for tok in it:
-        if tok == '--chdir':
-            next(it, None)
-            continue
-        if tok in _TAIL_MOUNTS:
-            operand = next(it, None)
-            if operand == _TAIL_MOUNTS[tok]:
-                cleaned.append((tok, operand))
-            continue
-        if tok.startswith('/'):        # orphan absolute path -> junk, drop
-            continue
-        if tok in _ALLOWED_TAIL_FLAGS:
-            cleaned.append((tok,))
-
-    # Over whole options, not over tokens: deduplicating "--proc" and "/proc" apart
-    # would drop the operand of a repeated mount and leave the flag dangling.
-    deduped: list[str] = []
-    seen = set()
-    for option in cleaned:
-        if option not in seen:
-            seen.add(option)
-            deduped.extend(option)
-
-    deduped += ['--chdir', runtime_chdir]
-
-    dst_tail.write_text(' '.join(deduped) + '\n')
+    dst_tail.write_text(f'--chdir {runtime_chdir}\n')
     print('  • wrote TailPhobos.cfg (runtime chdir set to', runtime_chdir + ')')
 
 
