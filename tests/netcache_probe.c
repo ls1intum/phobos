@@ -134,6 +134,41 @@ static int resolve_without_service(const char *host, int family) {
   return rc;
 }
 
+/* Resolves a host with a service given as text, by number or by registered name,
+   and reports who decided: "refused" when the interposer failed the lookup with
+   EAI_FAIL, "passed-to-resolver" otherwise. A container without /etc/services cannot
+   resolve a named service at all, so whether the resolver succeeds is not the point. */
+static const char *resolve_with_service(const char *host, const char *service) {
+  struct addrinfo hints;
+  struct addrinfo *res = NULL;
+  memset(&hints, 0, sizeof hints);
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  int rc = getaddrinfo(host, service, &hints, &res);
+  if (rc == 0) freeaddrinfo(res);
+  return rc == EAI_FAIL ? "refused" : "passed-to-resolver";
+}
+
+/* Connects a Unix domain socket. The interposer looks only at the address family,
+   so no path is needed: a refusal shows as "denied", and what the kernel says about
+   an address without a path as "errno:<n>". */
+static const char *unix_connect_result(void) {
+  static char buf[32];
+  int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd < 0) return "socket-failed";
+  struct sockaddr_storage addr;
+  memset(&addr, 0, sizeof addr);
+  addr.ss_family = AF_UNIX;
+  errno = 0;
+  int rc = connect(fd, (struct sockaddr *) &addr, sizeof(sa_family_t));
+  int err = errno;
+  close(fd);
+  if (rc == 0) return "allowed";
+  if (err == EACCES) return "denied";
+  snprintf(buf, sizeof buf, "errno:%d", err);
+  return buf;
+}
+
 /* Reports how SIGHUP is handled in this process: left at the default, ignored,
    or caught by a handler somebody installed. */
 static const char *hangup_disposition(void) {
@@ -226,7 +261,7 @@ static int phase_one(const char *self, const char *scenario) {
     if (listen_ephemeral(AF_INET6, &v6[i]) != 0) { have_v6 = 0; break; }
   }
 
-  char body[512];
+  char body[1024];
   const char *entry = RULES_NAME;
   int ignore_hangup = 0;
   int keep_writable = 0;
@@ -277,6 +312,20 @@ static int phase_one(const char *self, const char *scenario) {
     snprintf(body, sizeof body, "::ffff:127.0.0.0/104\n");
   } else if (!strcmp(scenario, "range_mapped_short")) {
     snprintf(body, sizeof body, "::ffff:127.0.0.0/8\n");
+  } else if (!strcmp(scenario, "kept_any_host_with_port")) {
+    snprintf(body, sizeof body, "* %u\n", v4[0].port);
+  } else if (!strcmp(scenario, "kept_port_zero")) {
+    snprintf(body, sizeof body, "127.0.0.1 0\n");
+  } else if (!strcmp(scenario, "kept_third_token")) {
+    snprintf(body, sizeof body, "127.0.0.1 %u ignored\n", v4[0].port);
+  } else if (!strcmp(scenario, "kept_invalid_port")) {
+    snprintf(body, sizeof body, "127.0.0.1 99999\n");
+  } else if (!strcmp(scenario, "kept_unix_socket")) {
+    snprintf(body, sizeof body, "127.0.0.1 *\n");
+  } else if (!strcmp(scenario, "kept_named_service")) {
+    snprintf(body, sizeof body, "localhost %u\n", v4[0].port);
+  } else if (!strcmp(scenario, "kept_long_line")) {
+    snprintf(body, sizeof body, "#%510s127.0.0.1 *\n", "");
   } else {
     fprintf(stderr, "unknown scenario: %s\n", scenario);
     return 2;
@@ -381,6 +430,22 @@ static int run_scenario(const char *scenario, int write_fd, const unsigned short
   } else if (!strcmp(scenario, "range_ipv6")) {
     printf("ipv6_loopback=%s\n", connect_result(AF_INET6, "::1", v6[0]));
     printf("ipv4_loopback=%s\n", connect_result(AF_INET, "127.0.0.1", v4[0]));
+  } else if (!strcmp(scenario, "kept_any_host_with_port")) {
+    printf("resolve=%s\n", resolve_without_service("localhost", AF_INET) == 0 ? "ok" : "failed");
+    printf("permitted_port=%s\n", connect_result(AF_INET, "127.0.0.1", v4[0]));
+    printf("other_port=%s\n", connect_result(AF_INET, "127.0.0.1", v4[1]));
+  } else if (!strcmp(scenario, "kept_port_zero") || !strcmp(scenario, "kept_long_line")) {
+    printf("first_port=%s\n", connect_result(AF_INET, "127.0.0.1", v4[0]));
+    printf("second_port=%s\n", connect_result(AF_INET, "127.0.0.1", v4[1]));
+  } else if (!strcmp(scenario, "kept_third_token") || !strcmp(scenario, "kept_invalid_port")) {
+    printf("permitted_port=%s\n", connect_result(AF_INET, "127.0.0.1", v4[0]));
+  } else if (!strcmp(scenario, "kept_unix_socket")) {
+    printf("unix_socket=%s\n", unix_connect_result());
+  } else if (!strcmp(scenario, "kept_named_service")) {
+    char other[16];
+    snprintf(other, sizeof other, "%u", (unsigned int) v4[1]);
+    printf("named_service=%s\n", resolve_with_service("localhost", "http"));
+    printf("other_service=%s\n", resolve_with_service("localhost", other));
   } else {
     fprintf(stderr, "unknown scenario: %s\n", scenario);
     return 2;

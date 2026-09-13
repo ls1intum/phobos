@@ -218,6 +218,34 @@ else
 fi
 
 # ---------------------------------------------------------------------
+# Behaviour the filter has today, recorded rather than endorsed
+# ---------------------------------------------------------------------
+
+# These pin down what the filter does now in cases a restructuring could change
+# without anyone noticing. They describe behaviour, not a policy anyone chose: a
+# change to any of them belongs in its own pull request, with this check changed there.
+echo
+echo "== behaviour the filter has today =="
+out="$(run_scenario kept_any_host_with_port)"
+check "'* <port>' fails every name lookup" "failed" "$(field "$out" resolve)"
+check "'* <port>' permits any address on that port" "allowed" "$(field "$out" permitted_port)"
+check "'* <port>' refuses another port" "denied" "$(field "$out" other_port)"
+out="$(run_scenario kept_port_zero)"
+check "port 0 in a rule permits one port" "allowed" "$(field "$out" first_port)"
+check "port 0 in a rule permits another port" "allowed" "$(field "$out" second_port)"
+out="$(run_scenario kept_third_token)"
+check "a third word in a rule is ignored" "allowed" "$(field "$out" permitted_port)"
+out="$(run_scenario kept_invalid_port)"
+check "a rule with a port above 65535 grants nothing" "denied" "$(field "$out" permitted_port)"
+out="$(run_scenario kept_unix_socket)"
+check "a connection to a Unix socket is refused" "denied" "$(field "$out" unix_socket)"
+out="$(run_scenario kept_named_service)"
+check "a lookup with a named service counts as no port" "passed-to-resolver" "$(field "$out" named_service)"
+check "a lookup naming a port the rule does not grant is refused" "refused" "$(field "$out" other_service)"
+out="$(run_scenario kept_long_line)"
+check "a rule after 511 characters of comment on one line takes effect" "allowed" "$(field "$out" first_port)"
+
+# ---------------------------------------------------------------------
 # SIGHUP belongs to the program, and reloads nothing
 # ---------------------------------------------------------------------
 
