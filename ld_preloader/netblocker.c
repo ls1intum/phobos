@@ -18,11 +18,15 @@
 
 #include <netdb.h>
 
-#include <signal.h>
+#include <fcntl.h>
 
 #include <stdint.h>
 
 #include <sys/socket.h>
+
+#include <sys/stat.h>
+
+#include <unistd.h>
 
 /*=======================  Rule table  =======================*/
 
@@ -165,11 +169,35 @@ static void free_rules(void) {
   }
 }
 
+/* Opens the rules file for reading, or answers NULL. A symbolic link as the last
+   component is not followed, and anything but a regular file is refused, so the
+   name cannot be pointed at another file or at a FIFO. O_NONBLOCK is what lets a
+   FIFO be opened, and so refused, at all: without it the open would block every
+   process this library is loaded into. It is cleared again before reading. No
+   rules means every connection is refused, which is the safe direction. */
+static FILE * open_rules_file(const char * path) {
+  int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+  if (fd < 0) return NULL;
+  struct stat st;
+  if (fstat(fd, & st) != 0 || !S_ISREG(st.st_mode)) {
+    close(fd);
+    return NULL;
+  }
+  int flags = fcntl(fd, F_GETFL);
+  if (flags < 0 || fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) != 0) {
+    close(fd);
+    return NULL;
+  }
+  FILE * f = fdopen(fd, "r");
+  if (!f) close(fd);
+  return f;
+}
+
 //TODO: we should supply allow list as an argument to the binary instead of env var NETBLOCKER_CONF
 static void load_rules_inner(void) {
   const char * cfg = getenv("NETBLOCKER_CONF");
   if (!cfg) return;
-  FILE * f = fopen(cfg, "r");
+  FILE * f = open_rules_file(cfg);
   if (!f) return;
   char line[512];
   while (fgets(line, sizeof line, f)) {
@@ -225,10 +253,6 @@ static void reload_rules(void) {
   load_rules_inner();
   ip_cache_clear();
   pthread_rwlock_unlock( & rules_lock);
-}
-static void hup_handler(int s) {
-  (void) s;
-  reload_rules();
 }
 
 /*=======================  Evaluation  =======================*/
@@ -408,7 +432,6 @@ int connect(int fd,
 
 __attribute__((constructor)) static void nb_init(void) {
   reload_rules();
-  signal(SIGHUP, hup_handler);
   real_gai = (gai_f) dlsym(RTLD_NEXT, "getaddrinfo");
   real_conn = (conn_f) dlsym(RTLD_NEXT, "connect");
 }

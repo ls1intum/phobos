@@ -22,6 +22,10 @@ Notes:
   per-path FS merge, NET union, TIMEOUT last-wins.
 - Tail config: "${HERE}/TailPhobos.cfg" (flags only) is applied last.
 - If no Base*.cfg is present, Phobos runs the command raw (no sandbox).
+- The run's policy is written to a directory under PHOBOS_SPEC_PARENT (default
+  /var/tmp), which must lie outside every write path, and removed when the run
+  ends. A run with --no-filesystem and --no-timeout hands the command to exec and
+  leaves that directory behind.
 USAGE
   exit 2
 }
@@ -100,8 +104,14 @@ for c in "${cfgs[@]}"; do
   [[ -n "${PARSED_TIMEOUT:-}" || "${PARSED_TIMEOUT:-__unset__}" == "" ]] && timeout_eff="${PARSED_TIMEOUT:-}"
 done
 
-SPEC_DIR="$(mktemp -d -t phobos-spec.XXXXXX)"
-trap 'rm -rf "$SPEC_DIR" $INI_TMP_DIRS "$base_ro" "$base_rw" "$base_hide" "$base_net" "$eff_ro" "$eff_rw" "$eff_hide" "$eff_net"' EXIT
+# The specification holds the rules file netblocker reads in every process the command
+# starts, so it has to lie outside every write path, where Landlock keeps it unchangeable.
+# /tmp is a write path in both shipped policies; /var/tmp is in neither.
+spec_parent="${PHOBOS_SPEC_PARENT:-/var/tmp}"
+refuse_unusable_spec_parent "$spec_parent"
+SPEC_DIR="$(mktemp -d "${spec_parent%/}/phobos-spec.XXXXXX")"
+mark_owned_spec_dir "$SPEC_DIR"
+trap 'finish_owned_spec_dir "$?" "$SPEC_DIR" $INI_TMP_DIRS "$base_ro" "$base_rw" "$base_hide" "$base_net" "$eff_ro" "$eff_rw" "$eff_hide" "$eff_net"' EXIT
 write_spec "$SPEC_DIR" "$eff_ro" "$eff_rw" "$eff_hide" "$eff_net" "$timeout_eff" "${TAIL_FLAGS_FILE:-}"
 
 # Always enter through the first layer; inner scripts decide whether to apply themselves

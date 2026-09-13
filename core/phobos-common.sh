@@ -589,3 +589,106 @@ refuse_unusable_netblocker() {
   report "Network layer unusable: '${library}' ${reason}, so the command would run unfiltered. (PHB-ERUNTIME)"
   exit "${PHB_ERUNTIME}"
 }
+
+# Appends the rules that let the preload library and its rules file be read inside
+# the sandbox, and refuses a policy under which either could be changed from inside
+# it. Assumes both paths exist and that the write file holds the policy's write
+# paths, one per line; the other sections grant no right that changes a file.
+#
+# Landlock adds the rights of every rule along a path and cannot take one away, so a
+# read rule on a file beneath a write path would still leave it writable, and a
+# submission could rewrite its network policy or replace the library that enforces
+# it before starting another process. Symbolic links are resolved on both sides,
+# because Landlock anchors a rule on the inode it opens.
+append_netblocker_rules() {
+  local -n netblocker_ref="$1"
+  local write_file="$2"
+  local library="$3"
+  local rules="$4"
+  local artefact
+  local resolved
+  local write_path
+  local resolved_write
+  for artefact in "$library" "$rules"; do
+    resolved="$(printf '%s\n' "$artefact" | resolve_symlinks)"
+    while IFS= read -r write_path || [[ -n "$write_path" ]]; do
+      [[ -z "$write_path" ]] && continue
+      resolved_write="$(printf '%s\n' "$write_path" | resolve_symlinks)"
+      if [[ "$resolved" == "$resolved_write" || "$resolved" == "${resolved_write%/}/"* ]]; then
+        report "Policy unenforceable: '${artefact}' lies beneath the write path '${write_path}', so the sandbox could change the network policy or the library that enforces it. (PHB-EPOLICY)"
+        exit "${PHB_EPOLICY}"
+      fi
+    done < <(cat "$write_file" 2>/dev/null)
+  done
+  netblocker_ref+=( --rights=rx "$library" --rights=r "$rules" )
+}
+
+# --------------------------------------------------------------------------
+# The directory a run's specification lives in.
+#
+# phobos.sh writes the effective policy there, and the rules file in it is read by
+# every process the command starts. It is created per run, marked as created by
+# Phobos, and removed by whichever layer ends the run, so that neither a stale
+# policy nor a directory a caller handed in is ever left behind or deleted.
+# --------------------------------------------------------------------------
+
+# The file that marks a specification directory as one phobos.sh created.
+PHB_SPEC_MARKER=".phobos-owned-spec"
+
+# The files write_spec creates, the only ones remove_owned_spec_dir deletes.
+PHB_SPEC_FILES="ro.paths rw.paths hide.paths tail.flags net.rules timeout.sec"
+
+# Refuses a parent for the specification directory that is not an absolute path
+# to an existing directory. Assumes it is called plainly, not in a command
+# substitution, so that the refusal ends the run.
+refuse_unusable_spec_parent() {
+  local parent="$1"
+  [[ "$parent" == /* && -d "$parent" ]] && return 0
+  report "Policy invalid: PHOBOS_SPEC_PARENT '${parent}' is not an absolute path to an existing directory. (PHB-EPOLICY)"
+  exit "${PHB_EPOLICY}"
+}
+
+# Marks a directory phobos.sh has just created with mktemp as its own. Assumes
+# nothing else can write there yet, which mktemp's private mode guarantees.
+mark_owned_spec_dir() {
+  : > "$1/${PHB_SPEC_MARKER}"
+}
+
+# Removes a specification directory phobos.sh created, and does nothing to any
+# other. Deletes only the files write_spec writes and the marker, then the
+# directory itself, so a directory that has gained anything else stays and the
+# failure is returned rather than the contents deleted. Assumes the path may be
+# empty, missing or not a directory, all of which leave nothing to do.
+remove_owned_spec_dir() {
+  local directory="$1"
+  local name
+  [[ -n "$directory" && -d "$directory" && ! -L "$directory" ]] || return 0
+  [[ -f "$directory/${PHB_SPEC_MARKER}" && ! -L "$directory/${PHB_SPEC_MARKER}" ]] || return 0
+  for name in ${PHB_SPEC_FILES}; do
+    rm -f -- "$directory/$name" || return 1
+  done
+  rm -f -- "$directory/${PHB_SPEC_MARKER}" || return 1
+  rmdir -- "$directory"
+}
+
+# Ends the shell with the given status after removing any scratch paths named after
+# the directory and then the owned specification directory. A directory that cannot
+# be removed is reported, and turns a run that had otherwise succeeded into a
+# PHB-ERUNTIME failure rather than leaving a policy behind unnoticed; a run that had
+# already failed keeps its own status. Meant for an EXIT trap, which passes $? as the
+# first argument, so that it is read before anything else runs. Assumes the scratch
+# paths are the shell's own temporary files: one that cannot be removed is reported
+# and does not stop the specification directory from being removed.
+finish_owned_spec_dir() {
+  local status="$1"
+  local directory="$2"
+  shift 2
+  if (( $# > 0 )) && ! rm -rf -- "$@"; then
+    _log "cleanup: could not remove the scratch files '$*'"
+  fi
+  if ! remove_owned_spec_dir "$directory"; then
+    _log "cleanup: could not remove the specification directory '${directory}'"
+    if (( status == 0 )); then status="${PHB_ERUNTIME}"; fi
+  fi
+  exit "$status"
+}

@@ -236,6 +236,13 @@ rm -f "$landlock_net_rules"
 # with only a warning, which would leave the build unfiltered.
 refuse_unusable_netblocker "$core/libnetblocker.so"
 
+# The library and its rules file have to be readable inside the sandbox, and neither
+# may lie beneath a write path. The same rule as phobos-filesystem.sh applies.
+netblocker_write_list="$(mktemp)"
+printf '%s\n' "${write_paths[@]}" > "$netblocker_write_list"
+append_netblocker_rules landlock_args "$netblocker_write_list" "$core/libnetblocker.so" "$allowed_file"
+rm -f "$netblocker_write_list"
+
 export NETBLOCKER_CONF="$allowed_file"
 export LD_PRELOAD="$core/libnetblocker.so"
 
