@@ -445,6 +445,17 @@ refuse_unusable_port() {
   exit "${PHB_EPOLICY}"
 }
 
+# True when the host is the loopback interface. Under the no-network container an exercise
+# runs in, loopback is the only network there is, so a loopback rule that names no port is
+# tolerated even though Landlock, which enforces ports and not hosts, cannot express it: the
+# container, not Landlock, is its boundary. Any other host with no port is refused instead.
+is_loopback_host() {
+  case "$1" in
+    localhost | ::1 | 127.* ) return 0 ;;
+    * ) return 1 ;;
+  esac
+}
+
 # Reads a "host port" allow-list, writing the concrete ports it names into the
 # second file and the first rule that names none into the third.
 #
@@ -466,6 +477,13 @@ collect_network_ports() {
   while read -r host port; do
     [[ -z "$host" ]] && continue
     if [[ "$port" == "*" || -z "$port" ]]; then
+      # An external host with no port cannot be enforced: Landlock knows ports, not hosts,
+      # so leaving the layer off for it would confine external egress to the preload library,
+      # which a submission can step around. Loopback with no port is the one tolerated case.
+      if ! is_loopback_host "$host"; then
+        report "Policy unenforceable: '${host}' names a host with no port. Landlock enforces TCP ports, not hosts, so an external host with no port cannot be enforced. Name a concrete port, and rely on a no-network container as the outer boundary. (PHB-EPOLICY)"
+        exit "${PHB_EPOLICY}"
+      fi
       [[ -s "$wildcard_file" ]] || printf '%s:%s\n' "$host" "${port:-*}" > "$wildcard_file"
       continue
     fi
@@ -477,10 +495,14 @@ collect_network_ports() {
 # Fills the named array with the TCP port rules Landlock can actually enforce.
 #
 # The policy language names a host and a port, Landlock knows only ports. A rule
-# naming no port therefore cannot be expressed at all: a section made only of
-# those leaves the network layer off and says so, which is what the shipped
-# policies do. A section mixing one with a concrete port is refused instead,
-# because the concrete rule would read as enforced and would not be.
+# naming no port therefore cannot be expressed. Only a LOOPBACK host may name no
+# port: a section made only of those leaves the network layer off and says so,
+# which is what the shipped policies do, and the no-network container is that
+# rule's boundary. A non-loopback host with no port is refused in
+# collect_network_ports, because leaving the layer off for it would confine
+# external egress to the preload library, which a submission can step around. A
+# section mixing a loopback wildcard with a concrete port is refused here, because
+# the concrete rule would read as enforced while the wildcard would not be.
 #
 # Only an explicit star or an omitted port is that wildcard. "host:0" names no
 # port that exists and is a policy mistake, not a licence to switch the layer off.

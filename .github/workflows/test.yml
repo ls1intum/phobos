@@ -56,6 +56,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/network_cache_ports.sh
 
+      # How the network allow-list becomes Landlock TCP-port rules: a concrete port is
+      # enforced, a loopback host with no port is tolerated, a non-loopback host with no
+      # port is refused, and the mixed case is refused. No sandbox needed.
+      - name: The network policy
+        if: ${{ !cancelled() }}
+        run: bash tests/network_policy.sh
+
       # Stubs stand in for the pruner and the emitter, so this needs no bubblewrap and
       # no exercises. It covers the two ways the prune phase can quietly produce less
       # than it should: finishing successfully with artefacts missing, and leaving an
