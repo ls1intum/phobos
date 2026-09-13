@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   unit:
-    name: Unit tests for the Landlock wrapper
+    name: Unit tests for the Landlock wrapper and the network filter
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -52,6 +52,17 @@ jobs:
 
       - name: Run the unit tests
         run: bash tests/unit/run.sh
+
+      - name: Run the network filter unit tests
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/netblocker_run.sh
+
+      # Measured here, unlike the wrapper suite: its interposed calls pass straight
+      # through unless a case arms a failure, so gcov's own writes are undisturbed. The
+      # step fails unless every line and every branch of the network filter ran.
+      - name: Every line and branch of the network filter ran
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/netblocker_run.sh --coverage
 
       # No coverage step, deliberately. The suite interposes open and close, which is
       # also how the gcov runtime writes its .gcda files, so an instrumented run has
@@ -82,7 +93,7 @@ jobs:
         run: .github/scripts/netblocker-build.sh install
 
       - name: Build the library from its source
-        run: .github/scripts/netblocker-build.sh build ld_preloader/netblocker.c "${RUNNER_TEMP}/libnetblocker.so"
+        run: .github/scripts/netblocker-build.sh build ld_preloader "${RUNNER_TEMP}/libnetblocker.so"
 
       # x86-64, no newer glibc than the run-phase image, both hooks defined and loadable.
       - name: Check what was built

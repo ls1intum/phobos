@@ -13,7 +13,7 @@
 # request that moves it rebuilds the committed objects.
 #
 #   netblocker-build.sh install [PACKAGE...]      as root, on Ubuntu 26.04
-#   netblocker-build.sh build SOURCE OUTPUT
+#   netblocker-build.sh build SOURCE_DIRECTORY OUTPUT
 #   netblocker-build.sh verify LIBRARY
 #   netblocker-build.sh compare REFERENCE COPY...
 set -euo pipefail
@@ -25,13 +25,15 @@ readonly LIBC_DEV_VERSION="2.43-2ubuntu2.4"
 # The C library of the run-phase image. A library needing a newer one would not load there.
 readonly HIGHEST_GLIBC="2.39"
 readonly MACHINE="Advanced Micro Devices X86-64"
+# The only functions the library may export: its two hooks, in the order the C locale sorts them.
+readonly EXPORTED_FUNCTIONS="connect getaddrinfo"
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 # Prints how to call this script and gives up.
 usage() {
     printf 'usage: netblocker-build.sh install [PACKAGE...]\n' >&2
-    printf '       netblocker-build.sh build SOURCE OUTPUT\n' >&2
+    printf '       netblocker-build.sh build SOURCE_DIRECTORY OUTPUT\n' >&2
     printf '       netblocker-build.sh verify LIBRARY\n' >&2
     printf '       netblocker-build.sh compare REFERENCE COPY...\n' >&2
     exit 2
@@ -107,31 +109,42 @@ check_toolchain() {
     done
 }
 
-# Compiles SOURCE into OUTPUT with the flags the run-phase image has always used.
+# Compiles every netblocker*.c in SOURCE_DIRECTORY into OUTPUT with the flags the
+# run-phase image has always used, plus -fvisibility=hidden.
 #
 # -O2 is what switches _FORTIFY_SOURCE on: without an optimisation level it is off, and
 # this library sits on every connection a submission makes. -Wl,-z,now makes every
-# relocation resolve at load time. The source is compiled from its own directory under
-# its bare name, so the bytes do not depend on where the checkout lives.
+# relocation resolve at load time. -fvisibility=hidden keeps every function but the two
+# hooks, which ask for default visibility themselves, out of the dynamic symbol table.
+# The sources are compiled from their own directory under their bare names, in the
+# order the C locale sorts them, so the bytes depend neither on where the checkout lives
+# nor on the machine's locale.
 build_library() {
-    local source="$1"
+    local directory="$1"
     local output
+    local -a sources
     check_toolchain
     output="$(realpath --canonicalize-missing -- "$2")"
+    mapfile -t sources < <(cd -- "${directory}" && LC_ALL=C compgen -G 'netblocker*.c' | LC_ALL=C sort)
+    (( ${#sources[@]} > 0 )) || fail "${directory} holds no netblocker*.c"
     (
-        cd -- "$(dirname -- "${source}")"
-        gcc-14 -std=gnu23 -O2 -Wall -Wextra -fPIC -shared -Wl,-z,now \
-            -o "${output}" "$(basename -- "${source}")"
+        cd -- "${directory}"
+        gcc-14 -std=gnu23 -O2 -Wall -Wextra -fPIC -shared -fvisibility=hidden -Wl,-z,now \
+            -o "${output}" "${sources[@]}"
     )
 }
 
 # Refuses a library that is not built for x86-64, needs a newer C library than the
-# run-phase image has, or that the network layer would refuse at run time. Assumes
-# readelf and the repository checkout this script lives in.
+# run-phase image has, exports any function but its two hooks, or that the network
+# layer would refuse at run time. Assumes readelf and the repository checkout this
+# script lives in.
 verify_library() {
     local library="$1"
     local machine
     local highest
+    local exported
+    # shellcheck source=../../core/phobos-common.sh
+    source "${HERE}/../../core/phobos-common.sh"
     machine="$(readelf --file-header --wide "${library}" | awk -F':[[:space:]]+' '$1 ~ /Machine$/ { print $2 }')"
     [[ "${machine}" == "${MACHINE}" ]] || fail "${library} is built for '${machine}', not x86-64"
     highest="$(readelf --dyn-syms --wide "${library}" | { grep -o 'GLIBC_[0-9.]*' || true; } | sort -uV | tail -n 1)"
@@ -139,8 +152,9 @@ verify_library() {
     highest="${highest#GLIBC_}"
     [[ "$(printf '%s\n%s\n' "${highest}" "${HIGHEST_GLIBC}" | sort -V | tail -n 1)" == "${HIGHEST_GLIBC}" ]] \
         || fail "${library} needs glibc ${highest}, newer than the ${HIGHEST_GLIBC} the run-phase image ships"
-    # shellcheck source=../../core/phobos-common.sh
-    source "${HERE}/../../core/phobos-common.sh"
+    exported="$(defined_library_functions "${library}" | LC_ALL=C sort | paste -s -d ' ' -)"
+    [[ "${exported}" == "${EXPORTED_FUNCTIONS}" ]] \
+        || fail "${library} exports '${exported}' rather than exactly '${EXPORTED_FUNCTIONS}', so one of its functions could take the place of a program's own"
     refuse_unusable_netblocker "$(realpath -- "${library}")"
 }
 

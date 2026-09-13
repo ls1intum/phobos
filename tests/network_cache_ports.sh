@@ -12,7 +12,7 @@
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE="${HERE}/../ld_preloader/netblocker.c"
+SOURCE_DIRECTORY="${HERE}/../ld_preloader"
 PROBE_SOURCE="${HERE}/netcache_probe.c"
 
 WORK="$(mktemp -d)"
@@ -67,12 +67,19 @@ fi
 # The same build the run-phase image performs, flags included: -O2 is what turns
 # _FORTIFY_SOURCE on, and -Wl,-z,now completes RELRO. Testing an unhardened build
 # of a library that ships hardened would leave the shipped one untested.
-if ! "$COMPILER" -std=gnu23 -O2 -Wall -Wextra -fPIC -shared -Wl,-z,now \
-     -o "$WORK/libnetblocker.so" "$SOURCE" 2>"$WORK/lib.log"; then
+if ! "$COMPILER" -std=gnu23 -O2 -Wall -Wextra -fPIC -shared -fvisibility=hidden -Wl,-z,now \
+     -o "$WORK/libnetblocker.so" "$SOURCE_DIRECTORY"/netblocker*.c 2>"$WORK/lib.log"; then
   bad "build the interposer" "a shared library" "$(cat "$WORK/lib.log")"
   summary
 fi
 ok "build the interposer"
+
+# Only the two hooks may be visible. Any other function the library exported could
+# take the place of one the program, or another library, defines under the same name.
+exported="$(readelf --dyn-syms --wide "$WORK/libnetblocker.so" 2>/dev/null \
+  | awk '$4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" { print $8 }' \
+  | LC_ALL=C sort | paste -s -d ' ' -)"
+check "the library exports exactly connect and getaddrinfo" "connect getaddrinfo" "$exported"
 
 if ! "$COMPILER" -std=gnu23 -O0 -g -o "$WORK/probe" "$PROBE_SOURCE" 2>"$WORK/probe.log"; then
   bad "build the probe client" "an executable" "$(cat "$WORK/probe.log")"

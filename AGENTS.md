@@ -90,7 +90,7 @@ marks `*.so` binary so that Git never applies text conversion to them.
   ```
   docker run --rm --platform linux/amd64 -v "$PWD:/repository" -w /repository <image> sh -c \
     '.github/scripts/netblocker-build.sh install &&
-     .github/scripts/netblocker-build.sh build ld_preloader/netblocker.c core/libnetblocker.so &&
+     .github/scripts/netblocker-build.sh build ld_preloader core/libnetblocker.so &&
      cp core/libnetblocker.so ld_preloader/libnetblocker.so'
   ```
 
