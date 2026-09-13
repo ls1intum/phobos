@@ -63,6 +63,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/network_policy.sh
 
+      # The [limits] resource keys are parsed and, when applied, set the process's rlimits,
+      # the in-process line against a fork bomb, a runaway allocation or a disk-filling file.
+      - name: The resource limits
+        if: ${{ !cancelled() }}
+        run: bash tests/resource_limits.sh
+
       # Stubs stand in for the pruner and the emitter, so this needs no bubblewrap and
       # no exercises. It covers the two ways the prune phase can quietly produce less
       # than it should: finishing successfully with artefacts missing, and leaving an

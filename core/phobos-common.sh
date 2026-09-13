@@ -68,6 +68,48 @@ set_parsed_timeout() {
     PARSED_TIMEOUT="$value"
   fi
 }
+
+# Validates one resource-limit value and stores it in the named variable. Each is a
+# non-negative whole number; an unusable one is a policy error rather than an ignored line,
+# because silently dropping it would run the command without a limit the policy asked for.
+set_parsed_limit() {
+  local -n limit_ref="$1"
+  local key="$2"
+  local value="${3//[[:space:]]/}"
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    report "Policy invalid: ${key} '${value}' must be a non-negative whole number. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  limit_ref="$value"
+}
+
+# Applies the configured resource limits to this shell, so the command tree it exec's into
+# inherits them. Each is optional. rlimits are self-imposed and need no privilege, exactly as
+# Landlock is, which is why this works inside the unprivileged container an exercise runs in.
+# A configured limit that cannot be set ends the run rather than running without it. Assumes
+# it is called plainly, not in a subshell, so the ulimit takes effect for the later exec.
+apply_resource_limits() {
+  local mem_mb="$1"
+  local nproc="$2"
+  local nofile="$3"
+  local fsize_mb="$4"
+  local cpu="$5"
+  if [[ -n "$mem_mb" ]]; then
+    ulimit -v "$(( mem_mb * 1024 ))" || die "cannot set the memory limit of ${mem_mb} MB" "${PHB_ERUNTIME}"
+  fi
+  if [[ -n "$nproc" ]]; then
+    ulimit -u "$nproc" || die "cannot set the process limit of ${nproc}" "${PHB_ERUNTIME}"
+  fi
+  if [[ -n "$nofile" ]]; then
+    ulimit -n "$nofile" || die "cannot set the open-file limit of ${nofile}" "${PHB_ERUNTIME}"
+  fi
+  if [[ -n "$fsize_mb" ]]; then
+    ulimit -f "$(( fsize_mb * 1024 ))" || die "cannot set the file-size limit of ${fsize_mb} MB" "${PHB_ERUNTIME}"
+  fi
+  if [[ -n "$cpu" ]]; then
+    ulimit -t "$cpu" || die "cannot set the CPU-time limit of ${cpu} s" "${PHB_ERUNTIME}"
+  fi
+}
 parse_cfg_policy() {
   local cfg="$1"
   local tdir
@@ -81,6 +123,10 @@ parse_cfg_policy() {
   local ro="${tdir}/ro.paths" rw="${tdir}/rw.paths" hide="${tdir}/hide.paths" net="${tdir}/net.rules"
   : >"$ro"; : >"$rw"; : >"$hide"; : >"$net"
   local sec=""
+  # Reset per call, so a resource limit is read from the cfg that sets it and not carried
+  # over from an earlier one; the caller takes the last that names each, as it does timeout.
+  PARSED_LIMIT_MEM_MB=""; PARSED_LIMIT_NPROC=""; PARSED_LIMIT_NOFILE=""
+  PARSED_LIMIT_FSIZE_MB=""; PARSED_LIMIT_CPU=""
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%%#*}"; line="$(echo "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
     [[ -z "$line" ]] && continue
@@ -101,6 +147,16 @@ parse_cfg_policy() {
         # validated; an unusable one is reported rather than ignored.
         if [[ "$line" =~ ^timeout[[:space:]]*=[[:space:]]*(.*)$ ]]; then
           set_parsed_timeout "${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^mem_mb[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+          set_parsed_limit PARSED_LIMIT_MEM_MB mem_mb "${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^nproc[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+          set_parsed_limit PARSED_LIMIT_NPROC nproc "${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^nofile[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+          set_parsed_limit PARSED_LIMIT_NOFILE nofile "${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^fsize_mb[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+          set_parsed_limit PARSED_LIMIT_FSIZE_MB fsize_mb "${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^cpu[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+          set_parsed_limit PARSED_LIMIT_CPU cpu "${BASH_REMATCH[1]}"
         elif [[ "$line" != *=* ]]; then
           set_parsed_timeout "$line"
         fi ;;
