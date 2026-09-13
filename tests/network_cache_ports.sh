@@ -182,6 +182,38 @@ out="$(run_scenario rules_fifo)"
 check "a FIFO in place of the rules file neither blocks nor grants" "denied" "$(field "$out" permitted_port)"
 
 # ---------------------------------------------------------------------
+# An address range covers the addresses in it, and no others
+# ---------------------------------------------------------------------
+
+# An IPv4 address is compared as the IPv4-mapped IPv6 address, so an IPv4 prefix
+# length has to count from bit 96. Counted from bit 0, the first bits of every IPv4
+# address and of ::1 are zero, and a range such as 10.0.0.0/8 covered all of them.
+echo
+echo "== address ranges =="
+out="$(run_scenario range_ipv4)"
+check "an IPv4 range permits an address inside it" "allowed" "$(field "$out" inside)"
+out="$(run_scenario range_other_ipv4)"
+check "an IPv4 range refuses an address outside it" "denied" "$(field "$out" loopback)"
+out="$(run_scenario range_single_ipv4)"
+check "a /32 range permits its one address" "allowed" "$(field "$out" host)"
+check "a /32 range refuses the address next to it" "denied" "$(field "$out" neighbour)"
+out="$(run_scenario range_ipv4_too_long)"
+check "an IPv4 prefix longer than 32 bits grants nothing" "denied" "$(field "$out" loopback)"
+out="$(run_scenario range_ipv4_against_ipv6)"
+if [[ "$out" == *"ipv6=unavailable"* ]]; then
+  skip "an IPv4 range refuses an IPv6 address" "no IPv6 loopback on this host"
+else
+  check "an IPv4 range refuses an IPv6 address" "denied" "$(field "$out" ipv6_loopback)"
+fi
+out="$(run_scenario range_ipv6)"
+if [[ "$out" == *"ipv6=unavailable"* ]]; then
+  skip "an IPv6 range" "no IPv6 loopback on this host"
+else
+  check "an IPv6 range permits an address inside it" "allowed" "$(field "$out" ipv6_loopback)"
+  check "an IPv6 range refuses an IPv4 address" "denied" "$(field "$out" ipv4_loopback)"
+fi
+
+# ---------------------------------------------------------------------
 # SIGHUP belongs to the program, and reloads nothing
 # ---------------------------------------------------------------------
 
