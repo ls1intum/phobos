@@ -7,7 +7,8 @@ submission legitimately needs and fail it. Both matter, and the second is the on
 tends to be discovered by an instructor rather than by a test.
 
 Read [SECURITY.md](SECURITY.md) before you run anything. The discovery phase deliberately
-breaks a build repeatedly, and `deploy_seccomp_apparmor.sh` changes host configuration.
+breaks a build repeatedly. The run phase changes no host state: Landlock, the preload
+library and the timeout are all self-imposed by the unprivileged process.
 
 ## Identity and transparency
 
@@ -36,9 +37,10 @@ For general background on contributing to open source, see the
 
 ## Prerequisites
 
-Phobos runs on Linux, because it depends on user namespaces and on `LD_PRELOAD`. Docker is
-the supported way to work on it from another operating system; the Compose file in the
-repository root brings up one container per language environment.
+Phobos runs on Linux, because it depends on Landlock and on `LD_PRELOAD` in the run phase
+and on Bubblewrap in the discovery phase. Docker is the supported way to work on it from
+another operating system; the Compose file in the repository root brings up one container
+per language environment.
 
 ## Running the checks locally
 
