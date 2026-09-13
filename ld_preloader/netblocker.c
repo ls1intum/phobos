@@ -158,6 +158,21 @@ static int cidr_match(const struct in6_addr * addr,
   return ((addr -> s6_addr[full] & mask) == (net -> s6_addr[full] & mask));
 }
 
+/* An IPv4 address is compared as the IPv4-mapped IPv6 address ::ffff:a.b.c.d, whose
+   first 96 bits are that fixed prefix, so an IPv4 prefix length counts from there. An
+   IPv4-mapped address written in IPv6 notation with a shorter prefix, such as
+   ::ffff:10.0.0.0/8, reads like an IPv4 range but covers every IPv4 address and ::1,
+   so such a rule is refused rather than taken at its word. */
+static const unsigned long IPV4_MAPPED_PREFIX_BITS = 96;
+static const unsigned long IPV4_PREFIX_BITS_MAX = 32;
+static const unsigned long IPV6_PREFIX_BITS_MAX = 128;
+
+/* Answers whether the text is an IPv4 address literal rather than an IPv6 one. */
+static int is_ipv4_literal(const char * text) {
+  struct in_addr v4;
+  return inet_pton(AF_INET, text, & v4) == 1;
+}
+
 /*=======================  Rule loading  =====================*/
 
 static void free_rules(void) {
@@ -220,9 +235,11 @@ static void load_rules_inner(void) {
       * slash = '\0';
       char * end;
       unsigned long bits = strtoul(slash + 1, & end, 10);
-      if ( * end || bits == 0 || bits > 128) continue;
-      cidr = (int) bits;
+      int ipv4 = is_ipv4_literal(tok);
+      if ( * end || bits == 0 || bits > (ipv4 ? IPV4_PREFIX_BITS_MAX : IPV6_PREFIX_BITS_MAX)) continue;
+      cidr = (int) (ipv4 ? IPV4_MAPPED_PREFIX_BITS + bits : bits);
       if (to_canon(tok, NULL, & net6) != 0) continue;
+      if (!ipv4 && IN6_IS_ADDR_V4MAPPED(& net6) && bits < IPV4_MAPPED_PREFIX_BITS) continue;
     }
     rule_t * r = calloc(1, sizeof * r);
     /* Out of memory. Skipping the rule leaves the host it names out of the allow-list, so

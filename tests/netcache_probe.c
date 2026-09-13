@@ -259,6 +259,24 @@ static int phase_one(const char *self, const char *scenario) {
     snprintf(body, sizeof body, "127.0.0.1 %u\n", v4[0].port);
     ignore_hangup = 1;
     keep_writable = 1;
+  } else if (!strcmp(scenario, "range_ipv4")) {
+    snprintf(body, sizeof body, "127.0.0.0/8\n");
+  } else if (!strcmp(scenario, "range_other_ipv4")) {
+    snprintf(body, sizeof body, "10.0.0.0/8\n");
+  } else if (!strcmp(scenario, "range_single_ipv4")) {
+    snprintf(body, sizeof body, "127.0.0.1/32\n");
+  } else if (!strcmp(scenario, "range_ipv4_too_long")) {
+    snprintf(body, sizeof body, "127.0.0.0/33\n");
+  } else if (!strcmp(scenario, "range_ipv4_against_ipv6")) {
+    if (!have_v6) { printf("ipv6=unavailable\n"); return 0; }
+    snprintf(body, sizeof body, "127.0.0.0/8\n");
+  } else if (!strcmp(scenario, "range_ipv6")) {
+    if (!have_v6) { printf("ipv6=unavailable\n"); return 0; }
+    snprintf(body, sizeof body, "::1/128\n");
+  } else if (!strcmp(scenario, "range_mapped_ipv4")) {
+    snprintf(body, sizeof body, "::ffff:127.0.0.0/104\n");
+  } else if (!strcmp(scenario, "range_mapped_short")) {
+    snprintf(body, sizeof body, "::ffff:127.0.0.0/8\n");
   } else {
     fprintf(stderr, "unknown scenario: %s\n", scenario);
     return 2;
@@ -350,6 +368,19 @@ static int run_scenario(const char *scenario, int write_fd, const unsigned short
     printf("rewrite=%s\n", rewrite_rules(write_fd, "127.0.0.1 *\n"));
     raise(SIGHUP);
     printf("after_hangup=%s\n", connect_result(AF_INET, "127.0.0.1", v4[1]));
+  } else if (!strcmp(scenario, "range_ipv4") || !strcmp(scenario, "range_mapped_ipv4")) {
+    printf("inside=%s\n", connect_result(AF_INET, "127.0.0.1", v4[0]));
+  } else if (!strcmp(scenario, "range_other_ipv4") || !strcmp(scenario, "range_ipv4_too_long")
+             || !strcmp(scenario, "range_mapped_short")) {
+    printf("loopback=%s\n", connect_result(AF_INET, "127.0.0.1", v4[0]));
+  } else if (!strcmp(scenario, "range_single_ipv4")) {
+    printf("host=%s\n", connect_result(AF_INET, "127.0.0.1", v4[0]));
+    printf("neighbour=%s\n", connect_result(AF_INET, "127.0.0.2", v4[0]));
+  } else if (!strcmp(scenario, "range_ipv4_against_ipv6")) {
+    printf("ipv6_loopback=%s\n", connect_result(AF_INET6, "::1", v6[0]));
+  } else if (!strcmp(scenario, "range_ipv6")) {
+    printf("ipv6_loopback=%s\n", connect_result(AF_INET6, "::1", v6[0]));
+    printf("ipv4_loopback=%s\n", connect_result(AF_INET, "127.0.0.1", v4[0]));
   } else {
     fprintf(stderr, "unknown scenario: %s\n", scenario);
     return 2;
