@@ -13,6 +13,9 @@
 #
 #   tests/prune_sandbox.sh
 #
+# How the pruner reads a build's outcome, the NO-SOURCE rule among it, is checked through
+# a bwrap that builds no sandbox, so those checks run on any machine with bash and python3.
+#
 # Bubblewrap needs an unprivileged user namespace. Where the host refuses one the
 # checks that need it are skipped, unless PHOBOS_REQUIRE_BWRAP is set, which turns that
 # skip into a failure. Anything that would otherwise read a skip as a pass should set it.
@@ -277,8 +280,171 @@ check_the_environment_is_not_inherited() {
     rm -rf "${root}"
 }
 
+# A bwrap on PATH that builds no sandbox at all. It writes the paths this invocation would
+# hide to logs/hidden, one per line, maps the exercise binding back onto the host copy and
+# runs the build script there. The checks that use it measure how the pruner classifies a
+# build's outcome, never what a sandbox contains, which is why they can run where
+# Bubblewrap cannot. An option it does not know stops it, so that a change to the pruner's
+# invocation cannot be misread quietly.
+install_passthrough_bwrap() {
+    local root="$1"
+    mkdir -p "${root}/bin"
+    cat >"${root}/bin/bwrap" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+hidden="${root}/logs/hidden"
+exercise="/var/tmp/testing-dir"
+host=""
+directory=""
+: >"${hidden}"
+while [[ "${1:-}" == --* ]]; do
+    case "$1" in
+        --tmpfs)
+            printf '%s\n' "$2" >>"${hidden}"
+            shift 2
+            ;;
+        --bind)
+            if [[ "$3" == "${exercise}" ]]; then host="$2"; fi
+            shift 3
+            ;;
+        --ro-bind|--setenv)
+            shift 3
+            ;;
+        --chdir)
+            directory="$2"
+            shift 2
+            ;;
+        --dir|--proc|--dev)
+            shift 2
+            ;;
+        --clearenv|--share-net|--new-session|--unshare-pid|--unshare-uts|--unshare-ipc)
+            shift
+            ;;
+        *)
+            printf 'pass-through bwrap: unknown option %s\n' "$1" >&2
+            exit 97
+            ;;
+    esac
+done
+[[ -n "${host}" ]] || { printf 'pass-through bwrap: no binding for %s\n' "${exercise}" >&2; exit 97; }
+cd -- "${host}${directory#"${exercise}"}"
+exec "$1" "${host}${2#"${exercise}"}"
+STUB
+    chmod +x "${root}/bin/bwrap"
+}
+
+# The line that stands in for Gradle compiling nothing: when this invocation hides
+# target/needed, the build prints the NO-SOURCE line Gradle prints and ends with the given
+# status, and otherwise carries on to its ordinary lines.
+no_source_build_line() {
+    local root="$1"
+    local status="$2"
+    printf "if grep -qxF '%s' '%s'; then echo '> Task :compileJava NO-SOURCE'; exit %s; fi" \
+        "${root}/target/needed" "${root}/logs/hidden" "${status}"
+}
+
+# Prunes a fixture through the pass-through bwrap, with a build that behaves as the named
+# outcome and with any NAME=VALUE arguments set for the run. Prints the exit status on the
+# first line, then one "log: NAME" line per build log the pruner left followed by that
+# log's lines indented with "  | ", then the artefact the run wrote. The logs are named
+# after each attempt and its verdict and hold what the build printed, so they show where a
+# run stopped and whether the build ran at all, which an exit status alone cannot.
+classify() {
+    local outcome="$1"
+    shift
+    local root
+    local line
+    local status
+    local assignment
+    local log
+    root="$(mktemp -d)"
+    build_fixture "${root}"
+    install_passthrough_bwrap "${root}"
+    case "${outcome}" in
+        no-source-success) line="$(no_source_build_line "${root}" 0)" ;;
+        no-source-failure) line="$(no_source_build_line "${root}" 1)" ;;
+        failing-tests) line="echo 'There were failing tests'; exit 1" ;;
+    esac
+    write_build_script "${root}" "${line}"
+    (
+        for assignment in "$@"; do export "${assignment?}"; done
+        run_prune "${root}"
+    ) >/dev/null 2>&1
+    status="$?"
+    printf '%s\n' "${status}"
+    for log in "${root}"/logs/build-*.log; do
+        [[ -e "${log}" ]] || continue
+        printf 'log: %s\n' "$(basename -- "${log}")"
+        sed 's/^/  | /' "${log}"
+    done
+    cat "${root}/out/java_exercise1.paths" 2>/dev/null
+    rm -rf "${root}"
+}
+
+# Whether a classification finished with status 0 and recorded the given mode on the
+# given directory of the fixture's target.
+classified_as() {
+    local result="$1"
+    local mode="$2"
+    local directory="$3"
+    [[ "${result%%$'\n'*}" == "0" ]] && grep -qE "^${mode} .*/target/${directory}$" <<<"${result}"
+}
+
+check_a_build_that_compiles_nothing_keeps_its_source() {
+    local result
+    result="$(classify no-source-success)"
+    if classified_as "${result}" r needed; then
+        ok "a build that compiles nothing and exits zero keeps what it reads readable"
+    else
+        bad "a build that compiles nothing and exits zero keeps what it reads readable" \
+            "exit 0 and r on target/needed" "${result}"
+    fi
+
+    result="$(classify no-source-success UNIGNORABLE_SUCCESS_PATTERNS='a^')"
+    if classified_as "${result}" n needed; then
+        ok "without the NO-SOURCE rule the same build would hide what it reads"
+    else
+        bad "without the NO-SOURCE rule the same build would hide what it reads" \
+            "exit 0 and n on target/needed, which shows the rule is what keeps it" "${result}"
+    fi
+
+    result="$(classify no-source-failure)"
+    if classified_as "${result}" r needed; then
+        ok "a build that compiles nothing and fails keeps what it reads readable"
+    else
+        bad "a build that compiles nothing and fails keeps what it reads readable" \
+            "exit 0 and r on target/needed" "${result}"
+    fi
+}
+
+check_failing_tests_are_not_a_missing_resource() {
+    local result
+    result="$(classify failing-tests)"
+    if classified_as "${result}" n unneeded; then
+        ok "failing tests alone do not make a directory needed"
+    else
+        bad "failing tests alone do not make a directory needed" \
+            "exit 0 and n on target/unneeded" "${result}"
+    fi
+
+    result="$(classify failing-tests IGNORABLE_FAILURE_PATTERNS='a^')"
+    if [[ "${result%%$'\n'*}" == "1" ]] \
+       && grep -qx "log: build-1-fail.log" <<<"${result}" \
+       && grep -qx "  | There were failing tests" <<<"${result}" \
+       && ! grep -q "^log: build-2" <<<"${result}" \
+       && ! grep -qE "^[nrw] " <<<"${result}"; then
+        ok "without the failing-tests rule such a build cannot be pruned at all"
+    else
+        bad "without the failing-tests rule such a build cannot be pruned at all" \
+            "exit 1 after one failed attempt with every directory writable, and no artefact" "${result}"
+    fi
+}
+
 check_the_target_must_be_named
 check_a_missing_target_is_refused
+check_a_build_that_compiles_nothing_keeps_its_source
+check_failing_tests_are_not_a_missing_resource
 
 if ! bwrap_works; then
     if [[ -n "${PHOBOS_REQUIRE_BWRAP:-}" ]]; then
