@@ -64,6 +64,7 @@ struct syscall_record {
     size_t ruleset_attributes_size;
     uint64_t handled_access_filesystem;
     uint64_t handled_access_network;
+    uint64_t scoped;
     size_t path_rule_count;
     uint64_t path_rule_allowed_access[RECORDED_RULE_LIMIT];
     int path_rule_parent_fd[RECORDED_RULE_LIMIT];
@@ -153,6 +154,7 @@ static long mock_create_ruleset(const struct landlock_ruleset_attributes *attrib
     record->ruleset_attributes_size = attributes_size;
     record->handled_access_filesystem = attributes->handled_access_filesystem;
     record->handled_access_network = attributes->handled_access_network;
+    record->scoped = attributes->scoped;
     if (fail_create) {
         errno = EINVAL;
         return -1;
@@ -1008,6 +1010,8 @@ static void test_what_reaches_the_kernel(void) {
           record->ruleset_attributes_size == ruleset_attributes_size_for_version(8));
     check("without a port rule the ruleset handles no network access",
           record->handled_access_network == 0);
+    check("version 8 scopes signals and abstract UNIX sockets to the sandbox",
+          record->scoped == (LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | LANDLOCK_SCOPE_SIGNAL));
     check("exactly one rule reaches the kernel", record->path_rule_count == 1);
     check("the rule carries the read-only rights and nothing besides",
           record->path_rule_allowed_access[0] == rights_granted_for(&read_only_rule, 8));
@@ -1097,6 +1101,8 @@ static void test_what_reaches_the_kernel(void) {
           record->handled_access_filesystem == filesystem_rights_for_version(3));
     check("the ruleset is sent at the size version 3 expects",
           record->ruleset_attributes_size == ruleset_attributes_size_for_version(3));
+    check("version 3 sets no scope, because scoping arrived in version 6",
+          record->scoped == 0);
     check("the rule carries only rights version 3 knows",
           record->path_rule_allowed_access[0] == rights_granted_for(&read_only_rule, 3));
 

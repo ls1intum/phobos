@@ -80,6 +80,15 @@ enum landlock_network_access : uint64_t {
     LANDLOCK_ACCESS_NETWORK_CONNECT_TCP = 1ULL << 1,
 };
 
+/* Scope restrictions, available since Landlock version 6. They keep a sandboxed process
+ * from reaching two things outside its own Landlock domain: a process it could signal, and
+ * an abstract UNIX socket it could connect to. Both are ways a submission could otherwise
+ * reach the grader beside it, which the filesystem and network rules do not cover. */
+enum landlock_scope : uint64_t {
+    LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET = 1ULL << 0,
+    LANDLOCK_SCOPE_SIGNAL = 1ULL << 1,
+};
+
 /* Rights that only make sense on a directory, out of the ones this tool ever
  * grants. Device nodes and symbolic links are not in it because they are never
  * granted at all. */
@@ -133,6 +142,11 @@ uint64_t filesystem_rights_for_version(int landlock_version);
 
 /* Size of the attribute structure the given version understands. */
 size_t ruleset_attributes_size_for_version(int landlock_version);
+
+/* The scope restrictions to hand the kernel at this version: none below version 6, and both
+ * the abstract-UNIX-socket and signal scopes at or above it, so the sandbox cannot reach a
+ * process or an abstract socket outside its own domain. */
+uint64_t scoped_for_version(int landlock_version);
 
 /* Asks the kernel for its Landlock version and refuses anything below the
  * demanded minimum, so an unsupported kernel stops the run instead of quietly
