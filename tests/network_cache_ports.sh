@@ -74,12 +74,12 @@ if ! "$COMPILER" -std=gnu23 -O2 -Wall -Wextra -fPIC -shared -fvisibility=hidden 
 fi
 ok "build the interposer"
 
-# Only the two hooks may be visible. Any other function the library exported could
+# Only the four hooks may be visible. Any other function the library exported could
 # take the place of one the program, or another library, defines under the same name.
 exported="$(readelf --dyn-syms --wide "$WORK/libnetblocker.so" 2>/dev/null \
   | awk '$4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" { print $8 }' \
   | LC_ALL=C sort | paste -s -d ' ' -)"
-check "the library exports exactly connect and getaddrinfo" "connect getaddrinfo" "$exported"
+check "the library exports exactly its four hooks" "connect getaddrinfo sendmsg sendto" "$exported"
 
 if ! "$COMPILER" -std=gnu23 -O0 -g -o "$WORK/probe" "$PROBE_SOURCE" 2>"$WORK/probe.log"; then
   bad "build the probe client" "an executable" "$(cat "$WORK/probe.log")"
@@ -157,6 +157,22 @@ check "literal rule refuses another port"   "denied"  "$(field "$out" other_port
 out="$(run_scenario literal_ip_any)"
 check "literal any-port rule permits one port"     "allowed" "$(field "$out" first_port)"
 check "literal any-port rule permits another port" "allowed" "$(field "$out" second_port)"
+
+# ---------------------------------------------------------------------
+# UDP datagrams are filtered too, on the destination they name themselves
+# ---------------------------------------------------------------------
+
+# A UDP datagram on an unconnected socket names its destination in the send call, which
+# connect never sees. sendto and sendmsg carry the same rule as the literal address above:
+# the permitted port goes through, another port is refused. This is defence in depth a raw
+# system call still steps around, as with the connect hook.
+echo
+echo "== UDP datagrams =="
+out="$(run_scenario datagram)"
+check "sendto to the permitted port is allowed"  "allowed" "$(field "$out" sendto_permitted)"
+check "sendto to another port is refused"        "denied"  "$(field "$out" sendto_other)"
+check "sendmsg to the permitted port is allowed" "allowed" "$(field "$out" sendmsg_permitted)"
+check "sendmsg to another port is refused"       "denied"  "$(field "$out" sendmsg_other)"
 
 # ---------------------------------------------------------------------
 # IPv6 addresses follow the same restriction

@@ -1,12 +1,18 @@
 /*
  * libnetblocker -- refuse the network access an allow-list does not name.
  *
- * Preloaded into every process of a graded run, it interposes getaddrinfo and connect.
- * A lookup of a host no rule covers fails with EAI_FAIL, and a connection to an address
- * no rule covers fails with EACCES. It is defence in depth that a process can step
- * around, as SECURITY.md says.
+ * Preloaded into every process of a graded run, it interposes getaddrinfo, connect,
+ * sendto and sendmsg. A lookup of a host no rule covers fails with EAI_FAIL, and a
+ * connection or a datagram to an address no rule covers fails with EACCES. It is
+ * defence in depth that a process can step around, as SECURITY.md says.
  *
- * This file is the two hooks and the loading of the library, and nothing else. What
+ * connect covers TCP and a connected UDP socket. sendto and sendmsg cover the other
+ * way a UDP datagram names its destination, on a socket that was never connected, which
+ * connect would never see. The C library's own name resolution reaches the network
+ * through calls this library cannot interpose, so this does not disturb DNS; it filters
+ * the datagrams a submission sends itself.
+ *
+ * This file is the four hooks and the loading of the library, and nothing else. What
  * they work with lives beside it:
  *
  *   netblocker-policy.h         the allow-list, its lock and its answers
@@ -14,7 +20,7 @@
  *   netblocker-address-cache.h  the addresses name lookups authorised
  *   netblocker-address.h        one address in the form it is compared in
  *
- * Only getaddrinfo and connect are visible outside the library. It is built with
+ * Only the four hooks are visible outside the library. It is built with
  * -fvisibility=hidden, so no other function of it can take the place of one a program
  * or another library defines under the same name.
  */
@@ -37,6 +43,9 @@ static constexpr int DECIMAL = 10;
 typedef int getaddrinfo_function(const char *, const char *, const struct addrinfo *,
                                  struct addrinfo **);
 typedef int connect_function(int, const struct sockaddr *, socklen_t);
+typedef ssize_t sendto_function(int, const void *, size_t, int, const struct sockaddr *,
+                                socklen_t);
+typedef ssize_t sendmsg_function(int, const struct msghdr *, int);
 
 /* The allow-list of this process. Initialised statically, so that a hook running
  * before this library's constructor, from another library's, finds it empty and
@@ -45,6 +54,8 @@ static struct policy policy = POLICY_INITIALISER;
 
 static getaddrinfo_function *real_getaddrinfo = nullptr;
 static connect_function *real_connect = nullptr;
+static sendto_function *real_sendto = nullptr;
+static sendmsg_function *real_sendmsg = nullptr;
 
 /* Reads a service as a port: a whole number up to 65535. Anything else, a service name
  * and an empty text included, counts as no port. */
@@ -88,6 +99,21 @@ static void describe_destination(const struct sockaddr *destination, char *text,
     }
 }
 
+/* Whether a datagram or connection to this destination is one the network policy allows
+ * through. A family that is not IPv4 or IPv6, an AF_UNIX socket among them, is not the
+ * network this library filters and passes: the filesystem layer governs a UNIX socket,
+ * and a raw or unknown family names no host or port to check. An IPv4 or IPv6
+ * destination passes only when the allow-list names its address and port. */
+static bool destination_permitted(const struct sockaddr *destination) {
+    char text[INET6_ADDRSTRLEN] = "";
+    uint16_t port = 0;
+    if (destination->sa_family != AF_INET && destination->sa_family != AF_INET6) {
+        return true;
+    }
+    describe_destination(destination, text, sizeof(text), &port);
+    return policy_permits_connection(&policy, text, port);
+}
+
 [[gnu::visibility("default")]]
 int getaddrinfo(const char *node, const char *service, const struct addrinfo *hints,
                 struct addrinfo **results) {
@@ -120,11 +146,42 @@ int connect(int descriptor, const struct sockaddr *destination, socklen_t length
     return -1;
 }
 
+[[gnu::visibility("default")]]
+ssize_t sendto(int descriptor, const void *buffer, size_t length, int flags,
+               const struct sockaddr *destination, socklen_t address_length) {
+    if (real_sendto == nullptr) {
+        real_sendto = (sendto_function *)dlsym(RTLD_NEXT, "sendto");
+    }
+    /* A null destination is a datagram on a connected socket, which connect already
+     * vetted, so it passes untouched. */
+    if (destination != nullptr && !destination_permitted(destination)) {
+        errno = EACCES;
+        return -1;
+    }
+    return real_sendto(descriptor, buffer, length, flags, destination, address_length);
+}
+
+[[gnu::visibility("default")]]
+ssize_t sendmsg(int descriptor, const struct msghdr *message, int flags) {
+    if (real_sendmsg == nullptr) {
+        real_sendmsg = (sendmsg_function *)dlsym(RTLD_NEXT, "sendmsg");
+    }
+    /* msg_name carries the destination of a datagram on an unconnected socket; it is
+     * null on a connected one, which connect already vetted. */
+    if (message->msg_name != nullptr && !destination_permitted(message->msg_name)) {
+        errno = EACCES;
+        return -1;
+    }
+    return real_sendmsg(descriptor, message, flags);
+}
+
 /* Loads the allow-list and finds the functions the hooks hand permitted calls to. */
 static void netblocker_initialise(void) {
     policy_load(&policy, getenv(RULES_VARIABLE));
     real_getaddrinfo = (getaddrinfo_function *)dlsym(RTLD_NEXT, "getaddrinfo");
     real_connect = (connect_function *)dlsym(RTLD_NEXT, "connect");
+    real_sendto = (sendto_function *)dlsym(RTLD_NEXT, "sendto");
+    real_sendmsg = (sendmsg_function *)dlsym(RTLD_NEXT, "sendmsg");
 }
 
 /* The unit tests include this file and call netblocker_initialise themselves, once
