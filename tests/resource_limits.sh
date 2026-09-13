@@ -62,12 +62,24 @@ echo
 echo "== applying the limits sets this process's rlimits =="
 # In a subshell, because the ulimit values it sets would otherwise stick for the rest of the
 # suite. Each printed value is the soft limit the command tree would inherit.
+#
+# The values are printed through the ulimit builtin directly, one per line, rather than
+# captured with "$(ulimit -u)". RLIMIT_NPROC counts every process the user already runs, not
+# just this shell's children, so once apply_resource_limits has set nproc to 32 a command
+# substitution forks and fails with EAGAIN on any busy machine (a CI runner among them)
+# before it can report a value. A builtin writing to stdout needs no fork. The lines are
+# joined into the comma-separated form the check expects by paste, which runs in the outer
+# shell where no process limit is in force.
 result="$(
   bash -c '
     source "$1/phobos-common.sh"
     apply_resource_limits 64 32 256 10 5
-    printf "%s,%s,%s,%s,%s" "$(ulimit -v)" "$(ulimit -u)" "$(ulimit -n)" "$(ulimit -f)" "$(ulimit -t)"
-  ' _ "$CORE" 2>&1
+    ulimit -v
+    ulimit -u
+    ulimit -n
+    ulimit -f
+    ulimit -t
+  ' _ "$CORE" 2>&1 | paste -sd, -
 )"
 # mem_mb and fsize_mb are given in MB; ulimit -v is KB and ulimit -f is 1024-byte blocks.
 check "the memory, process, file, file-size and CPU limits are set" "65536,32,256,10240,5" "$result"
