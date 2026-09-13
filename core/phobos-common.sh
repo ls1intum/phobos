@@ -503,3 +503,89 @@ build_network_args() {
   done < <(sort -n -u "$ports_file")
   rm -f "$ports_file" "$wildcard_file"
 }
+
+# --------------------------------------------------------------------------
+# Refusing a preload library that would not filter anything.
+#
+# The loader skips a preload library it cannot use and prints only a warning, and
+# the command then runs with no network filtering at all. Both entry points ask
+# these functions first, so that such a run ends instead.
+# --------------------------------------------------------------------------
+
+# The functions the network layer relies on the preload library defining.
+PHB_NETBLOCKER_HOOKS="connect getaddrinfo"
+
+# Prints the functions a shared object defines with default visibility, one per
+# line. Assumes readelf from binutils; prints nothing for a file it cannot read.
+defined_library_functions() {
+  readelf --dyn-syms --wide "$1" 2>/dev/null \
+    | awk '$4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" { print $8 }' \
+    || true
+}
+
+# Runs /bin/true with the named library preloaded and nothing else of the caller's
+# environment, printing everything it wrote. Further NAME=VALUE arguments join the
+# clean environment. Assumes /usr/bin/env.
+#
+# env -i alone is not enough: the loader reads LD_* variables while it starts env
+# itself, before env has cleared anything, so the subshell removes them first.
+run_with_only_preload() {
+  local library="$1"
+  shift
+  (
+    unset GLIBC_TUNABLES
+    while IFS= read -r name; do
+      if [[ "$name" == LD_* ]]; then unset "$name"; fi
+    done < <(compgen -e)
+    exec /usr/bin/env -i LC_ALL=C LD_BIND_NOW=1 LD_PRELOAD="$library" "$@" /bin/true
+  ) 2>&1
+}
+
+# Prints why the library cannot act as the network filter, or nothing when it can.
+# Assumes the path is already canonical. A space or a colon separates entries in
+# LD_PRELOAD, so a path holding one cannot be named there unambiguously.
+netblocker_unusable_reason() {
+  local library="$1"
+  local functions
+  local hook
+  local output
+  if [[ "$library" == *[[:space:]:]* ]]; then
+    printf 'holds a space or a colon, which LD_PRELOAD cannot name'
+    return 0
+  fi
+  if [[ ! -f "$library" ]]; then
+    printf 'does not exist'
+    return 0
+  fi
+  if ! command -v readelf >/dev/null 2>&1; then
+    printf 'cannot be inspected, because readelf is not installed'
+    return 0
+  fi
+  functions="$(defined_library_functions "$library")"
+  for hook in ${PHB_NETBLOCKER_HOOKS}; do
+    if ! grep -qx -- "$hook" <<<"$functions"; then
+      printf 'does not define %s' "$hook"
+      return 0
+    fi
+  done
+  if ! output="$(run_with_only_preload "$library")" || [[ -n "$output" ]]; then
+    printf 'does not load cleanly: %s' "${output:-a non-zero exit status}"
+    return 0
+  fi
+  if ! output="$(run_with_only_preload "$library" LD_TRACE_LOADED_OBJECTS=1)" \
+     || ! awk -v wanted="$library" '$1 == wanted { found = 1 } END { exit !found }' <<<"$output"; then
+    printf 'is not among the objects the loader maps'
+    return 0
+  fi
+}
+
+# Ends the run with PHB-ERUNTIME unless the library can act as the network filter.
+# Assumes the path is already canonical.
+refuse_unusable_netblocker() {
+  local library="$1"
+  local reason
+  reason="$(netblocker_unusable_reason "$library")"
+  [[ -z "$reason" ]] && return 0
+  report "Network layer unusable: '${library}' ${reason}, so the command would run unfiltered. (PHB-ERUNTIME)"
+  exit "${PHB_ERUNTIME}"
+}

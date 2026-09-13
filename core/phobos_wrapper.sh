@@ -232,6 +232,10 @@ done
 build_network_args landlock_args "$landlock_net_rules"
 rm -f "$landlock_net_rules"
 
+# The same refusal as phobos-network.sh: the loader skips a library it cannot use
+# with only a warning, which would leave the build unfiltered.
+refuse_unusable_netblocker "$core/libnetblocker.so"
+
 export NETBLOCKER_CONF="$allowed_file"
 export LD_PRELOAD="$core/libnetblocker.so"
 
