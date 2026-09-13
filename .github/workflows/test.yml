@@ -66,8 +66,8 @@ jobs:
 
       # The real pruner, against a fixture tree. How it classifies a build's outcome, the
       # NO-SOURCE rule among it, is checked through a bwrap that builds no sandbox, so those
-      # checks run here. The checks that need Bubblewrap itself skip, and say so, because
-      # this runner has no bubblewrap installed.
+      # checks run anywhere. The checks that need Bubblewrap itself run too wherever the
+      # runner lets it build a sandbox, and skip, saying so, wherever it does not.
       - name: What the pruner concludes from a build
         if: ${{ !cancelled() }}
         run: bash tests/prune_sandbox.sh
