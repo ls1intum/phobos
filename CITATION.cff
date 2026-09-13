@@ -5,8 +5,9 @@ abstract: >-
   Phobos is a sandboxing solution for programming exercises on interactive learning
   platforms. An offline pruning phase discovers the minimal set of files and network
   hosts a test run actually needs, by iteratively hiding directories and observing which
-  runs break. Student submissions then execute under Bubblewrap with only that allow-list
-  mounted, and a preload library intercepts name resolution and connection calls so that
+  runs break. Student submissions then execute under Landlock, an unprivileged Linux kernel
+  sandbox, with access to only that allow-list and to the TCP ports it names, and a preload
+  library intercepts name resolution and connection calls as defence in depth so that
   undeclared network access fails.
 type: software
 license: MIT
@@ -17,10 +18,10 @@ keywords:
   - security
   - education
   - automated-assessment
-  - bubblewrap
-  - linux-namespaces
-  - seccomp
-  - apparmor
+  - landlock
+  - unprivileged-sandbox
+  - artemis
+  - untrusted-code
 authors:
   -
     family-names: Singh

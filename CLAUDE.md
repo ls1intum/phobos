@@ -47,15 +47,15 @@ environment, offline, and grading itself only applies a fixed configuration.
 ## Tech Stack
 
 - POSIX shell for the wrapper and the layers, which is the bulk of the repository
-- C for the preload library, compiled inside the run-phase image
+- C for the preload library and for `phobos-landlock`, both compiled inside the run-phase image
 - Python for the prune orchestrator and the artefact helpers
 - Docker for both phases, one image per language environment
-- seccomp and AppArmor profiles for the host that runs the containers
 - Java for exactly one file, `.github/scripts/CheckPullRequestTemplate.java`
 
-Note that the filesystem enforcement mechanism is being changed on an open branch. Read
-`core/phobos-filesystem.sh` on the branch you are working from rather than assuming which
-mechanism is in force.
+The filesystem layer is enforced by Landlock, an unprivileged Linux kernel sandbox, applied
+by `phobos-landlock` (the C program under `core/`). The run phase needs no privileges, no
+capabilities and no container flags. The discovery phase still uses Bubblewrap to hide
+directories while it measures; the sandbox an exercise runs in does not.
 
 ## Build and development commands
 
@@ -71,8 +71,10 @@ core/phobos.sh --no-timeout --config core/config/BaseLanguage-java.cfg -- <comma
 
 ### The linters, which are the gate
 
-`lint.yml` runs six jobs and they are the whole of CI on `main` today. Run them before
-opening a pull request.
+`lint.yml` runs six lint jobs. It is not the whole of CI: `test.yml` runs the shell and
+Python suites, `build.yml` builds the images and holds the run-phase image to the Landlock
+acceptance suites inside it, `codeql.yml` scans, and `pullrequest-template.yml` checks the
+body. The lint jobs are the ones you can run in full by hand before opening a pull request.
 
 ```
 # Same file sets as CI. Each of these is the whole job, not a sample of it.
@@ -108,28 +110,26 @@ docker compose -f docker/run_phase/java/docker-compose.yaml up --build
 Each prune container works independently on its language and writes its result into the
 shared `var/tmp` mount; nothing passes between containers except through that directory.
 
-### The host profiles
+### The host
 
-```
-security_config/deploy_seccomp_apparmor.sh
-```
-
-This installs the seccomp and AppArmor profiles that allow the sandbox to run unprivileged
-on the host. It needs root, and it changes host state; read it before running it.
+The run phase installs nothing on the host and changes no host state. Landlock, the preload
+library and the timeout are all self-imposed by the unprivileged process, so there is no
+profile to deploy and no root step. The one thing the grading container must add from
+outside is `--network none` and cgroup limits, which Phobos cannot set for itself.
 
 ## Project structure
 
 ```
 core/                      the sandbox itself
   phobos.sh                entry point: parses the configuration, applies the layers
-  phobos-filesystem.sh     the filesystem layer, reads the path sets and binds them
+  phobos-filesystem.sh     the filesystem layer, reads the path sets and applies Landlock
+  phobos-landlock*.c/.h    the C program that applies the Landlock policy, then exec's
   phobos-network.sh        the network layer, drives the preload library
   phobos-timeout.sh        the timeout layer
   phobos-common.sh         shared helpers, sourced by the others
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
   libnetblocker.so         committed, binary in .gitattributes
 ld_preloader/              netblocker sources and its own allow-list
-security_config/           seccomp profile, AppArmor profile, host deployment script
 squid/                     the egress proxy image and its configuration
 docker/prune_phase/        one image per language, plus the orchestrator
 docker/run_phase/          the image an exercise actually runs in
