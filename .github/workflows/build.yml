@@ -236,6 +236,15 @@ jobs:
           docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
             phobos-run-phase:ci bash /testsuite/phase-test.sh
 
+      # The one suite that runs the shipped policy an exercise actually gets, rather than a
+      # tight test policy, so a regression that breaks an ordinary run under it, or widens it,
+      # fails here. The image bakes core/config/BaseLanguage-java.cfg, so this exercises it.
+      - name: The shipped policy runs an exercise both ways
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
+            phobos-run-phase:ci bash /testsuite/shipped-policy-test.sh
+
   # Mutation testing installs clang and mull into a container and then runs the suite
   # once per mutant, which is minutes rather than seconds. Weekly and on request, so it
   # reports on the suite's strength without being in the way of a pull request.
