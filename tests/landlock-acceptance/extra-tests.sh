@@ -121,6 +121,29 @@ if $LL $NB --connect-tcp 19001 -- java -cp "$NETDIR" N 19002 2>/dev/null | grep 
 else bad "--connect-tcp: nicht erlaubter Port war erreichbar"; fi
 kill $NETSRV 2>/dev/null; rm -rf "$NETDIR"
 
+hdr "I. Die Netzwerk-Policy liegt ausserhalb der Reichweite der Sandbox"
+# /tmp ist in dieser Policy ein Schreibpfad. Die Spezifikation liegt deshalb unter
+# /var/tmp, und die Regeldatei darin darf gelesen, aber nicht geaendert werden.
+# Ohne Umleitung nach /dev/null: diese Policy erlaubt /dev/null nicht.
+NET_OUT=$(phobos.sh -- /bin/sh -c 'echo "* 0" >> "$NETBLOCKER_CONF" && echo WRITE-OK || echo WRITE-DENIED; cat "$NETBLOCKER_CONF" && echo READ-OK' 2>&1)
+if printf '%s' "$NET_OUT" | grep -q WRITE-DENIED && printf '%s' "$NET_OUT" | grep -q READ-OK; then
+  ok "Regeldatei aus der Sandbox lesbar, aber nicht beschreibbar"
+else
+  bad "Regeldatei aus der Sandbox beschreibbar oder nicht lesbar"; printf '%s\n' "$NET_OUT" | sed 's/^/       | /' | tail -4
+fi
+# Liegt die Spezifikation selbst unter einem Schreibpfad, verweigert Phobos den Lauf.
+SPEC_OUT=$(PHOBOS_SPEC_PARENT=/tmp phobos.sh -- /bin/true 2>&1); SPEC_RC=$?
+if [[ $SPEC_RC -eq 11 && "$SPEC_OUT" == *"lies beneath the write path"* ]]; then
+  ok "Spezifikation unter einem Schreibpfad bricht ab (PHB-EPOLICY)"
+else
+  bad "Spezifikation unter einem Schreibpfad: rc=$SPEC_RC"; printf '%s\n' "$SPEC_OUT" | sed 's/^/       | /' | tail -4
+fi
+if ls -d /tmp/phobos-spec.* /var/tmp/phobos-spec.* >/dev/null 2>&1; then
+  bad "Nach den Laeufen liegen noch Spezifikationen herum: $(ls -d /tmp/phobos-spec.* /var/tmp/phobos-spec.* 2>/dev/null | tr '\n' ' ')"
+else
+  ok "Keine Spezifikation bleibt nach den Laeufen zurueck"
+fi
+
 hdr "E. Kontrollprobe: ohne Sandbox ist die Datei fuer denselben Benutzer lesbar"
 if su -s /bin/bash "$SU" -c "cat /var/tmp/secret/secret.txt" >/dev/null 2>&1; then
   ok "ohne Sandbox lesbar -> die Sperre oben kam von Landlock, nicht von Dateirechten"

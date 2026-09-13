@@ -9,6 +9,11 @@ source "${HERE}/phobos-common.sh"
 SPEC_DIR="$1"; shift 2
 CMD=("$@")
 
+# Removes the specification phobos.sh created on every way out of this layer except
+# the one that hands the command straight to exec, with neither this layer nor a
+# timeout to wait on it.
+trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
+
 RO="${SPEC_DIR}/ro.paths"; RW="${SPEC_DIR}/rw.paths"; HIDE="${SPEC_DIR}/hide.paths"; TAIL="${SPEC_DIR}/tail.flags"
 LANDLOCK="${PHOBOS_LANDLOCK_BIN:-${HERE}/phobos-landlock}"; TIMEOUT_BIN="${TIMEOUT_BIN:-timeout}"
 
@@ -40,11 +45,12 @@ fi
 
 args=()
 
-# Keep the LD_PRELOAD library reachable: Landlock must allow reading and
-# mapping it, otherwise the loader fails before the command starts.
-# PHB_NETBLOCKER_SO is set by phobos-network.sh when the lib exists.
-if [[ -n "${PHB_NETBLOCKER_SO:-}" && -f "${PHB_NETBLOCKER_SO}" ]]; then
-  args+=( --rights=rx "$PHB_NETBLOCKER_SO" )
+# Keep the LD_PRELOAD library and its rules file reachable, and out of reach of
+# change: Landlock must allow reading and mapping the library, or the loader skips
+# it, and reading the rules file, which every process the command starts opens.
+# PHB_NETBLOCKER_SO and NETBLOCKER_CONF are set by phobos-network.sh.
+if [[ -n "${PHB_NETBLOCKER_SO:-}" && -f "${PHB_NETBLOCKER_SO}" && -n "${NETBLOCKER_CONF:-}" ]]; then
+  append_netblocker_rules args "${RW}" "$PHB_NETBLOCKER_SO" "$NETBLOCKER_CONF"
 fi
 
 # Landlock withholds access, it cannot overlay a path with emptiness, and it
@@ -100,7 +106,7 @@ if [[ -n "${PHOBOS_DEBUG:-}" ]]; then
 fi
 
 OUTLOG="$(mktemp -t phobos-out.XXXXXX)"; ERRLOG="$(mktemp -t phobos-err.XXXXXX)"
-trap 'rm -f "$OUTLOG" "$ERRLOG"' EXIT
+trap 'finish_owned_spec_dir "$?" "$SPEC_DIR" "$OUTLOG" "$ERRLOG"' EXIT
 
 set +e
 (

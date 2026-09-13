@@ -80,10 +80,11 @@ if ! "$COMPILER" -std=gnu23 -O0 -g -o "$WORK/probe" "$PROBE_SOURCE" 2>"$WORK/pro
 fi
 ok "build the probe client"
 
-# Runs one scenario in its own process, so each starts with an empty cache.
+# Runs one scenario in its own process, so each starts with an empty cache. The
+# probe writes its rules into a private directory of its own. The limit is there for
+# a library that blocks while reading its rules, which would otherwise hang the suite.
 run_scenario() {
-  PROBE_RULES="$WORK/rules.cfg" PROBE_LIB="$WORK/libnetblocker.so" \
-    "$WORK/probe" "$1" 2>&1
+  PROBE_LIB="$WORK/libnetblocker.so" timeout 20 "$WORK/probe" "$1" 2>&1
 }
 
 field() {
@@ -163,6 +164,45 @@ else
   check "the permitted port is reachable"         "allowed" "$(field "$out" permitted_port)"
   check "another port stays refused after lookup" "denied"  "$(field "$out" other_port)"
 fi
+
+# ---------------------------------------------------------------------
+# The rules file is only ever read as the regular file it names
+# ---------------------------------------------------------------------
+
+# The same rule as the literal address checks above, which permit its port, but
+# reached through something other than a regular file. No rules means every port
+# is refused, and a FIFO must be refused without blocking the process.
+echo
+echo "== the rules file =="
+out="$(run_scenario rules_symlink)"
+check "a rules file reached through a symbolic link grants nothing" "denied" "$(field "$out" permitted_port)"
+out="$(run_scenario rules_directory)"
+check "a directory in place of the rules file grants nothing" "denied" "$(field "$out" permitted_port)"
+out="$(run_scenario rules_fifo)"
+check "a FIFO in place of the rules file neither blocks nor grants" "denied" "$(field "$out" permitted_port)"
+
+# ---------------------------------------------------------------------
+# SIGHUP belongs to the program, and reloads nothing
+# ---------------------------------------------------------------------
+
+echo
+echo "== SIGHUP =="
+out="$(run_scenario sighup_default)"
+check "an inherited default SIGHUP disposition stays the default" "default" "$(field "$out" sighup)"
+out="$(run_scenario sighup_ignored)"
+check "an inherited ignored SIGHUP stays ignored" "ignored" "$(field "$out" sighup)"
+out="$(run_scenario sighup_no_reload)"
+check "a port the rules do not name is refused" "denied" "$(field "$out" before_rewrite)"
+check "the rules file is rewritten to permit every port" "ok" "$(field "$out" rewrite)"
+check "rewriting the rules and sending SIGHUP widens nothing" "denied" "$(field "$out" after_hangup)"
+
+echo
+echo "== the probe's rules directory =="
+leftovers_before="$(find /tmp -maxdepth 1 -name 'phobos-netcache-probe.*' | wc -l)"
+run_scenario literal_ip > /dev/null
+run_scenario rules_fifo > /dev/null
+leftovers_after="$(find /tmp -maxdepth 1 -name 'phobos-netcache-probe.*' | wc -l)"
+check "every scenario removes the rules directory it created" "$leftovers_before" "$leftovers_after"
 
 # ---------------------------------------------------------------------
 # The network layer refuses a library that would not filter anything
@@ -265,5 +305,189 @@ for tool in /usr/bin/* /bin/*; do
 done
 refused_because "a library that cannot be inspected is refused" "readelf is not installed" \
   "$(PATH="$WORK/no-readelf" run_network_layer "$WORK/libnetblocker.so")"
+
+# ---------------------------------------------------------------------
+# The library and its rules file stay out of the sandbox's reach
+# ---------------------------------------------------------------------
+
+# Stands in for phobos-landlock: records the arguments it was handed, one per line,
+# and runs the command after "--" without restricting anything. What is checked is
+# the policy the layers hand to Landlock, not Landlock itself.
+cat > "$WORK/record-landlock" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$PHB_TEST_RECORD"
+while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done
+shift
+exec "$@"
+FAKE
+chmod +x "$WORK/record-landlock"
+
+REACH_SPEC="$WORK/reach-spec"
+mkdir -p "$REACH_SPEC"
+for f in ro.paths hide.paths tail.flags net.rules; do : > "$REACH_SPEC/$f"; done
+
+# Runs the filesystem layer over the reach specification with the given write path,
+# with the preload library and rules file set as phobos-network.sh sets them, and
+# prints its output followed by an EXIT=<status> line. A second argument of
+# "unterminated" writes the path without the newline that normally ends the line.
+run_with_write_path() {
+  local write_path=$1
+  local ending=${2:-}
+  local out
+  local rc
+  if [[ "$ending" == "unterminated" ]]; then
+    printf '%s' "$write_path" > "$REACH_SPEC/rw.paths"
+  else
+    printf '%s\n' "$write_path" > "$REACH_SPEC/rw.paths"
+  fi
+  out="$(PHB_ENABLE_FILESYSTEM=1 PHB_TIMEOUT_SEC="" PHB_NETBLOCKER_SO="$WORK/libnetblocker.so" \
+         NETBLOCKER_CONF="$REACH_SPEC/net.rules" PHOBOS_LANDLOCK_BIN="$WORK/record-landlock" \
+         PHB_TEST_RECORD="$WORK/reach-record" \
+         bash "$WORK/core/phobos-filesystem.sh" "$REACH_SPEC" -- /bin/echo command-ran 2>&1)"
+  rc=$?
+  printf '%s\nEXIT=%s' "$out" "$rc"
+}
+
+refused_as_unenforceable() {
+  local name=$1
+  local out=$2
+  if [[ "$out" == *"EXIT=11"* && "$out" == *"lies beneath the write path"* && "$out" != *"command-ran"* ]]; then
+    ok "$name"
+  else
+    bad "$name" "exit 11, PHB-EPOLICY naming the write path, and no command run" "$out"
+  fi
+}
+
+# Whether the recorded arguments hold the given option immediately followed by the path.
+recorded_rule() {
+  grep -x -A1 -- "$1" "$WORK/reach-record" 2>/dev/null | grep -qxF -- "$2"
+}
+
+echo
+echo "== the library and its rules file stay out of the sandbox's reach =="
+mkdir -p "$WORK/elsewhere"
+out="$(run_with_write_path "$WORK/elsewhere")"
+if [[ "$out" == *"EXIT=0"* && "$out" == *"command-ran"* ]] \
+   && recorded_rule "--rights=rx" "$WORK/libnetblocker.so" \
+   && recorded_rule "--rights=r" "$REACH_SPEC/net.rules"; then
+  ok "an unchangeable library and rules file are handed to Landlock readable"
+else
+  bad "an unchangeable library and rules file are handed to Landlock readable" \
+      "exit 0, --rights=rx on the library and --rights=r on the rules file" \
+      "$out / $(tr '\n' ' ' < "$WORK/reach-record" 2>/dev/null)"
+fi
+
+refused_as_unenforceable "a rules file in a writable directory is refused" \
+  "$(run_with_write_path "$REACH_SPEC")"
+refused_as_unenforceable "a rules file and library beneath a writable ancestor are refused" \
+  "$(run_with_write_path "$WORK")"
+ln -sfn "$REACH_SPEC" "$WORK/reach-spec-link"
+refused_as_unenforceable "a writable path that links to the rules file's directory is refused" \
+  "$(run_with_write_path "$WORK/reach-spec-link")"
+refused_as_unenforceable "a writable library is refused" \
+  "$(run_with_write_path "$WORK/libnetblocker.so")"
+refused_as_unenforceable "a write path on a last line without a newline is still refused" \
+  "$(run_with_write_path "$REACH_SPEC" unterminated)"
+
+if [[ -d "$REACH_SPEC" && -f "$REACH_SPEC/net.rules" ]]; then
+  ok "a specification directory Phobos did not create is never removed"
+else
+  bad "a specification directory Phobos did not create is never removed" \
+      "$REACH_SPEC and its rules file still in place" "it was removed"
+fi
+
+# ---------------------------------------------------------------------
+# A run leaves no specification behind
+# ---------------------------------------------------------------------
+
+# A base policy for phobos.sh with one write path, so that a specification can be
+# placed beneath it on purpose.
+printf '[readonly]\n/usr\n\n[write]\n%s\n' "$WORK/writable" > "$WORK/core/BaseTest.cfg"
+# Created before any run: a write path that does not exist yet is created as a file.
+mkdir -p "$WORK/writable/specs"
+printf '[limits]\ntimeout=1\n' > "$WORK/one-second.cfg"
+
+# Runs phobos.sh with its specification under the given parent and the remaining
+# arguments, through the recording stand-in for phobos-landlock, and prints its output
+# followed by an EXIT=<status> line. NETBLOCKER_SO_FOR_RUN names another library.
+run_phobos() {
+  local parent=$1
+  shift
+  local out
+  local rc
+  out="$(PHOBOS_SPEC_PARENT="$parent" NETBLOCKER_SO="${NETBLOCKER_SO_FOR_RUN:-$WORK/libnetblocker.so}" \
+         PHOBOS_LANDLOCK_BIN="$WORK/record-landlock" PHB_TEST_RECORD="$WORK/phobos-record" \
+         bash "$WORK/core/phobos.sh" "$@" 2>&1)"
+  rc=$?
+  printf '%s\nEXIT=%s' "$out" "$rc"
+}
+
+# Creates an empty parent directory for one run and prints its path.
+fresh_parent() {
+  local parent="$WORK/specs-$1"
+  mkdir -p "$parent"
+  printf '%s' "$parent"
+}
+
+# Checks that a run ended with the wanted status, said what it had to, and left no
+# specification directory in its parent.
+left_nothing() {
+  local name=$1
+  local parent=$2
+  local want=$3
+  local says=$4
+  local out=$5
+  local left
+  left="$(find "$parent" -mindepth 1 -maxdepth 1 -name 'phobos-spec.*' | wc -l | tr -d ' ')"
+  if [[ "$out" == *"EXIT=${want}"* && "$out" == *"$says"* && "$left" == "0" ]]; then
+    ok "$name"
+  else
+    bad "$name" "exit ${want}, output naming '${says}', and no specification left" \
+        "${left} left: $out"
+  fi
+}
+
+echo
+echo "== a run leaves no specification behind =="
+parent="$(fresh_parent success)"
+left_nothing "after a run that succeeds" "$parent" 0 "command-ran" \
+  "$(run_phobos "$parent" -- /bin/echo command-ran)"
+
+parent="$(fresh_parent failure)"
+left_nothing "after a command that fails" "$parent" 1 "" \
+  "$(run_phobos "$parent" -- /bin/false)"
+
+mkdir -p "$WORK/writable/specs"
+left_nothing "after a policy refusal, for a specification beneath a write path" \
+  "$WORK/writable/specs" 11 "lies beneath the write path" \
+  "$(run_phobos "$WORK/writable/specs" -- /bin/echo command-ran)"
+
+parent="$(fresh_parent unusable-library)"
+left_nothing "after the network layer refuses its library" "$parent" 15 "PHB-ERUNTIME" \
+  "$(NETBLOCKER_SO_FOR_RUN="$WORK/absent.so" run_phobos "$parent" -- /bin/echo command-ran)"
+
+parent="$(fresh_parent timeout)"
+left_nothing "after a run that times out" "$parent" 14 "PHB-ETIMEOUT" \
+  "$(run_phobos "$parent" --config "$WORK/one-second.cfg" -- /bin/sleep 10)"
+
+out="$(run_phobos relative-parent -- /bin/echo command-ran)"
+if [[ "$out" == *"EXIT=11"* && "$out" == *"not an absolute path"* && "$out" != *"command-ran"* ]]; then
+  ok "a relative PHOBOS_SPEC_PARENT is refused"
+else
+  bad "a relative PHOBOS_SPEC_PARENT is refused" "exit 11 naming the parent, and no command run" "$out"
+fi
+
+# The command leaves a file of its own in the specification directory, so it cannot be
+# removed without deleting what Phobos did not write. That must not pass as success.
+parent="$(fresh_parent unremovable)"
+out="$(run_phobos "$parent" -- /bin/sh -c 'touch "$(dirname "$NETBLOCKER_CONF")/left-by-command"')"
+left="$(find "$parent" -mindepth 1 -maxdepth 1 -name 'phobos-spec.*' | wc -l | tr -d ' ')"
+if [[ "$out" == *"EXIT=15"* && "$out" == *"could not remove the specification directory"* && "$left" == "1" ]]; then
+  ok "a specification that cannot be removed fails the run instead of passing silently"
+else
+  bad "a specification that cannot be removed fails the run instead of passing silently" \
+      "exit 15, the cleanup failure reported, and the directory with the command's file kept" \
+      "${left} left: $out"
+fi
 
 summary

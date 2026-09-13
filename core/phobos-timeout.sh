@@ -9,6 +9,9 @@ source "${HERE}/phobos-common.sh"
 SPEC_DIR="$1"; shift 2
 CMD=("$@")
 
+# Removes the specification phobos.sh created if this layer ends before it hands over.
+trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
+
 enable_timeout="${PHB_ENABLE_TIMEOUT:-1}"
 
 # If timeout layer is disabled, just pass through to network layer and ensure

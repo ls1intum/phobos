@@ -9,6 +9,10 @@ source "${HERE}/phobos-common.sh"
 SPEC_DIR="$1"; shift 2
 CMD=("$@")
 
+# Removes the specification phobos.sh created if this layer ends before it hands over,
+# for instance because the library cannot be used.
+trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
+
 enable_network="${PHB_ENABLE_NETWORK:-1}"
 
 # If network layer is disabled, just pass through to filesystem layer.
