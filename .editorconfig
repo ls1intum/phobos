@@ -2,19 +2,14 @@
 # coding styles between different editors and IDEs
 # editorconfig.org
 #
-# NOTE, deliberately absent: an `end_of_line` under `[*]`.
-#
-# .gitattributes explains why this repository has no blanket line-ending rule: eight files
-# are stored with CRLF, and normalising them is a behaviour change that needs a Docker
-# build to verify. It is tracked in ls1intum/phobos#15. A global `end_of_line = lf` here
-# would have an editor rewrite one of those files on the first save, which is the same
-# change arriving without the verification. The rules below therefore pin LF only where
-# something already depends on it.
+# Every file is LF, which is also how .gitattributes stores it. The sections below repeat
+# the setting where something breaks without it, and say what.
 
 root = true
 
 [*]
 charset = utf-8
+end_of_line = lf
 trim_trailing_whitespace = true
 insert_final_newline = true
 indent_style = space
@@ -53,8 +48,5 @@ end_of_line = lf
 [*.json]
 indent_size = 2
 
-# Deliberately no end_of_line: docker/run_phase/java/Dockerfile and
-# squid/HTTP_PROXY_SQUID_Dockerfile are two of the eight CRLF files, and hadolint accepts
-# them today. Pin this once ls1intum/phobos#15 has normalised them.
 [Dockerfile*]
 indent_size = 4

@@ -43,12 +43,17 @@ fails, and the sandbox does not start.
 
 **Rule:**
 
-- `*.cfg`, `*.paths`, `*.flags` and `*.rules` are LF. `.editorconfig` pins this and says why.
-- This repository deliberately has no blanket `text=auto` rule, because eight files are
-  stored with CRLF and normalising them is a behaviour change that needs a Docker build to
-  verify. That work is tracked in ls1intum/phobos#15. Do not normalise them as a side
-  effect of another change.
-- To see the current set rather than trusting a list: `git ls-files --eol | grep crlf`.
+- Every text file is LF. `* text=auto eol=lf` in `.gitattributes` has Git store it that way,
+  and `.editorconfig` asks editors for the same. `*.cfg`, `*.paths`, `*.flags` and `*.rules`
+  are where a carriage return breaks the sandbox rather than a tool.
+- Changing the line endings of a file something reads at run time is a behaviour change, so
+  the pull request says how the result was verified, by a Docker build where the file is a
+  Dockerfile. One exception was made when ls1intum/phobos#15 normalised the last CRLF files:
+  `squid/HTTP_PROXY_SQUID_Dockerfile` stops at a parse error and cannot be built, so it was
+  held to the same parse error and lint warning before and after instead. The exception
+  covers that file and nothing else.
+- To see whether anything is stored with CRLF rather than trusting this file:
+  `git ls-files --eol | grep crlf`.
 
 ## A prune run that fails for the wrong reason is worse than one that fails
 

@@ -697,8 +697,8 @@ public class CheckPullRequestTemplate {
     }
 
     /**
-     * Makes every line ending the same. GitHub sends Windows line endings and this repository stores
-     * Markdown with them too, so without this the same text would measure longer than it reads.
+     * Makes every line ending the same. GitHub sends Windows line endings, so without this the same
+     * text would measure longer than it reads.
      */
     private static String normalise(String text) {
         return text.replace("\r\n", "\n").replace("\r", "\n");
