@@ -225,10 +225,18 @@ static void check(const char *what, bool condition) {
     }
 }
 
+/* Writes the rules file inside the private rules directory, readable and writable by its
+ * owner only, and without following a link planted in its place. */
 static void write_rules(const char *body) {
-    FILE *file = fopen(rules_path, "w");
+    int descriptor = open(rules_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (descriptor < 0) {
+        perror("rules");
+        exit(2);
+    }
+    FILE *file = fdopen(descriptor, "w");
     if (file == nullptr) {
         perror("rules");
+        close(descriptor);
         exit(2);
     }
     fputs(body, file);
