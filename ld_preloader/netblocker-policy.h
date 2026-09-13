@@ -1,0 +1,50 @@
+/*
+ * The allow-list a process runs under.
+ *
+ * This becomes a class: the rules read from one file, the addresses name lookups
+ * authorised under them, and the lock that lets every thread ask while the rules are
+ * replaced. What it answers is whether a host may be looked up for a port, and whether
+ * an address may be connected to on a port.
+ */
+#ifndef NETBLOCKER_POLICY_H
+#define NETBLOCKER_POLICY_H
+
+#include "netblocker-address-cache.h"
+#include "netblocker-rule.h"
+
+#include <pthread.h>
+#include <stdint.h>
+
+struct policy {
+    struct rule *first_rule;
+    pthread_rwlock_t lock;
+    struct address_cache cache;
+};
+
+/* An initialiser rather than a function, for the same reason as the cache's: a hook
+ * can run before this library's constructor and has to find an empty policy, which
+ * refuses everything. */
+#define POLICY_INITIALISER                                                             \
+    { .first_rule = nullptr, .lock = PTHREAD_RWLOCK_INITIALIZER, .cache = ADDRESS_CACHE_INITIALISER }
+
+/* Replaces the rules with those in the file at path and forgets every authorisation.
+ * No path, a path that is not a regular file, a symbolic link as its last component
+ * and a file that cannot be read all leave no rules, which refuses every connection. */
+void policy_load(struct policy *policy, const char *path);
+
+/* True when a rule lets the host be looked up for the port, 0 meaning no port. */
+bool policy_permits_lookup(struct policy *policy, const char *host, uint16_t port);
+
+/* Records, against one address the host resolved to, the ports the rules grant the
+ * host. A resolver reply carries no port of its own, so the authorisation is read from
+ * the rules. */
+void policy_record_resolution(struct policy *policy, const char *host, const char *address);
+
+/* True when the address may be connected to on the port: through an authorisation a
+ * lookup recorded, "*", a rule naming the address, a range holding it, or a domain
+ * wildcard whose suffix resolves to it. Text that is not an address literal, the empty
+ * text a socket of another family yields included, is refused unless a lookup recorded
+ * it. */
+bool policy_permits_connection(struct policy *policy, const char *address, uint16_t port);
+
+#endif

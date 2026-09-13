@@ -4,9 +4,9 @@
 # library that needs a newer one than the 2.39 the image below ships.
 FROM ubuntu:26.04@sha256:513c074113a871b51a8d16ab445c88779d6452d937a164fb5cc479f32668a41d AS netblocker
 COPY build/netblocker-build.sh /tmp/netblocker/netblocker-build.sh
-COPY netblocker.c /tmp/netblocker/netblocker.c
+COPY netblocker/ /tmp/netblocker/source/
 RUN /tmp/netblocker/netblocker-build.sh install \
- && /tmp/netblocker/netblocker-build.sh build /tmp/netblocker/netblocker.c /tmp/netblocker/libnetblocker.so
+ && /tmp/netblocker/netblocker-build.sh build /tmp/netblocker/source /tmp/netblocker/libnetblocker.so
 
 FROM ls1tum/artemis-maven-template:java17-25@sha256:521f4dd3f3c6d81f403e84f2e2af3c459cd42dfd0345886aac1d1032527b07f8
 

@@ -12,7 +12,7 @@
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE="${HERE}/../ld_preloader/netblocker.c"
+SOURCE_DIRECTORY="${HERE}/../ld_preloader"
 PROBE_SOURCE="${HERE}/netcache_probe.c"
 
 WORK="$(mktemp -d)"
@@ -67,12 +67,19 @@ fi
 # The same build the run-phase image performs, flags included: -O2 is what turns
 # _FORTIFY_SOURCE on, and -Wl,-z,now completes RELRO. Testing an unhardened build
 # of a library that ships hardened would leave the shipped one untested.
-if ! "$COMPILER" -std=gnu23 -O2 -Wall -Wextra -fPIC -shared -Wl,-z,now \
-     -o "$WORK/libnetblocker.so" "$SOURCE" 2>"$WORK/lib.log"; then
+if ! "$COMPILER" -std=gnu23 -O2 -Wall -Wextra -fPIC -shared -fvisibility=hidden -Wl,-z,now \
+     -o "$WORK/libnetblocker.so" "$SOURCE_DIRECTORY"/netblocker*.c 2>"$WORK/lib.log"; then
   bad "build the interposer" "a shared library" "$(cat "$WORK/lib.log")"
   summary
 fi
 ok "build the interposer"
+
+# Only the two hooks may be visible. Any other function the library exported could
+# take the place of one the program, or another library, defines under the same name.
+exported="$(readelf --dyn-syms --wide "$WORK/libnetblocker.so" 2>/dev/null \
+  | awk '$4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" { print $8 }' \
+  | LC_ALL=C sort | paste -s -d ' ' -)"
+check "the library exports exactly connect and getaddrinfo" "connect getaddrinfo" "$exported"
 
 if ! "$COMPILER" -std=gnu23 -O0 -g -o "$WORK/probe" "$PROBE_SOURCE" 2>"$WORK/probe.log"; then
   bad "build the probe client" "an executable" "$(cat "$WORK/probe.log")"
@@ -216,6 +223,34 @@ else
   check "an IPv6 range permits an address inside it" "allowed" "$(field "$out" ipv6_loopback)"
   check "an IPv6 range refuses an IPv4 address" "denied" "$(field "$out" ipv4_loopback)"
 fi
+
+# ---------------------------------------------------------------------
+# Behaviour the filter has today, recorded rather than endorsed
+# ---------------------------------------------------------------------
+
+# These pin down what the filter does now in cases a restructuring could change
+# without anyone noticing. They describe behaviour, not a policy anyone chose: a
+# change to any of them belongs in its own pull request, with this check changed there.
+echo
+echo "== behaviour the filter has today =="
+out="$(run_scenario kept_any_host_with_port)"
+check "'* <port>' fails every name lookup" "failed" "$(field "$out" resolve)"
+check "'* <port>' permits any address on that port" "allowed" "$(field "$out" permitted_port)"
+check "'* <port>' refuses another port" "denied" "$(field "$out" other_port)"
+out="$(run_scenario kept_port_zero)"
+check "port 0 in a rule permits one port" "allowed" "$(field "$out" first_port)"
+check "port 0 in a rule permits another port" "allowed" "$(field "$out" second_port)"
+out="$(run_scenario kept_third_token)"
+check "a third word in a rule is ignored" "allowed" "$(field "$out" permitted_port)"
+out="$(run_scenario kept_invalid_port)"
+check "a rule with a port above 65535 grants nothing" "denied" "$(field "$out" permitted_port)"
+out="$(run_scenario kept_unix_socket)"
+check "a connection to a Unix socket is refused" "denied" "$(field "$out" unix_socket)"
+out="$(run_scenario kept_named_service)"
+check "a lookup with a named service counts as no port" "passed-to-resolver" "$(field "$out" named_service)"
+check "a lookup naming a port the rule does not grant is refused" "refused" "$(field "$out" other_service)"
+out="$(run_scenario kept_long_line)"
+check "a rule after 511 characters of comment on one line takes effect" "allowed" "$(field "$out" first_port)"
 
 # ---------------------------------------------------------------------
 # SIGHUP belongs to the program, and reloads nothing
