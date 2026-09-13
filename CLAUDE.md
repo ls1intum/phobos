@@ -17,8 +17,8 @@ one disagree, the full one is right.
 - Never add a bind, a capability or an allowed host to make a test pass. That turns a
   containment failure into a widened boundary, and the suite goes green either way.
 - `*.cfg` and `*.paths` are read with `while IFS= read -r`, so a carriage return ends up
-  inside a bind path and the sandbox does not start. Do not normalise the eight CRLF files
-  as a side effect of another change; that is ls1intum/phobos#15.
+  inside a bind path and the sandbox does not start. Every text file is stored with LF, and
+  `.gitattributes` keeps it that way.
 - `gh pr create --body` bypasses `.github/PULL_REQUEST_TEMPLATE.md` silently, so read that
   file before writing a body, and check it with
   `PR_BODY="$(cat body.md)" java .github/scripts/CheckPullRequestTemplate.java`.
