@@ -346,6 +346,59 @@ timeout=\$(touch $WORK/pwned-wrapper)")
         "exit 1, an error, and no side effect" "$out"
   fi
 
+  # Runs the wrapper over a [network] body and prints the allow-list it wrote for the
+  # preload library. The wrapper truncates and rewrites that file before it exec's, so it is
+  # there whether or not the exec that follows succeeds.
+  wrapper_allowedlist() {
+    run_wrapper "$1" >/dev/null 2>&1
+    cat "$WRAPPER_CORE/allowedList.cfg" 2>/dev/null
+  }
+
+  # "::1:*" must parse to host "::1", not an empty host. An empty host is written as a bare
+  # " *", which the preload library reads as "any host, any port": the loopback rule would
+  # become allow-all. This is the security-relevant half of the fix.
+  allowed="$(wrapper_allowedlist '[network]
+allow ::1:*')"
+  if grep -qx '::1 \*' <<<"$allowed" && ! grep -qE '^\*?[[:space:]]\*$' <<<"$allowed"; then
+    ok "wrapper: ::1:* becomes the loopback host, not allow-all"
+  else
+    bad "wrapper: ::1:* becomes the loopback host, not allow-all" "a line '::1 *'" "$allowed"
+  fi
+
+  allowed="$(wrapper_allowedlist '[network]
+allow [::1]:443')"
+  check "wrapper: bracketed IPv6 with a port"   "::1 443"       "$allowed"
+  allowed="$(wrapper_allowedlist '[network]
+allow 127.0.0.1:8080')"
+  check "wrapper: IPv4 with a port"             "127.0.0.1 8080" "$allowed"
+
+  # mem_mb defaults to 0, and "ulimit -v 0" would set the address-space limit to zero and
+  # stop the command from starting. With a pass-through stand-in for phobos-landlock, the
+  # command must actually run when no memory budget is set.
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift; exec "$@"' \
+    > "$WORK/passthrough-landlock"
+  chmod +x "$WORK/passthrough-landlock"
+  printf '[limits]\ntimeout=1\n' > "$WORK/base.cfg"
+  : > "$WORK/tail.cfg"
+  printf '#!/usr/bin/env bash\necho ran-ok\n' > "$WORK/build.sh"
+  chmod +x "$WORK/build.sh"
+  # The real timeout, not the recording stand-in earlier tests shadow it with through PATH:
+  # this case has to actually run the command to see that a zero memory budget did not stop
+  # it. The Landlock stand-in is named absolutely, so it needs no PATH entry.
+  out=$(
+    cd "$WORK" || exit 1
+    PHOBOS_LANDLOCK_BIN="$WORK/passthrough-landlock" \
+      bash "$CORE/phobos_wrapper.sh" --base base.cfg --tail tail.cfg -- "$WORK/build.sh" 2>&1
+  )
+  rc=$?
+  if [[ "$out" == *"ran-ok"* && "$rc" -eq 0 ]]; then
+    ok "wrapper: mem_mb=0 does not set an address-space limit of zero"
+  else
+    bad "wrapper: mem_mb=0 does not set an address-space limit of zero" \
+        "the command runs (ran-ok, exit 0)" "exit ${rc}: ${out}"
+  fi
+
 fi
 
 # ---------------------------------------------------------------------
