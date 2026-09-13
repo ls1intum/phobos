@@ -199,16 +199,30 @@ fi
 # ---------------------------------------------------------------------
 allowed_file="$core/allowedList.cfg"; : > "$allowed_file"
 
-parse_hostport() {                       # $1 = host[:port] (IPv6 ok)
+parse_hostport() {                       # $1 = host[:port]; IPv6 in [brackets] or bare
     local host port hostport=$1
-    if [[ $hostport == \[*\]:* ]]; then  # [v6]:port
+    if [[ $hostport == \[*\]:* ]]; then           # [v6]:port
         host=${hostport%%]*}; host=${host#[}
         port=${hostport##*:}
-    else
-        host=${hostport%%:*}
-        port=${hostport##*:}
+    elif [[ $hostport == \[*\] ]]; then           # [v6], no port
+        host=${hostport#[}; host=${host%]}
+        port=0
+    elif [[ $hostport == *:*:* ]]; then           # bare IPv6 (two or more colons)
+        # Splitting on the FIRST colon, as this used to, turned "::1:*" into an empty host
+        # and a "*" port, which the preload library then read as "any host, any port": the
+        # loopback rule became allow-all. Split off a trailing :port only when the last
+        # field is a port and a colon precedes it; otherwise the whole token is the address.
+        # A bare IPv6 with no port is ambiguous and should be written in [brackets].
+        local last=${hostport##*:}
+        if [[ ( $last == '*' || $last =~ ^[0-9]+$ ) && ${hostport%:*} == *:* ]]; then
+            host=${hostport%:*}; port=$last
+        else
+            host=$hostport; port=0
+        fi
+    else                                          # IPv4 or hostname, optional :port
+        host=${hostport%%:*}; port=${hostport##*:}
+        [[ $host == "$port" ]] && port=0
     fi
-    [[ $host == "$port" ]] && port=0
     echo "$host $port"
 }
 
@@ -250,5 +264,9 @@ timeout_cmd=( timeout --kill-after=5s "${timeout_s}s" )
 
 cmd=( "${timeout_cmd[@]}" "${PHOBOS_LANDLOCK_BIN:-$core/phobos-landlock}" "${landlock_args[@]}" -- "$build_script" "$@" )
 printf '\e[34m[landlock]\e[0m '; printf '%q ' "${cmd[@]}"; echo
-ulimit -v $((mem_mb*1024*5))
+# mem_mb defaults to 0, and "ulimit -v 0" sets the address-space limit to zero, which stops
+# the command from starting at all. Apply the limit only when a memory budget was configured.
+if (( mem_mb > 0 )); then
+    ulimit -v $((mem_mb*1024*5))
+fi
 exec "${cmd[@]}"
