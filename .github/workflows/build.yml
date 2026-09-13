@@ -31,7 +31,7 @@ concurrency:
 jobs:
   unit:
     name: Unit tests for the Landlock wrapper
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -42,8 +42,8 @@ jobs:
           persist-credentials: false
 
       # gcc-14 and nothing else. The syscalls are interposed through the linker, so
-      # this needs no Landlock, no container and no elevated permission. The runner
-      # ships gcc 13, which does not know -std=gnu23, so the compiler is installed
+      # this needs no Landlock, no container and no elevated permission. The runner's
+      # default gcc is not the compiler this suite is pinned to, so gcc-14 is installed
       # rather than assumed.
       - name: Install gcc-14
         run: |
@@ -66,12 +66,12 @@ jobs:
   # exactly what the source builds.
   netblocker:
     name: The committed libnetblocker.so is what its source builds
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: read
     container:
-      image: ubuntu:24.04@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254
+      image: ubuntu:26.04@sha256:513c074113a871b51a8d16ab445c88779d6452d937a164fb5cc479f32668a41d
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -95,7 +95,7 @@ jobs:
 
   images:
     name: Build the ${{ matrix.name }} image
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -149,7 +149,7 @@ jobs:
 
   run-phase:
     name: Build the run-phase image and hold it to the acceptance suites
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     permissions:
       contents: read
@@ -231,7 +231,7 @@ jobs:
   mutation:
     name: Mutation score of the wrapper suite
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       contents: read

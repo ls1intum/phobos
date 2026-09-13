@@ -89,7 +89,9 @@ marks `*.so` binary so that Git never applies text conversion to them.
      cp core/libnetblocker.so ld_preloader/libnetblocker.so'
   ```
 
-- The committed objects are x86-64 and need glibc 2.39 and `readelf`. Anywhere else the
+- The committed objects are x86-64 and need glibc 2.39 or newer, and `readelf`. They are
+  built on Ubuntu 26.04 against glibc 2.43, and CI refuses a build that requires more than
+  the 2.39 of the run-phase image. Anywhere else the
   network layer ends the run with PHB-ERUNTIME rather than running it unfiltered.
 - `.gitignore` covers `*.o` and `*.a`, not `*.so`, for that reason.
 

@@ -1,3 +1,13 @@
+# libnetblocker.so is built in a stage of its own, on the toolchain netblocker-build.sh
+# pins, so the copy this image ships is byte for byte the one CI builds and the
+# committed copies hold. The stage's C library is newer than the image's; CI refuses a
+# library that needs a newer one than the 2.39 the image below ships.
+FROM ubuntu:26.04@sha256:513c074113a871b51a8d16ab445c88779d6452d937a164fb5cc479f32668a41d AS netblocker
+COPY build/netblocker-build.sh /tmp/netblocker/netblocker-build.sh
+COPY netblocker.c /tmp/netblocker/netblocker.c
+RUN /tmp/netblocker/netblocker-build.sh install \
+ && /tmp/netblocker/netblocker-build.sh build /tmp/netblocker/netblocker.c /tmp/netblocker/libnetblocker.so
+
 FROM ls1tum/artemis-maven-template:java17-25@sha256:521f4dd3f3c6d81f403e84f2e2af3c459cd42dfd0345886aac1d1032527b07f8
 
 
@@ -8,27 +18,21 @@ FROM ls1tum/artemis-maven-template:java17-25@sha256:521f4dd3f3c6d81f403e84f2e2af
 # gcc-14 on top of build-essential: the image ships gcc 13, which knows C23 only
 # under its draft name -std=gnu2x. Pinning the language rather than taking
 # whatever the base image happens to default to is the point of the flag, so the
-# compiler that knows the real name is the one that builds both artefacts.
-#
-# netblocker-build.sh installs both from one Ubuntu snapshot, with gcc-14, binutils
-# and libc6-dev at the versions it pins. CI holds the libnetblocker.so this image
-# builds to the committed copies byte for byte, which only holds while both come from
-# the same toolchain.
-COPY netblocker-build.sh /tmp/netblocker-build.sh
-RUN /tmp/netblocker-build.sh install build-essential
+# compiler that knows the real name is the one that builds the wrapper.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc-14 \
+ && rm -rf /var/lib/apt/lists/*
 
 ENV PHOBOS_HOME=/var/tmp/opt/core
 RUN mkdir -p "${PHOBOS_HOME}"
 COPY *.sh                ${PHOBOS_HOME}/
-COPY netblocker.c                 ${PHOBOS_HOME}/
+COPY --from=netblocker /tmp/netblocker/libnetblocker.so ${PHOBOS_HOME}/
 COPY phobos-landlock*.c           ${PHOBOS_HOME}/
 COPY phobos-landlock*.h           ${PHOBOS_HOME}/
 COPY config/BaseLanguage-java.cfg                     ${PHOBOS_HOME}/
 COPY config/TailPhobos.cfg                     ${PHOBOS_HOME}/
 COPY allowedList.cfg                  ${PHOBOS_HOME}/
-# The same build CI runs, through the same script, which states the flags and why.
-RUN /tmp/netblocker-build.sh build ${PHOBOS_HOME}/netblocker.c ${PHOBOS_HOME}/libnetblocker.so \
- && rm /tmp/netblocker-build.sh
 # -static-pie rather than -static: plain -static overrides the -fPIE default and
 # produces a fixed-address executable, so the binary that applies the sandbox
 # would be the one part of the image without address randomisation.

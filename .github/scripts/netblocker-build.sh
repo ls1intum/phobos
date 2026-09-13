@@ -12,16 +12,16 @@
 # snapshot for at least two years. Moving it is a deliberate change, and the pull
 # request that moves it rebuilds the committed objects.
 #
-#   netblocker-build.sh install [PACKAGE...]      as root, on Ubuntu 24.04
+#   netblocker-build.sh install [PACKAGE...]      as root, on Ubuntu 26.04
 #   netblocker-build.sh build SOURCE OUTPUT
 #   netblocker-build.sh verify LIBRARY
 #   netblocker-build.sh compare REFERENCE COPY...
 set -euo pipefail
 
 readonly SNAPSHOT="20260912T000000Z"
-readonly GCC_VERSION="14.2.0-4ubuntu2~24.04.1"
-readonly BINUTILS_VERSION="2.42-4ubuntu2.10"
-readonly LIBC_DEV_VERSION="2.39-0ubuntu8.9"
+readonly GCC_VERSION="14.3.0-14ubuntu1"
+readonly BINUTILS_VERSION="2.46-3ubuntu2"
+readonly LIBC_DEV_VERSION="2.43-2ubuntu2.4"
 # The C library of the run-phase image. A library needing a newer one would not load there.
 readonly HIGHEST_GLIBC="2.39"
 readonly MACHINE="Advanced Micro Devices X86-64"
@@ -52,7 +52,7 @@ pinned_architecture() {
 }
 
 # Installs the toolchain and any further packages, pinned where the architecture
-# allows it. Assumes root on Ubuntu 24.04 with the stock archive sources.
+# allows it. Assumes root on Ubuntu 26.04 with the stock archive sources.
 install_toolchain() {
     export DEBIAN_FRONTEND=noninteractive
     if pinned_architecture; then
@@ -101,9 +101,7 @@ check_toolchain() {
     pinned_architecture || return 0
     for pin in "gcc-14=${GCC_VERSION}" "binutils=${BINUTILS_VERSION}" "libc6-dev=${LIBC_DEV_VERSION}"; do
         package="${pin%%=*}"
-        # The single quotes are dpkg-query's own format syntax, not a shell expansion.
-        # shellcheck disable=SC2016
-        installed="$(dpkg-query --show --showformat='${Version}' "${package}" 2>/dev/null || true)"
+        installed="$(dpkg-query --show --showformat="\${Version}" "${package}" 2>/dev/null || true)"
         [[ "${installed}" == "${pin#*=}" ]] \
             || fail "${package} is ${installed:-not installed}, but the pinned version is ${pin#*=}"
     done
