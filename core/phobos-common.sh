@@ -70,8 +70,14 @@ set_parsed_timeout() {
 }
 parse_cfg_policy() {
   local cfg="$1"
-  local tdir; tdir="$(mktemp -d -t phobos-cfg.XXXXXX)"
-  INI_TMP_DIRS+=" ${tdir}"
+  local tdir
+  # Under phobos.sh's scratch directory when it set one, so this scratch is removed with
+  # the specification directory rather than left in /tmp; otherwise a plain temporary dir.
+  if [[ -n "${PHOBOS_SCRATCH:-}" ]]; then
+    tdir="$(mktemp -d -p "$PHOBOS_SCRATCH" phobos-cfg.XXXXXX)"
+  else
+    tdir="$(mktemp -d -t phobos-cfg.XXXXXX)"
+  fi
   local ro="${tdir}/ro.paths" rw="${tdir}/rw.paths" hide="${tdir}/hide.paths" net="${tdir}/net.rules"
   : >"$ro"; : >"$rw"; : >"$hide"; : >"$net"
   local sec=""
@@ -638,6 +644,11 @@ PHB_SPEC_MARKER=".phobos-owned-spec"
 # The files write_spec creates, the only ones remove_owned_spec_dir deletes.
 PHB_SPEC_FILES="ro.paths rw.paths hide.paths tail.flags net.rules timeout.sec"
 
+# The subdirectory phobos.sh keeps its own scratch files in, so they live under the
+# specification directory and are removed with it rather than left in /tmp. phobos.sh ends
+# with exec, so its own EXIT trap never runs; this is how the scratch is cleaned regardless.
+PHB_SPEC_SCRATCH="scratch"
+
 # Refuses a parent for the specification directory that is not an absolute path
 # to an existing directory. Assumes it is called plainly, not in a command
 # substitution, so that the refusal ends the run.
@@ -655,15 +666,16 @@ mark_owned_spec_dir() {
 }
 
 # Removes a specification directory phobos.sh created, and does nothing to any
-# other. Deletes only the files write_spec writes and the marker, then the
-# directory itself, so a directory that has gained anything else stays and the
-# failure is returned rather than the contents deleted. Assumes the path may be
-# empty, missing or not a directory, all of which leave nothing to do.
+# other. Deletes the scratch subdirectory phobos.sh made, the files write_spec writes
+# and the marker, then the directory itself, so a directory that has gained anything
+# else stays and the failure is returned rather than the contents deleted. Assumes the
+# path may be empty, missing or not a directory, all of which leave nothing to do.
 remove_owned_spec_dir() {
   local directory="$1"
   local name
   [[ -n "$directory" && -d "$directory" && ! -L "$directory" ]] || return 0
   [[ -f "$directory/${PHB_SPEC_MARKER}" && ! -L "$directory/${PHB_SPEC_MARKER}" ]] || return 0
+  rm -rf -- "${directory:?}/${PHB_SPEC_SCRATCH}" || return 1
   for name in ${PHB_SPEC_FILES}; do
     rm -f -- "$directory/$name" || return 1
   done

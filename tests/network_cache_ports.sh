@@ -561,4 +561,42 @@ else
       "${left} left: $out"
 fi
 
+# phobos.sh ends with exec, so its own EXIT trap never runs; its scratch files must live
+# under the specification directory and be removed with it, not left in TMPDIR (which is a
+# write path the sandbox can read in both shipped policies).
+echo
+echo "== phobos.sh keeps no scratch behind and refuses to run without a base policy =="
+scratch_tmp="$WORK/scratch-tmp"
+mkdir -p "$scratch_tmp"
+parent="$(fresh_parent scratch)"
+TMPDIR="$scratch_tmp" PHOBOS_SPEC_PARENT="$parent" \
+  NETBLOCKER_SO="$WORK/libnetblocker.so" PHOBOS_LANDLOCK_BIN="$WORK/record-landlock" \
+  bash "$WORK/core/phobos.sh" -- /bin/echo command-ran >/dev/null 2>&1
+left="$(find "$scratch_tmp" -mindepth 1 | wc -l | tr -d ' ')"
+check "a run leaves no scratch files in TMPDIR" 0 "$left"
+
+# A core directory with no Base*.cfg beside phobos.sh: the sandbox cannot be applied.
+nobase="$WORK/nobase"
+mkdir -p "$nobase"
+cp "$WORK/core/"*.sh "$nobase/"
+out="$(PHOBOS_LANDLOCK_BIN="$WORK/record-landlock" \
+       bash "$nobase/phobos.sh" -- /bin/echo should-not-run 2>&1)"
+rc=$?
+if [[ "$rc" -eq 11 && "$out" == *"PHB-EPOLICY"* && "$out" != *"should-not-run"* ]]; then
+  ok "no Base*.cfg refuses to run unconfined (PHB-EPOLICY), and runs nothing"
+else
+  bad "no Base*.cfg refuses to run unconfined (PHB-EPOLICY), and runs nothing" \
+      "exit 11 naming PHB-EPOLICY, command not run" "exit ${rc}: $out"
+fi
+
+out="$(PHOBOS_LANDLOCK_BIN="$WORK/record-landlock" \
+       bash "$nobase/phobos.sh" --allow-unsandboxed -- /bin/echo ran-raw 2>&1)"
+rc=$?
+if [[ "$rc" -eq 0 && "$out" == *"ran-raw"* ]]; then
+  ok "--allow-unsandboxed runs the command raw when no Base*.cfg is present"
+else
+  bad "--allow-unsandboxed runs the command raw when no Base*.cfg is present" \
+      "exit 0, command run" "exit ${rc}: $out"
+fi
+
 summary

@@ -12,20 +12,24 @@ Usage:
   phobos.sh [layer options] [--config <file>]... <build_command> [args...]
 
 Layer options (all enabled by default):
-  --no-timeout       Disable timeout wrapper (phobos-timeout.sh).
-  --no-network       Disable network sandbox (libnetblocker / phobos-network.sh).
-  --no-filesystem    Disable filesystem sandbox (Landlock / phobos-filesystem.sh).
+  --no-timeout        Disable timeout wrapper (phobos-timeout.sh).
+  --no-network        Disable network sandbox (libnetblocker / phobos-network.sh).
+  --no-filesystem     Disable filesystem sandbox (Landlock / phobos-filesystem.sh).
+  --allow-unsandboxed Run the command with no sandbox when no Base*.cfg is present,
+                      instead of refusing. For deliberate raw runs only.
 
 Notes:
 - Base config: any "${HERE}/Base*.cfg" (INI-like) is applied first (sorted).
 - Exercise configs: only files passed via --config/-c are applied in order;
   per-path FS merge, NET union, TIMEOUT last-wins.
 - Tail config: "${HERE}/TailPhobos.cfg" (flags only) is applied last.
-- If no Base*.cfg is present, Phobos runs the command raw (no sandbox).
+- If no Base*.cfg is present, Phobos refuses to run (PHB-EPOLICY) rather than run
+  the command unconfined. --allow-unsandboxed opts into a raw run on purpose.
 - The run's policy is written to a directory under PHOBOS_SPEC_PARENT (default
   /var/tmp), which must lie outside every write path, and removed when the run
-  ends. A run with --no-filesystem and --no-timeout hands the command to exec and
-  leaves that directory behind.
+  ends, together with the scratch subdirectory this script keeps inside it. A run
+  with --no-filesystem and --no-timeout hands the command to exec and leaves that
+  directory behind.
 USAGE
   exit 2
 }
@@ -36,6 +40,8 @@ USAGE
 enable_timeout=1
 enable_network=1
 enable_filesystem=1
+# Refusing to run without a base policy is the default; this is the explicit opt-out.
+allow_unsandboxed=0
 
 cfgs=()
 cmd=()
@@ -52,6 +58,8 @@ while (( "$#" )); do
       enable_network=0; shift;;
     --no-filesystem|--no-fs)
       enable_filesystem=0; shift;;
+    --allow-unsandboxed)
+      allow_unsandboxed=1; shift;;
     --)
       shift
       while (( "$#" )); do cmd+=("$1"); shift; done
@@ -69,14 +77,34 @@ export PHB_ENABLE_FILESYSTEM="$enable_filesystem"
 
 mapfile -t base_cfgs < <(ls -1 "${HERE}"/Base*.cfg 2>/dev/null | sort || true)
 if [[ ${#base_cfgs[@]} -eq 0 ]]; then
-  _log "No Base*.cfg found; running command without sandbox."
-  exec "${cmd[@]}"
+  # No base policy means no sandbox. Running the command anyway would grade an untrusted
+  # submission unconfined while looking like Phobos ran, so refuse by default;
+  # --allow-unsandboxed is the explicit, per-invocation opt-out for a deliberate raw run.
+  if (( allow_unsandboxed )); then
+    _log "No Base*.cfg found; --allow-unsandboxed given, running command without sandbox."
+    exec "${cmd[@]}"
+  fi
+  report "Policy invalid: no Base*.cfg beside phobos.sh, so there is no sandbox to apply; refusing to run the command unconfined. Pass --allow-unsandboxed to run it raw on purpose. (PHB-EPOLICY)"
+  exit "${PHB_EPOLICY}"
 fi
 
 : "${TAIL_FLAGS_FILE:=${HERE}/TailPhobos.cfg}"
-INI_TMP_DIRS=""
 
-base_ro="$(mktemp)"; base_rw="$(mktemp)"; base_hide="$(mktemp)"; base_net="$(mktemp)"
+# The specification directory is created before any scratch file, so every temporary file
+# this script makes lives under it and is removed with it. phobos.sh ends with exec, so its
+# own EXIT trap never runs; the layer that finally ends the run removes the specification
+# directory, and with it the scratch subdirectory, in one place. It has to lie outside every
+# write path, where Landlock keeps the rules file it holds unchangeable. /tmp is a write path
+# in both shipped policies; /var/tmp is in neither.
+spec_parent="${PHOBOS_SPEC_PARENT:-/var/tmp}"
+refuse_unusable_spec_parent "$spec_parent"
+SPEC_DIR="$(mktemp -d "${spec_parent%/}/phobos-spec.XXXXXX")"
+mark_owned_spec_dir "$SPEC_DIR"
+PHOBOS_SCRATCH="${SPEC_DIR}/${PHB_SPEC_SCRATCH}"
+mkdir -p "$PHOBOS_SCRATCH"
+trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
+
+base_ro="$(mktemp -p "$PHOBOS_SCRATCH")"; base_rw="$(mktemp -p "$PHOBOS_SCRATCH")"; base_hide="$(mktemp -p "$PHOBOS_SCRATCH")"; base_net="$(mktemp -p "$PHOBOS_SCRATCH")"
 : >"$base_ro"; : >"$base_rw"; : >"$base_hide"; : >"$base_net"
 timeout_eff=""
 
@@ -87,31 +115,23 @@ for b in "${base_cfgs[@]}"; do
   fs_union_files "$base_ro" "$base_rw" "$base_hide" \
                  "$PARSED_RO_FILE" "$PARSED_RW_FILE" "$PARSED_HIDE_FILE"
   # NET: union
-  tmpnet="$(mktemp)"; net_union "$tmpnet" "$base_net" "$PARSED_NET_FILE"; mv "$tmpnet" "$base_net"
+  tmpnet="$(mktemp -p "$PHOBOS_SCRATCH")"; net_union "$tmpnet" "$base_net" "$PARSED_NET_FILE"; mv "$tmpnet" "$base_net"
   # TIMEOUT: last base wins
   [[ -n "${PARSED_TIMEOUT:-}" || "${PARSED_TIMEOUT:-__unset__}" == "" ]] && timeout_eff="${PARSED_TIMEOUT:-}"
 done
 
 # Effective policy (start from base, then apply exercise overrides)
-eff_ro="$(mktemp)"; eff_rw="$(mktemp)"; eff_hide="$(mktemp)"; eff_net="$(mktemp)"
+eff_ro="$(mktemp -p "$PHOBOS_SCRATCH")"; eff_rw="$(mktemp -p "$PHOBOS_SCRATCH")"; eff_hide="$(mktemp -p "$PHOBOS_SCRATCH")"; eff_net="$(mktemp -p "$PHOBOS_SCRATCH")"
 cp "$base_ro" "$eff_ro"; cp "$base_rw" "$eff_rw"; cp "$base_hide" "$eff_hide"; cp "$base_net" "$eff_net"
 
 for c in "${cfgs[@]}"; do
   parse_cfg_policy "$c"
   merge_fs_per_path "$base_ro" "$base_rw" "$base_hide" eff_ro eff_rw eff_hide \
                     "$PARSED_RO_FILE" "$PARSED_RW_FILE" "$PARSED_HIDE_FILE"
-  tmpnet="$(mktemp)"; net_union "$tmpnet" "$eff_net" "$PARSED_NET_FILE"; mv "$tmpnet" "$eff_net"
+  tmpnet="$(mktemp -p "$PHOBOS_SCRATCH")"; net_union "$tmpnet" "$eff_net" "$PARSED_NET_FILE"; mv "$tmpnet" "$eff_net"
   [[ -n "${PARSED_TIMEOUT:-}" || "${PARSED_TIMEOUT:-__unset__}" == "" ]] && timeout_eff="${PARSED_TIMEOUT:-}"
 done
 
-# The specification holds the rules file netblocker reads in every process the command
-# starts, so it has to lie outside every write path, where Landlock keeps it unchangeable.
-# /tmp is a write path in both shipped policies; /var/tmp is in neither.
-spec_parent="${PHOBOS_SPEC_PARENT:-/var/tmp}"
-refuse_unusable_spec_parent "$spec_parent"
-SPEC_DIR="$(mktemp -d "${spec_parent%/}/phobos-spec.XXXXXX")"
-mark_owned_spec_dir "$SPEC_DIR"
-trap 'finish_owned_spec_dir "$?" "$SPEC_DIR" $INI_TMP_DIRS "$base_ro" "$base_rw" "$base_hide" "$base_net" "$eff_ro" "$eff_rw" "$eff_hide" "$eff_net"' EXIT
 write_spec "$SPEC_DIR" "$eff_ro" "$eff_rw" "$eff_hide" "$eff_net" "$timeout_eff" "${TAIL_FLAGS_FILE:-}"
 
 # Always enter through the first layer; inner scripts decide whether to apply themselves
