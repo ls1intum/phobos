@@ -254,6 +254,16 @@ jobs:
           docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
             phobos-run-phase:ci bash /testsuite/network-port-test.sh
 
+      # Scoping keeps a submission from signalling the grading process beside it or reaching
+      # an abstract UNIX socket outside the sandbox, which the path and port rules do not
+      # cover. It confines rather than forbidding, so a process inside the sandbox is still
+      # reachable.
+      - name: A sandboxed process cannot reach out of the sandbox with a signal
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
+            phobos-run-phase:ci bash /testsuite/scoping-test.sh
+
   # Mutation testing installs clang and mull into a container and then runs the suite
   # once per mutant, which is minutes rather than seconds. Weekly and on request, so it
   # reports on the suite's strength without being in the way of a pull request.

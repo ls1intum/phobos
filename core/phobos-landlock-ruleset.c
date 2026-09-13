@@ -96,6 +96,13 @@ void report_unenforceable_rights(int landlock_version) {
                     "--minimum-landlock-version %d to refuse such a kernel instead.",
                     landlock_version, FIRST_VERSION_WITH_IOCTL_DEVICE);
     }
+    if (landlock_version < FIRST_VERSION_WITH_SCOPED) {
+        warn_always("warning: Landlock version %d does not handle scoping; a sandboxed "
+                    "process can signal a process outside the sandbox and reach abstract "
+                    "UNIX sockets outside it. Pass --minimum-landlock-version %d to refuse "
+                    "such a kernel instead.",
+                    landlock_version, FIRST_VERSION_WITH_SCOPED);
+    }
     /* The other direction, and not a gap: without REFER the kernel denies every
      * rename across directories rather than leaving it free. That breaks builds
      * loudly instead of weakening the sandbox quietly, so it is worth naming but
@@ -108,11 +115,19 @@ void report_unenforceable_rights(int landlock_version) {
     }
 }
 
+uint64_t scoped_for_version(int landlock_version) {
+    if (landlock_version < FIRST_VERSION_WITH_SCOPED) {
+        return 0;
+    }
+    return LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | LANDLOCK_SCOPE_SIGNAL;
+}
+
 int create_ruleset(int landlock_version, uint64_t handled_network) {
     struct landlock_ruleset_attributes attributes;
     memset(&attributes, 0, sizeof(attributes));
     attributes.handled_access_filesystem = filesystem_rights_for_version(landlock_version);
     attributes.handled_access_network = handled_network;
+    attributes.scoped = scoped_for_version(landlock_version);
 
     int ruleset_descriptor =
         (int)syscall(SYSCALL_NUMBER_LANDLOCK_CREATE_RULESET, &attributes,
