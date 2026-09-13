@@ -164,4 +164,106 @@ else
   check "another port stays refused after lookup" "denied"  "$(field "$out" other_port)"
 fi
 
+# ---------------------------------------------------------------------
+# The network layer refuses a library that would not filter anything
+# ---------------------------------------------------------------------
+
+# The loader skips a preload library it cannot use with only a warning, and the
+# command then runs unfiltered. These checks run the network layer with the
+# filesystem layer switched off, because that is the one way to reach the refusal
+# without Landlock. They claim nothing about that composition being safe: without
+# the filesystem layer nothing protects the rules file.
+#
+# The layers start one another with exec, so they have to be executable. A checkout
+# does not mark them so, the image does, and a copy stands in for the image here.
+cp -R "${HERE}/../core" "$WORK/core"
+chmod +x "$WORK"/core/*.sh
+NETWORK_LAYER="$WORK/core/phobos-network.sh"
+mkdir -p "$WORK/spec"
+
+# Runs the network layer over /bin/echo and prints its output and its exit status.
+# The second argument switches the network layer itself off when it is 0.
+run_network_layer() {
+  local library=$1
+  local network=${2:-1}
+  local out
+  local rc
+  out="$(NETBLOCKER_SO="$library" PHB_ENABLE_FILESYSTEM=0 PHB_ENABLE_NETWORK="$network" \
+         PHB_TIMEOUT_SEC="" bash "$NETWORK_LAYER" "$WORK/spec" -- /bin/echo command-ran 2>&1)"
+  rc=$?
+  printf '%s\nEXIT=%s' "$out" "$rc"
+}
+
+refused_because() {
+  local name=$1
+  local reason=$2
+  local out=$3
+  if [[ "$out" == *"EXIT=15"* && "$out" == *"PHB-ERUNTIME"* && "$out" == *"$reason"* \
+        && "$out" != *"command-ran"* ]]; then
+    ok "$name"
+  else
+    bad "$name" "exit 15, PHB-ERUNTIME naming '$reason', and no command run" "$out"
+  fi
+}
+
+ran() {
+  local name=$1
+  local out=$2
+  if [[ "$out" == *"EXIT=0"* && "$out" == *"command-ran"* ]]; then
+    ok "$name"
+  else
+    bad "$name" "exit 0 and the command run" "$out"
+  fi
+}
+
+echo
+echo "== the network layer refuses an unusable library =="
+ran "a freshly built interposer lets the command run" "$(run_network_layer "$WORK/libnetblocker.so")"
+ran "with the network layer off no library is needed" "$(run_network_layer "$WORK/absent.so" 0)"
+
+refused_because "a missing library is refused" "does not exist" \
+  "$(run_network_layer "$WORK/absent.so")"
+
+printf 'not a library\n' > "$WORK/text.so"
+refused_because "a file that is not a library is refused" "does not define connect" \
+  "$(run_network_layer "$WORK/text.so")"
+
+# The same library with its ELF machine field, at offset 18, set to another
+# architecture: x86-64 is 0x3e and AArch64 is 0xb7. Its symbols still read, so only
+# the loader can tell that it would never be mapped.
+cp "$WORK/libnetblocker.so" "$WORK/foreign.so"
+if [[ "$(od -An -tx1 -j18 -N1 "$WORK/foreign.so" | tr -d ' ')" == "3e" ]]; then
+  foreign_machine='\xb7'
+else
+  foreign_machine='\x3e'
+fi
+printf '%b' "$foreign_machine" | dd of="$WORK/foreign.so" bs=1 seek=18 conv=notrunc status=none
+refused_because "a library for another architecture is refused" "does not load cleanly" \
+  "$(run_network_layer "$WORK/foreign.so")"
+
+printf 'int unrelated_function(void) { return 0; }\n' > "$WORK/unrelated.c"
+if "$COMPILER" -std=gnu23 -O2 -fPIC -shared -o "$WORK/unrelated.so" "$WORK/unrelated.c" \
+     2>"$WORK/unrelated.log"; then
+  refused_because "a loadable library without the hooks is refused" "does not define connect" \
+    "$(run_network_layer "$WORK/unrelated.so")"
+else
+  bad "build a library without the hooks" "a shared library" "$(cat "$WORK/unrelated.log")"
+fi
+
+mkdir -p "$WORK/with space"
+cp "$WORK/libnetblocker.so" "$WORK/with space/libnetblocker.so"
+refused_because "a path LD_PRELOAD cannot name is refused" "space or a colon" \
+  "$(run_network_layer "$WORK/with space/libnetblocker.so")"
+
+# Every command on this machine except readelf, so that only its absence differs.
+mkdir -p "$WORK/no-readelf"
+for tool in /usr/bin/* /bin/*; do
+  case "${tool##*/}" in
+    readelf|*-readelf) continue ;;
+  esac
+  [[ -e "$WORK/no-readelf/${tool##*/}" ]] || ln -s "$tool" "$WORK/no-readelf/${tool##*/}"
+done
+refused_because "a library that cannot be inspected is refused" "readelf is not installed" \
+  "$(PATH="$WORK/no-readelf" run_network_layer "$WORK/libnetblocker.so")"
+
 summary

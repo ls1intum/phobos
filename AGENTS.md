@@ -76,9 +76,23 @@ marks `*.so` binary so that Git never applies text conversion to them.
 **Rule:**
 
 - Never let a text filter near them. A normalised shared object is a corrupted one.
-- When the C sources change, say in the pull request whether the committed objects were
-  rebuilt and how, or whether the image builds them. A stale `.so` beside changed sources is
-  a defect that no test in this repository catches by itself.
+- When the C sources change, rebuild both committed objects in the same pull request, with
+  the toolchain `.github/scripts/netblocker-build.sh` pins. The `netblocker` job in
+  `build.yml` builds the source with it and fails when either committed copy differs by a
+  byte, and the `run-phase` job holds the copy the image builds to the same bytes. From the
+  repository root, with the container image that job names:
+
+  ```
+  docker run --rm --platform linux/amd64 -v "$PWD:/repository" -w /repository <image> sh -c \
+    '.github/scripts/netblocker-build.sh install &&
+     .github/scripts/netblocker-build.sh build ld_preloader/netblocker.c core/libnetblocker.so &&
+     cp core/libnetblocker.so ld_preloader/libnetblocker.so'
+  ```
+
+- The committed objects are x86-64 and need glibc 2.39 or newer, and `readelf`. They are
+  built on Ubuntu 26.04 against glibc 2.43, and CI refuses a build that requires more than
+  the 2.39 of the run-phase image. Anywhere else the
+  network layer ends the run with PHB-ERUNTIME rather than running it unfiltered.
 - `.gitignore` covers `*.o` and `*.a`, not `*.so`, for that reason.
 
 ## Opening a pull request

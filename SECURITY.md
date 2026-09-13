@@ -16,8 +16,10 @@ rest exists to take privileges away. None of the following is a vulnerability.
   and binding back only what the allow-list names. Code that assembles mount arguments from a
   configuration file looks like path injection, and is the mechanism.
 - `ld_preloader/` and the `libnetblocker.so` beside it intercept network calls through
-  `LD_PRELOAD`, hooking name resolution and `connect` so that only allow-listed hosts are
-  reachable. Function interposition of libc symbols is what the component is for.
+  `LD_PRELOAD`, hooking name resolution and `connect` and refusing hosts the allow-list does
+  not name. Function interposition of libc symbols is what the component is for. It is
+  defence in depth rather than a boundary: a process can step around a preload library, so
+  the network restriction the sandbox enforces is the TCP ports a policy gives Landlock.
 - `docker/prune_phase/` runs the discovery phase, which deliberately breaks a build over and
   over: it hides a directory, runs the tests, and concludes from the failure that the
   directory was needed. Its orchestrator therefore starts processes and interprets their
@@ -27,9 +29,11 @@ rest exists to take privileges away. None of the following is a vulnerability.
 - The Dockerfiles under `docker/` extend the Artemis test images and add Bubblewrap, which
   needs user namespaces available in the container.
 
-A committed `libnetblocker.so` is a compiled artefact in version control. It is there so the
-runtime images can be assembled without a compiler; the C source it is built from is in the
-repository beside it.
+A committed `libnetblocker.so` is a compiled artefact in version control. It is there so
+Phobos can run from a checkout without a compiler. CI rebuilds it from the C source beside it
+with a pinned toolchain and fails when the bytes differ, and holds the copy the run-phase image
+builds to the same bytes. It is built for x86-64; where the loader cannot use it, the network
+layer refuses to start rather than running the command unfiltered.
 
 ## Threat model, in one paragraph
 
@@ -45,7 +49,8 @@ them touched is permitted for every submission thereafter.
 A report is in scope when Phobos fails at what it claims to do, or when it causes harm nobody
 asked for. Concretely:
 
-- a submission reaching a file or a network host that the active allow-list does not permit
+- a submission reaching a file, or a TCP port Landlock was given, that the active allow-list
+  does not permit
 - the sandbox failing open, that is, running the tests unconfined while reporting success
 - the pruning phase writing an allow-list that grants more than the runs it observed required
 - privilege escalation out of the sandbox onto the host

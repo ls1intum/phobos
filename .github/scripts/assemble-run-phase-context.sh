@@ -35,13 +35,16 @@ if [[ -e "${DESTINATION}" ]]; then
     fi
 fi
 
-mkdir -p "${DESTINATION}/config"
+mkdir -p "${DESTINATION}/config" "${DESTINATION}/build"
 cp "${REPOSITORY}"/core/*.sh "${DESTINATION}/"
 cp "${REPOSITORY}"/core/phobos-landlock*.c "${DESTINATION}/"
 cp "${REPOSITORY}"/core/phobos-landlock*.h "${DESTINATION}/"
 cp "${REPOSITORY}/core/allowedList.cfg" "${DESTINATION}/"
 cp "${REPOSITORY}"/core/config/*.cfg "${DESTINATION}/config/"
 cp "${REPOSITORY}/ld_preloader/netblocker.c" "${DESTINATION}/"
+# In a directory of its own: the Dockerfile copies every flat *.sh into the sandbox's
+# runtime directory, and a script that installs packages as root does not belong there.
+cp "${REPOSITORY}/.github/scripts/netblocker-build.sh" "${DESTINATION}/build/"
 
 touch "${DESTINATION}/${MARKER}"
 

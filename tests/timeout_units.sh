@@ -237,15 +237,38 @@ echo "== legacy wrapper =="
 # It truncates allowedList.cfg there, so they only run when the directory does
 # not already belong to a real installation.
 WRAPPER_CORE=/var/tmp/opt/core
-# The plain mkdir is deliberate: it fails rather than succeeding if the
-# directory appeared in the meantime, so ownership is never assumed.
+WRAPPER_LIBRARY_PROBLEM=""
+
+# Creates the wrapper's runtime directory and records that this run owns it. The
+# plain mkdir is deliberate: it fails rather than succeeding if the directory
+# appeared in the meantime, so ownership is never assumed.
+create_wrapper_core() {
+  mkdir -p "$(dirname "$WRAPPER_CORE")" 2>/dev/null || return 1
+  mkdir "$WRAPPER_CORE" 2>/dev/null || return 1
+  WRAPPER_CORE_OWNED="$WRAPPER_CORE"
+  [[ -w "$WRAPPER_CORE" ]]
+}
+
+# Places the committed preload library where the wrapper looks for it, because the
+# wrapper refuses to start without one it can load, and records why it cannot be
+# loaded here. It is built for x86-64, so anywhere else it cannot.
+install_wrapper_library() {
+  cp "$CORE/libnetblocker.so" "$WRAPPER_CORE/libnetblocker.so" || return 1
+  WRAPPER_LIBRARY_PROBLEM="$(bash -c 'source "$1/phobos-common.sh"; netblocker_unusable_reason "$2"' \
+                               _ "$CORE" "$WRAPPER_CORE/libnetblocker.so")"
+  [[ -z "$WRAPPER_LIBRARY_PROBLEM" ]]
+}
+
 if [[ -e "$WRAPPER_CORE" ]]; then
   skip "legacy wrapper timeout contract" \
        "$WRAPPER_CORE already exists; leaving an installed runtime untouched"
-elif mkdir -p "$(dirname "$WRAPPER_CORE")" 2>/dev/null &&
-     mkdir "$WRAPPER_CORE" 2>/dev/null &&
-     WRAPPER_CORE_OWNED="$WRAPPER_CORE" &&
-     [[ -w "$WRAPPER_CORE" ]]; then
+elif ! create_wrapper_core; then
+  skip "legacy wrapper timeout contract" \
+       "$WRAPPER_CORE cannot be created on this platform; these checks run on Linux"
+elif ! install_wrapper_library; then
+  skip "legacy wrapper timeout contract" \
+       "the committed libnetblocker.so ${WRAPPER_LIBRARY_PROBLEM:-could not be copied}; these checks run on x86-64"
+else
 
   # Runs the wrapper over a [limits] body and prints its output followed by an
   # EXIT=<status> line. The wrapper prints the assembled command before it
@@ -324,9 +347,6 @@ timeout=\$(touch $WORK/pwned-wrapper)")
         "exit 1, an error, and no side effect" "$out"
   fi
 
-else
-  skip "legacy wrapper timeout contract" \
-       "$WRAPPER_CORE cannot be created on this platform; these checks run on Linux"
 fi
 
 # ---------------------------------------------------------------------
