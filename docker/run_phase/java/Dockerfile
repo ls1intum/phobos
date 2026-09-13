@@ -9,10 +9,13 @@ FROM ls1tum/artemis-maven-template:java17-25@sha256:521f4dd3f3c6d81f403e84f2e2af
 # under its draft name -std=gnu2x. Pinning the language rather than taking
 # whatever the base image happens to default to is the point of the flag, so the
 # compiler that knows the real name is the one that builds both artefacts.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    gcc-14 \
- && rm -rf /var/lib/apt/lists/*
+#
+# netblocker-build.sh installs both from one Ubuntu snapshot, with gcc-14, binutils
+# and libc6-dev at the versions it pins. CI holds the libnetblocker.so this image
+# builds to the committed copies byte for byte, which only holds while both come from
+# the same toolchain.
+COPY netblocker-build.sh /tmp/netblocker-build.sh
+RUN /tmp/netblocker-build.sh install build-essential
 
 ENV PHOBOS_HOME=/var/tmp/opt/core
 RUN mkdir -p "${PHOBOS_HOME}"
@@ -23,11 +26,9 @@ COPY phobos-landlock*.h           ${PHOBOS_HOME}/
 COPY config/BaseLanguage-java.cfg                     ${PHOBOS_HOME}/
 COPY config/TailPhobos.cfg                     ${PHOBOS_HOME}/
 COPY allowedList.cfg                  ${PHOBOS_HOME}/
-# -O2 is what switches on _FORTIFY_SOURCE: without any optimisation level it is
-# off entirely, and this library sits on every connection a submission makes.
-# -Wl,-z,now completes RELRO, so the relocation table is read-only once loaded.
-RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -fPIC -shared -Wl,-z,now \
-    -o ${PHOBOS_HOME}/libnetblocker.so ${PHOBOS_HOME}/netblocker.c
+# The same build CI runs, through the same script, which states the flags and why.
+RUN /tmp/netblocker-build.sh build ${PHOBOS_HOME}/netblocker.c ${PHOBOS_HOME}/libnetblocker.so \
+ && rm /tmp/netblocker-build.sh
 # -static-pie rather than -static: plain -static overrides the -fPIE default and
 # produces a fixed-address executable, so the binary that applies the sandbox
 # would be the one part of the image without address randomisation.

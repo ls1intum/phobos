@@ -42,6 +42,7 @@ cp "${REPOSITORY}"/core/phobos-landlock*.h "${DESTINATION}/"
 cp "${REPOSITORY}/core/allowedList.cfg" "${DESTINATION}/"
 cp "${REPOSITORY}"/core/config/*.cfg "${DESTINATION}/config/"
 cp "${REPOSITORY}/ld_preloader/netblocker.c" "${DESTINATION}/"
+cp "${REPOSITORY}/.github/scripts/netblocker-build.sh" "${DESTINATION}/"
 
 touch "${DESTINATION}/${MARKER}"
 

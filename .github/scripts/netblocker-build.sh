@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+# Installs, checks and runs the one toolchain libnetblocker.so is built with.
+#
+# The library is committed and is also built into the run-phase image. A committed
+# object is only worth trusting while it is exactly what its source produces, and that
+# needs one compiler, one linker and one C library, installed the same way everywhere.
+# The versions therefore live here and nowhere else: the Dockerfile, the CI comparison
+# and a maintainer rebuilding the committed copies all go through this script.
+#
+# The packages come from a fixed Ubuntu snapshot rather than the moving archive, so an
+# update to gcc-14 does not change the bytes behind anyone's back. Ubuntu keeps a
+# snapshot for at least two years. Moving it is a deliberate change, and the pull
+# request that moves it rebuilds the committed objects.
+#
+#   netblocker-build.sh install [PACKAGE...]      as root, on Ubuntu 24.04
+#   netblocker-build.sh build SOURCE OUTPUT
+#   netblocker-build.sh verify LIBRARY
+#   netblocker-build.sh compare REFERENCE COPY...
+set -euo pipefail
+
+readonly SNAPSHOT="20260912T000000Z"
+readonly GCC_VERSION="14.2.0-4ubuntu2~24.04.1"
+readonly BINUTILS_VERSION="2.42-4ubuntu2.10"
+readonly LIBC_DEV_VERSION="2.39-0ubuntu8.9"
+# The C library of the run-phase image. A library needing a newer one would not load there.
+readonly HIGHEST_GLIBC="2.39"
+readonly MACHINE="Advanced Micro Devices X86-64"
+
+HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+# Prints how to call this script and gives up.
+usage() {
+    printf 'usage: netblocker-build.sh install [PACKAGE...]\n' >&2
+    printf '       netblocker-build.sh build SOURCE OUTPUT\n' >&2
+    printf '       netblocker-build.sh verify LIBRARY\n' >&2
+    printf '       netblocker-build.sh compare REFERENCE COPY...\n' >&2
+    exit 2
+}
+
+# Reports why the script stops and stops.
+fail() {
+    printf 'netblocker-build.sh: %s\n' "$1" >&2
+    exit 1
+}
+
+# Answers whether this machine is the architecture the committed objects are built
+# for. Only there is the toolchain pinned: the snapshot service covers the archive
+# amd64 installs from and not the ports archive other architectures use, and only the
+# amd64 build is compared byte for byte. Assumes dpkg.
+pinned_architecture() {
+    [[ "$(dpkg --print-architecture)" == "amd64" ]]
+}
+
+# Installs the toolchain and any further packages, pinned where the architecture
+# allows it. Assumes root on Ubuntu 24.04 with the stock archive sources.
+install_toolchain() {
+    export DEBIAN_FRONTEND=noninteractive
+    if pinned_architecture; then
+        install_pinned_toolchain "$@"
+    else
+        install_archive_toolchain "$@"
+    fi
+    rm -rf /var/lib/apt/lists/*
+}
+
+# Installs the pinned toolchain and the further packages from the snapshot.
+#
+# ca-certificates comes first, from the ordinary archive, because the snapshot is
+# served over HTTPS. The archive's package lists are then removed, and a snapshot
+# update that fails is an error: apt otherwise prints a warning and quietly installs
+# from whatever lists it still has, which would make the pin look effective when it
+# is not.
+install_pinned_toolchain() {
+    apt-get update -qq
+    apt-get install --yes --no-install-recommends ca-certificates
+    rm -rf /var/lib/apt/lists/*
+    apt-get update -qq --snapshot "${SNAPSHOT}" -o APT::Update::Error-Mode=any
+    apt-get install --yes --no-install-recommends --snapshot "${SNAPSHOT}" \
+        "gcc-14=${GCC_VERSION}" \
+        "binutils=${BINUTILS_VERSION}" \
+        "libc6-dev=${LIBC_DEV_VERSION}" \
+        "$@"
+    check_toolchain
+}
+
+# Installs the same packages from the ordinary archive, at whatever version it holds,
+# and says so. A build made this way is never compared with the committed objects.
+install_archive_toolchain() {
+    printf 'netblocker-build.sh: %s has no snapshot; installing the toolchain unpinned, so this build is not comparable with the committed amd64 objects\n' \
+        "$(dpkg --print-architecture)" >&2
+    apt-get update -qq
+    apt-get install --yes --no-install-recommends gcc-14 binutils libc6-dev "$@"
+}
+
+# Refuses to go on unless the installed toolchain is exactly the pinned one, on the
+# architecture that pins it. Assumes a Debian-style system with dpkg-query.
+check_toolchain() {
+    local pin
+    local package
+    local installed
+    pinned_architecture || return 0
+    for pin in "gcc-14=${GCC_VERSION}" "binutils=${BINUTILS_VERSION}" "libc6-dev=${LIBC_DEV_VERSION}"; do
+        package="${pin%%=*}"
+        # The single quotes are dpkg-query's own format syntax, not a shell expansion.
+        # shellcheck disable=SC2016
+        installed="$(dpkg-query --show --showformat='${Version}' "${package}" 2>/dev/null || true)"
+        [[ "${installed}" == "${pin#*=}" ]] \
+            || fail "${package} is ${installed:-not installed}, but the pinned version is ${pin#*=}"
+    done
+}
+
+# Compiles SOURCE into OUTPUT with the flags the run-phase image has always used.
+#
+# -O2 is what switches _FORTIFY_SOURCE on: without an optimisation level it is off, and
+# this library sits on every connection a submission makes. -Wl,-z,now makes every
+# relocation resolve at load time. The source is compiled from its own directory under
+# its bare name, so the bytes do not depend on where the checkout lives.
+build_library() {
+    local source="$1"
+    local output
+    check_toolchain
+    output="$(realpath --canonicalize-missing -- "$2")"
+    (
+        cd -- "$(dirname -- "${source}")"
+        gcc-14 -std=gnu23 -O2 -Wall -Wextra -fPIC -shared -Wl,-z,now \
+            -o "${output}" "$(basename -- "${source}")"
+    )
+}
+
+# Refuses a library that is not built for x86-64, needs a newer C library than the
+# run-phase image has, or that the network layer would refuse at run time. Assumes
+# readelf and the repository checkout this script lives in.
+verify_library() {
+    local library="$1"
+    local machine
+    local highest
+    machine="$(readelf --file-header --wide "${library}" | awk -F':[[:space:]]+' '$1 ~ /Machine$/ { print $2 }')"
+    [[ "${machine}" == "${MACHINE}" ]] || fail "${library} is built for '${machine}', not x86-64"
+    highest="$(readelf --dyn-syms --wide "${library}" | { grep -o 'GLIBC_[0-9.]*' || true; } | sort -uV | tail -n 1)"
+    [[ -n "${highest}" ]] || fail "${library} names no glibc symbol version, so it is not the dynamically linked library this job builds"
+    highest="${highest#GLIBC_}"
+    [[ "$(printf '%s\n%s\n' "${highest}" "${HIGHEST_GLIBC}" | sort -V | tail -n 1)" == "${HIGHEST_GLIBC}" ]] \
+        || fail "${library} needs glibc ${highest}, newer than the ${HIGHEST_GLIBC} the run-phase image ships"
+    # shellcheck source=../../core/phobos-common.sh
+    source "${HERE}/../../core/phobos-common.sh"
+    refuse_unusable_netblocker "$(realpath -- "${library}")"
+}
+
+# Refuses every copy whose bytes differ from the reference. Assumes sha256sum.
+compare_copies() {
+    local reference="$1"
+    shift
+    local wanted
+    local copy
+    local actual
+    wanted="$(sha256sum < "${reference}" | cut -d ' ' -f 1)"
+    for copy in "$@"; do
+        actual="$(sha256sum < "${copy}" | cut -d ' ' -f 1)"
+        [[ "${actual}" == "${wanted}" ]] \
+            || fail "${copy} is ${actual}, but ${reference} is ${wanted}; rebuild the committed copies as AGENTS.md describes under 'Compiled artefacts in version control'"
+    done
+    printf 'identical: %s %s\n' "${wanted}" "$*"
+}
+
+[[ $# -ge 1 ]] || usage
+case "$1" in
+    install)
+        shift
+        install_toolchain "$@"
+        ;;
+    build)
+        [[ $# -eq 3 ]] || usage
+        build_library "$2" "$3"
+        ;;
+    verify)
+        [[ $# -eq 2 ]] || usage
+        verify_library "$2"
+        ;;
+    compare)
+        [[ $# -ge 3 ]] || usage
+        shift
+        compare_copies "$@"
+        ;;
+    *)
+        usage
+        ;;
+esac
