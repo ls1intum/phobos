@@ -245,6 +245,15 @@ jobs:
           docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
             phobos-run-phase:ci bash /testsuite/shipped-policy-test.sh
 
+      # The kernel-enforced network boundary holds against a raw connect() syscall that
+      # steps around the preload library, which is what makes concrete Landlock ports, not
+      # the library alone, the network boundary.
+      - name: The network port rule holds against a raw-syscall bypass
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
+            phobos-run-phase:ci bash /testsuite/network-port-test.sh
+
   # Mutation testing installs clang and mull into a container and then runs the suite
   # once per mutant, which is minutes rather than seconds. Weekly and on request, so it
   # reports on the suite's strength without being in the way of a pull request.
