@@ -30,6 +30,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #define PORTS_V4 3
@@ -119,6 +120,72 @@ static const char *connect_result(int family, const char *ip, unsigned short por
   if (err == EACCES) return "denied";
   snprintf(buf, sizeof buf, "errno:%d", err);
   return buf;
+}
+
+/* Fills a loopback socket address for a family, address text and port, and returns
+   its length, or 0 when the text is not an address of that family. */
+static socklen_t loopback_address(struct sockaddr_storage *addr, int family, const char *ip,
+                                  unsigned short port) {
+  memset(addr, 0, sizeof *addr);
+  if (family == AF_INET) {
+    struct sockaddr_in *v4 = (struct sockaddr_in *) addr;
+    v4->sin_family = AF_INET;
+    v4->sin_port = htons(port);
+    return inet_pton(AF_INET, ip, &v4->sin_addr) == 1 ? (socklen_t) sizeof *v4 : 0;
+  }
+  struct sockaddr_in6 *v6 = (struct sockaddr_in6 *) addr;
+  v6->sin6_family = AF_INET6;
+  v6->sin6_port = htons(port);
+  return inet_pton(AF_INET6, ip, &v6->sin6_addr) == 1 ? (socklen_t) sizeof *v6 : 0;
+}
+
+/* Turns the result of a datagram send into the words the suite checks: "allowed" when
+   it went through, "denied" when the interposer refused it with EACCES, and "errno:<n>"
+   for anything else. A loopback datagram needs no listener: the kernel accepts it into
+   the socket buffer, so a send that is not refused returns at once. */
+static const char *send_words(ssize_t rc, int err) {
+  static char buf[32];
+  if (rc >= 0) return "allowed";
+  if (err == EACCES) return "denied";
+  snprintf(buf, sizeof buf, "errno:%d", err);
+  return buf;
+}
+
+/* Sends one datagram through sendto to a loopback address and port. */
+static const char *sendto_result(int family, const char *ip, unsigned short port) {
+  struct sockaddr_storage addr;
+  socklen_t len = loopback_address(&addr, family, ip, port);
+  if (len == 0) return "bad-address";
+  int fd = socket(family, SOCK_DGRAM, 0);
+  if (fd < 0) return "socket-failed";
+  errno = 0;
+  ssize_t rc = sendto(fd, "x", 1, 0, (struct sockaddr *) &addr, len);
+  int err = errno;
+  close(fd);
+  return send_words(rc, err);
+}
+
+/* Sends one datagram through sendmsg to a loopback address and port. */
+static const char *sendmsg_result(int family, const char *ip, unsigned short port) {
+  struct sockaddr_storage addr;
+  socklen_t len = loopback_address(&addr, family, ip, port);
+  if (len == 0) return "bad-address";
+  int fd = socket(family, SOCK_DGRAM, 0);
+  if (fd < 0) return "socket-failed";
+  struct iovec item;
+  item.iov_base = (void *) "x";
+  item.iov_len = 1;
+  struct msghdr message;
+  memset(&message, 0, sizeof message);
+  message.msg_name = &addr;
+  message.msg_namelen = len;
+  message.msg_iov = &item;
+  message.msg_iovlen = 1;
+  errno = 0;
+  ssize_t rc = sendmsg(fd, &message, 0);
+  int err = errno;
+  close(fd);
+  return send_words(rc, err);
 }
 
 /* Resolves a host without naming a service, which is the lookup an ordinary
@@ -271,7 +338,8 @@ static int phase_one(const char *self, const char *scenario) {
     snprintf(body, sizeof body, "localhost %u\nlocalhost %u\n", v4[0].port, v4[1].port);
   } else if (!strcmp(scenario, "any_port")) {
     snprintf(body, sizeof body, "localhost\n");
-  } else if (!strcmp(scenario, "literal_ip") || !strcmp(scenario, "sighup_default")) {
+  } else if (!strcmp(scenario, "literal_ip") || !strcmp(scenario, "sighup_default")
+             || !strcmp(scenario, "datagram")) {
     snprintf(body, sizeof body, "127.0.0.1 %u\n", v4[0].port);
   } else if (!strcmp(scenario, "literal_ip_any")) {
     snprintf(body, sizeof body, "127.0.0.1 *\n");
@@ -400,6 +468,13 @@ static int run_scenario(const char *scenario, int write_fd, const unsigned short
   } else if (!strcmp(scenario, "literal_ip")) {
     printf("permitted_port=%s\n", connect_result(AF_INET, "127.0.0.1", v4[0]));
     printf("other_port=%s\n", connect_result(AF_INET, "127.0.0.1", v4[1]));
+  } else if (!strcmp(scenario, "datagram")) {
+    /* The same rule as literal_ip, reached over UDP: sendto and sendmsg name the
+       destination on an unconnected socket, which the connect hook never sees. */
+    printf("sendto_permitted=%s\n", sendto_result(AF_INET, "127.0.0.1", v4[0]));
+    printf("sendto_other=%s\n", sendto_result(AF_INET, "127.0.0.1", v4[1]));
+    printf("sendmsg_permitted=%s\n", sendmsg_result(AF_INET, "127.0.0.1", v4[0]));
+    printf("sendmsg_other=%s\n", sendmsg_result(AF_INET, "127.0.0.1", v4[1]));
   } else if (!strcmp(scenario, "literal_ip_any")) {
     printf("first_port=%s\n", connect_result(AF_INET, "127.0.0.1", v4[0]));
     printf("second_port=%s\n", connect_result(AF_INET, "127.0.0.1", v4[1]));

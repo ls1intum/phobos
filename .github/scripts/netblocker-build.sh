@@ -25,8 +25,8 @@ readonly LIBC_DEV_VERSION="2.43-2ubuntu2.4"
 # The C library of the run-phase image. A library needing a newer one would not load there.
 readonly HIGHEST_GLIBC="2.39"
 readonly MACHINE="Advanced Micro Devices X86-64"
-# The only functions the library may export: its two hooks, in the order the C locale sorts them.
-readonly EXPORTED_FUNCTIONS="connect getaddrinfo"
+# The only functions the library may export: its four hooks, in the order the C locale sorts them.
+readonly EXPORTED_FUNCTIONS="connect getaddrinfo sendmsg sendto"
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 

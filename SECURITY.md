@@ -18,7 +18,8 @@ rest exists to take privileges away. None of the following is a vulnerability.
   looks like path injection, and is the mechanism. It needs no privilege: a task may always
   restrict itself further.
 - `ld_preloader/` and the `libnetblocker.so` beside it intercept network calls through
-  `LD_PRELOAD`, hooking name resolution and `connect` and refusing hosts the allow-list does
+  `LD_PRELOAD`, hooking name resolution, `connect`, and `sendto` and `sendmsg` for the
+  datagrams a UDP socket names without connecting, and refusing hosts the allow-list does
   not name. Function interposition of libc symbols is what the component is for. It is
   defence in depth rather than a boundary: a process can step around a preload library, so
   the network restriction the sandbox enforces is the TCP ports a policy gives Landlock, and

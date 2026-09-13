@@ -129,6 +129,8 @@ struct fake_answer {
 
 static int resolver_calls = 0;
 static int connect_calls = 0;
+static int sendto_calls = 0;
+static int sendmsg_calls = 0;
 static bool reload_during_lookup = false;
 
 static struct addrinfo *fake_answer_for(const char *text) {
@@ -194,6 +196,25 @@ static int fake_connect(int descriptor, const struct sockaddr *destination, sock
     return 0;
 }
 
+static ssize_t fake_sendto(int descriptor, const void *buffer, size_t length, int flags,
+                           const struct sockaddr *destination, socklen_t address_length) {
+    (void)descriptor;
+    (void)buffer;
+    (void)flags;
+    (void)destination;
+    (void)address_length;
+    sendto_calls++;
+    return (ssize_t)length;
+}
+
+static ssize_t fake_sendmsg(int descriptor, const struct msghdr *message, int flags) {
+    (void)descriptor;
+    (void)message;
+    (void)flags;
+    sendmsg_calls++;
+    return 0;
+}
+
 void *__real_dlsym(void *handle, const char *name);
 void *__wrap_dlsym(void *handle, const char *name) {
     if (strcmp(name, "getaddrinfo") == 0) {
@@ -201,6 +222,12 @@ void *__wrap_dlsym(void *handle, const char *name) {
     }
     if (strcmp(name, "connect") == 0) {
         return fake_connect;
+    }
+    if (strcmp(name, "sendto") == 0) {
+        return fake_sendto;
+    }
+    if (strcmp(name, "sendmsg") == 0) {
+        return fake_sendmsg;
     }
     return __real_dlsym(handle, name);
 }
@@ -306,6 +333,68 @@ static enum connection_outcome connection_outcome(const char *address, uint16_t 
         return CONNECTION_DENIED;
     }
     return CONNECTION_UNEXPECTED;
+}
+
+/* Writes an IPv4 or IPv6 destination into the storage, choosing the family from whether
+ * the address text holds a colon, and returns its length. */
+static socklen_t fill_destination(struct sockaddr_storage *destination, const char *address,
+                                  uint16_t port) {
+    memset(destination, 0, sizeof(*destination));
+    if (strchr(address, ':') != nullptr) {
+        struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)destination;
+        ipv6->sin6_family = AF_INET6;
+        ipv6->sin6_port = htons(port);
+        inet_pton(AF_INET6, address, &ipv6->sin6_addr);
+        return sizeof(*ipv6);
+    }
+    struct sockaddr_in *ipv4 = (struct sockaddr_in *)destination;
+    ipv4->sin_family = AF_INET;
+    ipv4->sin_port = htons(port);
+    inet_pton(AF_INET, address, &ipv4->sin_addr);
+    return sizeof(*ipv4);
+}
+
+/* What a datagram through a UDP hook did. */
+enum datagram_outcome {
+    DATAGRAM_SENT,      /* it reached the send the hook guards */
+    DATAGRAM_DENIED,    /* it was refused with EACCES without reaching it */
+    DATAGRAM_UNEXPECTED /* anything else, which no check accepts */
+};
+
+/* Sends through the sendto hook to an IPv4 or IPv6 address and reports what happened. */
+static enum datagram_outcome sendto_outcome(const char *address, uint16_t port) {
+    struct sockaddr_storage destination;
+    socklen_t length = fill_destination(&destination, address, port);
+    int calls_before = sendto_calls;
+    errno = 0;
+    ssize_t status = sendto(3, "x", 1, 0, (struct sockaddr *)&destination, length);
+    if (status == 1 && sendto_calls == calls_before + 1) {
+        return DATAGRAM_SENT;
+    }
+    if (status == -1 && errno == EACCES && sendto_calls == calls_before) {
+        return DATAGRAM_DENIED;
+    }
+    return DATAGRAM_UNEXPECTED;
+}
+
+/* Sends through the sendmsg hook to an IPv4 or IPv6 address and reports what happened. */
+static enum datagram_outcome sendmsg_outcome(const char *address, uint16_t port) {
+    struct sockaddr_storage destination;
+    struct msghdr message;
+    socklen_t length = fill_destination(&destination, address, port);
+    int calls_before = sendmsg_calls;
+    memset(&message, 0, sizeof(message));
+    message.msg_name = &destination;
+    message.msg_namelen = length;
+    errno = 0;
+    ssize_t status = sendmsg(3, &message, 0);
+    if (status == 0 && sendmsg_calls == calls_before + 1) {
+        return DATAGRAM_SENT;
+    }
+    if (status == -1 && errno == EACCES && sendmsg_calls == calls_before) {
+        return DATAGRAM_DENIED;
+    }
+    return DATAGRAM_UNEXPECTED;
 }
 
 /* ------------------------------------------------------------------- the cases */
@@ -585,6 +674,36 @@ static void test_hooks(void) {
     errno = 0;
     check("a connection of another family is refused with EACCES",
           connect(3, &unix_destination, sizeof(sa_family_t)) == -1 && errno == EACCES);
+
+    /* The UDP hooks. sendto and sendmsg filter a datagram named for an unconnected
+     * socket, which connect never sees. They share destination_permitted with connect,
+     * so the family branches are exercised through them here. */
+    int sendto_before = 0;
+    int sendmsg_before = 0;
+    struct msghdr connected_message;
+    real_sendto = nullptr;
+    check("a datagram an address rule covers is sent", sendto_outcome("192.0.2.1", 80) == DATAGRAM_SENT);
+    check("the hook finds sendto on first use", real_sendto == fake_sendto);
+    check("a datagram no rule covers is refused", sendto_outcome("192.0.2.1", 81) == DATAGRAM_DENIED);
+    check("an IPv6 datagram a rule covers is sent", sendto_outcome("2001:db8::99", 25) == DATAGRAM_SENT);
+
+    sendto_before = sendto_calls;
+    check("a datagram with no destination is on a connected socket and passes",
+          sendto(3, "x", 1, 0, nullptr, 0) == 1 && sendto_calls == sendto_before + 1);
+    sendto_before = sendto_calls;
+    check("a datagram to a non-INET family is left to other layers and passes",
+          sendto(3, "x", 1, 0, &unix_destination, sizeof(sa_family_t)) == 1
+              && sendto_calls == sendto_before + 1);
+
+    real_sendmsg = nullptr;
+    check("a message an address rule covers is sent", sendmsg_outcome("192.0.2.1", 80) == DATAGRAM_SENT);
+    check("the hook finds sendmsg on first use", real_sendmsg == fake_sendmsg);
+    check("a message no rule covers is refused", sendmsg_outcome("192.0.2.1", 81) == DATAGRAM_DENIED);
+
+    memset(&connected_message, 0, sizeof(connected_message));
+    sendmsg_before = sendmsg_calls;
+    check("a message with no destination is on a connected socket and passes",
+          sendmsg(3, &connected_message, 0) == 0 && sendmsg_calls == sendmsg_before + 1);
 }
 
 int main(void) {
@@ -605,7 +724,8 @@ int main(void) {
     printf("Loading the library\n");
     check("the rules NETBLOCKER_CONF names are loaded", rule_count() == 8);
     check("the functions the hooks hand calls to are found",
-          real_getaddrinfo == fake_getaddrinfo && real_connect == fake_connect);
+          real_getaddrinfo == fake_getaddrinfo && real_connect == fake_connect
+              && real_sendto == fake_sendto && real_sendmsg == fake_sendmsg);
 
     test_addresses();
     test_rule_parsing();
