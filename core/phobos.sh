@@ -14,6 +14,7 @@ Usage:
 Layer options (all enabled by default):
   --no-timeout        Disable timeout wrapper (phobos-timeout.sh).
   --no-network        Disable network sandbox (libnetblocker / phobos-network.sh).
+  --no-resources      Disable resource limits (rlimits / phobos-resources.sh).
   --no-filesystem     Disable filesystem sandbox (Landlock / phobos-filesystem.sh).
   --allow-unsandboxed Run the command with no sandbox when no Base*.cfg is present,
                       instead of refusing. For deliberate raw runs only.
@@ -39,6 +40,7 @@ USAGE
 # Layer toggles (default: all enabled)
 enable_timeout=1
 enable_network=1
+enable_resources=1
 enable_filesystem=1
 # Refusing to run without a base policy is the default; this is the explicit opt-out.
 allow_unsandboxed=0
@@ -56,6 +58,8 @@ while (( "$#" )); do
       enable_timeout=0; shift;;
     --no-network)
       enable_network=0; shift;;
+    --no-resources)
+      enable_resources=0; shift;;
     --no-filesystem|--no-fs)
       enable_filesystem=0; shift;;
     --allow-unsandboxed)
@@ -73,6 +77,7 @@ done
 # Export layer selection for inner scripts
 export PHB_ENABLE_TIMEOUT="$enable_timeout"
 export PHB_ENABLE_NETWORK="$enable_network"
+export PHB_ENABLE_RESOURCES="$enable_resources"
 export PHB_ENABLE_FILESYSTEM="$enable_filesystem"
 
 mapfile -t base_cfgs < <(ls -1 "${HERE}"/Base*.cfg 2>/dev/null | sort || true)
@@ -107,6 +112,18 @@ trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 base_ro="$(mktemp -p "$PHOBOS_SCRATCH")"; base_rw="$(mktemp -p "$PHOBOS_SCRATCH")"; base_hide="$(mktemp -p "$PHOBOS_SCRATCH")"; base_net="$(mktemp -p "$PHOBOS_SCRATCH")"
 : >"$base_ro"; : >"$base_rw"; : >"$base_hide"; : >"$base_net"
 timeout_eff=""
+eff_limit_mem_mb=""; eff_limit_nproc=""; eff_limit_nofile=""; eff_limit_fsize_mb=""; eff_limit_cpu=""
+
+# The last cfg that names each resource limit wins, as the timeout does. Reads the
+# PARSED_LIMIT_* variables parse_cfg_policy sets, so it is called after each parse.
+capture_resource_limits() {
+  [[ -n "${PARSED_LIMIT_MEM_MB:-}"   ]] && eff_limit_mem_mb="${PARSED_LIMIT_MEM_MB}"
+  [[ -n "${PARSED_LIMIT_NPROC:-}"    ]] && eff_limit_nproc="${PARSED_LIMIT_NPROC}"
+  [[ -n "${PARSED_LIMIT_NOFILE:-}"   ]] && eff_limit_nofile="${PARSED_LIMIT_NOFILE}"
+  [[ -n "${PARSED_LIMIT_FSIZE_MB:-}" ]] && eff_limit_fsize_mb="${PARSED_LIMIT_FSIZE_MB}"
+  [[ -n "${PARSED_LIMIT_CPU:-}"      ]] && eff_limit_cpu="${PARSED_LIMIT_CPU}"
+  return 0
+}
 
 # Build base policy (FS union, NET union, TIMEOUT last-wins)
 for b in "${base_cfgs[@]}"; do
@@ -118,6 +135,7 @@ for b in "${base_cfgs[@]}"; do
   tmpnet="$(mktemp -p "$PHOBOS_SCRATCH")"; net_union "$tmpnet" "$base_net" "$PARSED_NET_FILE"; mv "$tmpnet" "$base_net"
   # TIMEOUT: last base wins
   [[ -n "${PARSED_TIMEOUT:-}" || "${PARSED_TIMEOUT:-__unset__}" == "" ]] && timeout_eff="${PARSED_TIMEOUT:-}"
+  capture_resource_limits
 done
 
 # Effective policy (start from base, then apply exercise overrides)
@@ -130,9 +148,22 @@ for c in "${cfgs[@]}"; do
                     "$PARSED_RO_FILE" "$PARSED_RW_FILE" "$PARSED_HIDE_FILE"
   tmpnet="$(mktemp -p "$PHOBOS_SCRATCH")"; net_union "$tmpnet" "$eff_net" "$PARSED_NET_FILE"; mv "$tmpnet" "$eff_net"
   [[ -n "${PARSED_TIMEOUT:-}" || "${PARSED_TIMEOUT:-__unset__}" == "" ]] && timeout_eff="${PARSED_TIMEOUT:-}"
+  capture_resource_limits
 done
 
 write_spec "$SPEC_DIR" "$eff_ro" "$eff_rw" "$eff_hide" "$eff_net" "$timeout_eff" "${TAIL_FLAGS_FILE:-}"
+
+# The resource limits go into the specification, one "key=value" per line for each limit a
+# [limits] section named. phobos-resources.sh reads them and sets them with rlimits, so the
+# filesystem layer, phobos-landlock and the command inherit them, rather than this shell
+# setting them and the whole layer chain running under them.
+{
+  [[ -n "$eff_limit_mem_mb"   ]] && printf 'mem_mb=%s\n'   "$eff_limit_mem_mb"
+  [[ -n "$eff_limit_nproc"    ]] && printf 'nproc=%s\n'    "$eff_limit_nproc"
+  [[ -n "$eff_limit_nofile"   ]] && printf 'nofile=%s\n'   "$eff_limit_nofile"
+  [[ -n "$eff_limit_fsize_mb" ]] && printf 'fsize_mb=%s\n' "$eff_limit_fsize_mb"
+  [[ -n "$eff_limit_cpu"      ]] && printf 'cpu=%s\n'      "$eff_limit_cpu"
+} > "${SPEC_DIR}/limits.conf"
 
 # Always enter through the first layer; inner scripts decide whether to apply themselves
 exec "${HERE}/phobos-timeout.sh" "$SPEC_DIR" -- "${cmd[@]}"

@@ -16,12 +16,12 @@ Phobos is the operating-system layer, and no single layer is the whole story. A 
 | Layer | Guards | Mechanism | Covers |
 | --- | --- | --- | --- |
 | **Ares** | the JVM itself | bytecode/aspect instrumentation | reflection, `Unsafe`, deserialisation, class loading, and other in-process attacks that never touch the OS |
-| **Phobos** | the operating system | Landlock (files + TCP ports), `libnetblocker`, a timeout | which files a submission may read or write, which TCP ports it may reach, and how long it may run |
+| **Phobos** | the operating system | Landlock (files + TCP ports), `libnetblocker`, a timeout, rlimits | which files a submission may read or write, which TCP ports it may reach, how long it may run and how much memory, how many processes and files it may use |
 | **the container** | the machine | `--network none`, cgroup limits | all external network including UDP and DNS, and the hard caps on memory, processes and disk against a fork bomb or a disk-filling run |
 
-Phobos enforces the **filesystem and TCP-port** boundary, filters hosts as defence in depth, and bounds the run with a timeout. It does **not** replace Ares (JVM-internal attacks are Ares's job) and it does **not** replace the container's own settings (`--network none` is what closes UDP and external egress; cgroups are the hard resource caps against a fork bomb or a run that fills the disk). A grading host is only safe when all three are in place. This division, and the evidence behind it, is set out in [SECURITY.md](SECURITY.md).
+Phobos enforces the **filesystem and TCP-port** boundary, filters hosts as defence in depth, bounds the run with a timeout, and applies self-imposed resource limits (rlimits). It does **not** replace Ares (JVM-internal attacks are Ares's job) and it does **not** replace the container's own settings (`--network none` is what closes UDP and external egress; cgroups are the hard resource caps against a fork bomb or a run that fills the disk). The rlimits are an in-process line of defence beside those cgroup caps, not a substitute for them. A grading host is only safe when all three are in place. This division, and the evidence behind it, is set out in [SECURITY.md](SECURITY.md).
 
-Phobos needs **no privileges, no capabilities and no container flags**: Landlock and the preload library are self-imposed by the unprivileged process before it runs the submission. The one thing the container must add is what Phobos cannot do from inside it: start the grading container with no network (`--network none`) and with cgroup limits.
+Phobos needs **no privileges, no capabilities and no container flags**: Landlock, the preload library and the rlimits are self-imposed by the unprivileged process before it runs the submission. The one thing the container must add is what Phobos cannot do from inside it: start the grading container with no network (`--network none`) and with cgroup limits.
 
 ## Repository structure
 
@@ -30,6 +30,7 @@ core/                      the sandbox itself
   phobos.sh                entry point: parses the configuration, applies the layers
   phobos-filesystem.sh     the filesystem layer, reads the path sets and applies Landlock
   phobos-network.sh        the network layer, drives the preload library
+  phobos-resources.sh      the resource layer, sets the rlimits the policy names
   phobos-timeout.sh        the timeout layer
   phobos-common.sh         shared helpers, sourced by the others
   phobos-landlock*.c/.h    the C program that applies the Landlock policy, then exec's the command
@@ -101,7 +102,7 @@ A policy is an INI-like file with these sections:
 - `[readonly]`: one path per line, granted read and execute.
 - `[write]`: one path per line, granted read, write, create and delete (never device nodes or symbolic links).
 - `[network]`: `allow <host>[:<port>]` lines. A loopback host may omit the port; an external host should name a concrete port so that Landlock can enforce it.
-- `[limits]`: `timeout=<seconds>`, the wall-clock bound on the run.
+- `[limits]`: `timeout=<seconds>`, the wall-clock bound on the run, and optionally `mem_mb`, `nproc`, `nofile`, `fsize_mb` and `cpu`, applied as rlimits to bound the memory, processes, open files, file size and CPU time the run may use.
 
 Every text file is stored with LF line endings: the path sets are read line by line, and a carriage return would become part of a bind path. `.gitattributes` enforces this.
 
