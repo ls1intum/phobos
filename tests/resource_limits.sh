@@ -85,5 +85,96 @@ result="$(
 check "the memory, process, file, file-size and CPU limits are set" "65536,32,256,10240,5" "$result"
 
 echo
+echo "== the resource layer applies the limits from the specification =="
+# The layers start one another with exec, so they have to be executable. A checkout does
+# not mark them so, the image does, and a copy stands in for the image here.
+CORE_X="$WORK/core-x"
+cp -R "$CORE" "$CORE_X"
+chmod +x "$CORE_X"/*.sh
+SPEC="$WORK/spec"
+mkdir -p "$SPEC"
+for f in ro.paths rw.paths hide.paths tail.flags net.rules; do : > "$SPEC/$f"; done
+
+# Runs the resource layer with the given limits.conf and prints the four soft limits the
+# command inherited, comma-separated: memory, open files, file size and CPU time. The command
+# prints them through the ulimit builtin, which needs no fork. PHB_ENABLE_RESOURCES toggles
+# the layer itself.
+#
+# nproc is deliberately left out here. It is a per-user limit counting every process the user
+# already runs, so a low absolute value strangles the next layer's own start-up fork (its
+# HERE="$(...)") on a busy machine such as a CI runner. That the function sets nproc is proven
+# by the direct apply check above, which reads it back in the same shell without forking; the
+# parsing of every [limits] key, nproc included, is one shared loop, exercised by the four
+# keys here.
+run_resource_layer() {
+  local limits_body=$1
+  local enable=${2:-1}
+  printf '%s\n' "$limits_body" > "$SPEC/limits.conf"
+  PHB_ENABLE_RESOURCES="$enable" \
+  PHB_ENABLE_FILESYSTEM=0 \
+    bash "$CORE_X/phobos-resources.sh" "$SPEC" -- \
+      bash -c 'ulimit -v; ulimit -n; ulimit -f; ulimit -t' 2>&1 | paste -sd, -
+}
+
+check "the command inherits every configured limit" "262144,256,10240,5" \
+  "$(run_resource_layer 'mem_mb=256
+nofile=256
+fsize_mb=10
+cpu=5')"
+
+# With the layer switched off, the command must keep the ambient limits, not the configured
+# ones. A configured memory limit would be unmistakable if it leaked through.
+off_mem="$(run_resource_layer 'mem_mb=256' 0 | cut -d, -f1)"
+if [[ "$off_mem" != "262144" ]]; then
+  ok "--no-resources leaves the limits untouched"
+else
+  bad "--no-resources leaves the limits untouched" "a memory limit other than the configured 262144" "$off_mem"
+fi
+
+echo
+echo "== the resource layer refuses a malformed limit rather than running unrestricted =="
+# The layer re-validates the specification it reads. A value that is not a whole number must
+# fail closed, and must never reach the arithmetic apply_resource_limits performs.
+rm -f "$WORK/pwned"
+printf 'mem_mb=$(touch %s/pwned)\n' "$WORK" > "$SPEC/limits.conf"
+PHB_ENABLE_RESOURCES=1 PHB_ENABLE_FILESYSTEM=0 \
+  bash "$CORE_X/phobos-resources.sh" "$SPEC" -- /bin/echo ran >/dev/null 2>&1
+rc=$?
+if [[ "$rc" -eq 11 && ! -e "$WORK/pwned" ]]; then
+  ok "a malformed limit is refused (PHB-EPOLICY) and never evaluated"
+else
+  bad "a malformed limit is refused (PHB-EPOLICY) and never evaluated" \
+      "exit 11 and no side effect" "exit ${rc}, pwned exists: $([[ -e "$WORK/pwned" ]] && echo yes || echo no)"
+fi
+
+echo
+echo "== the full phobos.sh chain applies and clears the limits =="
+# phobos.sh captures the [limits] keys, writes them into the specification, and the resource
+# layer applies them. A passthrough stand-in for phobos-landlock lets the command run, and
+# --no-network keeps the preload library out of it.
+printf '%s\n' '#!/usr/bin/env bash' \
+  'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift; exec "$@"' > "$WORK/passthrough-landlock"
+chmod +x "$WORK/passthrough-landlock"
+# A memory limit, not a process limit: nproc is per-user and a low absolute value would
+# strangle the sandbox setup's own forks on a busy machine, which is a property of nproc
+# rather than of this layer.
+printf '[readonly]\n/usr\n[limits]\nmem_mb=256\nnofile=256\n' > "$CORE_X/BaseTest.cfg"
+parent="$WORK/specs"
+mkdir -p "$parent"
+e2e="$(PHOBOS_SPEC_PARENT="$parent" PHOBOS_LANDLOCK_BIN="$WORK/passthrough-landlock" \
+  bash "$CORE_X/phobos.sh" --no-network -- bash -c 'ulimit -v; ulimit -n' 2>/dev/null | paste -sd, -)"
+check "a [limits] policy reaches the command through the whole chain" "262144,256" "$e2e"
+left="$(find "$parent" -mindepth 1 -maxdepth 1 -name 'phobos-spec.*' 2>/dev/null | wc -l | tr -d ' ')"
+check "the run leaves no specification behind" "0" "$left"
+
+e2e_off="$(PHOBOS_SPEC_PARENT="$parent" PHOBOS_LANDLOCK_BIN="$WORK/passthrough-landlock" \
+  bash "$CORE_X/phobos.sh" --no-network --no-resources -- bash -c 'ulimit -v' 2>/dev/null)"
+if [[ "$e2e_off" != "262144" ]]; then
+  ok "--no-resources skips the resource layer end to end"
+else
+  bad "--no-resources skips the resource layer end to end" "a memory limit other than 262144" "$e2e_off"
+fi
+
+echo
 printf '%d passed, %d failed\n' "$passed" "$failed"
 (( failed == 0 ))

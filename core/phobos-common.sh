@@ -720,7 +720,7 @@ append_netblocker_rules() {
 PHB_SPEC_MARKER=".phobos-owned-spec"
 
 # The files write_spec creates, the only ones remove_owned_spec_dir deletes.
-PHB_SPEC_FILES="ro.paths rw.paths hide.paths tail.flags net.rules timeout.sec"
+PHB_SPEC_FILES="ro.paths rw.paths hide.paths tail.flags net.rules timeout.sec limits.conf"
 
 # The subdirectory phobos.sh keeps its own scratch files in, so they live under the
 # specification directory and are removed with it rather than left in /tmp. phobos.sh ends

@@ -15,9 +15,9 @@ trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 
 enable_network="${PHB_ENABLE_NETWORK:-1}"
 
-# If network layer is disabled, just pass through to filesystem layer.
+# If network layer is disabled, just pass through to the resource layer.
 if [[ "$enable_network" != "1" ]]; then
-  exec "${HERE}/phobos-filesystem.sh" "${SPEC_DIR}" -- "${CMD[@]}"
+  exec "${HERE}/phobos-resources.sh" "${SPEC_DIR}" -- "${CMD[@]}"
 fi
 
 RULES="${SPEC_DIR}/net.rules"
@@ -49,4 +49,4 @@ else
   export NETBLOCKER_CONF="$RULES"
 fi
 
-exec "${HERE}/phobos-filesystem.sh" "${SPEC_DIR}" -- "${CMD[@]}"
+exec "${HERE}/phobos-resources.sh" "${SPEC_DIR}" -- "${CMD[@]}"
