@@ -37,9 +37,9 @@ Notes:
   non-option word is the command; everything after it is its arguments.
 - The run's policy is written to a directory under PHOBOS_SPEC_PARENT (default
   /var/tmp), which must lie outside every write path, and removed when the run
-  ends, together with the scratch subdirectory this script keeps inside it. A run
-  with --no-filesystem-restriction and --no-runtime-restriction hands the command
-  to exec and leaves that directory behind.
+  ends, together with the scratch subdirectory this script keeps inside it. The
+  last layer in the chain waits for the command and removes it, whichever layers
+  the flags left in.
 USAGE
   exit 2
 }
@@ -118,11 +118,10 @@ for c in "${cfgs[@]}"; do
   [[ -f "$c" ]] || { echo "Config not found: $c" >&2; exit "${PHB_EPOLICY}"; }
 done
 
-# Export layer selection for inner scripts
-export PHB_ENABLE_TIMEOUT="$enable_timeout"
-export PHB_ENABLE_NETWORK="$enable_network"
-export PHB_ENABLE_RESOURCES="$enable_resources"
-export PHB_ENABLE_FILESYSTEM="$enable_filesystem"
+# Clear the internal channels a layer would otherwise inherit, so a value left in the
+# environment cannot make a layer act that the flags left out of the chain. Each layer that
+# is in the chain sets its own.
+unset PHB_TIMEOUT_SEC PHB_NETBLOCKER_SO NETBLOCKER_CONF
 
 mapfile -t base_cfgs < <(ls -1 "${HERE}"/Base*.cfg 2>/dev/null | sort || true)
 if [[ ${#base_cfgs[@]} -eq 0 ]]; then
@@ -242,6 +241,16 @@ write_spec "$SPEC_DIR" "$eff_ro" "$eff_rw" "$eff_hide" "$eff_net" "$timeout_eff"
   [[ -n "$eff_limit_cpu"      ]] && printf 'cpu=%s\n'      "$eff_limit_cpu"
 } > "${SPEC_DIR}/limits.conf"
 
-# Always enter through the first layer; inner scripts decide whether to apply themselves
+# Assemble the layer chain from the flags: a disabled layer is left out of the chain rather
+# than entered and skipped, so no PHB_ENABLE_* has to travel with the run. Each wrapper does
+# its work and execs the rest of the chain; the filesystem layer is always last and runs the
+# command, applying Landlock unless --no-landlock tells it not to.
 dbg=(); (( enable_debug )) && dbg=(--debug)
-exec "${HERE}/phobos-timeout.sh" "${dbg[@]}" "$SPEC_DIR" -- "${cmd[@]}"
+chain=()
+if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeout.sh"   "${dbg[@]}" "$SPEC_DIR" -- ); fi
+if (( enable_network ));   then chain+=( "${HERE}/phobos-network.sh"   "${dbg[@]}" "$SPEC_DIR" -- ); fi
+if (( enable_resources )); then chain+=( "${HERE}/phobos-resources.sh" "${dbg[@]}" "$SPEC_DIR" -- ); fi
+fs_flags=( "${dbg[@]}" )
+if (( ! enable_filesystem )); then fs_flags+=( --no-landlock ); fi
+chain+=( "${HERE}/phobos-filesystem.sh" "${fs_flags[@]}" "$SPEC_DIR" -- )
+exec "${chain[@]}" "${cmd[@]}"

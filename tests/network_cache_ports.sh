@@ -308,15 +308,14 @@ chmod +x "$WORK"/core/*.sh
 NETWORK_LAYER="$WORK/core/phobos-network.sh"
 mkdir -p "$WORK/spec"
 
-# Runs the network layer over /bin/echo and prints its output and its exit status.
-# The second argument switches the network layer itself off when it is 0.
+# Runs the network layer over /bin/echo and prints its output and its exit status. The layer
+# is a generic wrapper now: called at all, it checks its library and execs the command.
+# Whether it runs at all is phobos.sh's decision, covered by the command-line suite.
 run_network_layer() {
   local library=$1
-  local network=${2:-1}
   local out
   local rc
-  out="$(NETBLOCKER_SO="$library" PHB_ENABLE_FILESYSTEM=0 PHB_ENABLE_NETWORK="$network" \
-         PHB_TIMEOUT_SEC="" bash "$NETWORK_LAYER" "$WORK/spec" -- /bin/echo command-ran 2>&1)"
+  out="$(NETBLOCKER_SO="$library" bash "$NETWORK_LAYER" "$WORK/spec" -- /bin/echo command-ran 2>&1)"
   rc=$?
   printf '%s\nEXIT=%s' "$out" "$rc"
 }
@@ -346,7 +345,6 @@ ran() {
 echo
 echo "== the network layer refuses an unusable library =="
 ran "a freshly built interposer lets the command run" "$(run_network_layer "$WORK/libnetblocker.so")"
-ran "with the network layer off no library is needed" "$(run_network_layer "$WORK/absent.so" 0)"
 
 refused_because "a missing library is refused" "does not exist" \
   "$(run_network_layer "$WORK/absent.so")"
@@ -427,7 +425,7 @@ run_with_write_path() {
   else
     printf '%s\n' "$write_path" > "$REACH_SPEC/rw.paths"
   fi
-  out="$(PHB_ENABLE_FILESYSTEM=1 PHB_TIMEOUT_SEC="" PHB_NETBLOCKER_SO="$WORK/libnetblocker.so" \
+  out="$(PHB_TIMEOUT_SEC="" PHB_NETBLOCKER_SO="$WORK/libnetblocker.so" \
          NETBLOCKER_CONF="$REACH_SPEC/net.rules" PHOBOS_LANDLOCK_BIN="$WORK/record-landlock" \
          PHB_TEST_RECORD="$WORK/reach-record" \
          bash "$WORK/core/phobos-filesystem.sh" "$REACH_SPEC" -- /bin/echo command-ran 2>&1)"

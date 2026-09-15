@@ -97,8 +97,9 @@ for f in ro.paths rw.paths hide.paths tail.flags net.rules; do : > "$SPEC/$f"; d
 
 # Runs the resource layer with the given limits.conf and prints the four soft limits the
 # command inherited, comma-separated: memory, open files, file size and CPU time. The command
-# prints them through the ulimit builtin, which needs no fork. PHB_ENABLE_RESOURCES toggles
-# the layer itself.
+# prints them through the ulimit builtin, which needs no fork. The layer is a generic wrapper
+# now: called at all, it applies the limits and execs the command. Whether it runs at all is
+# phobos.sh's decision, exercised by the end-to-end check further down.
 #
 # nproc is deliberately left out here. It is a per-user limit counting every process the user
 # already runs, so a low absolute value strangles the next layer's own start-up fork (its
@@ -108,11 +109,8 @@ for f in ro.paths rw.paths hide.paths tail.flags net.rules; do : > "$SPEC/$f"; d
 # keys here.
 run_resource_layer() {
   local limits_body=$1
-  local enable=${2:-1}
   printf '%s\n' "$limits_body" > "$SPEC/limits.conf"
-  PHB_ENABLE_RESOURCES="$enable" \
-  PHB_ENABLE_FILESYSTEM=0 \
-    bash "$CORE_X/phobos-resources.sh" "$SPEC" -- \
+  bash "$CORE_X/phobos-resources.sh" "$SPEC" -- \
       bash -c 'ulimit -v; ulimit -n; ulimit -f; ulimit -t' 2>&1 | paste -sd, -
 }
 
@@ -122,22 +120,12 @@ nofile=256
 fsize_mb=10
 cpu=5')"
 
-# With the layer switched off, the command must keep the ambient limits, not the configured
-# ones. A configured memory limit would be unmistakable if it leaked through.
-off_mem="$(run_resource_layer 'mem_mb=256' 0 | cut -d, -f1)"
-if [[ "$off_mem" != "262144" ]]; then
-  ok "--no-resources-restriction leaves the limits untouched"
-else
-  bad "--no-resources-restriction leaves the limits untouched" "a memory limit other than the configured 262144" "$off_mem"
-fi
-
 echo
 echo "== the resource layer refuses a malformed limit rather than running unrestricted =="
 # The layer re-validates the specification it reads. A value that is not a whole number must
 # fail closed, and must never reach the arithmetic apply_resource_limits performs.
 rm -f "$WORK/pwned"
 printf 'mem_mb=$(touch %s/pwned)\n' "$WORK" > "$SPEC/limits.conf"
-PHB_ENABLE_RESOURCES=1 PHB_ENABLE_FILESYSTEM=0 \
   bash "$CORE_X/phobos-resources.sh" "$SPEC" -- /bin/echo ran >/dev/null 2>&1
 rc=$?
 if [[ "$rc" -eq 11 && ! -e "$WORK/pwned" ]]; then
