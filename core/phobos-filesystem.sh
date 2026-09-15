@@ -7,18 +7,20 @@ source "${HERE}/phobos-common.sh"
 
 DEBUG=0
 NO_LANDLOCK=0
+NO_NETWORK_PORTS=0
 LANDLOCK_BIN_OPT=""
 TIMEOUT_BIN_OPT=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --debug) DEBUG=1; shift ;;
     --no-landlock) NO_LANDLOCK=1; shift ;;
+    --no-network-ports) NO_NETWORK_PORTS=1; shift ;;
     --landlock-bin) shift; LANDLOCK_BIN_OPT="${1:-}"; shift ;;
     --timeout-bin) shift; TIMEOUT_BIN_OPT="${1:-}"; shift ;;
     *) break ;;
   esac
 done
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-filesystem.sh [--debug] [--no-landlock] [--landlock-bin <path>] [--timeout-bin <path>] <SPEC_DIR> -- <cmd...>"; exit 2; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-filesystem.sh [--debug] [--no-landlock] [--no-network-ports] [--landlock-bin <path>] [--timeout-bin <path>] <SPEC_DIR> -- <cmd...>"; exit 2; }
 SPEC_DIR="$1"; shift 2
 CMD=("$@")
 
@@ -102,7 +104,12 @@ fi
 # minus creating device nodes and symbolic links, which no build tool needs and
 # which are the two ways to reach something the policy never named.
 build_path_args args "" "${RO}" "${RW}"
-build_network_args args "${SPEC_DIR}/net.rules"
+# The Landlock TCP-port rules are the kernel-enforced half of the network boundary, built
+# here rather than in the network layer. With --no-network-ports the network restriction is
+# off as a whole, so they are skipped too, not only the preload filter.
+if (( ! NO_NETWORK_PORTS )); then
+  build_network_args args "${SPEC_DIR}/net.rules"
+fi
 if [[ -s "${TAIL}" ]]; then
   # Splitting is intended: tail.flags holds whitespace-separated arguments.
   # Read line by line so a multi-line file works too.

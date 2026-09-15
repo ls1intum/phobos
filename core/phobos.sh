@@ -14,12 +14,14 @@ Usage:
 Restriction options (every restriction is applied by default):
   --no-runtime-restriction, -ntr     Disable the timeout (phobos-timeout.sh).
   --no-networksystem-restriction, -nnr
-                                     Disable the network filter (libnetblocker /
-                                     phobos-network.sh).
+                                     Disable the whole network restriction: the
+                                     libnetblocker preload filter and the Landlock
+                                     TCP-port rules.
   --no-resources-restriction, -nrr   Disable the resource limits (rlimits /
                                      phobos-resources.sh).
-  --no-filesystem-restriction, -nfr  Disable the filesystem sandbox (Landlock /
-                                     phobos-filesystem.sh).
+  --no-filesystem-restriction, -nfr  Disable the filesystem sandbox (Landlock). This
+                                     turns off ALL of Landlock, the TCP-port rules
+                                     included, since they are one kernel ruleset.
   --allow-unsandboxed                Debug switch: run the command raw, with every
                                      layer disabled, EVEN when a base policy is
                                      present. For deliberate unconfined runs only.
@@ -284,5 +286,10 @@ if (( enable_network ));   then chain+=( "${HERE}/phobos-network.sh"   "${dbg[@]
 if (( enable_resources )); then chain+=( "${HERE}/phobos-resources.sh" "${dbg[@]}" "$SPEC_DIR" -- ); fi
 fs_flags=( "${dbg[@]}" --landlock-bin "$landlock_bin" --timeout-bin "$timeout_bin" )
 if (( ! enable_filesystem )); then fs_flags+=( --no-landlock ); fi
+# The network restriction spans two layers: the preload filter in phobos-network.sh, left
+# out of the chain above, and the kernel-enforced Landlock TCP-port rules built in the
+# filesystem layer. Disabling the network restriction has to cover both, so tell the
+# filesystem layer to skip the port rules too.
+if (( ! enable_network )); then fs_flags+=( --no-network-ports ); fi
 chain+=( "${HERE}/phobos-filesystem.sh" "${fs_flags[@]}" "$SPEC_DIR" -- )
 exec "${chain[@]}" "${cmd[@]}"
