@@ -13,13 +13,8 @@ CORE="${HERE}/../core"
 WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
 
-# Set only once this run has created the legacy wrapper's runtime directory,
-# so cleanup can never remove a directory the run found already in place.
-WRAPPER_CORE_OWNED=""
-
 cleanup() {
   rm -rf "$WORK"
-  if [[ -n "$WRAPPER_CORE_OWNED" ]]; then rm -rf "$WRAPPER_CORE_OWNED"; fi
 }
 trap cleanup EXIT
 
@@ -182,11 +177,6 @@ exit 0
 FAKE
 chmod +x "$WORK/fake-landlock"
 
-# The legacy wrapper resolves these two through PATH. Shadowing them keeps the
-# checks below from running the real sandbox tools on the host.
-cp "$WORK/fake-timeout" "$WORK/timeout"
-cp "$WORK/fake-landlock" "$WORK/phobos-landlock"
-
 SPEC="$WORK/spec"
 mkdir -p "$SPEC"
 for f in ro.paths rw.paths hide.paths tail.flags net.rules; do : > "$SPEC/$f"; done
@@ -226,180 +216,35 @@ for layer in 1 0; do
 done
 
 # ---------------------------------------------------------------------
-# Legacy wrapper
+# Modular parser: [network] host:port splitting
+#
+# Migrated from the removed legacy-wrapper checks. parse_cfg_policy in
+# phobos-common.sh is the single parser the entry point uses; it writes
+# "host port" lines into PARSED_NET_FILE. "::1:*" must keep the loopback host
+# rather than collapse to an empty host, which the preload library would read
+# as allow-all.
 # ---------------------------------------------------------------------
 
 echo
-echo "== legacy wrapper =="
+echo "== modular parser: network host:port =="
 
-# The wrapper hardcodes its runtime directory, so these checks need that path.
-# It truncates allowedList.cfg there, so they only run when the directory does
-# not already belong to a real installation.
-WRAPPER_CORE=/var/tmp/opt/core
-WRAPPER_LIBRARY_PROBLEM=""
-
-# Creates the wrapper's runtime directory and records that this run owns it. The
-# plain mkdir is deliberate: it fails rather than succeeding if the directory
-# appeared in the meantime, so ownership is never assumed.
-create_wrapper_core() {
-  mkdir -p "$(dirname "$WRAPPER_CORE")" 2>/dev/null || return 1
-  mkdir "$WRAPPER_CORE" 2>/dev/null || return 1
-  WRAPPER_CORE_OWNED="$WRAPPER_CORE"
-  [[ -w "$WRAPPER_CORE" ]]
+# Prints the "host port" lines parse_cfg_policy writes for a [network] body.
+parsed_net_rules() {
+  bash -c '
+    source "$1/phobos-common.sh"
+    printf "%s\n" "$2" > "$3/net.cfg"
+    parse_cfg_policy "$3/net.cfg" >/dev/null 2>&1
+    cat "$PARSED_NET_FILE"
+  ' _ "$CORE" "$1" "$WORK"
 }
 
-# Places the committed preload library where the wrapper looks for it, because the
-# wrapper refuses to start without one it can load, and records why it cannot be
-# loaded here. It is built for x86-64, so anywhere else it cannot.
-install_wrapper_library() {
-  cp "$CORE/libnetblocker.so" "$WRAPPER_CORE/libnetblocker.so" || return 1
-  WRAPPER_LIBRARY_PROBLEM="$(bash -c 'source "$1/phobos-common.sh"; netblocker_unusable_reason "$2"' \
-                               _ "$CORE" "$WRAPPER_CORE/libnetblocker.so")"
-  [[ -z "$WRAPPER_LIBRARY_PROBLEM" ]]
-}
-
-if [[ -e "$WRAPPER_CORE" ]]; then
-  skip "legacy wrapper timeout contract" \
-       "$WRAPPER_CORE already exists; leaving an installed runtime untouched"
-elif ! create_wrapper_core; then
-  skip "legacy wrapper timeout contract" \
-       "$WRAPPER_CORE cannot be created on this platform; these checks run on Linux"
-elif ! install_wrapper_library; then
-  skip "legacy wrapper timeout contract" \
-       "the committed libnetblocker.so ${WRAPPER_LIBRARY_PROBLEM:-could not be copied}; these checks run on x86-64"
-else
-
-  # Runs the wrapper over a [limits] body and prints its output followed by an
-  # EXIT=<status> line. The wrapper prints the assembled command before it
-  # applies the memory limit and exec's, and that printed command is what these
-  # checks inspect; the exec itself is not part of this contract.
-  run_wrapper() {
-    local body=$1
-    printf '%s\n' "$body" > "$WORK/base.cfg"
-    : > "$WORK/tail.cfg"
-    printf '#!/usr/bin/env bash\nexit 0\n' > "$WORK/build.sh"
-    chmod +x "$WORK/build.sh"
-    local out
-    local rc
-    out=$(
-      cd "$WORK" || exit 1
-      PATH="$WORK:$PATH" PHB_TEST_RECORD="$WORK/wrapper-record" \
-        bash "$CORE/phobos_wrapper.sh" \
-          --base base.cfg --tail tail.cfg -- "$WORK/build.sh" 2>&1
-    )
-    rc=$?
-    printf '%s\nEXIT=%s' "$out" "$rc"
-  }
-
-  # Extracts the duration argument that follows --kill-after in the assembled
-  # command, or "<none>" when the wrapper never got that far.
-  wrapper_timeout_arg() {
-    local out
-    out=$(run_wrapper "$1")
-    if [[ "$out" == *"--kill-after=5s"* ]]; then
-      sed -n 's/.*--kill-after=5s \([^ ]*\).*/\1/p' <<<"$out" | head -1
-    else
-      printf '<none>'
-    fi
-  }
-
-  check "wrapper: integer seconds"   "2s"     "$(wrapper_timeout_arg '[limits]
-timeout=2')"
-  check "wrapper: whole seconds"     "2.000s" "$(wrapper_timeout_arg '[limits]
-timeout=2.000')"
-  check "wrapper: non-whole seconds" "1.234s" "$(wrapper_timeout_arg '[limits]
-timeout=1.234')"
-  check "wrapper: sub-second"        "0.500s" "$(wrapper_timeout_arg '[limits]
-timeout=0.500')"
-  check "wrapper: zero disabled"     "0s"     "$(wrapper_timeout_arg '[limits]
-timeout=0')"
-  check "wrapper: decimal zero"      "0s"     "$(wrapper_timeout_arg '[limits]
-timeout=0.000')"
-  check "wrapper: absent timeout"    "0s"     "$(wrapper_timeout_arg '[limits]
-mem_mb=512')"
-
-  # A section ending on a valid timeout must not abort through the unrelated
-  # memory-limit branch.
-  check "wrapper: timeout-only section survives" "2.000s" "$(wrapper_timeout_arg '[limits]
-timeout=2.000')"
-  check "wrapper: timeout as last line after mem_mb" "1.234s" "$(wrapper_timeout_arg '[limits]
-mem_mb=512
-timeout=1.234')"
-
-  for bad_value in "-1" "+1" "2s" "1e3" ".5" "2.5" "2.00" "2.0000" "1..000" "abc" "2; touch pwned"; do
-    out=$(run_wrapper "[limits]
-timeout=$bad_value")
-    if [[ "$out" == *"invalid timeout"* && "$out" == *"EXIT=1"* && "$out" != *"--kill-after=5s"* ]]; then
-      ok "wrapper rejects '$bad_value'"
-    else
-      bad "wrapper rejects '$bad_value'" "exit 1, an error, and no assembled command" "$out"
-    fi
-  done
-
-  rm -f "$WORK/pwned-wrapper"
-  out=$(run_wrapper "[limits]
-timeout=\$(touch $WORK/pwned-wrapper)")
-  if [[ "$out" == *"invalid timeout"* && "$out" == *"EXIT=1"* && ! -e "$WORK/pwned-wrapper" ]]; then
-    ok "wrapper: command substitution is rejected and not executed"
-  else
-    bad "wrapper: command substitution is rejected and not executed" \
-        "exit 1, an error, and no side effect" "$out"
-  fi
-
-  # Runs the wrapper over a [network] body and prints the allow-list it wrote for the
-  # preload library. The wrapper truncates and rewrites that file before it exec's, so it is
-  # there whether or not the exec that follows succeeds.
-  wrapper_allowedlist() {
-    run_wrapper "$1" >/dev/null 2>&1
-    cat "$WRAPPER_CORE/allowedList.cfg" 2>/dev/null
-  }
-
-  # "::1:*" must parse to host "::1", not an empty host. An empty host is written as a bare
-  # " *", which the preload library reads as "any host, any port": the loopback rule would
-  # become allow-all. This is the security-relevant half of the fix.
-  allowed="$(wrapper_allowedlist '[network]
+check "parser: ::1:* keeps the loopback host" "::1 *"          "$(parsed_net_rules '[network]
 allow ::1:*')"
-  if grep -qx '::1 \*' <<<"$allowed" && ! grep -qE '^\*?[[:space:]]\*$' <<<"$allowed"; then
-    ok "wrapper: ::1:* becomes the loopback host, not allow-all"
-  else
-    bad "wrapper: ::1:* becomes the loopback host, not allow-all" "a line '::1 *'" "$allowed"
-  fi
-
-  allowed="$(wrapper_allowedlist '[network]
+check "parser: bracketed IPv6 with a port"    "::1 443"        "$(parsed_net_rules '[network]
 allow [::1]:443')"
-  check "wrapper: bracketed IPv6 with a port"   "::1 443"       "$allowed"
-  allowed="$(wrapper_allowedlist '[network]
+check "parser: IPv4 with a port"              "127.0.0.1 8080" "$(parsed_net_rules '[network]
 allow 127.0.0.1:8080')"
-  check "wrapper: IPv4 with a port"             "127.0.0.1 8080" "$allowed"
 
-  # mem_mb defaults to 0, and "ulimit -v 0" would set the address-space limit to zero and
-  # stop the command from starting. With a pass-through stand-in for phobos-landlock, the
-  # command must actually run when no memory budget is set.
-  printf '%s\n' '#!/usr/bin/env bash' \
-    'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift; exec "$@"' \
-    > "$WORK/passthrough-landlock"
-  chmod +x "$WORK/passthrough-landlock"
-  printf '[limits]\ntimeout=1\n' > "$WORK/base.cfg"
-  : > "$WORK/tail.cfg"
-  printf '#!/usr/bin/env bash\necho ran-ok\n' > "$WORK/build.sh"
-  chmod +x "$WORK/build.sh"
-  # The real timeout, not the recording stand-in earlier tests shadow it with through PATH:
-  # this case has to actually run the command to see that a zero memory budget did not stop
-  # it. The Landlock stand-in is named absolutely, so it needs no PATH entry.
-  out=$(
-    cd "$WORK" || exit 1
-    PHOBOS_LANDLOCK_BIN="$WORK/passthrough-landlock" \
-      bash "$CORE/phobos_wrapper.sh" --base base.cfg --tail tail.cfg -- "$WORK/build.sh" 2>&1
-  )
-  rc=$?
-  if [[ "$out" == *"ran-ok"* && "$rc" -eq 0 ]]; then
-    ok "wrapper: mem_mb=0 does not set an address-space limit of zero"
-  else
-    bad "wrapper: mem_mb=0 does not set an address-space limit of zero" \
-        "the command runs (ran-ok, exit 0)" "exit ${rc}: ${out}"
-  fi
-
-fi
 
 # ---------------------------------------------------------------------
 

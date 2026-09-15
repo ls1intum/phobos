@@ -177,8 +177,8 @@ def build_runtime_tail(runtime_chdir: str) -> None:
     discovery used (--proc, --dev, --share-net, --unshare-*, --new-session) and a
     per-exercise --chdir. The runtime is phobos-landlock, and it accepts none of those
     Bubblewrap flags: they are not Landlock concepts, and it exits on an option it does
-    not know. Both entry points, phobos.sh and phobos_wrapper.sh, append every tail token
-    to phobos-landlock, so a tail carrying a Bubblewrap flag would fail every run.
+    not know. phobos.sh appends every tail token to phobos-landlock, so a tail carrying
+    a Bubblewrap flag would fail every run.
 
     Network intent reaches the runtime through the [network] section rather than the tail,
     and a namespace is the container's boundary rather than Landlock's. So the runtime

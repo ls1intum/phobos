@@ -34,7 +34,6 @@ core/                      the sandbox itself
   phobos-timeout.sh        the timeout layer
   phobos-common.sh         shared helpers, sourced by the others
   phobos-landlock*.c/.h    the C program that applies the Landlock policy, then exec's the command
-  phobos_wrapper.sh        a legacy single-file entry point, kept for compatibility
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
   libnetblocker.so         committed, marked binary in .gitattributes
 ld_preloader/              netblocker sources and its own allow-list
