@@ -5,7 +5,9 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=phobos-common.sh
 source "${HERE}/phobos-common.sh"
 
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-filesystem.sh <SPEC_DIR> -- <cmd...>"; exit 2; }
+DEBUG=0
+if [[ "${1:-}" == "--debug" ]]; then DEBUG=1; shift; fi
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-filesystem.sh [--debug] <SPEC_DIR> -- <cmd...>"; exit 2; }
 SPEC_DIR="$1"; shift 2
 CMD=("$@")
 
@@ -22,7 +24,7 @@ enable_fs="${PHB_ENABLE_FILESYSTEM:-1}"
 # If filesystem layer is disabled, run the command directly,
 # but still respect PHB_TIMEOUT_SEC if the timeout layer is active.
 if [[ "$enable_fs" != "1" ]]; then
-  if [[ -n "${PHOBOS_DEBUG:-}" ]]; then
+  if (( DEBUG )); then
     >&2 printf '[phobos] filesystem layer disabled; exec '
     printf '%q ' "${CMD[@]}"
     echo >&2
@@ -97,7 +99,7 @@ if [[ -s "${TAIL}" ]]; then
   done < "${TAIL}"
 fi
 
-if [[ -n "${PHOBOS_DEBUG:-}" ]]; then
+if (( DEBUG )); then
   >&2 printf '[phobos] %s ' "${LANDLOCK}"
   printf '%q ' "${args[@]}"
   printf ' -- '

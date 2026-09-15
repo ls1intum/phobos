@@ -126,9 +126,9 @@ cpu=5')"
 # ones. A configured memory limit would be unmistakable if it leaked through.
 off_mem="$(run_resource_layer 'mem_mb=256' 0 | cut -d, -f1)"
 if [[ "$off_mem" != "262144" ]]; then
-  ok "--no-resources leaves the limits untouched"
+  ok "--no-resources-restriction leaves the limits untouched"
 else
-  bad "--no-resources leaves the limits untouched" "a memory limit other than the configured 262144" "$off_mem"
+  bad "--no-resources-restriction leaves the limits untouched" "a memory limit other than the configured 262144" "$off_mem"
 fi
 
 echo
@@ -151,7 +151,7 @@ echo
 echo "== the full phobos.sh chain applies and clears the limits =="
 # phobos.sh captures the [limits] keys, writes them into the specification, and the resource
 # layer applies them. A passthrough stand-in for phobos-landlock lets the command run, and
-# --no-network keeps the preload library out of it.
+# --no-networksystem-restriction keeps the preload library out of it.
 printf '%s\n' '#!/usr/bin/env bash' \
   'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift; exec "$@"' > "$WORK/passthrough-landlock"
 chmod +x "$WORK/passthrough-landlock"
@@ -162,17 +162,17 @@ printf '[readonly]\n/usr\n[limits]\nmem_mb=256\nnofile=256\n' > "$CORE_X/BaseTes
 parent="$WORK/specs"
 mkdir -p "$parent"
 e2e="$(PHOBOS_SPEC_PARENT="$parent" PHOBOS_LANDLOCK_BIN="$WORK/passthrough-landlock" \
-  bash "$CORE_X/phobos.sh" --no-network -- bash -c 'ulimit -v; ulimit -n' 2>/dev/null | paste -sd, -)"
+  bash "$CORE_X/phobos.sh" --no-networksystem-restriction -- bash -c 'ulimit -v; ulimit -n' 2>/dev/null | paste -sd, -)"
 check "a [limits] policy reaches the command through the whole chain" "262144,256" "$e2e"
 left="$(find "$parent" -mindepth 1 -maxdepth 1 -name 'phobos-spec.*' 2>/dev/null | wc -l | tr -d ' ')"
 check "the run leaves no specification behind" "0" "$left"
 
 e2e_off="$(PHOBOS_SPEC_PARENT="$parent" PHOBOS_LANDLOCK_BIN="$WORK/passthrough-landlock" \
-  bash "$CORE_X/phobos.sh" --no-network --no-resources -- bash -c 'ulimit -v' 2>/dev/null)"
+  bash "$CORE_X/phobos.sh" --no-networksystem-restriction --no-resources-restriction -- bash -c 'ulimit -v' 2>/dev/null)"
 if [[ "$e2e_off" != "262144" ]]; then
-  ok "--no-resources skips the resource layer end to end"
+  ok "--no-resources-restriction skips the resource layer end to end"
 else
-  bad "--no-resources skips the resource layer end to end" "a memory limit other than 262144" "$e2e_off"
+  bad "--no-resources-restriction skips the resource layer end to end" "a memory limit other than 262144" "$e2e_off"
 fi
 
 echo

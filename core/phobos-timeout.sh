@@ -5,9 +5,12 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=phobos-common.sh
 source "${HERE}/phobos-common.sh"
 
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-timeout.sh <SPEC_DIR> -- <cmd...>"; exit 2; }
+DEBUG=0
+if [[ "${1:-}" == "--debug" ]]; then DEBUG=1; shift; fi
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-timeout.sh [--debug] <SPEC_DIR> -- <cmd...>"; exit 2; }
 SPEC_DIR="$1"; shift 2
 CMD=("$@")
+dbg=(); (( DEBUG )) && dbg=(--debug)
 
 # Removes the specification phobos.sh created if this layer ends before it hands over.
 trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
@@ -18,7 +21,7 @@ enable_timeout="${PHB_ENABLE_TIMEOUT:-1}"
 # PHB_TIMEOUT_SEC is not set.
 if [[ "$enable_timeout" != "1" ]]; then
   export PHB_TIMEOUT_SEC=""
-  exec "${HERE}/phobos-network.sh" "${SPEC_DIR}" -- "${CMD[@]}"
+  exec "${HERE}/phobos-network.sh" "${dbg[@]}" "${SPEC_DIR}" -- "${CMD[@]}"
 fi
 
 if [[ -s "${SPEC_DIR}/timeout.sec" ]]; then
@@ -28,4 +31,4 @@ else
   export PHB_TIMEOUT_SEC=""
 fi
 
-exec "${HERE}/phobos-network.sh" "${SPEC_DIR}" -- "${CMD[@]}"
+exec "${HERE}/phobos-network.sh" "${dbg[@]}" "${SPEC_DIR}" -- "${CMD[@]}"

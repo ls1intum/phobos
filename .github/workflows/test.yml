@@ -52,6 +52,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/timeout_units.sh
 
+      - name: The command-line contract
+        if: ${{ !cancelled() }}
+        run: bash tests/cli_flags.sh
+
       - name: The address cache's port restrictions
         if: ${{ !cancelled() }}
         run: bash tests/network_cache_ports.sh
