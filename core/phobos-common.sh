@@ -796,7 +796,7 @@ PHB_SPEC_SCRATCH="scratch"
 refuse_unusable_spec_parent() {
   local parent="$1"
   [[ "$parent" == /* && -d "$parent" ]] && return 0
-  report "Policy invalid: PHOBOS_SPEC_PARENT '${parent}' is not an absolute path to an existing directory. (PHB-EPOLICY)"
+  report "Policy invalid: the --spec-parent '${parent}' is not an absolute path to an existing directory. (PHB-EPOLICY)"
   exit "${PHB_EPOLICY}"
 }
 

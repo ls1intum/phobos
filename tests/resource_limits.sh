@@ -149,14 +149,14 @@ chmod +x "$WORK/passthrough-landlock"
 printf '[readonly]\n/usr\n[limits]\nmem_mb=256\nnofile=256\n' > "$CORE_X/BaseTest.cfg"
 parent="$WORK/specs"
 mkdir -p "$parent"
-e2e="$(PHOBOS_SPEC_PARENT="$parent" PHOBOS_LANDLOCK_BIN="$WORK/passthrough-landlock" \
-  bash "$CORE_X/phobos.sh" --no-networksystem-restriction -- bash -c 'ulimit -v; ulimit -n' 2>/dev/null | paste -sd, -)"
+e2e="$(bash "$CORE_X/phobos.sh" --spec-parent "$parent" --landlock-bin "$WORK/passthrough-landlock" \
+  --no-networksystem-restriction -- bash -c 'ulimit -v; ulimit -n' 2>/dev/null | paste -sd, -)"
 check "a [limits] policy reaches the command through the whole chain" "262144,256" "$e2e"
 left="$(find "$parent" -mindepth 1 -maxdepth 1 -name 'phobos-spec.*' 2>/dev/null | wc -l | tr -d ' ')"
 check "the run leaves no specification behind" "0" "$left"
 
-e2e_off="$(PHOBOS_SPEC_PARENT="$parent" PHOBOS_LANDLOCK_BIN="$WORK/passthrough-landlock" \
-  bash "$CORE_X/phobos.sh" --no-networksystem-restriction --no-resources-restriction -- bash -c 'ulimit -v' 2>/dev/null)"
+e2e_off="$(bash "$CORE_X/phobos.sh" --spec-parent "$parent" --landlock-bin "$WORK/passthrough-landlock" \
+  --no-networksystem-restriction --no-resources-restriction -- bash -c 'ulimit -v' 2>/dev/null)"
 if [[ "$e2e_off" != "262144" ]]; then
   ok "--no-resources-restriction skips the resource layer end to end"
 else

@@ -14,16 +14,25 @@ Usage:
 Restriction options (every restriction is applied by default):
   --no-runtime-restriction, -ntr     Disable the timeout (phobos-timeout.sh).
   --no-networksystem-restriction, -nnr
-                                     Disable the network filter (libnetblocker /
-                                     phobos-network.sh).
+                                     Disable the whole network restriction: the
+                                     libnetblocker preload filter and the Landlock
+                                     TCP-port rules.
   --no-resources-restriction, -nrr   Disable the resource limits (rlimits /
                                      phobos-resources.sh).
-  --no-filesystem-restriction, -nfr  Disable the filesystem sandbox (Landlock /
-                                     phobos-filesystem.sh).
+  --no-filesystem-restriction, -nfr  Disable the filesystem sandbox (Landlock). This
+                                     turns off ALL of Landlock, the TCP-port rules
+                                     included, since they are one kernel ruleset.
   --allow-unsandboxed                Debug switch: run the command raw, with every
                                      layer disabled, EVEN when a base policy is
                                      present. For deliberate unconfined runs only.
   --debug                            Print the exact command each layer runs.
+
+Override options (taken only from the command line, never from the environment):
+  --landlock-bin <path>              The phobos-landlock binary (default: beside this script).
+  --timeout-bin <path>              The timeout tool (default: timeout).
+  --netblocker-so <path>            The libnetblocker library (default: beside this script).
+  --tail-flags-file <path>          The tail flags file (default: TailPhobos.cfg beside this script).
+  --spec-parent <path>              Where the run's specification directory is made (default: /var/tmp).
 
 Notes:
 - Base config: any "${HERE}/Base*.cfg" (INI-like) is applied first (sorted).
@@ -35,7 +44,7 @@ Notes:
   the command unconfined. --allow-unsandboxed opts into a raw run on purpose.
 - An unknown option is refused rather than treated as the command. The first
   non-option word is the command; everything after it is its arguments.
-- The run's policy is written to a directory under PHOBOS_SPEC_PARENT (default
+- The run's policy is written to a directory under --spec-parent (default
   /var/tmp), which must lie outside every write path, and removed when the run
   ends, together with the scratch subdirectory this script keeps inside it. The
   last layer in the chain waits for the command and removes it, whichever layers
@@ -54,6 +63,16 @@ enable_filesystem=1
 enable_debug=0
 # Refusing to run without a base policy is the default; this is the explicit opt-out.
 allow_unsandboxed=0
+
+# Which enforcement tools and locations a run uses. Taken only from these flags, never from
+# the environment, so a value left in the environment cannot change which binary applies the
+# sandbox, which timeout tool bounds it, which library filters the network, where the tail
+# flags come from, or where the specification is written. Empty means the built-in default.
+opt_landlock_bin=""
+opt_timeout_bin=""
+opt_netblocker_so=""
+opt_tail_flags_file=""
+opt_spec_parent=""
 
 cfgs=()
 cmd=()
@@ -75,6 +94,16 @@ while (( "$#" )); do
       allow_unsandboxed=1; shift;;
     --debug)
       enable_debug=1; shift;;
+    --landlock-bin)
+      shift; [[ $# -gt 0 ]] || usage; opt_landlock_bin="$1"; shift;;
+    --timeout-bin)
+      shift; [[ $# -gt 0 ]] || usage; opt_timeout_bin="$1"; shift;;
+    --netblocker-so)
+      shift; [[ $# -gt 0 ]] || usage; opt_netblocker_so="$1"; shift;;
+    --tail-flags-file)
+      shift; [[ $# -gt 0 ]] || usage; opt_tail_flags_file="$1"; shift;;
+    --spec-parent)
+      shift; [[ $# -gt 0 ]] || usage; opt_spec_parent="$1"; shift;;
     --)
       shift
       while (( "$#" )); do cmd+=("$1"); shift; done
@@ -133,7 +162,12 @@ if [[ ${#base_cfgs[@]} -eq 0 ]]; then
   exit "${PHB_EPOLICY}"
 fi
 
-: "${TAIL_FLAGS_FILE:=${HERE}/TailPhobos.cfg}"
+# Resolve the startup overrides from the flags, with the built-in defaults. The environment
+# is deliberately not consulted for any of them.
+tail_flags_file="${opt_tail_flags_file:-${HERE}/TailPhobos.cfg}"
+landlock_bin="${opt_landlock_bin:-${HERE}/phobos-landlock}"
+timeout_bin="${opt_timeout_bin:-timeout}"
+netblocker_so="${opt_netblocker_so:-${HERE}/libnetblocker.so}"
 
 # The specification directory is created before any scratch file, so every temporary file
 # this script makes lives under it and is removed with it. phobos.sh ends with exec, so its
@@ -141,7 +175,7 @@ fi
 # directory, and with it the scratch subdirectory, in one place. It has to lie outside every
 # write path, where Landlock keeps the rules file it holds unchangeable. /tmp is a write path
 # in both shipped policies; /var/tmp is in neither.
-spec_parent="${PHOBOS_SPEC_PARENT:-/var/tmp}"
+spec_parent="${opt_spec_parent:-/var/tmp}"
 refuse_unusable_spec_parent "$spec_parent"
 SPEC_DIR="$(mktemp -d "${spec_parent%/}/phobos-spec.XXXXXX")"
 mark_owned_spec_dir "$SPEC_DIR"
@@ -227,7 +261,7 @@ eff_limit_nofile="$(effective_limit nofile)"
 eff_limit_fsize_mb="$(effective_limit fsize_mb)"
 eff_limit_cpu="$(effective_limit cpu)"
 
-write_spec "$SPEC_DIR" "$eff_ro" "$eff_rw" "$eff_hide" "$eff_net" "$timeout_eff" "${TAIL_FLAGS_FILE:-}"
+write_spec "$SPEC_DIR" "$eff_ro" "$eff_rw" "$eff_hide" "$eff_net" "$timeout_eff" "$tail_flags_file"
 
 # The resource limits go into the specification, one "key=value" per line for each limit a
 # [limits] section named. phobos-resources.sh reads them and sets them with rlimits, so the
@@ -248,9 +282,14 @@ write_spec "$SPEC_DIR" "$eff_ro" "$eff_rw" "$eff_hide" "$eff_net" "$timeout_eff"
 dbg=(); (( enable_debug )) && dbg=(--debug)
 chain=()
 if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeout.sh"   "${dbg[@]}" "$SPEC_DIR" -- ); fi
-if (( enable_network ));   then chain+=( "${HERE}/phobos-network.sh"   "${dbg[@]}" "$SPEC_DIR" -- ); fi
+if (( enable_network ));   then chain+=( "${HERE}/phobos-network.sh"   "${dbg[@]}" --netblocker-so "$netblocker_so" "$SPEC_DIR" -- ); fi
 if (( enable_resources )); then chain+=( "${HERE}/phobos-resources.sh" "${dbg[@]}" "$SPEC_DIR" -- ); fi
-fs_flags=( "${dbg[@]}" )
+fs_flags=( "${dbg[@]}" --landlock-bin "$landlock_bin" --timeout-bin "$timeout_bin" )
 if (( ! enable_filesystem )); then fs_flags+=( --no-landlock ); fi
+# The network restriction spans two layers: the preload filter in phobos-network.sh, left
+# out of the chain above, and the kernel-enforced Landlock TCP-port rules built in the
+# filesystem layer. Disabling the network restriction has to cover both, so tell the
+# filesystem layer to skip the port rules too.
+if (( ! enable_network )); then fs_flags+=( --no-network-ports ); fi
 chain+=( "${HERE}/phobos-filesystem.sh" "${fs_flags[@]}" "$SPEC_DIR" -- )
 exec "${chain[@]}" "${cmd[@]}"

@@ -39,8 +39,8 @@ merge_result() {
     printf '%s\n' "$2" > "$WORK/ex.cfg"
     cfgargs=(--config "$WORK/ex.cfg")
   fi
-  PHOBOS_SPEC_PARENT="$SPECS" PHOBOS_LANDLOCK_BIN="$WORK/passthrough-landlock" \
-    bash "$CORE_X/phobos.sh" --no-networksystem-restriction "${cfgargs[@]}" -- \
+  bash "$CORE_X/phobos.sh" --spec-parent "$SPECS" --landlock-bin "$WORK/passthrough-landlock" \
+    --no-networksystem-restriction "${cfgargs[@]}" -- \
     bash -c 'printf "%s|%s|%s" "${PHB_TIMEOUT_SEC:-}" "$(ulimit -v)" "$(ulimit -n)"' 2>/dev/null
 }
 eff_timeout() { merge_result "$1" "${2:-}" | cut -d'|' -f1; }

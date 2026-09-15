@@ -188,11 +188,9 @@ timeout_arg_for() {
   local value=$2
   rm -f "$WORK/record"
   local rc
-  local flags=()
+  local flags=(--timeout-bin "$WORK/fake-timeout" --landlock-bin "$WORK/fake-landlock")
   if [[ "$enable_fs" != "1" ]]; then flags+=(--no-landlock); fi
   PHB_TIMEOUT_SEC="$value" \
-  TIMEOUT_BIN="$WORK/fake-timeout" \
-  PHOBOS_LANDLOCK_BIN="$WORK/fake-landlock" \
   PHB_TEST_RECORD="$WORK/record" \
     bash "$CORE/phobos-filesystem.sh" "${flags[@]}" "$SPEC" -- /bin/true >/dev/null 2>&1
   rc=$?
@@ -222,10 +220,8 @@ echo
 echo "== modular runtime: the timeout monitors phobos-landlock directly =="
 rm -f "$WORK/record"
 PHB_TIMEOUT_SEC="3" \
-TIMEOUT_BIN="$WORK/fake-timeout" \
-PHOBOS_LANDLOCK_BIN="$WORK/fake-landlock" \
 PHB_TEST_RECORD="$WORK/record" \
-  bash "$CORE/phobos-filesystem.sh" "$SPEC" -- /bin/true >/dev/null 2>&1
+  bash "$CORE/phobos-filesystem.sh" --timeout-bin "$WORK/fake-timeout" --landlock-bin "$WORK/fake-landlock" "$SPEC" -- /bin/true >/dev/null 2>&1
 monitored="$(awk '{print $3}' "$WORK/record" 2>/dev/null)"
 check "phobos-landlock is timeout's monitored child" "$WORK/fake-landlock" "$monitored"
 
