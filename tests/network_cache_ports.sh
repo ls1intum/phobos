@@ -315,7 +315,7 @@ run_network_layer() {
   local library=$1
   local out
   local rc
-  out="$(NETBLOCKER_SO="$library" bash "$NETWORK_LAYER" "$WORK/spec" -- /bin/echo command-ran 2>&1)"
+  out="$(bash "$NETWORK_LAYER" --netblocker-so "$library" "$WORK/spec" -- /bin/echo command-ran 2>&1)"
   rc=$?
   printf '%s\nEXIT=%s' "$out" "$rc"
 }
@@ -426,9 +426,9 @@ run_with_write_path() {
     printf '%s\n' "$write_path" > "$REACH_SPEC/rw.paths"
   fi
   out="$(PHB_TIMEOUT_SEC="" PHB_NETBLOCKER_SO="$WORK/libnetblocker.so" \
-         NETBLOCKER_CONF="$REACH_SPEC/net.rules" PHOBOS_LANDLOCK_BIN="$WORK/record-landlock" \
+         NETBLOCKER_CONF="$REACH_SPEC/net.rules" \
          PHB_TEST_RECORD="$WORK/reach-record" \
-         bash "$WORK/core/phobos-filesystem.sh" "$REACH_SPEC" -- /bin/echo command-ran 2>&1)"
+         bash "$WORK/core/phobos-filesystem.sh" --landlock-bin "$WORK/record-landlock" "$REACH_SPEC" -- /bin/echo command-ran 2>&1)"
   rc=$?
   printf '%s\nEXIT=%s' "$out" "$rc"
 }
@@ -500,9 +500,10 @@ run_phobos() {
   shift
   local out
   local rc
-  out="$(PHOBOS_SPEC_PARENT="$parent" NETBLOCKER_SO="${NETBLOCKER_SO_FOR_RUN:-$WORK/libnetblocker.so}" \
-         PHOBOS_LANDLOCK_BIN="$WORK/record-landlock" PHB_TEST_RECORD="$WORK/phobos-record" \
-         bash "$WORK/core/phobos.sh" "$@" 2>&1)"
+  out="$(PHB_TEST_RECORD="$WORK/phobos-record" \
+         bash "$WORK/core/phobos.sh" --spec-parent "$parent" \
+         --netblocker-so "${NETBLOCKER_SO_FOR_RUN:-$WORK/libnetblocker.so}" \
+         --landlock-bin "$WORK/record-landlock" "$@" 2>&1)"
   rc=$?
   printf '%s\nEXIT=%s' "$out" "$rc"
 }
@@ -557,9 +558,9 @@ left_nothing "after a run that times out" "$parent" 14 "PHB-ETIMEOUT" \
 
 out="$(run_phobos relative-parent -- /bin/echo command-ran)"
 if [[ "$out" == *"EXIT=11"* && "$out" == *"not an absolute path"* && "$out" != *"command-ran"* ]]; then
-  ok "a relative PHOBOS_SPEC_PARENT is refused"
+  ok "a relative --spec-parent is refused"
 else
-  bad "a relative PHOBOS_SPEC_PARENT is refused" "exit 11 naming the parent, and no command run" "$out"
+  bad "a relative --spec-parent is refused" "exit 11 naming the parent, and no command run" "$out"
 fi
 
 # The command leaves a file of its own in the specification directory, so it cannot be
@@ -583,9 +584,10 @@ echo "== phobos.sh keeps no scratch behind and refuses to run without a base pol
 scratch_tmp="$WORK/scratch-tmp"
 mkdir -p "$scratch_tmp"
 parent="$(fresh_parent scratch)"
-TMPDIR="$scratch_tmp" PHOBOS_SPEC_PARENT="$parent" \
-  NETBLOCKER_SO="$WORK/libnetblocker.so" PHOBOS_LANDLOCK_BIN="$WORK/record-landlock" \
-  bash "$WORK/core/phobos.sh" -- /bin/echo command-ran >/dev/null 2>&1
+TMPDIR="$scratch_tmp" \
+  bash "$WORK/core/phobos.sh" --spec-parent "$parent" \
+  --netblocker-so "$WORK/libnetblocker.so" --landlock-bin "$WORK/record-landlock" \
+  -- /bin/echo command-ran >/dev/null 2>&1
 left="$(find "$scratch_tmp" -mindepth 1 | wc -l | tr -d ' ')"
 check "a run leaves no scratch files in TMPDIR" 0 "$left"
 
@@ -593,8 +595,7 @@ check "a run leaves no scratch files in TMPDIR" 0 "$left"
 nobase="$WORK/nobase"
 mkdir -p "$nobase"
 cp "$WORK/core/"*.sh "$nobase/"
-out="$(PHOBOS_LANDLOCK_BIN="$WORK/record-landlock" \
-       bash "$nobase/phobos.sh" -- /bin/echo should-not-run 2>&1)"
+out="$(bash "$nobase/phobos.sh" --landlock-bin "$WORK/record-landlock" -- /bin/echo should-not-run 2>&1)"
 rc=$?
 if [[ "$rc" -eq 11 && "$out" == *"PHB-EPOLICY"* && "$out" != *"should-not-run"* ]]; then
   ok "no Base*.cfg refuses to run unconfined (PHB-EPOLICY), and runs nothing"
@@ -603,8 +604,7 @@ else
       "exit 11 naming PHB-EPOLICY, command not run" "exit ${rc}: $out"
 fi
 
-out="$(PHOBOS_LANDLOCK_BIN="$WORK/record-landlock" \
-       bash "$nobase/phobos.sh" --allow-unsandboxed -- /bin/echo ran-raw 2>&1)"
+out="$(bash "$nobase/phobos.sh" --landlock-bin "$WORK/record-landlock" --allow-unsandboxed -- /bin/echo ran-raw 2>&1)"
 rc=$?
 if [[ "$rc" -eq 0 && "$out" == *"ran-raw"* ]]; then
   ok "--allow-unsandboxed runs the command raw when no Base*.cfg is present"

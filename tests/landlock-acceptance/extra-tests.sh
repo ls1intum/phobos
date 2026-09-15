@@ -132,7 +132,7 @@ else
   bad "Regeldatei aus der Sandbox beschreibbar oder nicht lesbar"; printf '%s\n' "$NET_OUT" | sed 's/^/       | /' | tail -4
 fi
 # Liegt die Spezifikation selbst unter einem Schreibpfad, verweigert Phobos den Lauf.
-SPEC_OUT=$(PHOBOS_SPEC_PARENT=/tmp phobos.sh -- /bin/true 2>&1); SPEC_RC=$?
+SPEC_OUT=$(phobos.sh --spec-parent /tmp -- /bin/true 2>&1); SPEC_RC=$?
 if [[ $SPEC_RC -eq 11 && "$SPEC_OUT" == *"lies beneath the write path"* ]]; then
   ok "Spezifikation unter einem Schreibpfad bricht ab (PHB-EPOLICY)"
 else

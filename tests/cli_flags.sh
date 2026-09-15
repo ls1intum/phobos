@@ -36,8 +36,7 @@ mkdir -p "$SPECS"
 # RC. The assignment is in this shell, so RC survives, which a command-substitution call
 # would not allow.
 run_phobos() {
-  OUT="$(PHOBOS_SPEC_PARENT="$1" PHOBOS_LANDLOCK_BIN="$WORK/passthrough-landlock" \
-         bash "$CORE_X/phobos.sh" "${@:2}" 2>&1)"
+  OUT="$(bash "$CORE_X/phobos.sh" --spec-parent "$1" --landlock-bin "$WORK/passthrough-landlock" "${@:2}" 2>&1)"
   RC=$?
 }
 
