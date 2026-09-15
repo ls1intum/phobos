@@ -77,6 +77,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/limit_merge.sh
 
+      - name: The policy program
+        if: ${{ !cancelled() }}
+        run: bash tests/policy_program.sh
+
       # Stubs stand in for the pruner and the emitter, so this needs no bubblewrap and
       # no exercises. It covers the two ways the prune phase can quietly produce less
       # than it should: finishing successfully with artefacts missing, and leaving an
