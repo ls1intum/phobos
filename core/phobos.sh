@@ -28,7 +28,8 @@ Restriction options (every restriction is applied by default):
 Notes:
 - Base config: any "${HERE}/Base*.cfg" (INI-like) is applied first (sorted).
 - Exercise configs: only files passed via --config/-c are applied in order;
-  per-path FS merge, NET union, TIMEOUT last-wins.
+  per-path FS merge, NET union, and for the timeout and each resource limit the
+  largest value any cfg names, where a zero switches that limit off and wins.
 - Tail config: "${HERE}/TailPhobos.cfg" (flags only) is applied last.
 - If no Base*.cfg is present, Phobos refuses to run (PHB-EPOLICY) rather than run
   the command unconfined. --allow-unsandboxed opts into a raw run on purpose.
@@ -154,18 +155,42 @@ base_ro="$(mktemp -p "$PHOBOS_SCRATCH")"; base_rw="$(mktemp -p "$PHOBOS_SCRATCH"
 timeout_eff=""
 eff_limit_mem_mb=""; eff_limit_nproc=""; eff_limit_nofile=""; eff_limit_fsize_mb=""; eff_limit_cpu=""
 
-# The last cfg that names each resource limit wins, as the timeout does. Reads the
-# PARSED_LIMIT_* variables parse_cfg_policy sets, so it is called after each parse.
-capture_resource_limits() {
-  [[ -n "${PARSED_LIMIT_MEM_MB:-}"   ]] && eff_limit_mem_mb="${PARSED_LIMIT_MEM_MB}"
-  [[ -n "${PARSED_LIMIT_NPROC:-}"    ]] && eff_limit_nproc="${PARSED_LIMIT_NPROC}"
-  [[ -n "${PARSED_LIMIT_NOFILE:-}"   ]] && eff_limit_nofile="${PARSED_LIMIT_NOFILE}"
-  [[ -n "${PARSED_LIMIT_FSIZE_MB:-}" ]] && eff_limit_fsize_mb="${PARSED_LIMIT_FSIZE_MB}"
-  [[ -n "${PARSED_LIMIT_CPU:-}"      ]] && eff_limit_cpu="${PARSED_LIMIT_CPU}"
-  return 0
+# The timeout and each resource limit are pooled across every base and exercise cfg by the
+# same rule the setters use within a cfg: a zero anywhere disables that limit and wins, and
+# otherwise the largest value is kept, so the order of the cfgs does not matter. Timeouts are
+# compared in whole milliseconds, resource limits as base-ten integers.
+timeout_disabled=0
+timeout_max_ms=-1
+declare -A limit_disabled=( [mem_mb]=0 [nproc]=0 [nofile]=0 [fsize_mb]=0 [cpu]=0 )
+declare -A limit_max=( [mem_mb]=-1 [nproc]=-1 [nofile]=-1 [fsize_mb]=-1 [cpu]=-1 )
+
+# Folds the PARSED_* values one parse_cfg_policy call produced into the pooled state above.
+merge_limits() {
+  if (( PARSED_TIMEOUT_DISABLED )); then timeout_disabled=1; fi
+  if [[ -n "${PARSED_TIMEOUT:-}" ]]; then
+    local ms; ms="$(timeout_to_ms "$PARSED_TIMEOUT")"
+    if (( ms > timeout_max_ms )); then timeout_max_ms="$ms"; fi
+  fi
+  local key upper var dvar val
+  for key in mem_mb nproc nofile fsize_mb cpu; do
+    upper="${key^^}"
+    var="PARSED_LIMIT_${upper}"; dvar="PARSED_LIMIT_${upper}_DISABLED"
+    if (( ${!dvar:-0} )); then limit_disabled[$key]=1; fi
+    val="${!var:-}"
+    if [[ -n "$val" ]] && (( 10#$val > limit_max[$key] )); then limit_max[$key]="$(( 10#$val ))"; fi
+  done
 }
 
-# Build base policy (FS union, NET union, TIMEOUT last-wins)
+# Resolves the pooled state into one effective value: a disabled limit prints nothing, so it
+# is left out of the specification and not applied, and otherwise the largest value prints.
+effective_limit() {
+  local key="$1"
+  if (( limit_disabled[$key] )); then printf '%s' ""; return 0; fi
+  if (( limit_max[$key] >= 0 )); then printf '%s' "${limit_max[$key]}"; return 0; fi
+  printf '%s' ""; return 0
+}
+
+# Build base policy (FS union, NET union, limits pooled by merge_limits)
 for b in "${base_cfgs[@]}"; do
   parse_cfg_policy "$b"
   # FS: union only (no least-privilege checks while building base)
@@ -173,9 +198,7 @@ for b in "${base_cfgs[@]}"; do
                  "$PARSED_RO_FILE" "$PARSED_RW_FILE" "$PARSED_HIDE_FILE"
   # NET: union
   tmpnet="$(mktemp -p "$PHOBOS_SCRATCH")"; net_union "$tmpnet" "$base_net" "$PARSED_NET_FILE"; mv "$tmpnet" "$base_net"
-  # TIMEOUT: last base wins
-  [[ -n "${PARSED_TIMEOUT:-}" || "${PARSED_TIMEOUT:-__unset__}" == "" ]] && timeout_eff="${PARSED_TIMEOUT:-}"
-  capture_resource_limits
+  merge_limits
 done
 
 # Effective policy (start from base, then apply exercise overrides)
@@ -187,9 +210,23 @@ for c in "${cfgs[@]}"; do
   merge_fs_per_path "$base_ro" "$base_rw" "$base_hide" eff_ro eff_rw eff_hide \
                     "$PARSED_RO_FILE" "$PARSED_RW_FILE" "$PARSED_HIDE_FILE"
   tmpnet="$(mktemp -p "$PHOBOS_SCRATCH")"; net_union "$tmpnet" "$eff_net" "$PARSED_NET_FILE"; mv "$tmpnet" "$eff_net"
-  [[ -n "${PARSED_TIMEOUT:-}" || "${PARSED_TIMEOUT:-__unset__}" == "" ]] && timeout_eff="${PARSED_TIMEOUT:-}"
-  capture_resource_limits
+  merge_limits
 done
+
+# Resolve the pooled state into the effective values. A disabled timeout is written as none,
+# and a finite one is canonicalised so 2 and 2.000 produce the same specification.
+if (( timeout_disabled )); then
+  timeout_eff=""
+elif (( timeout_max_ms >= 0 )); then
+  timeout_eff="$(ms_to_timeout "$timeout_max_ms")"
+else
+  timeout_eff=""
+fi
+eff_limit_mem_mb="$(effective_limit mem_mb)"
+eff_limit_nproc="$(effective_limit nproc)"
+eff_limit_nofile="$(effective_limit nofile)"
+eff_limit_fsize_mb="$(effective_limit fsize_mb)"
+eff_limit_cpu="$(effective_limit cpu)"
 
 write_spec "$SPEC_DIR" "$eff_ro" "$eff_rw" "$eff_hide" "$eff_net" "$timeout_eff" "${TAIL_FLAGS_FILE:-}"
 

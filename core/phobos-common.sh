@@ -52,35 +52,68 @@ validate_config_file_keys() {
 # conversion happens after this point.
 PHB_TIMEOUT_PATTERN='^[0-9]+(\.[0-9]{3})?$'
 
-# Validates one configured timeout value and stores it in PARSED_TIMEOUT.
-# An unusable value is a policy error rather than an ignored line, because
-# silently dropping it would run the command with no limit at all.
+# A timeout in whole milliseconds, so two spellings of one value compare as numbers rather
+# than as text. The pattern guarantees a digit before the point and exactly three after it,
+# so both parts are read in base ten, never as octal, and never with an empty field.
+timeout_to_ms() {
+  local value="$1" integer fraction="000"
+  if [[ "$value" == *.* ]]; then integer="${value%%.*}"; fraction="${value#*.}"; else integer="$value"; fi
+  printf '%s' "$(( 10#$integer * 1000 + 10#$fraction ))"
+}
+
+# The inverse, canonical: whole seconds print without a fraction, so 2 and 2.000 come back as
+# the one spelling and the written specification does not depend on which cfg named it.
+ms_to_timeout() {
+  local ms="$1" seconds fraction
+  seconds=$(( ms / 1000 )); fraction=$(( ms % 1000 ))
+  if (( fraction == 0 )); then printf '%s' "$seconds"; else printf '%d.%03d' "$seconds" "$fraction"; fi
+}
+
+# Merges one configured timeout value into PARSED_TIMEOUT and PARSED_TIMEOUT_DISABLED, which
+# parse_cfg_policy resets per call. The rule is the same within a file and across files:
+# every spelling of zero disables the timeout and wins over any finite value, and otherwise
+# the largest finite value is kept. An unusable value is a policy error rather than an
+# ignored line, because silently dropping it would run the command without a limit the
+# policy asked for. PARSED_TIMEOUT keeps the raw spelling of the largest finite value so a
+# parse test can read it back; the caller canonicalises the effective value.
 set_parsed_timeout() {
   local value="$1"
   if [[ ! "$value" =~ $PHB_TIMEOUT_PATTERN ]]; then
     report "Policy invalid: timeout '${value}' must be seconds, either whole or with exactly three decimals. (PHB-EPOLICY)"
     exit "${PHB_EPOLICY}"
   fi
-  # Every accepted spelling of zero (0, 0.000, ...) disables the timeout.
+  # Every accepted spelling of zero (0, 0.000, ...) disables the timeout and wins.
   if [[ -z "${value//[0.]/}" ]]; then
-    PARSED_TIMEOUT=""
-  else
+    PARSED_TIMEOUT_DISABLED=1
+    return
+  fi
+  if [[ -z "${PARSED_TIMEOUT:-}" ]] || (( $(timeout_to_ms "$value") > $(timeout_to_ms "$PARSED_TIMEOUT") )); then
     PARSED_TIMEOUT="$value"
   fi
 }
 
-# Validates one resource-limit value and stores it in the named variable. Each is a
-# non-negative whole number; an unusable one is a policy error rather than an ignored line,
-# because silently dropping it would run the command without a limit the policy asked for.
+# Merges one resource-limit value into the named variable and its "<name>_DISABLED"
+# companion, which parse_cfg_policy resets per call. Each value is a non-negative whole
+# number; an unusable one is a policy error rather than an ignored line, because silently
+# dropping it would run the command without a limit the policy asked for. The rule matches
+# the timeout's: zero disables this limit and wins over any finite value, within a file and
+# across files, and otherwise the largest finite value is kept.
 set_parsed_limit() {
   local -n limit_ref="$1"
+  local -n disabled_ref="${1}_DISABLED"
   local key="$2"
   local value="${3//[[:space:]]/}"
   if [[ ! "$value" =~ ^[0-9]+$ ]]; then
     report "Policy invalid: ${key} '${value}' must be a non-negative whole number. (PHB-EPOLICY)"
     exit "${PHB_EPOLICY}"
   fi
-  limit_ref="$value"
+  if (( 10#$value == 0 )); then
+    disabled_ref=1
+    return
+  fi
+  if [[ -z "${limit_ref:-}" ]] || (( 10#$value > 10#${limit_ref} )); then
+    limit_ref="$value"
+  fi
 }
 
 # Applies the configured resource limits to this shell, so the command tree it exec's into
@@ -94,20 +127,28 @@ apply_resource_limits() {
   local nofile="$3"
   local fsize_mb="$4"
   local cpu="$5"
-  if [[ -n "$mem_mb" ]]; then
-    ulimit -v "$(( mem_mb * 1024 ))" || die "cannot set the memory limit of ${mem_mb} MB" "${PHB_ERUNTIME}"
+  # A megabyte value is multiplied by 1024 for ulimit's kilobyte argument. Refuse one so
+  # large the multiplication would overflow the shell's signed 64-bit arithmetic and wrap to
+  # a small or negative limit, rather than setting a limit far tighter than the policy asked.
+  local mb_max=8796093022207
+  # Zero means the limit is switched off, so it is not applied. Every value is read in base
+  # ten, so a leading zero is not taken for octal.
+  if [[ -n "$mem_mb" ]] && (( 10#$mem_mb != 0 )); then
+    (( 10#$mem_mb <= mb_max )) || die "the memory limit of ${mem_mb} MB is too large to set safely" "${PHB_EPOLICY}"
+    ulimit -v "$(( 10#$mem_mb * 1024 ))" || die "cannot set the memory limit of ${mem_mb} MB" "${PHB_ERUNTIME}"
   fi
-  if [[ -n "$nproc" ]]; then
-    ulimit -u "$nproc" || die "cannot set the process limit of ${nproc}" "${PHB_ERUNTIME}"
+  if [[ -n "$nproc" ]] && (( 10#$nproc != 0 )); then
+    ulimit -u "$(( 10#$nproc ))" || die "cannot set the process limit of ${nproc}" "${PHB_ERUNTIME}"
   fi
-  if [[ -n "$nofile" ]]; then
-    ulimit -n "$nofile" || die "cannot set the open-file limit of ${nofile}" "${PHB_ERUNTIME}"
+  if [[ -n "$nofile" ]] && (( 10#$nofile != 0 )); then
+    ulimit -n "$(( 10#$nofile ))" || die "cannot set the open-file limit of ${nofile}" "${PHB_ERUNTIME}"
   fi
-  if [[ -n "$fsize_mb" ]]; then
-    ulimit -f "$(( fsize_mb * 1024 ))" || die "cannot set the file-size limit of ${fsize_mb} MB" "${PHB_ERUNTIME}"
+  if [[ -n "$fsize_mb" ]] && (( 10#$fsize_mb != 0 )); then
+    (( 10#$fsize_mb <= mb_max )) || die "the file-size limit of ${fsize_mb} MB is too large to set safely" "${PHB_EPOLICY}"
+    ulimit -f "$(( 10#$fsize_mb * 1024 ))" || die "cannot set the file-size limit of ${fsize_mb} MB" "${PHB_ERUNTIME}"
   fi
-  if [[ -n "$cpu" ]]; then
-    ulimit -t "$cpu" || die "cannot set the CPU-time limit of ${cpu} s" "${PHB_ERUNTIME}"
+  if [[ -n "$cpu" ]] && (( 10#$cpu != 0 )); then
+    ulimit -t "$(( 10#$cpu ))" || die "cannot set the CPU-time limit of ${cpu} s" "${PHB_ERUNTIME}"
   fi
 }
 parse_cfg_policy() {
@@ -123,10 +164,14 @@ parse_cfg_policy() {
   local ro="${tdir}/ro.paths" rw="${tdir}/rw.paths" hide="${tdir}/hide.paths" net="${tdir}/net.rules"
   : >"$ro"; : >"$rw"; : >"$hide"; : >"$net"
   local sec=""
-  # Reset per call, so a resource limit is read from the cfg that sets it and not carried
-  # over from an earlier one; the caller takes the last that names each, as it does timeout.
+  # Reset per call, so a timeout or a resource limit is read from the cfg that sets it and
+  # not carried over from an earlier one; the caller merges each across cfgs by the same rule
+  # the setters use within a cfg (zero disables and wins, else the largest value).
+  PARSED_TIMEOUT=""; PARSED_TIMEOUT_DISABLED=0
   PARSED_LIMIT_MEM_MB=""; PARSED_LIMIT_NPROC=""; PARSED_LIMIT_NOFILE=""
   PARSED_LIMIT_FSIZE_MB=""; PARSED_LIMIT_CPU=""
+  PARSED_LIMIT_MEM_MB_DISABLED=0; PARSED_LIMIT_NPROC_DISABLED=0; PARSED_LIMIT_NOFILE_DISABLED=0
+  PARSED_LIMIT_FSIZE_MB_DISABLED=0; PARSED_LIMIT_CPU_DISABLED=0
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%%#*}"; line="$(echo "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
     [[ -z "$line" ]] && continue
