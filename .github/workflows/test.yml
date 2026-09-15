@@ -73,6 +73,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/resource_limits.sh
 
+      - name: The timeout and resource-limit merge
+        if: ${{ !cancelled() }}
+        run: bash tests/limit_merge.sh
+
       # Stubs stand in for the pruner and the emitter, so this needs no bubblewrap and
       # no exercises. It covers the two ways the prune phase can quietly produce less
       # than it should: finishing successfully with artefacts missing, and leaving an
