@@ -264,6 +264,15 @@ jobs:
           docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
             phobos-run-phase:ci bash /testsuite/scoping-test.sh
 
+      # The libnetblocker bind hook narrows a local TCP bind to the addresses a [bind] rule
+      # names, which Landlock's per-port bind right cannot do. Runs against the library the
+      # image compiled, so it also confirms that copy carries the hook.
+      - name: The libnetblocker bind hook narrows a local bind by address
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
+            phobos-run-phase:ci bash /testsuite/bind-address-test.sh
+
   # Mutation testing installs clang and mull into a container and then runs the suite
   # once per mutant, which is minutes rather than seconds. Weekly and on request, so it
   # reports on the suite's strength without being in the way of a pull request.

@@ -74,7 +74,7 @@ cat "${WRITE}" "${CREATE}" "${DELETE}" 2>/dev/null > "${WRITABLE}" || :
 # it, and reading the rules file, which every process the command starts opens.
 # PHB_NETBLOCKER_SO and NETBLOCKER_CONF are set by phobos-network.sh.
 if [[ -n "${PHB_NETBLOCKER_SO:-}" && -f "${PHB_NETBLOCKER_SO}" && -n "${NETBLOCKER_CONF:-}" ]]; then
-  append_netblocker_rules args "${WRITABLE}" "$PHB_NETBLOCKER_SO" "$NETBLOCKER_CONF"
+  append_netblocker_rules args "${WRITABLE}" "$PHB_NETBLOCKER_SO" "$NETBLOCKER_CONF" "${NETBLOCKER_BIND_CONF:-}"
 fi
 rm -f "${WRITABLE}"
 

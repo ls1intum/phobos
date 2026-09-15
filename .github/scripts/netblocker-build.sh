@@ -25,8 +25,8 @@ readonly LIBC_DEV_VERSION="2.43-2ubuntu2.4"
 # The C library of the run-phase image. A library needing a newer one would not load there.
 readonly HIGHEST_GLIBC="2.39"
 readonly MACHINE="Advanced Micro Devices X86-64"
-# The only functions the library may export: its four hooks, in the order the C locale sorts them.
-readonly EXPORTED_FUNCTIONS="connect getaddrinfo sendmsg sendto"
+# The only functions the library may export: its five hooks, in the order the C locale sorts them.
+readonly EXPORTED_FUNCTIONS="bind connect getaddrinfo sendmsg sendto"
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -135,7 +135,7 @@ build_library() {
 }
 
 # Refuses a library that is not built for x86-64, needs a newer C library than the
-# run-phase image has, exports any function but its four hooks, or that the network
+# run-phase image has, exports any function but its five hooks, or that the network
 # layer would refuse at run time. Assumes readelf and the repository checkout this
 # script lives in.
 verify_library() {

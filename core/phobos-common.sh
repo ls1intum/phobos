@@ -207,21 +207,26 @@ parse_cfg_policy() {
         parse_network_target "$target" host port
         printf '%s %s\n' "$host" "$port" >>"$net" ;;
       bind)
-        # [bind] names local TCP ports a submission may listen on, one 'allow <port>' per
-        # line. Landlock's bind right is per-port and knows no local address, and the
-        # address a service may bind to is enforced by the stacked libnetblocker bind hook,
-        # not here, so a line that names more than a bare port is refused rather than
-        # accepted with its address silently unenforced.
+        # [bind] names a local TCP listening endpoint, one 'allow <addr>:<port>' or
+        # 'allow <port>' per line. A bare port means any local address. The port is
+        # enforced by Landlock (--bind-tcp) and must be concrete, because Landlock's bind
+        # right is per-port and cannot express a wildcard; the local address is enforced by
+        # libnetblocker's bind hook as defence in depth. IPv6 is bracketed, [::1]:8080.
         if [[ ! "$line" =~ ^allow[[:space:]]+(.+)$ ]]; then
-          report "Policy invalid: '${line}' in [bind] is not an 'allow <port>' line. (PHB-EPOLICY)"
+          report "Policy invalid: '${line}' in [bind] is not an 'allow <addr>:<port>' line. (PHB-EPOLICY)"
           exit "${PHB_EPOLICY}"
         fi
-        local bind_target="${BASH_REMATCH[1]}"
-        if [[ ! "$bind_target" =~ ^[0-9]+$ ]]; then
-          report "Policy invalid: '${bind_target}' in [bind] names more than a bare TCP port. A local bind address is enforced by the libnetblocker bind hook, a stacked change; name only a port here. (PHB-EPOLICY)"
+        local bind_target="${BASH_REMATCH[1]}" bind_host="" bind_port=""
+        if [[ "$bind_target" =~ ^[0-9]+$ ]]; then
+          bind_host="*"; bind_port="$bind_target"
+        else
+          parse_network_target "$bind_target" bind_host bind_port
+        fi
+        if [[ "$bind_port" == "*" || -z "$bind_port" ]]; then
+          report "Policy invalid: '${bind_target}' in [bind] names no concrete port. Landlock enforces a bind by port, so name one. (PHB-EPOLICY)"
           exit "${PHB_EPOLICY}"
         fi
-        printf '%s\n' "$bind_target" >>"$bind" ;;
+        printf '%s %s\n' "$bind_host" "$bind_port" >>"$bind" ;;
       limits)
         # Only the six known keys are accepted; a bare value and an unknown key are refused
         # rather than ignored, so a typo in a limit does not leave the run unrestricted.
@@ -702,13 +707,23 @@ build_bind_args() {
   local arguments_name="$1"
   local rules="$2"
   local -n bind_ref="$arguments_name"
+  local host
   local port
+  local ports_file
+  local emitted
   [[ -n "$rules" && -s "$rules" ]] || return 0
-  while IFS= read -r port; do
-    [[ -z "$port" ]] && continue
-    refuse_unusable_port "bind" "$port"
-    bind_ref+=( --bind-tcp "$port" )
-  done < <(sort -n -u "$rules")
+  ports_file="$(mktemp -t phobos-bindports.XXXXXX)"
+  # Each rule is "addr port"; Landlock enforces the port, so several rules that share a
+  # port (different local addresses) collapse to one --bind-tcp. The address is libnetblocker's.
+  while read -r host port; do
+    [[ -z "$host" ]] && continue
+    refuse_unusable_port "$host" "$port"
+    printf '%s\n' "$port" >> "$ports_file"
+  done < "$rules"
+  while IFS= read -r emitted; do
+    bind_ref+=( --bind-tcp "$emitted" )
+  done < <(sort -n -u "$ports_file")
+  rm -f "$ports_file"
 }
 
 # --------------------------------------------------------------------------
@@ -720,7 +735,7 @@ build_bind_args() {
 # --------------------------------------------------------------------------
 
 # The functions the network layer relies on the preload library defining.
-PHB_NETBLOCKER_HOOKS="connect getaddrinfo sendmsg sendto"
+PHB_NETBLOCKER_HOOKS="bind connect getaddrinfo sendmsg sendto"
 
 # Prints the functions a shared object defines with default visibility, one per
 # line. Assumes readelf from binutils; prints nothing for a file it cannot read.
@@ -812,11 +827,13 @@ append_netblocker_rules() {
   local write_file="$2"
   local library="$3"
   local rules="$4"
+  local bind_rules="$5"
   local artefact
   local resolved
   local write_path
   local resolved_write
-  for artefact in "$library" "$rules"; do
+  for artefact in "$library" "$rules" "$bind_rules"; do
+    [[ -n "$artefact" ]] || continue
     resolved="$(printf '%s\n' "$artefact" | resolve_symlinks)"
     while IFS= read -r write_path || [[ -n "$write_path" ]]; do
       [[ -z "$write_path" ]] && continue
@@ -828,6 +845,11 @@ append_netblocker_rules() {
     done < <(cat "$write_file" 2>/dev/null)
   done
   netblocker_ref+=( --rights=rx "$library" --rights=r "$rules" )
+  # An if, not a "&&", so an empty bind_rules leaves the function returning zero rather than
+  # the 1 of a false test, which under the caller's set -e would abort the run silently.
+  if [[ -n "$bind_rules" ]]; then
+    netblocker_ref+=( --rights=r "$bind_rules" )
+  fi
 }
 
 # --------------------------------------------------------------------------

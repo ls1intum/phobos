@@ -129,6 +129,7 @@ struct fake_answer {
 
 static int resolver_calls = 0;
 static int connect_calls = 0;
+static int bind_calls = 0;
 static int sendto_calls = 0;
 static int sendmsg_calls = 0;
 static bool reload_during_lookup = false;
@@ -196,6 +197,14 @@ static int fake_connect(int descriptor, const struct sockaddr *destination, sock
     return 0;
 }
 
+static int fake_bind(int descriptor, const struct sockaddr *address, socklen_t length) {
+    (void)descriptor;
+    (void)address;
+    (void)length;
+    bind_calls++;
+    return 0;
+}
+
 static ssize_t fake_sendto(int descriptor, const void *buffer, size_t length, int flags,
                            const struct sockaddr *destination, socklen_t address_length) {
     (void)descriptor;
@@ -222,6 +231,9 @@ void *__wrap_dlsym(void *handle, const char *name) {
     }
     if (strcmp(name, "connect") == 0) {
         return fake_connect;
+    }
+    if (strcmp(name, "bind") == 0) {
+        return fake_bind;
     }
     if (strcmp(name, "sendto") == 0) {
         return fake_sendto;
@@ -273,6 +285,11 @@ static void write_rules(const char *body) {
 static void load_rules(const char *body) {
     write_rules(body);
     policy_load(&policy, rules_path);
+}
+
+static void load_bind_rules(const char *body) {
+    write_rules(body);
+    policy_load(&bind_policy, rules_path);
 }
 
 static size_t rule_count(void) {
@@ -706,6 +723,79 @@ static void test_hooks(void) {
           sendmsg(3, &connected_message, 0) == 0 && sendmsg_calls == sendmsg_before + 1);
 }
 
+/* What a bind through the hook did. */
+enum bind_result { BIND_BOUND, BIND_DENIED, BIND_UNEXPECTED };
+
+/* Binds a socket of the given type to a local address through the hook and reports whether
+ * it reached the real bind or was refused with EACCES. A real socket is created so the
+ * hook's SO_TYPE check reads a true type; the real bind is faked, so nothing is bound. */
+static enum bind_result bind_outcome(int socket_type, const char *address, uint16_t port) {
+    struct sockaddr_storage local;
+    socklen_t length = fill_destination(&local, address, port);
+    int family = (strchr(address, ':') != nullptr) ? AF_INET6 : AF_INET;
+    int descriptor = socket(family, socket_type, 0);
+    int calls_before = bind_calls;
+    errno = 0;
+    int status = bind(descriptor, (struct sockaddr *)&local, length);
+    enum bind_result result = BIND_UNEXPECTED;
+    if (status == 0 && bind_calls == calls_before + 1) {
+        result = BIND_BOUND;
+    }
+    else if (status == -1 && errno == EACCES && bind_calls == calls_before) {
+        result = BIND_DENIED;
+    }
+    if (descriptor >= 0) {
+        close(descriptor);
+    }
+    return result;
+}
+
+static void test_bind(void) {
+    struct sockaddr_storage local;
+    struct sockaddr unix_local;
+    socklen_t length;
+    int closed_descriptor;
+    int calls_before;
+    printf("\nThe bind hook\n");
+
+    /* With no [bind] rule the hook passes every bind, matching Landlock leaving bind
+     * unrestricted when no bind port is named. */
+    policy_load(&bind_policy, nullptr);
+    real_bind = nullptr;
+    check("with no bind rule a bind passes", bind_outcome(SOCK_STREAM, "127.0.0.1", 8080) == BIND_BOUND);
+    check("the hook finds bind on first use", real_bind == fake_bind);
+
+    /* With a bind rule, a TCP bind to an allowed local address passes, and to a disallowed
+     * address or port is refused. */
+    load_bind_rules("127.0.0.1 8080\n");
+    check("a TCP bind to an allowed local address passes", bind_outcome(SOCK_STREAM, "127.0.0.1", 8080) == BIND_BOUND);
+    check("a TCP bind to a disallowed local address is refused", bind_outcome(SOCK_STREAM, "0.0.0.0", 8080) == BIND_DENIED);
+    check("a TCP bind to a disallowed port is refused", bind_outcome(SOCK_STREAM, "127.0.0.1", 9090) == BIND_DENIED);
+    check("an IPv6 TCP bind is filtered too", bind_outcome(SOCK_STREAM, "::1", 8080) == BIND_DENIED);
+
+    /* Only TCP is filtered, matching Landlock's TCP-only bind right: a datagram bind passes
+     * even where the address is not listed. */
+    check("a UDP bind is not filtered and passes", bind_outcome(SOCK_DGRAM, "0.0.0.0", 8080) == BIND_BOUND);
+
+    /* A non-INET family is left to other layers. */
+    memset(&unix_local, 0, sizeof(unix_local));
+    unix_local.sa_family = AF_UNIX;
+    calls_before = bind_calls;
+    check("a bind of another family passes to other layers",
+          bind(3, &unix_local, sizeof(sa_family_t)) == 0 && bind_calls == calls_before + 1);
+
+    /* A descriptor whose type cannot be read passes, since the hook cannot tell it is TCP;
+     * a closed descriptor makes getsockopt fail. */
+    closed_descriptor = socket(AF_INET, SOCK_STREAM, 0);
+    close(closed_descriptor);
+    length = fill_destination(&local, "0.0.0.0", 8080);
+    calls_before = bind_calls;
+    check("a bind whose socket type cannot be read passes",
+          bind(closed_descriptor, (struct sockaddr *)&local, length) == 0 && bind_calls == calls_before + 1);
+
+    policy_load(&bind_policy, nullptr);
+}
+
 int main(void) {
     if (mkdtemp(rules_directory) == nullptr) {
         perror("mkdtemp");
@@ -725,7 +815,8 @@ int main(void) {
     check("the rules NETBLOCKER_CONF names are loaded", rule_count() == 8);
     check("the functions the hooks hand calls to are found",
           real_getaddrinfo == fake_getaddrinfo && real_connect == fake_connect
-              && real_sendto == fake_sendto && real_sendmsg == fake_sendmsg);
+              && real_bind == fake_bind && real_sendto == fake_sendto
+              && real_sendmsg == fake_sendmsg);
 
     test_addresses();
     test_rule_parsing();
@@ -734,8 +825,10 @@ int main(void) {
     test_loading();
     test_policy();
     test_hooks();
+    test_bind();
 
     policy_load(&policy, nullptr);
+    policy_load(&bind_policy, nullptr);
     unlink(link_path);
     unlink(rules_path);
     rmdir(rules_directory);

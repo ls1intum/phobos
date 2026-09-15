@@ -97,16 +97,19 @@ run_bind() {
 }
 
 echo
-echo "== [bind] emits a --bind-tcp rule per local port =="
-r="$(run_bind "8080")"
+echo "== [bind] emits one --bind-tcp per port; the local address is libnetblocker's =="
+r="$(run_bind "* 8080")"
 [[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" == "--bind-tcp 8080" ]] && ok "a bind port emits --bind-tcp" || bad "a bind port emits --bind-tcp" "--bind-tcp 8080" "exit $(field "$r" 1): $(field "$r" 2)"
-r="$(run_bind "9000
-8080")"
+r="$(run_bind "* 9000
+* 8080")"
 [[ "$(field "$r" 2)" == "--bind-tcp 8080 --bind-tcp 9000" ]] && ok "several bind ports are sorted and each enforced" || bad "several bind ports are sorted and each enforced" "--bind-tcp 8080 --bind-tcp 9000" "$(field "$r" 2)"
+r="$(run_bind "127.0.0.1 8080
+0.0.0.0 8080")"
+[[ "$(field "$r" 2)" == "--bind-tcp 8080" ]] && ok "two local addresses on one port collapse to one Landlock rule" || bad "two local addresses on one port collapse to one Landlock rule" "--bind-tcp 8080" "$(field "$r" 2)"
 
 echo
 echo "== an out-of-range bind port is refused =="
-r="$(run_bind "70000")"
+r="$(run_bind "* 70000")"
 [[ "$(field "$r" 1)" != 0 ]] && ok "a bind port above 65535 is refused" || bad "a bind port above 65535 is refused" "a non-zero exit" "exit $(field "$r" 1)"
 
 echo

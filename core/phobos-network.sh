@@ -46,4 +46,15 @@ else
   export NETBLOCKER_CONF="$RULES"
 fi
 
+# The spec's bind.rules gives libnetblocker the local-bind allow-list, whether or not it is
+# empty; an empty file leaves binding unrestricted, matching the absence of a Landlock
+# bind-port rule.
+BIND_RULES="${SPEC_DIR}/bind.rules"
+if [[ -f "$BIND_RULES" ]]; then
+  export NETBLOCKER_BIND_CONF="$BIND_RULES"
+else
+  : > "$BIND_RULES"
+  export NETBLOCKER_BIND_CONF="$BIND_RULES"
+fi
+
 exec "$@"
