@@ -93,7 +93,7 @@ cp -R "$CORE" "$CORE_X"
 chmod +x "$CORE_X"/*.sh
 SPEC="$WORK/spec"
 mkdir -p "$SPEC"
-for f in ro.paths rw.paths hide.paths tail.flags net.rules; do : > "$SPEC/$f"; done
+for f in read.paths execute.paths write.paths create.paths delete.paths tail.flags net.rules; do : > "$SPEC/$f"; done
 
 # Runs the resource layer with the given limits.conf and prints the four soft limits the
 # command inherited, comma-separated: memory, open files, file size and CPU time. The command
@@ -146,7 +146,7 @@ chmod +x "$WORK/passthrough-landlock"
 # A memory limit, not a process limit: nproc is per-user and a low absolute value would
 # strangle the sandbox setup's own forks on a busy machine, which is a property of nproc
 # rather than of this layer.
-printf '[readonly]\n/usr\n[limits]\nmem_mb=256\nnofile=256\n' > "$CORE_X/BaseTest.cfg"
+printf '[read]\n/usr\n[limits]\nmem_mb=256\nnofile=256\n' > "$CORE_X/BaseTest.cfg"
 parent="$WORK/specs"
 mkdir -p "$parent"
 e2e="$(bash "$CORE_X/phobos.sh" --spec-parent "$parent" --landlock-bin "$WORK/passthrough-landlock" \

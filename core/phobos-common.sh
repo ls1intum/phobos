@@ -10,6 +10,8 @@ PHB_EMERGE=12
 PHB_EBASE=13
 PHB_ETIMEOUT=14
 PHB_ERUNTIME=15
+# The filesystem sections, each granting exactly its own phobos-landlock right.
+PHB_FS_RIGHTS="read execute write create delete"
 _log()   { printf '%s\n' "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*" >&2; }
 die()    { _log "$1"; exit "${2:-1}"; }
 report() { printf '%s\n' "$1"; }
@@ -127,7 +129,7 @@ apply_resource_limits() {
     ulimit -t "$(( 10#$cpu ))" || die "cannot set the CPU-time limit of ${cpu} s" "${PHB_ERUNTIME}"
   fi
 }
-# Splits one [network] target into a host and a port, writing them through the two named
+# Splits one [connect] target into a host and a port, writing them through the two named
 # variables. IPv4 and a host name take an optional single-colon ":port". An IPv6 address has
 # colons of its own, so it must be bracketed to carry a port, [addr]:port, and a bare IPv6
 # address with two or more colons and no brackets is the whole host with no port. A "*" port,
@@ -142,7 +144,7 @@ parse_network_target() {
   elif [[ "$target" == \[*\] ]]; then
     host_ref="${target#[}"; host_ref="${host_ref%]}"; port_ref="*"
   elif [[ "$target" == \[* ]]; then
-    report "Policy invalid: '${target}' in [network] opens a bracket it does not close. (PHB-EPOLICY)"
+    report "Policy invalid: '${target}' in [connect] opens a bracket it does not close. (PHB-EPOLICY)"
     exit "${PHB_EPOLICY}"
   else
     local colons="${target//[^:]/}"
@@ -166,8 +168,8 @@ parse_cfg_policy() {
   else
     tdir="$(mktemp -d -t phobos-cfg.XXXXXX)"
   fi
-  local ro="${tdir}/ro.paths" rw="${tdir}/rw.paths" hide="${tdir}/hide.paths" net="${tdir}/net.rules"
-  : >"$ro"; : >"$rw"; : >"$hide"; : >"$net"
+  local rd="${tdir}/read.paths" ex="${tdir}/execute.paths" wr="${tdir}/write.paths" cr="${tdir}/create.paths" de="${tdir}/delete.paths" net="${tdir}/net.rules" bind="${tdir}/bind.rules"
+  : >"$rd"; : >"$ex"; : >"$wr"; : >"$cr"; : >"$de"; : >"$net"; : >"$bind"
   local sec=""
   # Reset per call, so a timeout or a resource limit is read from the cfg that sets it and
   # not carried over from an earlier one; the caller merges each across cfgs by the same rule
@@ -185,24 +187,42 @@ parse_cfg_policy() {
       # Validate the section at its header, so an unknown section is refused whether or not it
       # holds any line, rather than being silently ignored.
       case "$sec" in
-        readonly|read|write|hide|tmpfs|network|limits|timeout) ;;
+        read|execute|write|create|delete|connect|bind|limits) ;;
         *) report "Policy invalid: unknown section '[${sec}]' in ${cfg}. (PHB-EPOLICY)"; exit "${PHB_EPOLICY}" ;;
       esac
       continue
     fi
     case "$sec" in
-      readonly|read) printf '%s\n' "$line" >>"$ro" ;;
-      write)         printf '%s\n' "$line" >>"$rw" ;;
-      hide|tmpfs)    printf '%s\n' "$line" >>"$hide" ;;
-      network)
+      read)    printf '%s\n' "$line" >>"$rd" ;;
+      execute) printf '%s\n' "$line" >>"$ex" ;;
+      write)   printf '%s\n' "$line" >>"$wr" ;;
+      create)  printf '%s\n' "$line" >>"$cr" ;;
+      delete)  printf '%s\n' "$line" >>"$de" ;;
+      connect)
         if [[ ! "$line" =~ ^allow[[:space:]]+(.+)$ ]]; then
-          report "Policy invalid: '${line}' in [network] is not an 'allow <host>[:<port>]' line. (PHB-EPOLICY)"
+          report "Policy invalid: '${line}' in [connect] is not an 'allow <host>[:<port>]' line. (PHB-EPOLICY)"
           exit "${PHB_EPOLICY}"
         fi
         local target="${BASH_REMATCH[1]}" host="" port="*"
         parse_network_target "$target" host port
         printf '%s %s\n' "$host" "$port" >>"$net" ;;
-      limits|timeout)
+      bind)
+        # [bind] names local TCP ports a submission may listen on, one 'allow <port>' per
+        # line. Landlock's bind right is per-port and knows no local address, and the
+        # address a service may bind to is enforced by the stacked libnetblocker bind hook,
+        # not here, so a line that names more than a bare port is refused rather than
+        # accepted with its address silently unenforced.
+        if [[ ! "$line" =~ ^allow[[:space:]]+(.+)$ ]]; then
+          report "Policy invalid: '${line}' in [bind] is not an 'allow <port>' line. (PHB-EPOLICY)"
+          exit "${PHB_EPOLICY}"
+        fi
+        local bind_target="${BASH_REMATCH[1]}"
+        if [[ ! "$bind_target" =~ ^[0-9]+$ ]]; then
+          report "Policy invalid: '${bind_target}' in [bind] names more than a bare TCP port. A local bind address is enforced by the libnetblocker bind hook, a stacked change; name only a port here. (PHB-EPOLICY)"
+          exit "${PHB_EPOLICY}"
+        fi
+        printf '%s\n' "$bind_target" >>"$bind" ;;
+      limits)
         # Only the six known keys are accepted; a bare value and an unknown key are refused
         # rather than ignored, so a typo in a limit does not leave the run unrestricted.
         if [[ "$line" =~ ^timeout[[:space:]]*=[[:space:]]*(.*)$ ]]; then
@@ -226,45 +246,51 @@ parse_cfg_policy() {
         exit "${PHB_EPOLICY}" ;;
     esac
   done <"$cfg"
-  PARSED_RO_FILE="$ro"; PARSED_RW_FILE="$rw"; PARSED_HIDE_FILE="$hide"; PARSED_NET_FILE="$net"; : "${PARSED_TIMEOUT:=}"
+  PARSED_FS_DIR="$tdir"; PARSED_NET_FILE="$net"; PARSED_BIND_FILE="$bind"; : "${PARSED_TIMEOUT:=}"
 }
+# Merges one exercise config's per-right file sets (in add_dir) into the effective policy
+# (cur_dir), refusing any widening against the base (base_dir). Each directory holds one file
+# per right: read.paths, execute.paths, write.paths, create.paths, delete.paths.
+#
+# The effective policy starts as a copy of the base. An exercise may narrow a base path's
+# rights or re-affirm them, but may not grant a right, or name a path, the base does not. A
+# path the exercise mentions in any section has its effective rights REPLACED by exactly what
+# the exercise lists for it, so listing a base read+write path in [read] alone narrows it to
+# read; a path the exercise does not mention keeps its base rights.
 merge_fs_per_path() {
-  local base_ro="$1" base_rw="$2" base_hide="$3"
-  local -n cur_ro_ref="$4"; local -n cur_rw_ref="$5"; local -n cur_hide_ref="$6"
-  local add_ro="$7" add_rw="$8" add_hide="$9"
-  declare -A BASE_RO=() BASE_RW=()
-  if [[ -s "$base_ro" ]]; then while IFS= read -r p; do [[ -z "$p" ]] && continue; BASE_RO["$p"]=1; done < <(canon_paths < "$base_ro"); fi
-  if [[ -s "$base_rw" ]]; then while IFS= read -r p; do [[ -z "$p" ]] && continue; BASE_RW["$p"]=1; done < <(canon_paths < "$base_rw"); fi
-  declare -A CUR_RO=() CUR_RW=() CUR_HIDE=()
-  if [[ -s "$cur_ro_ref"  ]]; then while IFS= read -r p; do [[ -z "$p" ]] && continue; CUR_RO["$p"]=1; done < "$cur_ro_ref"; fi
-  if [[ -s "$cur_rw_ref"  ]]; then while IFS= read -r p; do [[ -z "$p" ]] && continue; CUR_RW["$p"]=1; done < "$cur_rw_ref"; fi
-  if [[ -s "$cur_hide_ref" ]]; then while IFS= read -r p; do [[ -z "$p" ]] && continue; CUR_HIDE["$p"]=1; done < "$cur_hide_ref"; fi
-  if [[ -s "$add_hide" ]]; then
-    while IFS= read -r p; do [[ -z "$p" ]] && continue; CUR_HIDE["$p"]=1; unset "CUR_RO[$p]"; unset "CUR_RW[$p]"; done < <(canon_paths < "$add_hide" | uniq_keep_order)
-  fi
-  if [[ -s "$add_ro" ]]; then
-    while IFS= read -r p; do
-      [[ -z "$p" ]] && continue
-      if [[ -n "${BASE_RO["$p"]:-}" || -n "${BASE_RW["$p"]:-}" ]]; then
-        CUR_RO["$p"]=1; unset "CUR_RW[$p]"; unset "CUR_HIDE[$p]"
-      else
-        report "Policy merge failed: path '$p' requested RO but base does not allow access. (PHB-EMERGE)"; exit "${PHB_EMERGE}"
-      fi
-    done < <(canon_paths < "$add_ro" | uniq_keep_order)
-  fi
-  if [[ -s "$add_rw" ]]; then
-    while IFS= read -r p; do
-      [[ -z "$p" ]] && continue
-      if [[ -n "${BASE_RW["$p"]:-}" ]]; then
-        CUR_RW["$p"]=1; unset "CUR_RO[$p]"; unset "CUR_HIDE[$p]"
-      else
-        report "Policy merge failed: path '$p' requested RW but base forbids write. (PHB-EMERGE)"; exit "${PHB_EMERGE}"
-      fi
-    done < <(canon_paths < "$add_rw" | uniq_keep_order)
-  fi
-  { for k in "${!CUR_RO[@]}"; do echo "$k"; done; } | uniq_keep_order | depth_sort > "$cur_ro_ref" || : > "$cur_ro_ref"
-  { for k in "${!CUR_RW[@]}"; do echo "$k"; done; } | uniq_keep_order | depth_sort > "$cur_rw_ref" || : > "$cur_rw_ref"
-  { for k in "${!CUR_HIDE[@]}"; do echo "$k"; done; } | uniq_keep_order | depth_sort > "$cur_hide_ref" || : > "$cur_hide_ref"
+  local base_dir="$1" cur_dir="$2" add_dir="$3"
+  local right p key cp newf
+  declare -A BASE_HAS=() ADD_HAS=() MENTIONED=()
+  for right in ${PHB_FS_RIGHTS}; do
+    if [[ -s "${base_dir}/${right}.paths" ]]; then
+      while IFS= read -r p; do [[ -z "$p" ]] && continue; BASE_HAS["${right} ${p}"]=1; done < <(canon_paths < "${base_dir}/${right}.paths")
+    fi
+    if [[ -s "${add_dir}/${right}.paths" ]]; then
+      while IFS= read -r p; do [[ -z "$p" ]] && continue; ADD_HAS["${right} ${p}"]=1; MENTIONED["$p"]=1; done < <(canon_paths < "${add_dir}/${right}.paths")
+    fi
+  done
+  for key in "${!ADD_HAS[@]}"; do
+    if [[ -z "${BASE_HAS["$key"]:-}" ]]; then
+      report "Policy merge failed: '${key%% *}' on path '${key#* }' is not granted by the base. (PHB-EMERGE)"; exit "${PHB_EMERGE}"
+    fi
+  done
+  for right in ${PHB_FS_RIGHTS}; do
+    newf="${cur_dir}/${right}.paths.new"
+    : > "$newf"
+    if [[ -s "${cur_dir}/${right}.paths" ]]; then
+      while IFS= read -r p; do
+        [[ -z "$p" ]] && continue
+        cp="$(printf '%s\n' "$p" | canon_paths)"
+        [[ -n "${MENTIONED["$cp"]:-}" ]] && continue
+        printf '%s\n' "$p" >> "$newf"
+      done < "${cur_dir}/${right}.paths"
+    fi
+    for key in "${!ADD_HAS[@]}"; do
+      [[ "${key%% *}" == "$right" ]] && printf '%s\n' "${key#* }" >> "$newf"
+    done
+    uniq_keep_order < "$newf" | depth_sort > "${cur_dir}/${right}.paths" || : > "${cur_dir}/${right}.paths"
+    rm -f "$newf"
+  done
 }
 net_union() {
   local out="$1"; shift
@@ -281,35 +307,33 @@ net_union() {
   done
 }
 
-filter_existing() { while IFS= read -r p; do [[ -n "$p" && -e "$p" ]] && printf '%s\n' "$p"; done; }
 
 write_spec() {
-  local spec_dir="$1" ro="$2" rw="$3" hide="$4" net="$5" timeout="$6" tail="$7"
+  local spec_dir="$1" fs_dir="$2" net="$3" timeout="$4" tail="$5" bind="$6"
   mkdir -p "$spec_dir"
 
-  if [[ -s "$ro" ]]; then filter_existing < "$ro" > "${spec_dir}/ro.paths"; else : > "${spec_dir}/ro.paths"; fi
-  if [[ -s "$hide" ]]; then filter_existing < "$hide" > "${spec_dir}/hide.paths"; else : > "${spec_dir}/hide.paths"; fi
-
-  cp "$rw"   "${spec_dir}/rw.paths"   2>/dev/null || : > "${spec_dir}/rw.paths"
+  local right
+  for right in ${PHB_FS_RIGHTS}; do
+    if [[ -s "${fs_dir}/${right}.paths" ]]; then cp "${fs_dir}/${right}.paths" "${spec_dir}/${right}.paths"; else : > "${spec_dir}/${right}.paths"; fi
+  done
 
   if [[ -n "$timeout" ]]; then printf '%s\n' "$timeout" > "${spec_dir}/timeout.sec"; else : > "${spec_dir}/timeout.sec"; fi
   if [[ -n "$tail" && -f "$tail" ]]; then sed -E 's/#.*$//' "$tail" | sed '/^[[:space:]]*$/d' > "${spec_dir}/tail.flags"; else : > "${spec_dir}/tail.flags"; fi
   if [[ -n "$net" && -s "$net" ]]; then cp "$net" "${spec_dir}/net.rules"; else : > "${spec_dir}/net.rules"; fi
+  if [[ -n "$bind" && -s "$bind" ]]; then cp "$bind" "${spec_dir}/bind.rules"; else : > "${spec_dir}/bind.rules"; fi
 }
-fs_union_files() {
-  local out_ro="$1" out_rw="$2" out_hide="$3" in_ro="$4" in_rw="$5" in_hide="$6"
-  tmpd="$(mktemp -d)"; trap 'rm -rf "$tmpd"' RETURN
-  for k in ro rw hide; do : >"${tmpd}/${k}.all"; done
-  [[ -s "$out_ro"   ]] && cat "$out_ro"   >> "${tmpd}/ro.all"
-  [[ -s "$out_rw"   ]] && cat "$out_rw"   >> "${tmpd}/rw.all"
-  [[ -s "$out_hide" ]] && cat "$out_hide" >> "${tmpd}/hide.all"
-  [[ -s "$in_ro"    ]] && cat "$in_ro"    >> "${tmpd}/ro.all"
-  [[ -s "$in_rw"    ]] && cat "$in_rw"    >> "${tmpd}/rw.all"
-  [[ -s "$in_hide"  ]] && cat "$in_hide"  >> "${tmpd}/hide.all"
-
-  canon_paths < "${tmpd}/ro.all"   | uniq_keep_order | depth_sort > "$out_ro"   || : > "$out_ro"
-  canon_paths < "${tmpd}/rw.all"   | uniq_keep_order | depth_sort > "$out_rw"   || : > "$out_rw"
-  canon_paths < "${tmpd}/hide.all" | uniq_keep_order | depth_sort > "$out_hide" || : > "$out_hide"
+# Unions the per-right file sets of in_dir into out_dir, canonicalising and de-duplicating
+# each right's paths. Used to build the base policy from several base cfgs.
+fs_union_dir() {
+  local out_dir="$1" in_dir="$2"
+  local right tmp
+  for right in ${PHB_FS_RIGHTS}; do
+    tmp="$(mktemp)"
+    [[ -s "${out_dir}/${right}.paths" ]] && cat "${out_dir}/${right}.paths" >> "$tmp"
+    [[ -s "${in_dir}/${right}.paths"  ]] && cat "${in_dir}/${right}.paths"  >> "$tmp"
+    canon_paths < "$tmp" | uniq_keep_order | depth_sort > "${out_dir}/${right}.paths" || : > "${out_dir}/${right}.paths"
+    rm -f "$tmp"
+  done
 }
 
 # --------------------------------------------------------------------------
@@ -318,11 +342,6 @@ fs_union_files() {
 # Both entry points use these, so the two cannot drift apart. That has already
 # happened once in this repository, which is why it lives here and not twice.
 # --------------------------------------------------------------------------
-
-# Rights each section grants, as the letters phobos-landlock understands.
-PHB_RIGHTS_READONLY="r"
-PHB_RIGHTS_EXECUTABLE="rx"
-PHB_RIGHTS_WRITE="rwmd"
 
 # The order the usage text lists the letters in, used to normalise a set.
 PHB_RIGHTS_ORDER="rwxmdi"
@@ -396,31 +415,50 @@ materialise_write_path() {
   : > "$target" || true
 }
 
-# Writes one "rights<TAB>resolved path<TAB>written path" line per policy entry
-# into the named table. Assumes the three section files hold one path per line and
-# that write paths may be created.
+# Writes one "letter<TAB>resolved path<TAB>written path" line per policy entry into the named
+# table. Takes the five per-right section files. Assumes each holds one path per line.
+#
+# The changeable paths (write, create, delete) are materialised first, so a path that is also
+# read or executed exists by the time its read/execute row is built and keeps that right. A
+# non-existent read/execute path is then dropped as a system path absent from this image; a
+# non-existent changeable path is kept, so phobos-landlock refuses it with a clear policy
+# error rather than the run failing later with EACCES.
 collect_rights_table() {
   local table="$1"
-  local readonly_file="$2"
-  local executable_file="$3"
+  local read_file="$2"
+  local execute_file="$3"
   local write_file="$4"
-  local -a section_files=( "$readonly_file" "$executable_file" "$write_file" )
-  local -a section_rights=( "${PHB_RIGHTS_READONLY}" "${PHB_RIGHTS_EXECUTABLE}" \
-                            "${PHB_RIGHTS_WRITE}" )
-  local index
-  local section_file
-  local rights
+  local create_file="$5"
+  local delete_file="$6"
+  local changeable
   local entry
-  : > "$table"
-  for (( index = 0; index < ${#section_files[@]}; index++ )); do
-    section_file="${section_files[$index]}"
-    rights="${section_rights[$index]}"
-    [[ -n "$section_file" && -s "$section_file" ]] || continue
+  for changeable in "$write_file" "$create_file" "$delete_file"; do
+    [[ -n "$changeable" && -s "$changeable" ]] || continue
     while IFS= read -r entry; do
       [[ -z "$entry" ]] && continue
       refuse_dangling_symlink "$entry"
-      [[ "$rights" == "${PHB_RIGHTS_WRITE}" ]] && materialise_write_path "$entry"
-      printf '%s\t%s\t%s\n' "$rights" "$(printf '%s\n' "$entry" | resolve_symlinks)" "$entry" \
+      materialise_write_path "$entry"
+    done < "$changeable"
+  done
+  local -a section_files=( "$read_file" "$execute_file" "$write_file" "$create_file" "$delete_file" )
+  local -a section_letters=( r x w m d )
+  local -a drop_if_missing=( 1 1 0 0 0 )
+  local index
+  local section_file
+  local letter
+  : > "$table"
+  for (( index = 0; index < ${#section_files[@]}; index++ )); do
+    section_file="${section_files[$index]}"
+    letter="${section_letters[$index]}"
+    [[ -n "$section_file" && -s "$section_file" ]] || continue
+    while IFS= read -r entry; do
+      [[ -z "$entry" ]] && continue
+      if (( drop_if_missing[index] )); then
+        [[ -e "$entry" ]] || continue
+      else
+        refuse_dangling_symlink "$entry"
+      fi
+      printf '%s\t%s\t%s\n' "$letter" "$(printf '%s\n' "$entry" | resolve_symlinks)" "$entry" \
         >> "$table"
     done < "$section_file"
   done
@@ -537,16 +575,18 @@ emit_rights_arguments() {
 # that subshell and leave the run going with no rules at all.
 build_path_args() {
   local arguments_name="$1"
-  local readonly_file="$2"
-  local executable_file="$3"
+  local read_file="$2"
+  local execute_file="$3"
   local write_file="$4"
+  local create_file="$5"
+  local delete_file="$6"
   local table
   local folded_table
   local effective_table
   table="$(mktemp -t phobos-rights.XXXXXX)"
   folded_table="$(mktemp -t phobos-rights-f.XXXXXX)"
   effective_table="$(mktemp -t phobos-rights-e.XXXXXX)"
-  collect_rights_table "$table" "$readonly_file" "$executable_file" "$write_file"
+  collect_rights_table "$table" "$read_file" "$execute_file" "$write_file" "$create_file" "$delete_file"
   fold_table_by_target "$table" "$folded_table"
   report_folded_widenings "$table" "$folded_table"
   resolve_rights_hierarchy "$folded_table" "$effective_table"
@@ -649,6 +689,26 @@ build_network_args() {
     network_ref+=( --connect-tcp "$port" )
   done < <(sort -n -u "$ports_file")
   rm -f "$ports_file" "$wildcard_file"
+}
+
+# Fills the named array with the TCP bind-port rules Landlock enforces.
+#
+# The [bind] section names local TCP ports a submission may listen on. Landlock's bind right
+# is per-port and knows no local address, so this emits one --bind-tcp per port. Which local
+# address a service may bind to is a separate, stacked change (the libnetblocker bind hook);
+# the parser already refuses a [bind] line that names more than a bare port, so every line
+# here is a port. A port outside 1..65535 is a policy mistake and ends the run.
+build_bind_args() {
+  local arguments_name="$1"
+  local rules="$2"
+  local -n bind_ref="$arguments_name"
+  local port
+  [[ -n "$rules" && -s "$rules" ]] || return 0
+  while IFS= read -r port; do
+    [[ -z "$port" ]] && continue
+    refuse_unusable_port "bind" "$port"
+    bind_ref+=( --bind-tcp "$port" )
+  done < <(sort -n -u "$rules")
 }
 
 # --------------------------------------------------------------------------
@@ -783,7 +843,7 @@ append_netblocker_rules() {
 PHB_SPEC_MARKER=".phobos-owned-spec"
 
 # The files write_spec creates, the only ones remove_owned_spec_dir deletes.
-PHB_SPEC_FILES="ro.paths rw.paths hide.paths tail.flags net.rules timeout.sec limits.conf"
+PHB_SPEC_FILES="read.paths execute.paths write.paths create.paths delete.paths tail.flags net.rules bind.rules timeout.sec limits.conf"
 
 # The subdirectory phobos.sh keeps its own scratch files in, so they live under the
 # specification directory and are removed with it rather than left in /tmp. phobos.sh ends

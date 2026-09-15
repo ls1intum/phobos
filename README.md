@@ -51,7 +51,7 @@ assets/                    diagrams
 
 Two consequences of using Landlock rather than a mount sandbox are worth knowing:
 
-- Landlock grants a whole subtree and cannot carve an exception inside it, so a policy that tries to hide a path beneath an allowed directory is refused rather than pretended. A path that is simply not granted is denied, but it stays visible by name.
+- Landlock grants a whole subtree and cannot carve an exception inside it, so a path is either granted, with everything beneath it, or simply not granted. A path that is not granted is denied, but it stays visible by name; there is no way to blank it out.
 - A right the running kernel is too old to know is not enforced at all. `phobos-landlock` reports every such gap before the run, and `--minimum-landlock-version` refuses a kernel too old for the guarantee an exercise needs.
 
 ## The network layer
@@ -96,15 +96,20 @@ core/phobos.sh --no-runtime-restriction --config core/config/BaseLanguage-java.c
 
 ## Configuration format
 
-A policy is an INI-like file with these sections. An unknown section, an unknown key in a
-limits section, a malformed `[network]` line and any content before the first section are
-refused (PHB-EPOLICY) rather than ignored, so a typo cannot silently drop a restriction.
+A policy is an INI-like file with these sections. Each filesystem section grants exactly its
+own right, so a program tree that must be both readable and executable is listed in both
+`[read]` and `[execute]`. An unknown section, an unknown key in a limits section, a malformed
+`[connect]` line and any content before the first section are refused (PHB-EPOLICY) rather
+than ignored, so a typo cannot silently drop a restriction.
 
-- `[readonly]` (or `[read]`): one path per line, granted read and execute.
-- `[write]`: one path per line, granted read, write, create and delete (never device nodes or symbolic links).
-- `[hide]` (or `[tmpfs]`): one path per line, denied where no allow-listed ancestor covers it (Landlock cannot mask a path, so it stays visible by name; a path beneath an allowed directory is refused).
-- `[network]`: `allow <host>[:<port>]` lines. A loopback host may omit the port; an external host should name a concrete port so that Landlock can enforce it. An IPv6 address has colons of its own, so a port is written in brackets, `allow [::1]:443`, and a bare `allow ::1` is the host with no port.
-- `[limits]` (or `[timeout]`): `timeout=<seconds>`, the wall-clock bound on the run, and optionally `mem_mb`, `nproc`, `nofile`, `fsize_mb` and `cpu`, applied as rlimits to bound the memory, processes, open files, file size and CPU time the run may use. A value written as `0` switches that limit off. Each key must be named; a bare value is refused.
+- `[read]`: one path per line, granted read.
+- `[execute]`: one path per line, granted execute. A program tree needs both `[read]` and `[execute]`; a pure data tree needs only `[read]`.
+- `[write]`: one path per line, granted write into an existing file (and truncate).
+- `[create]`: one path per line, granted the creation of files, directories, sockets and named pipes (never device nodes or symbolic links).
+- `[delete]`: one path per line, granted the deletion of files and directories.
+- `[connect]`: `allow <host>[:<port>]` lines, the outbound TCP destinations a submission may reach. A loopback host may omit the port; an external host should name a concrete port so that Landlock can enforce it. An IPv6 address has colons of its own, so a port is written in brackets, `allow [::1]:443`, and a bare `allow ::1` is the host with no port.
+- `[bind]`: `allow <port>` lines, the local TCP ports a submission may listen on, enforced by Landlock. A concrete local bind address is enforced by the libnetblocker bind hook rather than here, so a `[bind]` line names only a port.
+- `[limits]`: `timeout=<seconds>`, the wall-clock bound on the run, and optionally `mem_mb`, `nproc`, `nofile`, `fsize_mb` and `cpu`, applied as rlimits to bound the memory, processes, open files, file size and CPU time the run may use. A value written as `0` switches that limit off. Each key must be named; a bare value is refused.
 
 Every text file is stored with LF line endings: the path sets are read line by line, and a carriage return would become part of a bind path. `.gitattributes` enforces this.
 

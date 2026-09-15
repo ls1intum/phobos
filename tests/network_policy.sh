@@ -79,6 +79,36 @@ echo "== an out-of-range port is refused =="
 r="$(run_rules "example.com 70000")"
 [[ "$(field "$r" 1)" != 0 ]] && ok "a port above 65535 is refused" || bad "a port above 65535 is refused" "a non-zero exit" "exit $(field "$r" 1)"
 
+# Runs build_bind_args over a bind-rules body (one port per line) in a subshell, so a policy
+# refusal (which exits) is captured. Prints "<exit>|<args>|<log>".
+run_bind() {
+  local body=$1
+  printf '%s\n' "$body" > "$WORK/bind.rules"
+  local out
+  out="$(
+    # shellcheck source=/dev/null
+    source "${CORE}/phobos-common.sh"
+    args=()
+    build_bind_args args "$WORK/bind.rules" 2>"$WORK/blog"
+    printf '%s' "${args[*]}"
+  )"
+  local rc=$?
+  printf '%s|%s|%s' "$rc" "$out" "$(tr '\n' ' ' <"$WORK/blog")"
+}
+
+echo
+echo "== [bind] emits a --bind-tcp rule per local port =="
+r="$(run_bind "8080")"
+[[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" == "--bind-tcp 8080" ]] && ok "a bind port emits --bind-tcp" || bad "a bind port emits --bind-tcp" "--bind-tcp 8080" "exit $(field "$r" 1): $(field "$r" 2)"
+r="$(run_bind "9000
+8080")"
+[[ "$(field "$r" 2)" == "--bind-tcp 8080 --bind-tcp 9000" ]] && ok "several bind ports are sorted and each enforced" || bad "several bind ports are sorted and each enforced" "--bind-tcp 8080 --bind-tcp 9000" "$(field "$r" 2)"
+
+echo
+echo "== an out-of-range bind port is refused =="
+r="$(run_bind "70000")"
+[[ "$(field "$r" 1)" != 0 ]] && ok "a bind port above 65535 is refused" || bad "a bind port above 65535 is refused" "a non-zero exit" "exit $(field "$r" 1)"
+
 echo
 printf '%d passed, %d failed\n' "$passed" "$failed"
 (( failed == 0 ))

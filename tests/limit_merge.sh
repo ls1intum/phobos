@@ -75,7 +75,7 @@ echo "== a resource limit follows the same rule, and a zero is not applied =="
 check "the larger memory limit wins (256 MB is 262144 KB)" "262144" "$(eff_memkb '[limits]
 mem_mb=128' '[limits]
 mem_mb=256')"
-check "no memory limit leaves it unlimited" "unlimited" "$(eff_memkb '[readonly]
+check "no memory limit leaves it unlimited" "unlimited" "$(eff_memkb '[read]
 /usr' '')"
 check "a memory limit of zero is not applied" "unlimited" "$(eff_memkb '[limits]
 mem_mb=256' '[limits]

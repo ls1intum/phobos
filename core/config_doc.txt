@@ -1,21 +1,31 @@
 
-1. Relevant hooks
+1. The libc functions libnetblocker actually interposes
 
-| Stage                   | Function(s)               | Notes                                           |
-| ----------------------- | ------------------------- | ----------------------------------------------- |
-| Name resolution         | `getaddrinfo()`           | Filter by hostname before any socket is made.   |
-| Socket creation         | `socket()`                | See every new FD, whether client or server.     |
-| Outgoing connect        | `connect()`               | Client‐side: inspect peer IP/port before SYN.   |
-| Incoming accept         | `accept()`<br>`accept4()` | Server‐side: inspect peer IP/port after SYN.    |
-| (Optional server setup) | `bind()`, `listen()`      | If you need to see which ports a service opens. |
+libnetblocker (ld_preloader/netblocker.c) defines exactly four hooks with
+default visibility. Everything else in the library is hidden, so no other
+symbol can take the place of a program's own.
+
+| Stage             | Hook                | What it does                                                     |
+| ----------------- | ------------------- | --------------------------------------------------------------- |
+| Name resolution   | `getaddrinfo()`     | Refuse a lookup of a host no rule covers (EAI_FAIL); cache the   |
+|                   |                     | addresses a permitted lookup returned.                          |
+| Outgoing connect  | `connect()`         | Refuse a TCP or connected-UDP peer no rule covers (EACCES).     |
+| UDP datagram      | `sendto()`          | Refuse a datagram whose destination no rule covers (EACCES).    |
+| UDP datagram      | `sendmsg()`         | The same, for a destination named in `msg_name`.                |
+
+There is NO hook on `socket()`, `bind()`, `listen()`, `accept()`/`accept4()`,
+`send()`/`recv()` or `read()`/`write()`. libnetblocker sees only outbound name
+resolution, outbound connect, and the two ways an unconnected UDP socket names
+its destination. It does not filter inbound connections, and it is defence in
+depth that a raw system call steps around, as SECURITY.md says.
 
 
-2. Config mapping:
+2. Where the policy comes from
 
-    openConnections: hook connect() (outgoing) and accept()/accept4() (incoming).
-    sendData: hook send()/write()
-    receiveData: hook recv()/read()
-
-
-
-
+The allow-list is the [connect] section of a policy cfg (see the README's
+configuration format), turned into two things: concrete TCP ports handed to
+Landlock as `--connect-tcp`, and host/address rules handed to libnetblocker
+through the NETBLOCKER_CONF rules file. Landlock enforces the ports below user
+space; libnetblocker narrows by host as defence in depth. There is no
+`openConnections` / `sendData` / `receiveData` toggle: a rule either names a
+host and a port or it does not.

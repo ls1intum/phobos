@@ -4,7 +4,7 @@
 # phobos-policy.sh -- turn the base and exercise configuration into a run's specification.
 #
 # The one place that discovers the base policy, parses every cfg, merges them and writes the
-# specification files (ro.paths, rw.paths, hide.paths, net.rules, timeout.sec, tail.flags,
+# specification files (read/execute/write/create/delete.paths, net.rules, bind.rules, timeout.sec, tail.flags,
 # limits.conf) into a directory the caller owns. phobos.sh calls it once and then assembles
 # the layer chain over the same directory; a standalone caller can call it to build a
 # specification and then run any single layer script over that directory itself.
@@ -55,8 +55,9 @@ if [[ ${#base_cfgs[@]} -eq 0 ]]; then
   exit "${PHB_EPOLICY}"
 fi
 
-base_ro="$(mktemp -p "$PHOBOS_SCRATCH")"; base_rw="$(mktemp -p "$PHOBOS_SCRATCH")"; base_hide="$(mktemp -p "$PHOBOS_SCRATCH")"; base_net="$(mktemp -p "$PHOBOS_SCRATCH")"
-: >"$base_ro"; : >"$base_rw"; : >"$base_hide"; : >"$base_net"
+base_dir="$(mktemp -d -p "$PHOBOS_SCRATCH")"; base_net="$(mktemp -p "$PHOBOS_SCRATCH")"; base_bind="$(mktemp -p "$PHOBOS_SCRATCH")"
+for r in ${PHB_FS_RIGHTS}; do : >"${base_dir}/${r}.paths"; done
+: >"$base_net"; : >"$base_bind"
 timeout_eff=""
 eff_limit_mem_mb=""; eff_limit_nproc=""; eff_limit_nofile=""; eff_limit_fsize_mb=""; eff_limit_cpu=""
 
@@ -99,22 +100,23 @@ effective_limit() {
 for b in "${base_cfgs[@]}"; do
   parse_cfg_policy "$b"
   # FS: union only (no least-privilege checks while building base)
-  fs_union_files "$base_ro" "$base_rw" "$base_hide" \
-                 "$PARSED_RO_FILE" "$PARSED_RW_FILE" "$PARSED_HIDE_FILE"
+  fs_union_dir "$base_dir" "$PARSED_FS_DIR"
   # NET: union
   tmpnet="$(mktemp -p "$PHOBOS_SCRATCH")"; net_union "$tmpnet" "$base_net" "$PARSED_NET_FILE"; mv "$tmpnet" "$base_net"
+  tmpbind="$(mktemp -p "$PHOBOS_SCRATCH")"; net_union "$tmpbind" "$base_bind" "$PARSED_BIND_FILE"; mv "$tmpbind" "$base_bind"
   merge_limits
 done
 
 # Effective policy (start from base, then apply exercise overrides)
-eff_ro="$(mktemp -p "$PHOBOS_SCRATCH")"; eff_rw="$(mktemp -p "$PHOBOS_SCRATCH")"; eff_hide="$(mktemp -p "$PHOBOS_SCRATCH")"; eff_net="$(mktemp -p "$PHOBOS_SCRATCH")"
-cp "$base_ro" "$eff_ro"; cp "$base_rw" "$eff_rw"; cp "$base_hide" "$eff_hide"; cp "$base_net" "$eff_net"
+eff_dir="$(mktemp -d -p "$PHOBOS_SCRATCH")"; eff_net="$(mktemp -p "$PHOBOS_SCRATCH")"; eff_bind="$(mktemp -p "$PHOBOS_SCRATCH")"
+for r in ${PHB_FS_RIGHTS}; do cp "${base_dir}/${r}.paths" "${eff_dir}/${r}.paths"; done
+cp "$base_net" "$eff_net"; cp "$base_bind" "$eff_bind"
 
 for c in "${cfgs[@]}"; do
   parse_cfg_policy "$c"
-  merge_fs_per_path "$base_ro" "$base_rw" "$base_hide" eff_ro eff_rw eff_hide \
-                    "$PARSED_RO_FILE" "$PARSED_RW_FILE" "$PARSED_HIDE_FILE"
+  merge_fs_per_path "$base_dir" "$eff_dir" "$PARSED_FS_DIR"
   tmpnet="$(mktemp -p "$PHOBOS_SCRATCH")"; net_union "$tmpnet" "$eff_net" "$PARSED_NET_FILE"; mv "$tmpnet" "$eff_net"
+  tmpbind="$(mktemp -p "$PHOBOS_SCRATCH")"; net_union "$tmpbind" "$eff_bind" "$PARSED_BIND_FILE"; mv "$tmpbind" "$eff_bind"
   merge_limits
 done
 
@@ -133,7 +135,7 @@ eff_limit_nofile="$(effective_limit nofile)"
 eff_limit_fsize_mb="$(effective_limit fsize_mb)"
 eff_limit_cpu="$(effective_limit cpu)"
 
-write_spec "$SPEC_DIR" "$eff_ro" "$eff_rw" "$eff_hide" "$eff_net" "$timeout_eff" "$tail_flags_file"
+write_spec "$SPEC_DIR" "$eff_dir" "$eff_net" "$timeout_eff" "$tail_flags_file" "$eff_bind"
 
 # The resource limits go into the specification, one "key=value" per line for each limit a
 # [limits] section named. phobos-resources.sh reads them and sets them with rlimits, so the

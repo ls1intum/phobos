@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-orchestrate.py – prune, merge & build binding config files used by Bubblewrap
-sandboxes.
+orchestrate.py – prune, merge & build the Base*.cfg policy files that
+`core/phobos-policy.sh` applies at run time. Only the discovery (pruning) phase
+uses Bubblewrap; the run phase is enforced by Landlock, not Bubblewrap.
 
 Refactored to consume *pre‑generated* per‑exercise artifacts (.paths/.json) and a
 cumulative `TailPhobos.cfg` emitted upstream by `run_minimal_fs_all.sh` +
@@ -180,7 +181,7 @@ def build_runtime_tail(runtime_chdir: str) -> None:
     not know. phobos.sh appends every tail token to phobos-landlock, so a tail carrying
     a Bubblewrap flag would fail every run.
 
-    Network intent reaches the runtime through the [network] section rather than the tail,
+    Network intent reaches the runtime through the [connect] section rather than the tail,
     and a namespace is the container's boundary rather than Landlock's. So the runtime
     tail is the stable runtime chdir and nothing else; the pruning run's per-exercise
     chdir is ephemeral and is discarded.
@@ -262,10 +263,18 @@ write_cfg_path = CORE_DIR / 'BasePhobos.cfg'
 
 def _write_cfg(read_set: set[str], write_set: set[str], dest: Path) -> None:
     lines: list[str] = []
+    # Per-right sections. A former read-only (ro-bind) path grants read+execute; a former
+    # writable path grants read+write+create+delete. Write implies read, so writable paths
+    # also appear in [read].
+    read_all = sorted(read_set | write_set)
+    if read_all:
+        lines += ['[read]', *read_all, '']
     if read_set:
-        lines += ['[readonly]', *sorted(read_set), '']
+        lines += ['[execute]', *sorted(read_set), '']
     if write_set:
-        lines += ['[write]', *sorted(write_set), '']
+        writable = sorted(write_set)
+        for section in ('write', 'create', 'delete'):
+            lines += [f'[{section}]', *writable, '']
     dest.write_text('\n'.join(lines))
 
 _write_cfg(read_union, write_union, write_cfg_path)
