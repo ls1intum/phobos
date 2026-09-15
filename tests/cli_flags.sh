@@ -56,6 +56,18 @@ else
   bad "the short forms -ntr/-nnr/-nrr/-nfr run the command" "exit 0, short-ok" "exit ${RC}: $OUT"
 fi
 
+# Every layer off still runs through the chain (a filesystem layer with no Landlock), and the
+# last layer must remove the specification rather than leak it.
+NOLAYERS="$WORK/nolayers"
+mkdir -p "$NOLAYERS"
+run_phobos "$NOLAYERS" -ntr -nnr -nrr -nfr --config "$BASE" -- /bin/echo cleaned
+left="$(find "$NOLAYERS" -mindepth 1 -maxdepth 1 -name 'phobos-spec.*' 2>/dev/null | wc -l | tr -d ' ')"
+if [[ "$RC" -eq 0 && "$OUT" == *"cleaned"* && "$left" -eq 0 ]]; then
+  ok "a run with every layer disabled leaves no specification behind"
+else
+  bad "a run with every layer disabled leaves no specification behind" "exit 0, cleaned, no spec left" "exit ${RC}, specs=${left}: $OUT"
+fi
+
 echo
 echo "== an unknown or obsolete option is refused before anything runs =="
 for opt in --no-timeout --no-fs --bogus -x; do

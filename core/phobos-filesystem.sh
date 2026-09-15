@@ -6,8 +6,15 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/phobos-common.sh"
 
 DEBUG=0
-if [[ "${1:-}" == "--debug" ]]; then DEBUG=1; shift; fi
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-filesystem.sh [--debug] <SPEC_DIR> -- <cmd...>"; exit 2; }
+NO_LANDLOCK=0
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --debug) DEBUG=1; shift ;;
+    --no-landlock) NO_LANDLOCK=1; shift ;;
+    *) break ;;
+  esac
+done
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-filesystem.sh [--debug] [--no-landlock] <SPEC_DIR> -- <cmd...>"; exit 2; }
 SPEC_DIR="$1"; shift 2
 CMD=("$@")
 
@@ -19,13 +26,12 @@ trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 RO="${SPEC_DIR}/ro.paths"; RW="${SPEC_DIR}/rw.paths"; HIDE="${SPEC_DIR}/hide.paths"; TAIL="${SPEC_DIR}/tail.flags"
 LANDLOCK="${PHOBOS_LANDLOCK_BIN:-${HERE}/phobos-landlock}"; TIMEOUT_BIN="${TIMEOUT_BIN:-timeout}"
 
-enable_fs="${PHB_ENABLE_FILESYSTEM:-1}"
-
-# If filesystem layer is disabled, run the command directly,
-# but still respect PHB_TIMEOUT_SEC if the timeout layer is active.
-if [[ "$enable_fs" != "1" ]]; then
+# With --no-landlock the filesystem restriction is off, so run the command without Landlock,
+# but still under the timeout when one is set. Run it as a child and exit with its status
+# rather than exec'ing it, so the EXIT trap still removes the specification directory.
+if (( NO_LANDLOCK )); then
   if (( DEBUG )); then
-    >&2 printf '[phobos] filesystem layer disabled; exec '
+    >&2 printf '[phobos] filesystem layer disabled; run '
     printf '%q ' "${CMD[@]}"
     echo >&2
   fi
@@ -41,7 +47,11 @@ if [[ "$enable_fs" != "1" ]]; then
     fi
     exit "$rc"
   else
-    exec "${CMD[@]}"
+    set +e
+    "${CMD[@]}"
+    rc=$?
+    set -e
+    exit "$rc"
   fi
 fi
 

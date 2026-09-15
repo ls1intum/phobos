@@ -59,7 +59,7 @@ hdr "F. Nicht durchsetzbare Policy und umlenkbare Schreibpfade werden abgelehnt"
 SPEC=$(mktemp -d); for f in ro.paths rw.paths hide.paths tail.flags net.rules; do : > "$SPEC/$f"; done
 echo "$TD"            > "$SPEC/ro.paths"
 echo "$TD/allowed-ro" > "$SPEC/hide.paths"
-OUT=$(PHB_ENABLE_FILESYSTEM=1 bash $CORE/phobos-filesystem.sh "$SPEC" -- /bin/true 2>&1); RC=$?
+OUT=$(bash $CORE/phobos-filesystem.sh "$SPEC" -- /bin/true 2>&1); RC=$?
 if [[ $RC -eq 11 && "$OUT" == *"unenforceable"* ]]; then
   ok "hide unterhalb eines erlaubten Baums bricht ab (PHB-EPOLICY) statt Sicherheit vorzutaeuschen"
 else
@@ -203,7 +203,7 @@ hdr "H. Geerbte Rechte werden gemeldet, nicht verschwiegen"
 WEITER=$(mktemp -d); for f in ro.paths rw.paths hide.paths tail.flags net.rules; do : > "$WEITER/$f"; done
 printf '%s\n' "$TD/fein" > "$WEITER/ro.paths"
 printf '%s\n' "$TD" > "$WEITER/rw.paths"
-OUT=$(PHB_ENABLE_FILESYSTEM=1 "$CORE/phobos-filesystem.sh" "$WEITER" -- /bin/true 2>&1)
+OUT=$("$CORE/phobos-filesystem.sh" "$WEITER" -- /bin/true 2>&1)
 if printf '%s' "$OUT" | grep -q "effectively holds"; then
   ok "geerbte Erweiterung wird benannt statt stillschweigend uebernommen"
 else

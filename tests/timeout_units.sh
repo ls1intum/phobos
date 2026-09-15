@@ -188,12 +188,13 @@ timeout_arg_for() {
   local value=$2
   rm -f "$WORK/record"
   local rc
-  PHB_ENABLE_FILESYSTEM="$enable_fs" \
+  local flags=()
+  if [[ "$enable_fs" != "1" ]]; then flags+=(--no-landlock); fi
   PHB_TIMEOUT_SEC="$value" \
   TIMEOUT_BIN="$WORK/fake-timeout" \
   PHOBOS_LANDLOCK_BIN="$WORK/fake-landlock" \
   PHB_TEST_RECORD="$WORK/record" \
-    bash "$CORE/phobos-filesystem.sh" "$SPEC" -- /bin/true >/dev/null 2>&1
+    bash "$CORE/phobos-filesystem.sh" "${flags[@]}" "$SPEC" -- /bin/true >/dev/null 2>&1
   rc=$?
   if [[ -f "$WORK/record" ]]; then
     printf 'rc=%s arg=%s' "$rc" "$(awk '{print $2}' "$WORK/record")"
@@ -212,6 +213,21 @@ for layer in 1 0; do
   check "$label: sub-second"        "rc=0 arg=0.500s" "$(timeout_arg_for "$layer" 0.500)"
   check "$label: disabled"          "rc=0 arg=<none>" "$(timeout_arg_for "$layer" "")"
 done
+
+# The timeout must wrap phobos-landlock directly, so GNU timeout's kill escalation reaches a
+# command that ignores SIGTERM (a bash intermediary between them would die on SIGTERM and let
+# timeout exit before it escalates). Assert phobos-landlock is the word right after the
+# duration in what GNU timeout was invoked with.
+echo
+echo "== modular runtime: the timeout monitors phobos-landlock directly =="
+rm -f "$WORK/record"
+PHB_TIMEOUT_SEC="3" \
+TIMEOUT_BIN="$WORK/fake-timeout" \
+PHOBOS_LANDLOCK_BIN="$WORK/fake-landlock" \
+PHB_TEST_RECORD="$WORK/record" \
+  bash "$CORE/phobos-filesystem.sh" "$SPEC" -- /bin/true >/dev/null 2>&1
+monitored="$(awk '{print $3}' "$WORK/record" 2>/dev/null)"
+check "phobos-landlock is timeout's monitored child" "$WORK/fake-landlock" "$monitored"
 
 # ---------------------------------------------------------------------
 # Modular parser: [network] host:port splitting
