@@ -96,12 +96,15 @@ core/phobos.sh --no-runtime-restriction --config core/config/BaseLanguage-java.c
 
 ## Configuration format
 
-A policy is an INI-like file with these sections:
+A policy is an INI-like file with these sections. An unknown section, an unknown key in a
+limits section, a malformed `[network]` line and any content before the first section are
+refused (PHB-EPOLICY) rather than ignored, so a typo cannot silently drop a restriction.
 
-- `[readonly]`: one path per line, granted read and execute.
+- `[readonly]` (or `[read]`): one path per line, granted read and execute.
 - `[write]`: one path per line, granted read, write, create and delete (never device nodes or symbolic links).
-- `[network]`: `allow <host>[:<port>]` lines. A loopback host may omit the port; an external host should name a concrete port so that Landlock can enforce it.
-- `[limits]`: `timeout=<seconds>`, the wall-clock bound on the run, and optionally `mem_mb`, `nproc`, `nofile`, `fsize_mb` and `cpu`, applied as rlimits to bound the memory, processes, open files, file size and CPU time the run may use.
+- `[hide]` (or `[tmpfs]`): one path per line, denied where no allow-listed ancestor covers it (Landlock cannot mask a path, so it stays visible by name; a path beneath an allowed directory is refused).
+- `[network]`: `allow <host>[:<port>]` lines. A loopback host may omit the port; an external host should name a concrete port so that Landlock can enforce it. An IPv6 address has colons of its own, so a port is written in brackets, `allow [::1]:443`, and a bare `allow ::1` is the host with no port.
+- `[limits]` (or `[timeout]`): `timeout=<seconds>`, the wall-clock bound on the run, and optionally `mem_mb`, `nproc`, `nofile`, `fsize_mb` and `cpu`, applied as rlimits to bound the memory, processes, open files, file size and CPU time the run may use. A value written as `0` switches that limit off. Each key must be named; a bare value is refused.
 
 Every text file is stored with LF line endings: the path sets are read line by line, and a carriage return would become part of a bind path. `.gitattributes` enforces this.
 
