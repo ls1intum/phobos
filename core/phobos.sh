@@ -11,13 +11,19 @@ Usage:
   phobos.sh [layer options] [--config <file>]... -- <build_command> [args...]
   phobos.sh [layer options] [--config <file>]... <build_command> [args...]
 
-Layer options (all enabled by default):
-  --no-timeout        Disable timeout wrapper (phobos-timeout.sh).
-  --no-network        Disable network sandbox (libnetblocker / phobos-network.sh).
-  --no-resources      Disable resource limits (rlimits / phobos-resources.sh).
-  --no-filesystem     Disable filesystem sandbox (Landlock / phobos-filesystem.sh).
-  --allow-unsandboxed Run the command with no sandbox when no Base*.cfg is present,
-                      instead of refusing. For deliberate raw runs only.
+Restriction options (every restriction is applied by default):
+  --no-runtime-restriction, -ntr     Disable the timeout (phobos-timeout.sh).
+  --no-networksystem-restriction, -nnr
+                                     Disable the network filter (libnetblocker /
+                                     phobos-network.sh).
+  --no-resources-restriction, -nrr   Disable the resource limits (rlimits /
+                                     phobos-resources.sh).
+  --no-filesystem-restriction, -nfr  Disable the filesystem sandbox (Landlock /
+                                     phobos-filesystem.sh).
+  --allow-unsandboxed                Debug switch: run the command raw, with every
+                                     layer disabled, EVEN when a base policy is
+                                     present. For deliberate unconfined runs only.
+  --debug                            Print the exact command each layer runs.
 
 Notes:
 - Base config: any "${HERE}/Base*.cfg" (INI-like) is applied first (sorted).
@@ -26,11 +32,13 @@ Notes:
 - Tail config: "${HERE}/TailPhobos.cfg" (flags only) is applied last.
 - If no Base*.cfg is present, Phobos refuses to run (PHB-EPOLICY) rather than run
   the command unconfined. --allow-unsandboxed opts into a raw run on purpose.
+- An unknown option is refused rather than treated as the command. The first
+  non-option word is the command; everything after it is its arguments.
 - The run's policy is written to a directory under PHOBOS_SPEC_PARENT (default
   /var/tmp), which must lie outside every write path, and removed when the run
   ends, together with the scratch subdirectory this script keeps inside it. A run
-  with --no-filesystem and --no-timeout hands the command to exec and leaves that
-  directory behind.
+  with --no-filesystem-restriction and --no-runtime-restriction hands the command
+  to exec and leaves that directory behind.
 USAGE
   exit 2
 }
@@ -42,6 +50,7 @@ enable_timeout=1
 enable_network=1
 enable_resources=1
 enable_filesystem=1
+enable_debug=0
 # Refusing to run without a base policy is the default; this is the explicit opt-out.
 allow_unsandboxed=0
 
@@ -52,27 +61,61 @@ while (( "$#" )); do
     --config|-c)
       shift
       [[ $# -gt 0 ]] || usage
-      [[ -f "$1" ]] || { echo "Config not found: $1" >&2; exit ${PHB_EPOLICY}; }
       cfgs+=("$1"); shift;;
-    --no-timeout)
+    --no-runtime-restriction|-ntr)
       enable_timeout=0; shift;;
-    --no-network)
+    --no-networksystem-restriction|-nnr)
       enable_network=0; shift;;
-    --no-resources)
+    --no-resources-restriction|-nrr)
       enable_resources=0; shift;;
-    --no-filesystem|--no-fs)
+    --no-filesystem-restriction|-nfr)
       enable_filesystem=0; shift;;
     --allow-unsandboxed)
       allow_unsandboxed=1; shift;;
+    --debug)
+      enable_debug=1; shift;;
     --)
       shift
       while (( "$#" )); do cmd+=("$1"); shift; done
       break;;
+    -*)
+      # An unknown option is refused rather than silently run as the command, so an
+      # obsolete or mistyped flag fails clearly instead of ending up as argv.
+      echo "Unknown option: $1" >&2; usage;;
     *)
-      cmd+=("$1"); shift;;
+      # The first non-option word is the command; everything after it, options
+      # included, is its arguments.
+      while (( "$#" )); do cmd+=("$1"); shift; done
+      break;;
   esac
 done
 [[ ${#cmd[@]} -eq 0 ]] && usage
+
+# --allow-unsandboxed is a debug switch: it runs the command with no layer at all, even
+# when a base policy is present. Handled here, before any specification directory is
+# created, so a raw run leaves nothing behind, and before the configs are read, since
+# there is no sandbox to build from them.
+if (( allow_unsandboxed )); then
+  _log "WARNING: --allow-unsandboxed given; running the command RAW, with NO sandbox."
+  _log "runtime restriction (timeout) DISABLED"
+  _log "network-system restriction (libnetblocker) DISABLED"
+  _log "resources restriction (rlimits) DISABLED"
+  _log "filesystem restriction (Landlock) DISABLED"
+  (( ${#cfgs[@]} )) && _log "--allow-unsandboxed ignores the ${#cfgs[@]} --config file(s) given: there is no sandbox to apply them to."
+  exec "${cmd[@]}"
+fi
+
+# Loudly record every restriction the caller switched off, so a run with a layer
+# disabled cannot look like an ordinary one in a log.
+(( enable_timeout ))    || _log "runtime restriction (timeout) DISABLED by --no-runtime-restriction"
+(( enable_network ))    || _log "network-system restriction (libnetblocker) DISABLED by --no-networksystem-restriction"
+(( enable_resources ))  || _log "resources restriction (rlimits) DISABLED by --no-resources-restriction"
+(( enable_filesystem )) || _log "filesystem restriction (Landlock) DISABLED by --no-filesystem-restriction"
+
+# Outside a raw run, every --config must name a file that exists.
+for c in "${cfgs[@]}"; do
+  [[ -f "$c" ]] || { echo "Config not found: $c" >&2; exit "${PHB_EPOLICY}"; }
+done
 
 # Export layer selection for inner scripts
 export PHB_ENABLE_TIMEOUT="$enable_timeout"
@@ -83,12 +126,9 @@ export PHB_ENABLE_FILESYSTEM="$enable_filesystem"
 mapfile -t base_cfgs < <(ls -1 "${HERE}"/Base*.cfg 2>/dev/null | sort || true)
 if [[ ${#base_cfgs[@]} -eq 0 ]]; then
   # No base policy means no sandbox. Running the command anyway would grade an untrusted
-  # submission unconfined while looking like Phobos ran, so refuse by default;
-  # --allow-unsandboxed is the explicit, per-invocation opt-out for a deliberate raw run.
-  if (( allow_unsandboxed )); then
-    _log "No Base*.cfg found; --allow-unsandboxed given, running command without sandbox."
-    exec "${cmd[@]}"
-  fi
+  # submission unconfined while looking like Phobos ran, so refuse. --allow-unsandboxed,
+  # handled earlier before any specification is created, is the explicit opt-out for a
+  # deliberate raw run.
   report "Policy invalid: no Base*.cfg beside phobos.sh, so there is no sandbox to apply; refusing to run the command unconfined. Pass --allow-unsandboxed to run it raw on purpose. (PHB-EPOLICY)"
   exit "${PHB_EPOLICY}"
 fi
@@ -166,4 +206,5 @@ write_spec "$SPEC_DIR" "$eff_ro" "$eff_rw" "$eff_hide" "$eff_net" "$timeout_eff"
 } > "${SPEC_DIR}/limits.conf"
 
 # Always enter through the first layer; inner scripts decide whether to apply themselves
-exec "${HERE}/phobos-timeout.sh" "$SPEC_DIR" -- "${cmd[@]}"
+dbg=(); (( enable_debug )) && dbg=(--debug)
+exec "${HERE}/phobos-timeout.sh" "${dbg[@]}" "$SPEC_DIR" -- "${cmd[@]}"

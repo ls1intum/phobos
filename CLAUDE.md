@@ -66,7 +66,7 @@ There is no build system. The shell runs as it is, and the C is compiled inside 
 core/phobos.sh --config core/config/BaseLanguage-java.cfg -- ./gradlew test
 
 # Layer switches, for isolating which layer a failure belongs to
-core/phobos.sh --no-timeout --config core/config/BaseLanguage-java.cfg -- <command>
+core/phobos.sh --no-runtime-restriction --config core/config/BaseLanguage-java.cfg -- <command>
 ```
 
 ### The linters, which are the gate

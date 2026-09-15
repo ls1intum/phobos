@@ -5,9 +5,12 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=phobos-common.sh
 source "${HERE}/phobos-common.sh"
 
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh <SPEC_DIR> -- <cmd...>"; exit 2; }
+DEBUG=0
+if [[ "${1:-}" == "--debug" ]]; then DEBUG=1; shift; fi
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] <SPEC_DIR> -- <cmd...>"; exit 2; }
 SPEC_DIR="$1"; shift 2
 CMD=("$@")
+dbg=(); (( DEBUG )) && dbg=(--debug)
 
 # Removes the specification phobos.sh created if this layer ends before it hands over,
 # for instance because the library cannot be used.
@@ -17,7 +20,7 @@ enable_network="${PHB_ENABLE_NETWORK:-1}"
 
 # If network layer is disabled, just pass through to the resource layer.
 if [[ "$enable_network" != "1" ]]; then
-  exec "${HERE}/phobos-resources.sh" "${SPEC_DIR}" -- "${CMD[@]}"
+  exec "${HERE}/phobos-resources.sh" "${dbg[@]}" "${SPEC_DIR}" -- "${CMD[@]}"
 fi
 
 RULES="${SPEC_DIR}/net.rules"
@@ -49,4 +52,4 @@ else
   export NETBLOCKER_CONF="$RULES"
 fi
 
-exec "${HERE}/phobos-resources.sh" "${SPEC_DIR}" -- "${CMD[@]}"
+exec "${HERE}/phobos-resources.sh" "${dbg[@]}" "${SPEC_DIR}" -- "${CMD[@]}"

@@ -91,7 +91,7 @@ Run the grading container with **`--network none`** and with cgroup limits (`--m
 To isolate which layer a failure belongs to, each layer can be turned off on its own:
 
 ```
-core/phobos.sh --no-timeout --config core/config/BaseLanguage-java.cfg -- <command>
+core/phobos.sh --no-runtime-restriction --config core/config/BaseLanguage-java.cfg -- <command>
 ```
 
 ## Configuration format

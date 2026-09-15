@@ -5,9 +5,12 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=phobos-common.sh
 source "${HERE}/phobos-common.sh"
 
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-resources.sh <SPEC_DIR> -- <cmd...>"; exit 2; }
+DEBUG=0
+if [[ "${1:-}" == "--debug" ]]; then DEBUG=1; shift; fi
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-resources.sh [--debug] <SPEC_DIR> -- <cmd...>"; exit 2; }
 SPEC_DIR="$1"; shift 2
 CMD=("$@")
+dbg=(); (( DEBUG )) && dbg=(--debug)
 
 # Removes the specification phobos.sh created if this layer ends before it hands over.
 trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
@@ -16,7 +19,7 @@ enable_resources="${PHB_ENABLE_RESOURCES:-1}"
 
 # If the resource layer is disabled, hand straight to the filesystem layer.
 if [[ "$enable_resources" != "1" ]]; then
-  exec "${HERE}/phobos-filesystem.sh" "${SPEC_DIR}" -- "${CMD[@]}"
+  exec "${HERE}/phobos-filesystem.sh" "${dbg[@]}" "${SPEC_DIR}" -- "${CMD[@]}"
 fi
 
 # The limits phobos.sh captured from the policy, one "key=value" per line, only for the
@@ -59,4 +62,4 @@ done
 # rlimits are the in-process line of defence beside them.
 apply_resource_limits "$mem_mb" "$nproc" "$nofile" "$fsize_mb" "$cpu"
 
-exec "${HERE}/phobos-filesystem.sh" "${SPEC_DIR}" -- "${CMD[@]}"
+exec "${HERE}/phobos-filesystem.sh" "${dbg[@]}" "${SPEC_DIR}" -- "${CMD[@]}"
