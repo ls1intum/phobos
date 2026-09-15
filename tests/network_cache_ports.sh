@@ -409,7 +409,7 @@ chmod +x "$WORK/record-landlock"
 
 REACH_SPEC="$WORK/reach-spec"
 mkdir -p "$REACH_SPEC"
-for f in ro.paths hide.paths tail.flags net.rules; do : > "$REACH_SPEC/$f"; done
+for f in read.paths execute.paths create.paths delete.paths tail.flags net.rules; do : > "$REACH_SPEC/$f"; done
 
 # Runs the filesystem layer over the reach specification with the given write path,
 # with the preload library and rules file set as phobos-network.sh sets them, and
@@ -421,9 +421,9 @@ run_with_write_path() {
   local out
   local rc
   if [[ "$ending" == "unterminated" ]]; then
-    printf '%s' "$write_path" > "$REACH_SPEC/rw.paths"
+    printf '%s' "$write_path" > "$REACH_SPEC/write.paths"
   else
-    printf '%s\n' "$write_path" > "$REACH_SPEC/rw.paths"
+    printf '%s\n' "$write_path" > "$REACH_SPEC/write.paths"
   fi
   out="$(PHB_TIMEOUT_SEC="" PHB_NETBLOCKER_SO="$WORK/libnetblocker.so" \
          NETBLOCKER_CONF="$REACH_SPEC/net.rules" \
@@ -487,7 +487,7 @@ fi
 
 # A base policy for phobos.sh with one write path, so that a specification can be
 # placed beneath it on purpose.
-printf '[readonly]\n/usr\n\n[write]\n%s\n' "$WORK/writable" > "$WORK/core/BaseTest.cfg"
+printf '[read]\n/usr\n\n[write]\n%s\n' "$WORK/writable" > "$WORK/core/BaseTest.cfg"
 # Created before any run: a write path that does not exist yet is created as a file.
 mkdir -p "$WORK/writable/specs"
 printf '[limits]\ntimeout=1\n' > "$WORK/one-second.cfg"

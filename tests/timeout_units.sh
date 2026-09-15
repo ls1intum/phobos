@@ -107,7 +107,7 @@ accepts "decimal zero disables the timeout"     '[limits]
 timeout=0.000'                                  ""
 accepts "absent timeout leaves it disabled"     '[limits]
 mem_mb=512'                                     ""
-accepts "no limits section at all"              '[readonly]
+accepts "no limits section at all"              '[read]
 /usr'                                           ""
 accepts "other limit keys are left alone"       '[limits]
 mem_mb=512
@@ -177,7 +177,7 @@ chmod +x "$WORK/fake-landlock"
 
 SPEC="$WORK/spec"
 mkdir -p "$SPEC"
-for f in ro.paths rw.paths hide.paths tail.flags net.rules; do : > "$SPEC/$f"; done
+for f in read.paths execute.paths write.paths create.paths delete.paths tail.flags net.rules; do : > "$SPEC/$f"; done
 
 # Runs the filesystem layer and prints its exit status together with the
 # duration argument GNU timeout saw, or "<none>" when GNU timeout was not
@@ -226,7 +226,7 @@ monitored="$(awk '{print $3}' "$WORK/record" 2>/dev/null)"
 check "phobos-landlock is timeout's monitored child" "$WORK/fake-landlock" "$monitored"
 
 # ---------------------------------------------------------------------
-# Modular parser: [network] host:port splitting
+# Modular parser: [connect] host:port splitting
 #
 # Migrated from the removed legacy-wrapper checks. parse_cfg_policy in
 # phobos-common.sh is the single parser the entry point uses; it writes
@@ -236,9 +236,9 @@ check "phobos-landlock is timeout's monitored child" "$WORK/fake-landlock" "$mon
 # ---------------------------------------------------------------------
 
 echo
-echo "== modular parser: [network] host:port grammar =="
+echo "== modular parser: [connect] host:port grammar =="
 
-# Prints the "host port" lines parse_cfg_policy writes for a [network] body, or nothing when
+# Prints the "host port" lines parse_cfg_policy writes for a [connect] body, or nothing when
 # the body is refused (a refusal is asserted separately with rejects_net).
 parsed_net_rules() {
   bash -c '
@@ -262,27 +262,27 @@ rejects_net() {
   fi
 }
 
-check "parser: a bare IPv6 is the whole host, no port"    "::1 *"          "$(parsed_net_rules '[network]
+check "parser: a bare IPv6 is the whole host, no port"    "::1 *"          "$(parsed_net_rules '[connect]
 allow ::1')"
-check "parser: bracketed IPv6 without a port"             "::1 *"          "$(parsed_net_rules '[network]
+check "parser: bracketed IPv6 without a port"             "::1 *"          "$(parsed_net_rules '[connect]
 allow [::1]')"
-check "parser: bracketed IPv6 with a port"                "::1 443"        "$(parsed_net_rules '[network]
+check "parser: bracketed IPv6 with a port"                "::1 443"        "$(parsed_net_rules '[connect]
 allow [::1]:443')"
-check "parser: IPv4 with a port"                          "127.0.0.1 8080" "$(parsed_net_rules '[network]
+check "parser: IPv4 with a port"                          "127.0.0.1 8080" "$(parsed_net_rules '[connect]
 allow 127.0.0.1:8080')"
-check "parser: an unbracketed ::1:* is a bogus host"      "::1:* *"        "$(parsed_net_rules '[network]
+check "parser: an unbracketed ::1:* is a bogus host"      "::1:* *"        "$(parsed_net_rules '[connect]
 allow ::1:*')"
 
-rejects_net "a [network] line without allow is refused"    '[network]
+rejects_net "a [connect] line without allow is refused"    '[connect]
 localhost'
-rejects_net "an IPv6 bracket that never closes is refused" '[network]
+rejects_net "an IPv6 bracket that never closes is refused" '[connect]
 allow [::1'
 rejects_net "an unknown section is refused"                '[bogus]
 /x'
 rejects_net "content before any section is refused"        'stray line'
 rejects_net "an unknown key in [limits] is refused"        '[limits]
 foo=1'
-rejects_net "a bare value in a timeout section is refused" '[timeout]
+rejects_net "a bare value in a [limits] section is refused" '[limits]
 1.234'
 
 

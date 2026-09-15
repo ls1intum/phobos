@@ -54,17 +54,7 @@ su -s /bin/bash "$SU" -c "export PATH=/opt/java/openjdk/bin:\$PATH; cd $TD && $C
 if grep -q 'RESULT OK read ' /tmp/nonroot2.log; then ok "als $SU: erlaubte Datei weiterhin lesbar"
 else bad "als $SU: erlaubte Datei nicht lesbar"; sed 's/^/       | /' /tmp/nonroot2.log | tail -4; fi
 
-hdr "F. Nicht durchsetzbare Policy und umlenkbare Schreibpfade werden abgelehnt"
-# hide-Pfad unterhalb eines erlaubten Baums: Landlock kann das nicht aussparen
-SPEC=$(mktemp -d); for f in ro.paths rw.paths hide.paths tail.flags net.rules; do : > "$SPEC/$f"; done
-echo "$TD"            > "$SPEC/ro.paths"
-echo "$TD/allowed-ro" > "$SPEC/hide.paths"
-OUT=$(bash $CORE/phobos-filesystem.sh "$SPEC" -- /bin/true 2>&1); RC=$?
-if [[ $RC -eq 11 && "$OUT" == *"unenforceable"* ]]; then
-  ok "hide unterhalb eines erlaubten Baums bricht ab (PHB-EPOLICY) statt Sicherheit vorzutaeuschen"
-else
-  bad "unerwartet: rc=$RC out=$OUT"
-fi
+hdr "F. Umlenkbare Schreibpfade werden abgelehnt"
 # Schreibpfad, der ein Symlink ist: darf die Regel nicht umlenken
 ln -sfn /var/tmp/secret $TD/umleitung 2>/dev/null
 # Ausgabe erst einsammeln: unter "set -o pipefail" wuerde der Exit-Code des
@@ -195,14 +185,13 @@ hdr "H. Geerbte Rechte werden gemeldet, nicht verschwiegen"
 # dann weniger, als tatsaechlich gilt. Das wird gemeldet und die geltende
 # Rechtemenge wird uebergeben, damit die Ausgabe nicht luegt.
 #
-# Der harte Fall, eine echte Verengung unterhalb eines weiteren Vorfahren, ist
-# ueber die Politikdateien noch nicht erreichbar: [readonly] erteilt rx und
-# [write] erteilt rwmd, und keine der beiden Mengen liegt ganz in der anderen.
-# Er wird von den Einheitstests abgedeckt und wird hier pruefbar, sobald das
-# Format einen dritten Abschnitt fuer reine Daten kennt.
-WEITER=$(mktemp -d); for f in ro.paths rw.paths hide.paths tail.flags net.rules; do : > "$WEITER/$f"; done
-printf '%s\n' "$TD/fein" > "$WEITER/ro.paths"
-printf '%s\n' "$TD" > "$WEITER/rw.paths"
+# Der harte Fall, eine echte Verengung unterhalb eines weiteren Vorfahren, ist mit den
+# Pro-Recht-Abschnitten nun ausdrueckbar (etwa [read] auf einem Unterpfad unter [read] und
+# [write] auf dem Vorfahren) und wird von den Einheitstests abgedeckt. Hier bleibt der
+# gemeldete, nicht abgelehnte Fall.
+WEITER=$(mktemp -d); for f in read.paths execute.paths write.paths create.paths delete.paths tail.flags net.rules; do : > "$WEITER/$f"; done
+printf '%s\n' "$TD/fein" > "$WEITER/read.paths"
+printf '%s\n' "$TD" > "$WEITER/write.paths"
 OUT=$("$CORE/phobos-filesystem.sh" "$WEITER" -- /bin/true 2>&1)
 if printf '%s' "$OUT" | grep -q "effectively holds"; then
   ok "geerbte Erweiterung wird benannt statt stillschweigend uebernommen"

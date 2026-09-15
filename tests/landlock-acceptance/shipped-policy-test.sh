@@ -7,10 +7,10 @@
 # still works under it (read its files, write its build output, use /dev/null and
 # /dev/urandom) and that a path outside the allow-list stays denied.
 #
-# The probe uses absolute paths on purpose: the JVM's user.dir does not resolve when its
-# working directory is not itself readable, which the shipped policy does not grant. Making
-# that working directory readable narrowly, for relative paths, is a separate change (an
-# execute-only grant), so this suite deliberately does not depend on it.
+# The probe uses absolute paths on purpose, so it does not depend on the working directory's
+# contents. The shipped policy now grants read on /var/tmp/testing-dir itself, so the JVM's
+# user.dir resolves and relative paths would work too; absolute paths keep this suite
+# independent of that grant either way.
 #
 # It needs the run-phase image and an ordinary container: no --privileged, no --cap-add,
 # no --security-opt.

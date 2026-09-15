@@ -24,7 +24,7 @@ bad() { printf 'FAIL  %s\n        expected: %s\n        actual:   %s\n' "$1" "$2
 CORE_X="$WORK/core-x"
 cp -R "$CORE" "$CORE_X"
 chmod +x "$CORE_X"/*.sh
-printf '[readonly]\n/usr\n' > "$CORE_X/BaseTest.cfg"
+printf '[read]\n/usr\n' > "$CORE_X/BaseTest.cfg"
 BASE="$CORE_X/BaseTest.cfg"
 printf '%s\n' '#!/usr/bin/env bash' \
   'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift; exec "$@"' > "$WORK/passthrough-landlock"
@@ -120,7 +120,7 @@ printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" > "$LL_RECORD"; exit 0' 
 chmod +x "$WORK/record-landlock"
 PORTSPEC="$WORK/portspec"
 mkdir -p "$PORTSPEC"
-for f in ro.paths rw.paths hide.paths tail.flags; do : > "$PORTSPEC/$f"; done
+for f in read.paths execute.paths write.paths create.paths delete.paths tail.flags; do : > "$PORTSPEC/$f"; done
 printf '1.2.3.4 443\n' > "$PORTSPEC/net.rules"
 
 rm -f "$WORK/ll-record"

@@ -22,7 +22,7 @@ check() { local n=$1 w=$2 g=$3; if [[ "$g" == "$w" ]]; then ok "$n"; else bad "$
 CORE_X="$WORK/core-x"
 cp -R "$CORE" "$CORE_X"
 chmod +x "$CORE_X"/*.sh
-printf '[readonly]\n/usr\n[write]\n/tmp\n[limits]\nmem_mb=64\n' > "$CORE_X/BaseTest.cfg"
+printf '[read]\n/usr\n[execute]\n/usr\n[write]\n/tmp\n[create]\n/tmp\n[limits]\nmem_mb=64\n' > "$CORE_X/BaseTest.cfg"
 
 # Makes an empty, owned specification directory the way phobos.sh does, and prints its path.
 fresh_spec() {
@@ -39,9 +39,27 @@ printf '[limits]\nmem_mb=128\n' > "$WORK/exercise.cfg"
 bash "$CORE_X/phobos-policy.sh" --spec-dir "$SPEC" --config "$WORK/exercise.cfg"
 rc=$?
 if [[ "$rc" -eq 0 ]]; then ok "a base and an exercise config build a specification"; else bad "a base and an exercise config build a specification" "exit 0" "exit $rc"; fi
-check "the base read path is carried through"  "/usr" "$(cat "$SPEC/ro.paths")"
-check "the base write path is carried through" "/tmp" "$(cat "$SPEC/rw.paths")"
+check "the base read path is carried through"    "/usr" "$(cat "$SPEC/read.paths")"
+check "the base execute path is carried through" "/usr" "$(cat "$SPEC/execute.paths")"
+check "the base write path is carried through"   "/tmp" "$(cat "$SPEC/write.paths")"
+check "the base create path is carried through"  "/tmp" "$(cat "$SPEC/create.paths")"
 check "the largest memory limit wins in the merge" "mem_mb=128" "$(cat "$SPEC/limits.conf")"
+
+echo
+echo "== an exercise may narrow a base right but not widen it =="
+NSPEC="$(fresh_spec)"
+printf '[read]\n/usr\n' > "$WORK/narrow.cfg"
+bash "$CORE_X/phobos-policy.sh" --spec-dir "$NSPEC" --config "$WORK/narrow.cfg" >/dev/null 2>&1
+check "the narrowed read right is kept"          "/usr" "$(cat "$NSPEC/read.paths")"
+check "the narrowed-away execute right is gone"  ""     "$(cat "$NSPEC/execute.paths")"
+WSPEC="$(fresh_spec)"
+printf '[write]\n/usr\n' > "$WORK/widen.cfg"
+out="$(bash "$CORE_X/phobos-policy.sh" --spec-dir "$WSPEC" --config "$WORK/widen.cfg" 2>&1)"; rc=$?
+if [[ "$rc" -eq 12 && "$out" == *"EMERGE"* ]]; then
+  ok "an exercise widening a right the base forbids is refused (PHB-EMERGE)"
+else
+  bad "an exercise widening a right the base forbids is refused (PHB-EMERGE)" "exit 12 reporting EMERGE" "exit $rc: $out"
+fi
 
 echo
 echo "== phobos-policy.sh refuses when there is no base policy =="

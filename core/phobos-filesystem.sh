@@ -29,7 +29,7 @@ CMD=("$@")
 # timeout to wait on it.
 trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 
-RO="${SPEC_DIR}/ro.paths"; RW="${SPEC_DIR}/rw.paths"; HIDE="${SPEC_DIR}/hide.paths"; TAIL="${SPEC_DIR}/tail.flags"
+READ="${SPEC_DIR}/read.paths"; EXECUTE="${SPEC_DIR}/execute.paths"; WRITE="${SPEC_DIR}/write.paths"; CREATE="${SPEC_DIR}/create.paths"; DELETE="${SPEC_DIR}/delete.paths"; TAIL="${SPEC_DIR}/tail.flags"
 LANDLOCK="${LANDLOCK_BIN_OPT:-${HERE}/phobos-landlock}"; TIMEOUT_BIN="${TIMEOUT_BIN_OPT:-timeout}"
 
 # With --no-landlock the filesystem restriction is off, so run the command without Landlock,
@@ -63,52 +63,33 @@ fi
 
 args=()
 
+# The paths a submission can change: the union of the write, create and delete sections. The
+# preload library and its rules file must stay out of this set, or a submission could rewrite
+# its own network policy before starting another process.
+WRITABLE="$(mktemp -t phobos-writable.XXXXXX)"
+cat "${WRITE}" "${CREATE}" "${DELETE}" 2>/dev/null > "${WRITABLE}" || :
+
 # Keep the LD_PRELOAD library and its rules file reachable, and out of reach of
 # change: Landlock must allow reading and mapping the library, or the loader skips
 # it, and reading the rules file, which every process the command starts opens.
 # PHB_NETBLOCKER_SO and NETBLOCKER_CONF are set by phobos-network.sh.
 if [[ -n "${PHB_NETBLOCKER_SO:-}" && -f "${PHB_NETBLOCKER_SO}" && -n "${NETBLOCKER_CONF:-}" ]]; then
-  append_netblocker_rules args "${RW}" "$PHB_NETBLOCKER_SO" "$NETBLOCKER_CONF"
+  append_netblocker_rules args "${WRITABLE}" "$PHB_NETBLOCKER_SO" "$NETBLOCKER_CONF"
 fi
+rm -f "${WRITABLE}"
 
-# Landlock withholds access, it cannot overlay a path with emptiness, and it
-# cannot carve an exception out of an allowed subtree. A [hide] path is
-# therefore only denied while no allow-listed ancestor covers it: it stays
-# visible by name, which is weaker than the tmpfs mask bubblewrap provided.
-# If an ancestor IS allowed the path is not denied at all, so the policy is
-# unenforceable and we refuse to run rather than pretend it holds.
-if [[ -s "${HIDE}" ]]; then
-  while IFS= read -r p; do
-    [[ -z "$p" ]] && continue
-    covering=""
-    while IFS= read -r a; do
-      [[ -z "$a" ]] && continue
-      # "$p" lies beneath "$a" when it equals it or starts with it plus a slash
-      if [[ "$p" == "$a" || "$p" == "${a%/}/"* ]]; then covering="$a"; break; fi
-    done < <(cat "${RO}" "${RW}" 2>/dev/null)
-    if [[ -n "$covering" ]]; then
-      report "Policy unenforceable: '$p' is listed as hidden but lies beneath allowed path '$covering'. Landlock grants a whole subtree and cannot except a path inside it. (PHB-EPOLICY)"
-      exit "${PHB_EPOLICY}"
-    fi
-    _log "hide: '$p' is denied but stays visible (Landlock cannot mask paths)"
-  done < "${HIDE}"
-fi
-# Read paths keep the execute right: bubblewrap's --ro-bind allowed execution
-# from the bound tree, and the base policies rely on it, because the JVM and
-# every build tool live under [readonly] paths. Splitting those into data and
-# programs is a change of policy rather than of mechanism, so it is not made
-# here; phobos-landlock can express it, and the configuration format is where
-# it has to be decided.
-#
-# Write paths get rwmd: write, create, delete. That is what --rw granted before,
-# minus creating device nodes and symbolic links, which no build tool needs and
-# which are the two ways to reach something the policy never named.
-build_path_args args "" "${RO}" "${RW}"
+# One --rights=LETTERS rule per allow-listed path, the letters being exactly the sections the
+# path appears in: [read] grants r, [execute] x, [write] w, [create] m, [delete] d. Creating
+# device nodes and symbolic links is never granted, since those are the two ways to reach
+# something the policy never named. A path that names no right at all is simply not listed and
+# stays denied by Landlock's default.
+build_path_args args "${READ}" "${EXECUTE}" "${WRITE}" "${CREATE}" "${DELETE}"
 # The Landlock TCP-port rules are the kernel-enforced half of the network boundary, built
 # here rather than in the network layer. With --no-network-ports the network restriction is
 # off as a whole, so they are skipped too, not only the preload filter.
 if (( ! NO_NETWORK_PORTS )); then
   build_network_args args "${SPEC_DIR}/net.rules"
+  build_bind_args args "${SPEC_DIR}/bind.rules"
 fi
 if [[ -s "${TAIL}" ]]; then
   # Splitting is intended: tail.flags holds whitespace-separated arguments.
