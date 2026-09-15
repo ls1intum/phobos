@@ -15,7 +15,7 @@ sections:
   create: "grants creation of files, directories, sockets and named pipes; never a device node or a symbolic link"
   delete: "grants deletion of files and directories"
   connect: "allow <host>[:<port>] lines, outbound TCP; loopback may omit the port"
-  bind: "allow <port> lines, the local TCP ports a submission may listen on"
+  bind: "allow <addr>:<port> or <port> lines; local TCP endpoints, address filtered by libnetblocker"
   limits: "timeout, mem_mb, nproc, nofile, fsize_mb, cpu; 0 switches one off"
 # A real, runnable example of the format above, as a plain string.
 example_cfg: |

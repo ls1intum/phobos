@@ -74,12 +74,12 @@ if ! "$COMPILER" -std=gnu23 -O2 -Wall -Wextra -fPIC -shared -fvisibility=hidden 
 fi
 ok "build the interposer"
 
-# Only the four hooks may be visible. Any other function the library exported could
+# Only the five hooks may be visible. Any other function the library exported could
 # take the place of one the program, or another library, defines under the same name.
 exported="$(readelf --dyn-syms --wide "$WORK/libnetblocker.so" 2>/dev/null \
   | awk '$4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" { print $8 }' \
   | LC_ALL=C sort | paste -s -d ' ' -)"
-check "the library exports exactly its four hooks" "connect getaddrinfo sendmsg sendto" "$exported"
+check "the library exports exactly its five hooks" "bind connect getaddrinfo sendmsg sendto" "$exported"
 
 if ! "$COMPILER" -std=gnu23 -O0 -g -o "$WORK/probe" "$PROBE_SOURCE" 2>"$WORK/probe.log"; then
   bad "build the probe client" "an executable" "$(cat "$WORK/probe.log")"
@@ -350,7 +350,7 @@ refused_because "a missing library is refused" "does not exist" \
   "$(run_network_layer "$WORK/absent.so")"
 
 printf 'not a library\n' > "$WORK/text.so"
-refused_because "a file that is not a library is refused" "does not define connect" \
+refused_because "a file that is not a library is refused" "does not define bind" \
   "$(run_network_layer "$WORK/text.so")"
 
 # The same library with its ELF machine field, at offset 18, set to another
@@ -369,7 +369,7 @@ refused_because "a library for another architecture is refused" "does not load c
 printf 'int unrelated_function(void) { return 0; }\n' > "$WORK/unrelated.c"
 if "$COMPILER" -std=gnu23 -O2 -fPIC -shared -o "$WORK/unrelated.so" "$WORK/unrelated.c" \
      2>"$WORK/unrelated.log"; then
-  refused_because "a loadable library without the hooks is refused" "does not define connect" \
+  refused_because "a loadable library without the hooks is refused" "does not define bind" \
     "$(run_network_layer "$WORK/unrelated.so")"
 else
   bad "build a library without the hooks" "a shared library" "$(cat "$WORK/unrelated.log")"

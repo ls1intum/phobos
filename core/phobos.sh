@@ -145,7 +145,7 @@ fi
 # Clear the internal channels a layer would otherwise inherit, so a value left in the
 # environment cannot make a layer act that the flags left out of the chain. Each layer that
 # is in the chain sets its own.
-unset PHB_TIMEOUT_SEC PHB_NETBLOCKER_SO NETBLOCKER_CONF
+unset PHB_TIMEOUT_SEC PHB_NETBLOCKER_SO NETBLOCKER_CONF NETBLOCKER_BIND_CONF
 
 # Resolve the startup overrides from the flags, with the built-in defaults. The environment
 # is deliberately not consulted for any of them.
