@@ -109,8 +109,6 @@ accepts "absent timeout leaves it disabled"     '[limits]
 mem_mb=512'                                     ""
 accepts "no limits section at all"              '[readonly]
 /usr'                                           ""
-accepts "bare value in a timeout section"       '[timeout]
-1.234'                                          "1.234"
 accepts "other limit keys are left alone"       '[limits]
 mem_mb=512
 timeout=2.000'                                  "2.000"
@@ -226,9 +224,10 @@ done
 # ---------------------------------------------------------------------
 
 echo
-echo "== modular parser: network host:port =="
+echo "== modular parser: [network] host:port grammar =="
 
-# Prints the "host port" lines parse_cfg_policy writes for a [network] body.
+# Prints the "host port" lines parse_cfg_policy writes for a [network] body, or nothing when
+# the body is refused (a refusal is asserted separately with rejects_net).
 parsed_net_rules() {
   bash -c '
     source "$1/phobos-common.sh"
@@ -238,12 +237,41 @@ parsed_net_rules() {
   ' _ "$CORE" "$1" "$WORK"
 }
 
-check "parser: ::1:* keeps the loopback host" "::1 *"          "$(parsed_net_rules '[network]
-allow ::1:*')"
-check "parser: bracketed IPv6 with a port"    "::1 443"        "$(parsed_net_rules '[network]
+# Asserts parse_cfg_policy refuses a policy body with PHB-EPOLICY.
+rejects_net() {
+  local name=$1 body=$2 out rc
+  printf '%s\n' "$body" > "$WORK/net.cfg"
+  out=$(bash -c 'source "$1/phobos-common.sh"; parse_cfg_policy "$2"' _ "$CORE" "$WORK/net.cfg" 2>&1)
+  rc=$?
+  if [[ "$rc" == "11" && "$out" == *"PHB-EPOLICY"* ]]; then
+    ok "$name"
+  else
+    bad "$name" "exit 11 reporting PHB-EPOLICY" "exit $rc: $out"
+  fi
+}
+
+check "parser: a bare IPv6 is the whole host, no port"    "::1 *"          "$(parsed_net_rules '[network]
+allow ::1')"
+check "parser: bracketed IPv6 without a port"             "::1 *"          "$(parsed_net_rules '[network]
+allow [::1]')"
+check "parser: bracketed IPv6 with a port"                "::1 443"        "$(parsed_net_rules '[network]
 allow [::1]:443')"
-check "parser: IPv4 with a port"              "127.0.0.1 8080" "$(parsed_net_rules '[network]
+check "parser: IPv4 with a port"                          "127.0.0.1 8080" "$(parsed_net_rules '[network]
 allow 127.0.0.1:8080')"
+check "parser: an unbracketed ::1:* is a bogus host"      "::1:* *"        "$(parsed_net_rules '[network]
+allow ::1:*')"
+
+rejects_net "a [network] line without allow is refused"    '[network]
+localhost'
+rejects_net "an IPv6 bracket that never closes is refused" '[network]
+allow [::1'
+rejects_net "an unknown section is refused"                '[bogus]
+/x'
+rejects_net "content before any section is refused"        'stray line'
+rejects_net "an unknown key in [limits] is refused"        '[limits]
+foo=1'
+rejects_net "a bare value in a timeout section is refused" '[timeout]
+1.234'
 
 
 # ---------------------------------------------------------------------

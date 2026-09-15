@@ -22,30 +22,6 @@ canon_paths() {
     cat
   fi
 }
-allowed_keys() {
-  cat <<'EOF'
-TIMEOUT_SECONDS
-NET_ALLOWLIST_FILE
-RO_PATHS_FILE
-RW_PATHS_FILE
-HIDE_PATHS_FILE
-TAIL_FLAGS_FILE
-EOF
-}
-validate_config_file_keys() {
-  local file="$1"
-  local keys ok unknown=""
-  keys=$(sed -E -n 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p' "$file" | sed 's/[[:space:]]//g' | sort -u)
-  ok=$(allowed_keys | sort -u)
-  while IFS= read -r k; do
-    [[ -z "$k" ]] && continue
-    if ! grep -qx "$k" <<< "$ok"; then unknown+="$k "; fi
-  done <<< "$keys"
-  if [[ -n "$unknown" ]]; then
-    report "Policy invalid: unknown key(s): ${unknown}. (PHB-EPOLICY)"
-    exit "${PHB_EPOLICY}"
-  fi
-}
 # Timeout values are seconds: either a whole number, or seconds with
 # millisecond precision written as exactly three decimal places.
 # GNU timeout receives the value with an explicit seconds suffix, so no unit
@@ -151,6 +127,35 @@ apply_resource_limits() {
     ulimit -t "$(( 10#$cpu ))" || die "cannot set the CPU-time limit of ${cpu} s" "${PHB_ERUNTIME}"
   fi
 }
+# Splits one [network] target into a host and a port, writing them through the two named
+# variables. IPv4 and a host name take an optional single-colon ":port". An IPv6 address has
+# colons of its own, so it must be bracketed to carry a port, [addr]:port, and a bare IPv6
+# address with two or more colons and no brackets is the whole host with no port. A "*" port,
+# or none, means every port. A bracket that never closes is a policy error rather than a
+# guess, so that a mistyped rule is refused instead of read as something else.
+parse_network_target() {
+  local target="$1"
+  local -n host_ref="$2"
+  local -n port_ref="$3"
+  if [[ "$target" == \[*\]:* ]]; then
+    host_ref="${target%]:*}"; host_ref="${host_ref#[}"; port_ref="${target##*:}"
+  elif [[ "$target" == \[*\] ]]; then
+    host_ref="${target#[}"; host_ref="${host_ref%]}"; port_ref="*"
+  elif [[ "$target" == \[* ]]; then
+    report "Policy invalid: '${target}' in [network] opens a bracket it does not close. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  else
+    local colons="${target//[^:]/}"
+    if (( ${#colons} >= 2 )); then
+      host_ref="$target"; port_ref="*"
+    elif [[ "$target" == *:* ]]; then
+      host_ref="${target%:*}"; port_ref="${target##*:}"
+    else
+      host_ref="$target"; port_ref="*"
+    fi
+  fi
+}
+
 parse_cfg_policy() {
   local cfg="$1"
   local tdir
@@ -175,21 +180,31 @@ parse_cfg_policy() {
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%%#*}"; line="$(echo "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
     [[ -z "$line" ]] && continue
-    if [[ "$line" =~ ^\[(.+)\]$ ]]; then sec="${BASH_REMATCH[1]}"; continue; fi
+    if [[ "$line" =~ ^\[(.+)\]$ ]]; then
+      sec="${BASH_REMATCH[1]}"
+      # Validate the section at its header, so an unknown section is refused whether or not it
+      # holds any line, rather than being silently ignored.
+      case "$sec" in
+        readonly|read|write|hide|tmpfs|network|limits|timeout) ;;
+        *) report "Policy invalid: unknown section '[${sec}]' in ${cfg}. (PHB-EPOLICY)"; exit "${PHB_EPOLICY}" ;;
+      esac
+      continue
+    fi
     case "$sec" in
       readonly|read) printf '%s\n' "$line" >>"$ro" ;;
       write)         printf '%s\n' "$line" >>"$rw" ;;
       hide|tmpfs)    printf '%s\n' "$line" >>"$hide" ;;
       network)
-        if [[ "$line" =~ ^allow[[:space:]]+(.+)$ ]]; then
-          local target="${BASH_REMATCH[1]}" host port="*"
-          if [[ "$target" == *:* ]]; then host="${target%:*}"; port="${target##*:}"; else host="$target"; fi
-          host="${host#[}"; host="${host%]}"; printf '%s %s\n' "$host" "$port" >>"$net"
-        fi ;;
+        if [[ ! "$line" =~ ^allow[[:space:]]+(.+)$ ]]; then
+          report "Policy invalid: '${line}' in [network] is not an 'allow <host>[:<port>]' line. (PHB-EPOLICY)"
+          exit "${PHB_EPOLICY}"
+        fi
+        local target="${BASH_REMATCH[1]}" host="" port="*"
+        parse_network_target "$target" host port
+        printf '%s %s\n' "$host" "$port" >>"$net" ;;
       limits|timeout)
-        # Lines carrying another key (mem_mb=...) stay untouched. An explicit
-        # timeout, or a bare value on its own line, is the timeout and is
-        # validated; an unusable one is reported rather than ignored.
+        # Only the six known keys are accepted; a bare value and an unknown key are refused
+        # rather than ignored, so a typo in a limit does not leave the run unrestricted.
         if [[ "$line" =~ ^timeout[[:space:]]*=[[:space:]]*(.*)$ ]]; then
           set_parsed_timeout "${BASH_REMATCH[1]}"
         elif [[ "$line" =~ ^mem_mb[[:space:]]*=[[:space:]]*(.*)$ ]]; then
@@ -202,10 +217,13 @@ parse_cfg_policy() {
           set_parsed_limit PARSED_LIMIT_FSIZE_MB fsize_mb "${BASH_REMATCH[1]}"
         elif [[ "$line" =~ ^cpu[[:space:]]*=[[:space:]]*(.*)$ ]]; then
           set_parsed_limit PARSED_LIMIT_CPU cpu "${BASH_REMATCH[1]}"
-        elif [[ "$line" != *=* ]]; then
-          set_parsed_timeout "$line"
+        else
+          report "Policy invalid: '${line}' in [${sec}] is not a known limit; use timeout=, mem_mb=, nproc=, nofile=, fsize_mb= or cpu=. (PHB-EPOLICY)"
+          exit "${PHB_EPOLICY}"
         fi ;;
-      *) ;;
+      "")
+        report "Policy invalid: '${line}' appears before any [section] in ${cfg}. (PHB-EPOLICY)"
+        exit "${PHB_EPOLICY}" ;;
     esac
   done <"$cfg"
   PARSED_RO_FILE="$ro"; PARSED_RW_FILE="$rw"; PARSED_HIDE_FILE="$hide"; PARSED_NET_FILE="$net"; : "${PARSED_TIMEOUT:=}"
