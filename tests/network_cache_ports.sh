@@ -305,6 +305,15 @@ check "every scenario removes the rules directory it created" "$leftovers_before
 # does not mark them so, the image does, and a copy stands in for the image here.
 cp -R "${HERE}/../core" "$WORK/core"
 chmod +x "$WORK"/core/*.sh
+# A pass-through stand-in for the connect guard, the way record-landlock stands in for
+# phobos-landlock: here the preload library, not the guard, is under test, so the network
+# layer's fail-closed check for the guard is satisfied by a binary that drops its own options
+# up to the "--" and execs the rest, handing over transparently.
+printf '%s\n' '#!/bin/sh' \
+  'while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done' \
+  'shift' \
+  'exec "$@"' > "$WORK/core/phobos-connect-guard"
+chmod +x "$WORK/core/phobos-connect-guard"
 NETWORK_LAYER="$WORK/core/phobos-network.sh"
 mkdir -p "$WORK/spec"
 

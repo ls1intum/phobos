@@ -22,9 +22,20 @@ rest exists to take privileges away. None of the following is a vulnerability.
   the datagrams a UDP socket names without connecting, refusing outbound hosts an allow-list
   does not name and narrowing a local TCP bind to the addresses a `[bind]` allow-list names.
   Function interposition of libc symbols is what the component is for. It is
-  defence in depth rather than a boundary: a process can step around a preload library, so
-  the network restriction the sandbox enforces is the TCP ports a policy gives Landlock, and
-  the boundary for external egress and for UDP is a container started with `--network none`.
+  defence in depth rather than a boundary: a process can step around a preload library.
+- `core/phobos-connect-guard.c` is the connect guard. When the network layer is on it
+  supervises every `connect()` with a seccomp user-notification and makes an allowed
+  connection itself from outside the sandboxed process, so for `connect` it is a boundary a
+  raw system call cannot step around, enforcing the `[connect]` allow-list by host and port.
+  It reads the destination address of the connect, so it holds a rule that names an IP literal
+  (and the name `localhost`) to that exact address, and a rule that names a DNS hostname it
+  cannot tie to an address there to its port alone, leaving that host to libnetblocker. Since
+  seccomp stops the call before the kernel path where Landlock would check the port, the guard
+  connects outside Landlock and so is the whole connect boundary where it runs; Landlock's
+  `--connect-tcp` ports remain a second, kernel-enforced expression of the same ports. A
+  `connect` of a family the guard does not carry (a UNIX-domain socket) is refused rather than
+  made outside the Landlock view the command is held to. The boundary for external egress
+  beyond the allow-list, and for UDP, is still a container started with `--network none`.
 - `docker/prune_phase/` runs the discovery phase, which deliberately breaks a build over and
   over: it hides a directory, runs the tests, and concludes from the failure that the
   directory was needed. Its orchestrator therefore starts processes and interprets their

@@ -26,12 +26,19 @@ SECURITY.md says.
 2. Where the policy comes from
 
 The allow-list is the [connect] section of a policy cfg (see the README's
-configuration format), turned into two things: concrete TCP ports handed to
-Landlock as `--connect-tcp`, and host/address rules handed to libnetblocker
-through the NETBLOCKER_CONF rules file. Landlock enforces the ports below user
-space; libnetblocker narrows by host as defence in depth. There is no
-`openConnections` / `sendData` / `receiveData` toggle: a rule either names a
-host and a port or it does not.
+configuration format), turned into three things: concrete TCP ports handed to
+Landlock as `--connect-tcp`, host/address rules handed to libnetblocker through
+the NETBLOCKER_CONF rules file, and the same rules read by the connect guard
+(phobos-connect-guard). The connect guard supervises every connect() with a
+seccomp user-notification and makes an allowed connection itself, so where it
+runs it is the whole connect boundary, host and port, from outside the process,
+which a raw system call cannot step around; it holds an IP-literal rule (and the
+name localhost) to that exact address, and a rule that names a DNS hostname it
+cannot tie to an address to its port alone, leaving that host to libnetblocker.
+Landlock's `--connect-tcp` ports stay as a second, kernel-enforced expression of
+the same ports; libnetblocker narrows by host as the softer in-process filter
+beside the guard. There is no `openConnections` / `sendData` / `receiveData`
+toggle: a rule either names a host and a port or it does not.
 
 The [bind] section is turned the same way: its ports become Landlock `--bind-tcp`
 rules, and its local addresses reach libnetblocker's bind hook through the
