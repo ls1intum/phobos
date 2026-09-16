@@ -425,7 +425,7 @@ run_with_write_path() {
   else
     printf '%s\n' "$write_path" > "$REACH_SPEC/write.paths"
   fi
-  out="$(PHB_TIMEOUT_SEC="" PHB_NETBLOCKER_SO="$WORK/libnetblocker.so" \
+  out="$(PHB_NETBLOCKER_SO="$WORK/libnetblocker.so" \
          NETBLOCKER_CONF="$REACH_SPEC/net.rules" \
          PHB_TEST_RECORD="$WORK/reach-record" \
          bash "$WORK/core/phobos-filesystem.sh" --landlock-bin "$WORK/record-landlock" "$REACH_SPEC" -- /bin/echo command-ran 2>&1)"

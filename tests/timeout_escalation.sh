@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# The timeout stops a command that ignores SIGTERM, and lets a well-behaved one finish.
+#
+# The timeout layer runs GNU timeout without --foreground, so it signals the command's whole
+# process group and, with --kill-after, escalates to SIGKILL. That escalation only fires while
+# GNU timeout's own child is still alive, so the layers between the timeout and the command
+# ignore SIGTERM and stay, and it is the SIGKILL that stops a command which ignores SIGTERM.
+# This proves that end to end through the real chain, with a stand-in for phobos-landlock so no
+# Landlock kernel is needed, and the network layer off to spare its readelf dependency.
+#
+# It needs GNU timeout (the real one, not a stand-in) and a C compiler. Where either is
+# missing the checks skip, saying so, rather than passing without having run.
+set -uo pipefail
+
+HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CORE="${HERE}/../core"
+WORK="$(mktemp -d)"
+export TMPDIR="$WORK"
+cleanup() { rm -rf "$WORK"; }
+trap cleanup EXIT
+
+passed=0
+failed=0
+skipped=0
+ok()   { printf 'ok    %s\n' "$1"; passed=$((passed + 1)); }
+bad()  { printf 'FAIL  %s\n        %s\n' "$1" "$2"; failed=$((failed + 1)); }
+skip() { printf 'SKIP  %s\n        reason:   %s\n' "$1" "$2"; skipped=$((skipped + 1)); }
+
+finish() {
+  echo
+  printf '%d passed, %d failed, %d skipped\n' "$passed" "$failed" "$skipped"
+  (( failed == 0 )) || exit 1
+  exit 0
+}
+
+if ! command -v timeout >/dev/null 2>&1; then
+  skip "the timeout escalation" "GNU timeout is not installed"
+  finish
+fi
+compiler=cc
+command -v "$compiler" >/dev/null 2>&1 || compiler=gcc
+if ! command -v "$compiler" >/dev/null 2>&1; then
+  skip "the timeout escalation" "no C compiler to build the SIGTERM-ignoring probe"
+  finish
+fi
+
+cat > "$WORK/ignorer.c" <<'C'
+#include <signal.h>
+#include <stdlib.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    signal(SIGTERM, SIG_IGN);
+    unsigned seconds = (argc > 1) ? (unsigned)atoi(argv[1]) : 30u;
+    sleep(seconds);
+    return 0;
+}
+C
+if ! "$compiler" -O2 -o "$WORK/ignorer" "$WORK/ignorer.c" 2>"$WORK/cc.log"; then
+  skip "the timeout escalation" "the probe did not compile: $(cat "$WORK/cc.log")"
+  finish
+fi
+
+# A stand-in for phobos-landlock: it drops its own options up to the "--" and exec's the
+# command, so the real filesystem layer runs its Landlock branch without a Landlock kernel.
+printf '%s\n' '#!/usr/bin/env bash' \
+  'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift; exec "$@"' > "$WORK/passthrough-landlock"
+chmod +x "$WORK/passthrough-landlock"
+
+CORE_X="$WORK/core-x"
+cp -R "$CORE" "$CORE_X"
+chmod +x "$CORE_X"/*.sh
+SPECS="$WORK/specs"
+mkdir -p "$SPECS"
+
+# Runs the whole chain over a base policy with the given timeout, against a command, under an
+# outer real timeout so a broken escalation cannot hang the suite. The first argument selects
+# the filesystem layer: "landlock" runs its Landlock branch with a stand-in enforcement helper,
+# "nolandlock" runs the --no-landlock branch, so both branches of the SIGTERM survival are
+# exercised. Prints "<exit>|<elapsed>|<output>".
+run_chain() {
+  local mode=$1
+  local timeout_value=$2
+  shift 2
+  printf '[limits]\ntimeout=%s\n' "$timeout_value" > "$CORE_X/BaseTimeout.cfg"
+  local sandbox=()
+  if [[ "$mode" == "nolandlock" ]]; then
+    sandbox=(--no-filesystem-restriction)
+  else
+    sandbox=(--landlock-bin "$WORK/passthrough-landlock")
+  fi
+  local start
+  local end
+  local out
+  local rc
+  start=$(date +%s)
+  out="$(timeout 30s bash "$CORE_X/phobos.sh" --spec-parent "$SPECS" \
+    "${sandbox[@]}" --no-networksystem-restriction -- "$@" 2>&1)"
+  rc=$?
+  end=$(date +%s)
+  printf '%s|%s|%s' "$rc" "$((end - start))" "$out"
+}
+
+echo "== a command that ignores SIGTERM is stopped by the escalation =="
+res="$(run_chain landlock 1 "$WORK/ignorer" 30)"
+rc="${res%%|*}"
+rest="${res#*|}"
+elapsed="${rest%%|*}"
+out="${rest#*|}"
+
+# 14 is PHB-ETIMEOUT. The escalation waited --kill-after=5s after the 1s timeout, so a run that
+# returned in under four seconds did not escalate, which is the regression this guards.
+if [[ "$rc" == "14" ]]; then
+  ok "the run ends with PHB-ETIMEOUT"
+else
+  bad "the run ends with PHB-ETIMEOUT" "exit 14, got exit ${rc}: ${out}"
+fi
+if [[ "$out" == *"PHB-ETIMEOUT"* ]]; then
+  ok "it reports the timeout"
+else
+  bad "it reports the timeout" "PHB-ETIMEOUT in the output, got: ${out}"
+fi
+if (( elapsed >= 4 )); then
+  ok "the escalation waited its kill-after before SIGKILL (elapsed ${elapsed}s)"
+else
+  bad "the escalation waited its kill-after before SIGKILL" "at least 4s, got ${elapsed}s"
+fi
+# The command must actually be gone, not merely be judged by a marker it has not yet had time
+# to write: a survivor that escaped the group-kill would still be sleeping. Check for a
+# residual process directly, the way the acceptance suite does. A killed process leaves at most
+# a reaped-away zombie, which has no command line for pgrep to match.
+sleep 1
+if ! command -v pgrep >/dev/null 2>&1; then
+  skip "no residual SIGTERM-ignoring process" "pgrep is not available to check"
+elif pgrep -f "$WORK/ignorer" >/dev/null 2>&1; then
+  bad "no residual SIGTERM-ignoring process" "the command is still running after the run returned"
+else
+  ok "no residual SIGTERM-ignoring process: the command was killed, not left running"
+fi
+
+echo
+echo "== the --no-landlock branch also stops a SIGTERM-ignoring command =="
+res="$(run_chain nolandlock 1 "$WORK/ignorer" 30)"
+rc="${res%%|*}"
+rest="${res#*|}"
+elapsed="${rest%%|*}"
+out="${rest#*|}"
+if [[ "$rc" == "14" && "$out" == *"PHB-ETIMEOUT"* && "$elapsed" -ge 4 ]]; then
+  ok "with the filesystem layer off, the escalation still stops the command (elapsed ${elapsed}s)"
+else
+  bad "with the filesystem layer off, the escalation still stops the command" "exit 14, PHB-ETIMEOUT and elapsed >= 4s; got exit ${rc}, elapsed ${elapsed}s: ${out}"
+fi
+sleep 1
+if ! command -v pgrep >/dev/null 2>&1; then
+  skip "no residual process, --no-landlock branch" "pgrep is not available to check"
+elif pgrep -f "$WORK/ignorer" >/dev/null 2>&1; then
+  bad "no residual process, --no-landlock branch" "the command is still running after the run returned"
+else
+  ok "no residual process, --no-landlock branch: the command was killed"
+fi
+
+echo
+echo "== a well-behaved command finishes and is not killed =="
+res="$(run_chain landlock 30 /bin/echo command-ran)"
+rc="${res%%|*}"
+rest="${res#*|}"
+elapsed="${rest%%|*}"
+out="${rest#*|}"
+if [[ "$rc" == "0" && "$out" == *"command-ran"* ]]; then
+  ok "it runs to completion with its own exit status"
+else
+  bad "it runs to completion with its own exit status" "exit 0 and its output, got exit ${rc}: ${out}"
+fi
+if [[ "$out" != *"PHB-ETIMEOUT"* ]]; then
+  ok "no timeout is reported for a command within its limit"
+else
+  bad "no timeout is reported for a command within its limit" "unexpected PHB-ETIMEOUT: ${out}"
+fi
+
+finish

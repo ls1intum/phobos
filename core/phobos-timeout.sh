@@ -5,24 +5,55 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=phobos-common.sh
 source "${HERE}/phobos-common.sh"
 
-# A generic layer: it does its work and execs the rest of the chain, whatever phobos.sh put
-# after the "--". phobos.sh includes this layer only when the timeout is enabled, so there is
-# no enable flag to read; --debug is accepted for symmetry with the layers that print.
-if [[ "${1:-}" == "--debug" ]]; then shift; fi
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-timeout.sh [--debug] <SPEC_DIR> -- <cmd...>"; exit 2; }
+# A self-contained layer: it reads the timeout from the specification and, when one is set,
+# runs the rest of the chain under GNU timeout itself, rather than passing a value down for a
+# deeper layer to apply. So phobos-timeout.sh -- CMD is a usable timeout on its own. phobos.sh
+# includes this layer only when the timeout is enabled, so there is no enable flag to read.
+DEBUG=0
+TIMEOUT_BIN_OPT=""
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --debug) DEBUG=1; shift ;;
+    --timeout-bin) shift; TIMEOUT_BIN_OPT="${1:-}"; shift ;;
+    *) break ;;
+  esac
+done
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-timeout.sh [--debug] [--timeout-bin <path>] <SPEC_DIR> -- <cmd...>"; exit 2; }
 SPEC_DIR="$1"; shift 2
 
-# Removes the specification phobos.sh created if this layer ends before it hands over.
+# Removes the specification phobos.sh created. When a timeout is set this layer waits, so this
+# trap is what removes the specification, including after the timeout has just group-killed
+# everything below it. When no timeout is set the layer hands over with exec below, which does
+# not fire an EXIT trap, so the layer that does wait removes it instead.
 trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 
-# The effective timeout travels to the filesystem layer, which applies it coupled to
-# phobos-landlock so the kill escalation still reaches a command that ignores SIGTERM. An
-# empty timeout.sec, or none, means no timeout.
-if [[ -s "${SPEC_DIR}/timeout.sec" ]]; then
-  PHB_TIMEOUT_SEC="$(<"${SPEC_DIR}/timeout.sec")"
-else
-  PHB_TIMEOUT_SEC=""
-fi
-export PHB_TIMEOUT_SEC
+TIMEOUT_BIN="${TIMEOUT_BIN_OPT:-timeout}"
 
-exec "$@"
+# An empty timeout.sec, or none, means no timeout: hand the chain straight on.
+if [[ ! -s "${SPEC_DIR}/timeout.sec" ]]; then
+  exec "$@"
+fi
+timeout_sec="$(<"${SPEC_DIR}/timeout.sec")"
+
+if (( DEBUG )); then
+  >&2 printf '[phobos] %s --kill-after=5s %ss ' "${TIMEOUT_BIN}" "${timeout_sec}"
+  >&2 printf '%q ' "$@"
+  echo >&2
+fi
+
+# No --foreground: GNU timeout puts the command in a new process group and signals the whole
+# group, so the kill reaches the command's children too. --kill-after escalates to SIGKILL for
+# a command that ignores SIGTERM. That escalation only fires while GNU timeout's own child is
+# still alive, so the layers below keep themselves alive across SIGTERM (they set the command
+# itself back to the default disposition), and it is the SIGKILL that stops such a command.
+set +e
+"${TIMEOUT_BIN}" "--kill-after=5s" "${timeout_sec}s" "$@"
+rc=$?
+set -e
+
+# 124 is GNU timeout's own "timed out" code; 137 is 128+SIGKILL, the escalation having fired.
+if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+  report "Timed out after ${timeout_sec}s. (PHB-ETIMEOUT)"
+  exit "${PHB_ETIMEOUT}"
+fi
+exit "$rc"
