@@ -273,6 +273,16 @@ jobs:
           docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
             phobos-run-phase:ci bash /testsuite/bind-address-test.sh
 
+      # The connect guard the image compiled installs its seccomp user-notification filter under
+      # the image's default seccomp profile in an ordinary container, and enforces the [connect]
+      # allow-list by host and port. This is both the availability check (the filter installs
+      # unprivileged here) and the boundary check (both directions), in the image an exercise gets.
+      - name: The connect guard enforces the allow-list in the run-phase image
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
+            phobos-run-phase:ci bash /testsuite/connect-guard-test.sh
+
   # Mutation testing installs clang and mull into a container and then runs the suite
   # once per mutant, which is minutes rather than seconds. Weekly and on request, so it
   # reports on the suite's strength without being in the way of a pull request.

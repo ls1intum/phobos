@@ -198,6 +198,29 @@ else
 fi
 
 echo
+echo "== a hostname rule is held to its port; the host is left to libnetblocker =="
+# The guard cannot tie a DNS name to an address at connect time, so a hostname rule enforces
+# its port and lets any host through on it: the port is refused elsewhere, the host is not.
+printf 'example.invalid %s\n' "$PORT" > "$WORK/rules"
+lp=$(start_listener "$PORT")
+out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" inet 127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+kill "$lp" 2>/dev/null
+wait "$lp" 2>/dev/null
+if [[ $rc -eq 0 && "$out" == *PROBE-OK* ]]; then
+  ok "a hostname rule permits a host on its port (host not enforced here)"
+else
+  bad "a hostname rule permits a host on its port (host not enforced here)" "rc=$rc out=$out"
+fi
+out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" inet 127.0.0.1 "$OTHER" 2>&1)"
+rc=$?
+if [[ $rc -eq 10 && "$out" == *"Permission denied"* ]]; then
+  ok "a hostname rule still refuses a port it does not name"
+else
+  bad "a hostname rule still refuses a port it does not name" "rc=$rc out=$out"
+fi
+
+echo
 echo "== a UNIX-domain connect is refused, even with an empty list =="
 : > "$WORK/rules"
 out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" unix "$WORK/nosuch.sock" 2>&1)"

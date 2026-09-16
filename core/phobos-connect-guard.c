@@ -94,6 +94,17 @@ struct seccomp_notif_addfd {
 #define SECCOMP_IOCTL_NOTIF_ADDFD _IOW('!', 3, struct seccomp_notif_addfd)
 #endif
 
+/* The one native ABI this build's connect number belongs to. The filter denies every other
+ * ABI, so a connect made through an alternate one (i386 int 0x80, or x32) cannot slip past the
+ * native-number comparison unwatched. */
+#if defined(__x86_64__)
+#define GUARD_NATIVE_AUDIT_ARCH AUDIT_ARCH_X86_64
+#elif defined(__aarch64__)
+#define GUARD_NATIVE_AUDIT_ARCH AUDIT_ARCH_AARCH64
+#else
+#error "phobos-connect-guard supports x86-64 and aarch64 only"
+#endif
+
 static constexpr int EXIT_SETUP_ERROR = 125;
 static constexpr int CONNECT_TIMEOUT_MS = 10000;
 static constexpr size_t MAXIMUM_RULES = 256;
@@ -152,17 +163,19 @@ static void remember_rule(const char *host, const char *port_text)
     connect_rule_count++;
 }
 
-/* Reads the allow-list from the spec's net.rules, one "host port" line each. A
- * missing or empty file leaves the list empty, which means no restriction, the way
- * libnetblocker treats an empty outbound policy. */
-static void load_rules(const char *path)
+/* Reads the allow-list from the spec's net.rules, one "host port" line each. An absent file
+ * leaves the list empty, which means no restriction, the way libnetblocker treats an empty
+ * outbound policy. Returns false only when a rules file was named but could not be read for a
+ * reason other than its absence, so the caller refuses the run rather than fall open to
+ * allow-all on an unreadable policy. */
+static bool load_rules(const char *path)
 {
     if (path == nullptr) {
-        return;
+        return true;
     }
     FILE *file = fopen(path, "re");
     if (file == nullptr) {
-        return;
+        return errno == ENOENT;
     }
     char line[512];
     while (fgets(line, sizeof(line), file) != nullptr) {
@@ -173,6 +186,7 @@ static void load_rules(const char *path)
         }
     }
     fclose(file);
+    return true;
 }
 
 /* -------------------------------------------------------- the address decision */
@@ -235,14 +249,24 @@ static bool connection_permitted(int family, const void *address, uint16_t port)
 
 /* ------------------------------------------- the child: install and hand over */
 
-/* The filter: trap connect() to the supervisor, allow everything else. The program
- * cannot read the address (it is behind a pointer the filter may not follow), so it
- * traps every connect and leaves the address to the supervisor, which can read the
- * child's memory. */
+/* The filter: refuse a syscall made on any but the native ABI, trap connect() to the
+ * supervisor, and allow everything else. The arch check is what makes the trap cover every
+ * connect: without it an i386 (int 0x80) socketcall or an x32 connect arrives under a different
+ * arch or with the x32 bit set, does not equal the native connect number, and would fall
+ * through to ALLOW unwatched. The program cannot read the address (it is behind a pointer the
+ * filter may not follow), so it traps every connect and leaves the address to the supervisor,
+ * which can read the child's memory. */
 static int install_connect_filter(void)
 {
     struct sock_filter instructions[] = {
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, GUARD_NATIVE_AUDIT_ARCH, 1, 0),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA)),
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+#ifdef __X32_SYSCALL_BIT
+        BPF_JUMP(BPF_JMP | BPF_JSET | BPF_K, __X32_SYSCALL_BIT, 0, 1),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA)),
+#endif
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_connect, 0, 1),
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF),
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
@@ -392,9 +416,11 @@ static socklen_t read_peer_address(pid_t command_pid, uintptr_t address_pointer,
     return length;
 }
 
-/* Connect a fresh socket to the destination, within a bounded wait so one slow
- * connection cannot stall the supervisor. Returns the connected descriptor, blocking
- * again as an ordinary socket is, or a negative errno. */
+/* Connect a fresh socket to the destination, within a bounded wait so one slow connection
+ * cannot stall the supervisor. Returns the connected descriptor, cleared back to blocking as
+ * an ordinary socket is, or a negative errno. This is a fresh socket, so options the command
+ * set on its own before connecting, and a non-blocking mode, are not carried onto it: that is
+ * the documented limit of connecting on the command's behalf rather than letting it connect. */
 static int connect_within_deadline(int family, const struct sockaddr *address, socklen_t length)
 {
     int outward = socket(family, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
@@ -411,7 +437,10 @@ static int connect_within_deadline(int family, const struct sockaddr *address, s
         return -failure;
     }
     struct pollfd waiting = { .fd = outward, .events = POLLOUT, .revents = 0 };
-    int ready = poll(&waiting, 1, CONNECT_TIMEOUT_MS);
+    int ready;
+    do {
+        ready = poll(&waiting, 1, CONNECT_TIMEOUT_MS);
+    } while (ready < 0 && errno == EINTR);
     if (ready <= 0) {
         close(outward);
         return ready == 0 ? -ETIMEDOUT : -errno;
@@ -638,7 +667,12 @@ int main(int argument_count, char *arguments[])
     struct guard_options options;
     parse_arguments(argument_count, arguments, &options);
     verbose = options.verbose;
-    load_rules(options.rules_path);
+    if (!load_rules(options.rules_path)) {
+        fprintf(stderr, "[phobos-connect-guard] cannot read the rules file '%s': %s; refusing "
+                        "to run rather than fall open to allow-all\n",
+                options.rules_path, strerror(errno));
+        return EXIT_SETUP_ERROR;
+    }
 
     int pair[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) {
@@ -667,7 +701,8 @@ int main(int argument_count, char *arguments[])
     close(pair[0]);
     if (notify_descriptor < 0) {
         int status = 0;
-        waitpid(child, &status, 0);
+        while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
+        }
         fprintf(stderr, "[phobos-connect-guard] the sandboxed command could not be supervised; "
                         "refusing to run it\n");
         int code = exit_code_from_status(status);
