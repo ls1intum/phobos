@@ -442,8 +442,9 @@ static int connect_within_deadline(int family, const struct sockaddr *address, s
         ready = poll(&waiting, 1, CONNECT_TIMEOUT_MS);
     } while (ready < 0 && errno == EINTR);
     if (ready <= 0) {
+        int failure = errno;
         close(outward);
-        return ready == 0 ? -ETIMEDOUT : -errno;
+        return ready == 0 ? -ETIMEDOUT : -failure;
     }
     int socket_error = 0;
     socklen_t error_length = sizeof(socket_error);

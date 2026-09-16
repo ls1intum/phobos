@@ -64,6 +64,19 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/unit/netblocker_run.sh --coverage
 
+      - name: Run the connect guard unit tests
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/connect_guard_run.sh
+
+      # The guard installs a real seccomp filter and forks only when run for real; the unit
+      # suite wraps every syscall and fork instead, so it needs no kernel, and its interposed
+      # calls are answered rather than passed through, so gcov's own writes are undisturbed.
+      # Lines are held to 100 %; branches are reported, not gated, for the reason the script
+      # states.
+      - name: Every line of the connect guard ran
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/connect_guard_run.sh --coverage
+
       # No coverage step, deliberately. The suite interposes open and close, which is
       # also how the gcov runtime writes its .gcda files, so an instrumented run has
       # gcov's own diagnostics landing on stderr. That breaks the test asserting that a
