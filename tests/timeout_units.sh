@@ -169,30 +169,21 @@ exit 0
 FAKE
 chmod +x "$WORK/fake-timeout"
 
-cat > "$WORK/fake-landlock" <<'FAKE'
-#!/usr/bin/env bash
-exit 0
-FAKE
-chmod +x "$WORK/fake-landlock"
-
 SPEC="$WORK/spec"
 mkdir -p "$SPEC"
 for f in read.paths execute.paths write.paths create.paths delete.paths tail.flags net.rules; do : > "$SPEC/$f"; done
 
-# Runs the filesystem layer and prints its exit status together with the
-# duration argument GNU timeout saw, or "<none>" when GNU timeout was not
-# invoked at all. The status is part of the assertion so that a layer which
-# crashed before invoking GNU timeout cannot look like a disabled timeout.
+# Runs the timeout layer with a given timeout.sec value and prints its exit status together
+# with the duration argument GNU timeout saw, or "<none>" when GNU timeout was not invoked at
+# all. The status is part of the assertion so that a layer which crashed before invoking GNU
+# timeout cannot look like a disabled timeout.
 timeout_arg_for() {
-  local enable_fs=$1
-  local value=$2
+  local value=$1
   rm -f "$WORK/record"
+  printf '%s' "$value" > "$SPEC/timeout.sec"
   local rc
-  local flags=(--timeout-bin "$WORK/fake-timeout" --landlock-bin "$WORK/fake-landlock")
-  if [[ "$enable_fs" != "1" ]]; then flags+=(--no-landlock); fi
-  PHB_TIMEOUT_SEC="$value" \
   PHB_TEST_RECORD="$WORK/record" \
-    bash "$CORE/phobos-filesystem.sh" "${flags[@]}" "$SPEC" -- /bin/true >/dev/null 2>&1
+    bash "$CORE/phobos-timeout.sh" --timeout-bin "$WORK/fake-timeout" "$SPEC" -- /bin/true >/dev/null 2>&1
   rc=$?
   if [[ -f "$WORK/record" ]]; then
     printf 'rc=%s arg=%s' "$rc" "$(awk '{print $2}' "$WORK/record")"
@@ -201,29 +192,36 @@ timeout_arg_for() {
   fi
 }
 
-for layer in 1 0; do
-  if [[ "$layer" == "1" ]]; then label="sandboxed path"; else label="direct path"; fi
-  echo
-  echo "== modular runtime: GNU timeout arguments, $label =="
-  check "$label: integer seconds"   "rc=0 arg=2s"     "$(timeout_arg_for "$layer" 2)"
-  check "$label: whole seconds"     "rc=0 arg=2.000s" "$(timeout_arg_for "$layer" 2.000)"
-  check "$label: non-whole seconds" "rc=0 arg=1.234s" "$(timeout_arg_for "$layer" 1.234)"
-  check "$label: sub-second"        "rc=0 arg=0.500s" "$(timeout_arg_for "$layer" 0.500)"
-  check "$label: disabled"          "rc=0 arg=<none>" "$(timeout_arg_for "$layer" "")"
-done
-
-# The timeout must wrap phobos-landlock directly, so GNU timeout's kill escalation reaches a
-# command that ignores SIGTERM (a bash intermediary between them would die on SIGTERM and let
-# timeout exit before it escalates). Assert phobos-landlock is the word right after the
-# duration in what GNU timeout was invoked with.
 echo
-echo "== modular runtime: the timeout monitors phobos-landlock directly =="
+echo "== modular runtime: GNU timeout arguments =="
+check "integer seconds"   "rc=0 arg=2s"     "$(timeout_arg_for 2)"
+check "whole seconds"     "rc=0 arg=2.000s" "$(timeout_arg_for 2.000)"
+check "non-whole seconds" "rc=0 arg=1.234s" "$(timeout_arg_for 1.234)"
+check "sub-second"        "rc=0 arg=0.500s" "$(timeout_arg_for 0.500)"
+check "disabled"          "rc=0 arg=<none>" "$(timeout_arg_for "")"
+
+# GNU timeout must group-kill and escalate: without --foreground it signals the command's whole
+# process group, and --kill-after sends SIGKILL after SIGTERM, so a command that ignores SIGTERM
+# is still stopped. The layers between the timeout and the command keep themselves alive across
+# SIGTERM so that this escalation is what stops such a command; here the invocation that makes
+# it possible is asserted.
+echo
+echo "== modular runtime: the timeout group-kills and escalates =="
 rm -f "$WORK/record"
-PHB_TIMEOUT_SEC="3" \
+printf '3' > "$SPEC/timeout.sec"
 PHB_TEST_RECORD="$WORK/record" \
-  bash "$CORE/phobos-filesystem.sh" --timeout-bin "$WORK/fake-timeout" --landlock-bin "$WORK/fake-landlock" "$SPEC" -- /bin/true >/dev/null 2>&1
-monitored="$(awk '{print $3}' "$WORK/record" 2>/dev/null)"
-check "phobos-landlock is timeout's monitored child" "$WORK/fake-landlock" "$monitored"
+  bash "$CORE/phobos-timeout.sh" --timeout-bin "$WORK/fake-timeout" "$SPEC" -- /bin/true >/dev/null 2>&1
+invocation="$(cat "$WORK/record" 2>/dev/null)"
+if [[ "$invocation" == *"--kill-after=5s"* ]]; then
+  ok "it escalates to SIGKILL with --kill-after"
+else
+  bad "it escalates to SIGKILL with --kill-after" "--kill-after=5s in the invocation" "$invocation"
+fi
+if [[ "$invocation" != *"--foreground"* ]]; then
+  ok "it group-kills, without --foreground"
+else
+  bad "it group-kills, without --foreground" "no --foreground in the invocation" "$invocation"
+fi
 
 # ---------------------------------------------------------------------
 # Modular parser: [connect] host:port splitting

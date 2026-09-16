@@ -46,9 +46,9 @@ Notes:
   non-option word is the command; everything after it is its arguments.
 - The run's policy is written to a directory under --spec-parent (default
   /var/tmp), which must lie outside every write path, and removed when the run
-  ends, together with the scratch subdirectory this script keeps inside it. The
-  last layer in the chain waits for the command and removes it, whichever layers
-  the flags left in.
+  ends, together with the scratch subdirectory this script keeps inside it. The layer that
+  waits for the command removes it: the timeout layer when a timeout bounds the run, since the
+  filesystem layer is then group-killed with the command, and the filesystem layer otherwise.
 USAGE
   exit 2
 }
@@ -145,7 +145,7 @@ fi
 # Clear the internal channels a layer would otherwise inherit, so a value left in the
 # environment cannot make a layer act that the flags left out of the chain. Each layer that
 # is in the chain sets its own.
-unset PHB_TIMEOUT_SEC PHB_NETBLOCKER_SO NETBLOCKER_CONF NETBLOCKER_BIND_CONF
+unset PHB_NETBLOCKER_SO NETBLOCKER_CONF NETBLOCKER_BIND_CONF
 
 # Resolve the startup overrides from the flags, with the built-in defaults. The environment
 # is deliberately not consulted for any of them.
@@ -176,14 +176,15 @@ for c in "${cfgs[@]}"; do policy_flags+=( --config "$c" ); done
 
 # Assemble the layer chain from the flags: a disabled layer is left out of the chain rather
 # than entered and skipped, so no PHB_ENABLE_* has to travel with the run. Each wrapper does
-# its work and execs the rest of the chain; the filesystem layer is always last and runs the
-# command, applying Landlock unless --no-landlock tells it not to.
+# its work and hands on the rest of the chain; the timeout layer, when a timeout is set, runs
+# the rest under GNU timeout and waits on it, and the filesystem layer is always last and runs
+# the command, applying Landlock unless --no-landlock tells it not to.
 dbg=(); (( enable_debug )) && dbg=(--debug)
 chain=()
-if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeout.sh"   "${dbg[@]}" "$SPEC_DIR" -- ); fi
+if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeout.sh"   "${dbg[@]}" --timeout-bin "$timeout_bin" "$SPEC_DIR" -- ); fi
 if (( enable_network ));   then chain+=( "${HERE}/phobos-network.sh"   "${dbg[@]}" --netblocker-so "$netblocker_so" "$SPEC_DIR" -- ); fi
 if (( enable_resources )); then chain+=( "${HERE}/phobos-resources.sh" "${dbg[@]}" "$SPEC_DIR" -- ); fi
-fs_flags=( "${dbg[@]}" --landlock-bin "$landlock_bin" --timeout-bin "$timeout_bin" )
+fs_flags=( "${dbg[@]}" --landlock-bin "$landlock_bin" )
 if (( ! enable_filesystem )); then fs_flags+=( --no-landlock ); fi
 # The network restriction spans two layers: the preload filter in phobos-network.sh, left
 # out of the chain above, and the kernel-enforced Landlock TCP-port rules built in the

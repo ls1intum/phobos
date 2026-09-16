@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # The deterministic merge of the timeout and the resource limits across cfgs: the largest
 # value wins, a zero disables that limit and wins over any finite value, within one file and
-# across files, and the order of the cfgs does not matter. The effective timeout reaches the
-# command as PHB_TIMEOUT_SEC and the effective limits as the rlimits it inherits, so a
-# pass-through stand-in for phobos-landlock is enough and no Landlock kernel is needed. The
-# network layer is switched off only to spare the checks its readelf dependency.
+# across files, and the order of the cfgs does not matter. The effective timeout is read from
+# what the timeout layer invokes GNU timeout with, captured by a recording stand-in, and the
+# effective limits as the rlimits the command inherits, so a pass-through stand-in for
+# phobos-landlock is enough and no Landlock kernel is needed. The network layer is switched
+# off only to spare the checks its readelf dependency.
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,12 +27,22 @@ chmod +x "$CORE_X"/*.sh
 printf '%s\n' '#!/usr/bin/env bash' \
   'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift; exec "$@"' > "$WORK/passthrough-landlock"
 chmod +x "$WORK/passthrough-landlock"
+# A recording stand-in for GNU timeout. GNU timeout is invoked as
+# "timeout --kill-after=5s <duration>s <command...>", so it records the second argument with
+# its seconds suffix stripped and then runs the command, which lets the merge be read without
+# the command needing to see the timeout in its environment.
+printf '%s\n' '#!/usr/bin/env bash' \
+  'printf "%s" "${2%s}" > "$PHB_TEST_TIMEOUT_RECORD"' \
+  'shift 2' \
+  'exec "$@"' > "$WORK/fake-timeout"
+chmod +x "$WORK/fake-timeout"
 SPECS="$WORK/specs"
 mkdir -p "$SPECS"
 
 # Runs phobos.sh with the given base body (written beside phobos.sh) and an optional exercise
-# body (passed via --config), and prints "<PHB_TIMEOUT_SEC>|<ulimit -v>|<ulimit -n>" as the
-# command sees them: the effective timeout and the effective memory and open-file limits.
+# body (passed via --config), and prints "<effective timeout>|<ulimit -v>|<ulimit -n>": the
+# duration the timeout layer would pass GNU timeout (empty when disabled), and the effective
+# memory and open-file limits the command inherits.
 merge_result() {
   printf '%s\n' "$1" > "$CORE_X/BaseMerge.cfg"
   local cfgargs=()
@@ -39,9 +50,15 @@ merge_result() {
     printf '%s\n' "$2" > "$WORK/ex.cfg"
     cfgargs=(--config "$WORK/ex.cfg")
   fi
-  bash "$CORE_X/phobos.sh" --spec-parent "$SPECS" --landlock-bin "$WORK/passthrough-landlock" \
-    --no-networksystem-restriction "${cfgargs[@]}" -- \
-    bash -c 'printf "%s|%s|%s" "${PHB_TIMEOUT_SEC:-}" "$(ulimit -v)" "$(ulimit -n)"' 2>/dev/null
+  rm -f "$WORK/timeout-record"
+  local limits
+  limits="$(PHB_TEST_TIMEOUT_RECORD="$WORK/timeout-record" bash "$CORE_X/phobos.sh" \
+    --spec-parent "$SPECS" --landlock-bin "$WORK/passthrough-landlock" \
+    --timeout-bin "$WORK/fake-timeout" --no-networksystem-restriction "${cfgargs[@]}" -- \
+    bash -c 'printf "%s|%s" "$(ulimit -v)" "$(ulimit -n)"' 2>/dev/null)"
+  local duration=""
+  if [[ -f "$WORK/timeout-record" ]]; then duration="$(cat "$WORK/timeout-record")"; fi
+  printf '%s|%s' "$duration" "$limits"
 }
 eff_timeout() { merge_result "$1" "${2:-}" | cut -d'|' -f1; }
 eff_memkb()   { merge_result "$1" "${2:-}" | cut -d'|' -f2; }

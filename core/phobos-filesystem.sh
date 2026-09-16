@@ -9,32 +9,38 @@ DEBUG=0
 NO_LANDLOCK=0
 NO_NETWORK_PORTS=0
 LANDLOCK_BIN_OPT=""
-TIMEOUT_BIN_OPT=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --debug) DEBUG=1; shift ;;
     --no-landlock) NO_LANDLOCK=1; shift ;;
     --no-network-ports) NO_NETWORK_PORTS=1; shift ;;
     --landlock-bin) shift; LANDLOCK_BIN_OPT="${1:-}"; shift ;;
-    --timeout-bin) shift; TIMEOUT_BIN_OPT="${1:-}"; shift ;;
     *) break ;;
   esac
 done
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-filesystem.sh [--debug] [--no-landlock] [--no-network-ports] [--landlock-bin <path>] [--timeout-bin <path>] <SPEC_DIR> -- <cmd...>"; exit 2; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-filesystem.sh [--debug] [--no-landlock] [--no-network-ports] [--landlock-bin <path>] <SPEC_DIR> -- <cmd...>"; exit 2; }
 SPEC_DIR="$1"; shift 2
 CMD=("$@")
 
-# Removes the specification phobos.sh created on every way out of this layer except
-# the one that hands the command straight to exec, with neither this layer nor a
-# timeout to wait on it.
+# Removes the specification phobos.sh created. This layer always runs the command as a child
+# and waits on it, then exits, so this trap always runs, except when the command's timeout
+# group-kills this layer, where the timeout layer removes the specification instead.
 trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 
-READ="${SPEC_DIR}/read.paths"; EXECUTE="${SPEC_DIR}/execute.paths"; WRITE="${SPEC_DIR}/write.paths"; CREATE="${SPEC_DIR}/create.paths"; DELETE="${SPEC_DIR}/delete.paths"; TAIL="${SPEC_DIR}/tail.flags"
-LANDLOCK="${LANDLOCK_BIN_OPT:-${HERE}/phobos-landlock}"; TIMEOUT_BIN="${TIMEOUT_BIN_OPT:-timeout}"
+# This layer runs the command as a child and waits on it, so its output can be watched for
+# denials. An outer timeout (phobos-timeout.sh) group-kills on expiry and escalates to SIGKILL
+# only while GNU timeout's own child is still alive, so this layer ignores SIGTERM and stays
+# until the command it waits on is gone. The command is put back to the default disposition
+# just before it runs, so the graceful SIGTERM still reaches the command itself.
+trap '' TERM
 
-# With --no-landlock the filesystem restriction is off, so run the command without Landlock,
-# but still under the timeout when one is set. Run it as a child and exit with its status
-# rather than exec'ing it, so the EXIT trap still removes the specification directory.
+READ="${SPEC_DIR}/read.paths"; EXECUTE="${SPEC_DIR}/execute.paths"; WRITE="${SPEC_DIR}/write.paths"; CREATE="${SPEC_DIR}/create.paths"; DELETE="${SPEC_DIR}/delete.paths"; TAIL="${SPEC_DIR}/tail.flags"
+LANDLOCK="${LANDLOCK_BIN_OPT:-${HERE}/phobos-landlock}"
+
+# With --no-landlock the filesystem restriction is off, so run the command without Landlock.
+# Run it in a subshell that restores the default SIGTERM disposition and exec's it, so the
+# command stands in as this layer's child: an outer timeout's kill escalation reaches it, while
+# this layer keeps ignoring SIGTERM and stays to remove the specification directory.
 if (( NO_LANDLOCK )); then
   if (( DEBUG )); then
     >&2 printf '[phobos] filesystem layer disabled; run '
@@ -42,23 +48,11 @@ if (( NO_LANDLOCK )); then
     echo >&2
   fi
 
-  if [[ -n "${PHB_TIMEOUT_SEC:-}" ]]; then
-    set +e
-    "${TIMEOUT_BIN}" "--kill-after=5s" "${PHB_TIMEOUT_SEC}s" "${CMD[@]}"
-    rc=$?
-    set -e
-    if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
-      report "Timed out after ${PHB_TIMEOUT_SEC}s. (PHB-ETIMEOUT)"
-      exit ${PHB_ETIMEOUT}
-    fi
-    exit "$rc"
-  else
-    set +e
-    "${CMD[@]}"
-    rc=$?
-    set -e
-    exit "$rc"
-  fi
+  set +e
+  ( trap - TERM; exec "${CMD[@]}" )
+  rc=$?
+  set -e
+  exit "$rc"
 fi
 
 args=()
@@ -112,21 +106,17 @@ fi
 OUTLOG="$(mktemp -t phobos-out.XXXXXX)"; ERRLOG="$(mktemp -t phobos-err.XXXXXX)"
 trap 'finish_owned_spec_dir "$?" "$SPEC_DIR" "$OUTLOG" "$ERRLOG"' EXIT
 
+# The command runs in a subshell that restores the default SIGTERM disposition and exec's
+# phobos-landlock, so phobos-landlock and the command it runs are one process an outer
+# timeout's kill escalation reaches directly, while this layer ignores SIGTERM and waits so it
+# can watch the output for denials. The timeout itself, when set, is phobos-timeout.sh's.
 set +e
 (
-  if [[ -n "${PHB_TIMEOUT_SEC:-}" ]]; then
-    "${TIMEOUT_BIN}" "--kill-after=5s" "${PHB_TIMEOUT_SEC}s" "${LANDLOCK}" "${args[@]}" -- "${CMD[@]}"
-  else
-    "${LANDLOCK}" "${args[@]}" -- "${CMD[@]}"
-  fi
+  trap - TERM
+  exec "${LANDLOCK}" "${args[@]}" -- "${CMD[@]}"
 ) > >(tee "$OUTLOG") 2> >(tee "$ERRLOG" >&2)
 rc=$?
 set -e
-
-if [[ -n "${PHB_TIMEOUT_SEC:-}" && ( "$rc" -eq 124 || "$rc" -eq 137 ) ]]; then
-  report "Timed out after ${PHB_TIMEOUT_SEC}s. (PHB-ETIMEOUT)"
-  exit ${PHB_ETIMEOUT}
-fi
 
 net_denials=0; fs_denials=0
 if [[ -s "$ERRLOG" ]]; then
