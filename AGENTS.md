@@ -73,31 +73,34 @@ as a dependency.
   allow-list, which is a weaker sandbox that still looks like it works. Say in the pull
   request which direction a heuristic errs in.
 
-## Compiled artefacts in version control
+## The compiled library
 
-`core/libnetblocker.so` and `ld_preloader/libnetblocker.so` are committed. `.gitattributes`
-marks `*.so` binary so that Git never applies text conversion to them.
+`libnetblocker.so` is not committed. It is built from the C source in `ld_preloader/`, once
+per architecture, inside the run-phase image, alongside the two C products the image compiles.
+`.gitattributes` still marks `*.so` binary so that a stray one is never normalised.
 
 **Rule:**
 
-- Never let a text filter near them. A normalised shared object is a corrupted one.
-- When the C sources change, rebuild both committed objects in the same pull request, with
-  the toolchain `.github/scripts/netblocker-build.sh` pins. The `netblocker` job in
-  `build.yml` builds the source with it and fails when either committed copy differs by a
-  byte, and the `run-phase` job holds the copy the image builds to the same bytes. From the
-  repository root, with the container image that job names:
+- Never check the library in. The `netblocker` job in `build.yml` builds it from the source on
+  the pinned amd64 toolchain and verifies it (right architecture, no newer glibc than the
+  run-phase image, exactly the five hooks). The `run-phase` job builds the image for amd64 and
+  arm64 on native runners, verifies the copy each image compiled, and folds the two into one
+  multi-arch tag.
+- On amd64 the toolchain is pinned for a deterministic build; on arm64 it comes from the
+  ordinary archive, so the arm64 build is functional but not byte-reproducible.
+- The library must be built for x86-64 or AArch64 and need no glibc newer than the 2.39 the
+  run-phase image ships; `verify` refuses anything else. Where the loader cannot use it, the
+  network layer ends the run with PHB-ERUNTIME rather than running it unfiltered, so a bare
+  checkout with nothing built does not run: the delivery vehicle is the image.
+- To rebuild and check it locally, from the repository root with the container image that job
+  names:
 
   ```
-  docker run --rm --platform linux/amd64 -v "$PWD:/repository" -w /repository <image> sh -c \
+  docker run --rm -v "$PWD:/repository" -w /repository <image> sh -c \
     '.github/scripts/netblocker-build.sh install &&
-     .github/scripts/netblocker-build.sh build ld_preloader core/libnetblocker.so &&
-     cp core/libnetblocker.so ld_preloader/libnetblocker.so'
+     .github/scripts/netblocker-build.sh build ld_preloader /tmp/libnetblocker.so &&
+     .github/scripts/netblocker-build.sh verify /tmp/libnetblocker.so'
   ```
-
-- The committed objects are x86-64 and need glibc 2.39 or newer, and `readelf`. They are
-  built on Ubuntu 26.04 against glibc 2.43, and CI refuses a build that requires more than
-  the 2.39 of the run-phase image. Anywhere else the
-  network layer ends the run with PHB-ERUNTIME rather than running it unfiltered.
 - `.gitignore` covers `*.o` and `*.a`, not `*.so`, for that reason.
 
 ## Opening a pull request

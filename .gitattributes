@@ -7,8 +7,9 @@
 #     git ls-files --eol | grep crlf
 * text=auto eol=lf
 
-# Binary files, so that Git never applies text conversion to them. Phobos ships a
-# compiled preload library in version control; a Git that normalised it would corrupt it.
+# Binary files, so that Git never applies text conversion to them. Phobos ships no
+# compiled artefact in version control any more (the preload library and both C products
+# are built per architecture inside the image), but a stray one must never be normalised.
 *.so       binary
 *.png      binary
 *.jpg      binary

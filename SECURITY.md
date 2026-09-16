@@ -17,7 +17,8 @@ rest exists to take privileges away. None of the following is a vulnerability.
   starts can only lose access. Code that assembles access rules from a configuration file
   looks like path injection, and is the mechanism. It needs no privilege: a task may always
   restrict itself further.
-- `ld_preloader/` and the `libnetblocker.so` beside it intercept network calls through
+- `ld_preloader/` holds the sources of `libnetblocker.so`, the library built from them
+  intercepts network calls through
   `LD_PRELOAD`, hooking name resolution, `connect`, `bind`, and `sendto` and `sendmsg` for
   the datagrams a UDP socket names without connecting, refusing outbound hosts an allow-list
   does not name and narrowing a local TCP bind to the addresses a `[bind]` allow-list names.
@@ -47,11 +48,13 @@ rest exists to take privileges away. None of the following is a vulnerability.
   unprivileged process. The container the grader starts should add `--network none` and
   cgroup limits, which are the outer boundary Phobos cannot set from inside itself.
 
-A committed `libnetblocker.so` is a compiled artefact in version control. It is there so
-Phobos can run from a checkout without a compiler. CI rebuilds it from the C source beside it
-with a pinned toolchain and fails when the bytes differ, and holds the copy the run-phase image
-builds to the same bytes. It is built for x86-64; where the loader cannot use it, the network
-layer refuses to start rather than running the command unfiltered.
+`libnetblocker.so` is not committed. It is built from the C source beside it, once per
+architecture, inside the run-phase image, and CI verifies each build: the right architecture,
+no newer glibc than the image ships, and exactly the five hooks. On amd64 a pinned toolchain
+keeps that build deterministic; on arm64 it is built from the ordinary archive. Where the
+loader cannot use the library the network layer refuses to start rather than run the command
+unfiltered, so a bare checkout with nothing built does not run. The delivery vehicle is the
+run-phase image, published multi-arch, so a grader pulls the build for its own architecture.
 
 ## Threat model, in one paragraph
 

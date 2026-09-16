@@ -24,7 +24,11 @@ readonly BINUTILS_VERSION="2.46-3ubuntu2"
 readonly LIBC_DEV_VERSION="2.43-2ubuntu2.4"
 # The C library of the run-phase image. A library needing a newer one would not load there.
 readonly HIGHEST_GLIBC="2.39"
-readonly MACHINE="Advanced Micro Devices X86-64"
+# The ELF machines Phobos supports, as readelf's --wide file header prints them, the two
+# architectures the images are built for. No library is committed any more: it is built
+# inside each architecture's image and verified there, so verify accepts either rather
+# than holding every build to x86-64.
+readonly SUPPORTED_MACHINES="Advanced Micro Devices X86-64|AArch64"
 # The only functions the library may export: its five hooks, in the order the C locale sorts them.
 readonly EXPORTED_FUNCTIONS="bind connect getaddrinfo sendmsg sendto"
 
@@ -134,10 +138,10 @@ build_library() {
     )
 }
 
-# Refuses a library that is not built for x86-64, needs a newer C library than the
-# run-phase image has, exports any function but its five hooks, or that the network
-# layer would refuse at run time. Assumes readelf and the repository checkout this
-# script lives in.
+# Refuses a library built for neither architecture Phobos supports, that needs a newer C
+# library than the run-phase image has, exports any function but its five hooks, or that
+# the network layer would refuse at run time. Assumes readelf and the repository checkout
+# this script lives in.
 verify_library() {
     local library="$1"
     local machine
@@ -146,7 +150,7 @@ verify_library() {
     # shellcheck source=../../core/phobos-common.sh
     source "${HERE}/../../core/phobos-common.sh"
     machine="$(readelf --file-header --wide "${library}" | awk -F':[[:space:]]+' '$1 ~ /Machine$/ { print $2 }')"
-    [[ "${machine}" == "${MACHINE}" ]] || fail "${library} is built for '${machine}', not x86-64"
+    [[ "${machine}" =~ ^(${SUPPORTED_MACHINES})$ ]] || fail "${library} is built for '${machine}', which is neither x86-64 nor AArch64"
     highest="$(readelf --dyn-syms --wide "${library}" | { grep -o 'GLIBC_[0-9.]*' || true; } | sort -uV | tail -n 1)"
     [[ -n "${highest}" ]] || fail "${library} names no glibc symbol version, so it is not the dynamically linked library this job builds"
     highest="${highest#GLIBC_}"
@@ -169,7 +173,7 @@ compare_copies() {
     for copy in "$@"; do
         actual="$(sha256sum < "${copy}" | cut -d ' ' -f 1)"
         [[ "${actual}" == "${wanted}" ]] \
-            || fail "${copy} is ${actual}, but ${reference} is ${wanted}; rebuild the committed copies as AGENTS.md describes under 'Compiled artefacts in version control'"
+            || fail "${copy} is ${actual}, but ${reference} is ${wanted}"
     done
     printf 'identical: %s %s\n' "${wanted}" "$*"
 }
