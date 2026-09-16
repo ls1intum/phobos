@@ -71,6 +71,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/network_policy.sh
 
+      - name: The connect guard enforces the allow-list by host and port
+        if: ${{ !cancelled() }}
+        run: bash tests/connect_guard.sh
+
       # The [limits] resource keys are parsed and, when applied, set the process's rlimits,
       # the in-process line against a fork bomb, a runaway allocation or a disk-filling file.
       - name: The resource limits

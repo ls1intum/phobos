@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Assembles the build context the run-phase image expects.
 #
-# The Dockerfile copies flat names: *.sh, phobos-landlock*.c and .h,
+# The Dockerfile copies flat names: *.sh, phobos-landlock*.c and .h, phobos-connect-guard.c,
 # allowedList.cfg and config/*.cfg, plus the network filter's sources in netblocker/. Those files live in two directories of
 # this repository, so the context has to be put together before docker build can
 # see it, and no compose file or plain `docker build .` can express that.
@@ -39,6 +39,7 @@ mkdir -p "${DESTINATION}/config" "${DESTINATION}/build" "${DESTINATION}/netblock
 cp "${REPOSITORY}"/core/*.sh "${DESTINATION}/"
 cp "${REPOSITORY}"/core/phobos-landlock*.c "${DESTINATION}/"
 cp "${REPOSITORY}"/core/phobos-landlock*.h "${DESTINATION}/"
+cp "${REPOSITORY}/core/phobos-connect-guard.c" "${DESTINATION}/"
 cp "${REPOSITORY}/core/allowedList.cfg" "${DESTINATION}/"
 cp "${REPOSITORY}"/core/config/*.cfg "${DESTINATION}/config/"
 cp "${REPOSITORY}"/ld_preloader/netblocker*.c "${REPOSITORY}"/ld_preloader/netblocker*.h "${DESTINATION}/netblocker/"

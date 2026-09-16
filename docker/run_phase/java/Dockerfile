@@ -30,6 +30,7 @@ COPY *.sh                ${PHOBOS_HOME}/
 COPY --from=netblocker /tmp/netblocker/libnetblocker.so ${PHOBOS_HOME}/
 COPY phobos-landlock*.c           ${PHOBOS_HOME}/
 COPY phobos-landlock*.h           ${PHOBOS_HOME}/
+COPY phobos-connect-guard.c       ${PHOBOS_HOME}/
 COPY config/BaseLanguage-java.cfg                     ${PHOBOS_HOME}/
 COPY config/TailPhobos.cfg                     ${PHOBOS_HOME}/
 COPY allowedList.cfg                  ${PHOBOS_HOME}/
@@ -38,17 +39,24 @@ COPY allowedList.cfg                  ${PHOBOS_HOME}/
 # would be the one part of the image without address randomisation.
 RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
     -o ${PHOBOS_HOME}/phobos-landlock ${PHOBOS_HOME}/phobos-landlock*.c
+# The connect guard is built the same way and held to the same hardening below.
+RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
+    -o ${PHOBOS_HOME}/phobos-connect-guard ${PHOBOS_HOME}/phobos-connect-guard.c
 # The hardening is measured, not assumed: a DYN type proves -static-pie kept the
 # binary position independent, and a BIND_NOW entry proves RELRO is complete.
 # Written to files rather than piped into grep, because a pipe here would need
 # pipefail to report a failing readelf and hadolint rejects one without it.
 RUN readelf -h ${PHOBOS_HOME}/phobos-landlock > /tmp/wrapper-header.txt \
  && readelf -d ${PHOBOS_HOME}/phobos-landlock > /tmp/wrapper-dynamic.txt \
+ && readelf -h ${PHOBOS_HOME}/phobos-connect-guard > /tmp/guard-header.txt \
+ && readelf -d ${PHOBOS_HOME}/phobos-connect-guard > /tmp/guard-dynamic.txt \
  && readelf -d ${PHOBOS_HOME}/libnetblocker.so > /tmp/library-dynamic.txt \
  && grep -q 'Type:[[:space:]]*DYN' /tmp/wrapper-header.txt \
  && grep -q 'BIND_NOW' /tmp/wrapper-dynamic.txt \
+ && grep -q 'Type:[[:space:]]*DYN' /tmp/guard-header.txt \
+ && grep -q 'BIND_NOW' /tmp/guard-dynamic.txt \
  && grep -q 'BIND_NOW' /tmp/library-dynamic.txt \
- && rm -f /tmp/wrapper-header.txt /tmp/wrapper-dynamic.txt /tmp/library-dynamic.txt
+ && rm -f /tmp/wrapper-header.txt /tmp/wrapper-dynamic.txt /tmp/guard-header.txt /tmp/guard-dynamic.txt /tmp/library-dynamic.txt
 RUN chmod +x ${PHOBOS_HOME}/*.sh ${PHOBOS_HOME}/*.cfg \
  && chmod +w ${PHOBOS_HOME}/allowedList.cfg && ln -sf phobos.sh ${PHOBOS_HOME}/phobos
 ENV PATH=${PHOBOS_HOME}:$PATH

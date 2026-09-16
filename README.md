@@ -5,7 +5,7 @@
 Phobos is a sandboxing solution for the [Artemis](https://github.com/ls1intum/Artemis) e-learning platform. It runs a student submission for a programming exercise with access to only what the exercise's own tests were shown to need, so a submission cannot read files or reach hosts the exercise never declared. It works in two phases:
 
 - **Resource discovery (pruning), offline.** Phobos runs a reference exercise repeatedly, hiding one directory at a time and observing whether the tests still pass, to discover the minimal set of files and network hosts the tests actually need. A directory whose absence changes nothing was never needed and stays hidden; one whose absence breaks the run is kept, read-only first and writable only if that is not enough. The result is a *path set*: every path the run needs, with the access mode it needs.
-- **Sandbox application, at grading time.** The submission runs confined to that path set. The filesystem is enforced by **Landlock**, a Linux kernel feature that lets an unprivileged process restrict its own access to the filesystem and to TCP ports and then hand that restriction down to everything it starts. Undeclared network access is refused by a preload library (`libnetblocker`) as defence in depth, and a timeout layer bounds the run.
+- **Sandbox application, at grading time.** The submission runs confined to that path set. The filesystem is enforced by **Landlock**, a Linux kernel feature that lets an unprivileged process restrict its own access to the filesystem and to TCP ports and then hand that restriction down to everything it starts. Outbound connections are supervised by a **connect guard** that enforces the allow-list by host and port from outside the process, with a preload library (`libnetblocker`) as softer defence in depth beside it, and a timeout layer bounds the run.
 
 The point of the split is that the expensive, fragile part happens once per language environment, offline, and grading itself only applies a fixed configuration.
 
@@ -29,11 +29,12 @@ Phobos needs **no privileges, no capabilities and no container flags**: Landlock
 core/                      the sandbox itself
   phobos.sh                entry point: parses the configuration, applies the layers
   phobos-filesystem.sh     the filesystem layer, reads the path sets and applies Landlock
-  phobos-network.sh        the network layer, drives the preload library
+  phobos-network.sh        the network layer, runs the connect guard and drives the preload library
   phobos-resources.sh      the resource layer, sets the rlimits the policy names
   phobos-timeout.sh        the timeout layer
   phobos-common.sh         shared helpers, sourced by the others
   phobos-landlock*.c/.h    the C program that applies the Landlock policy, then exec's the command
+  phobos-connect-guard.c   the connect guard: supervises connect() and enforces [connect] by host and port
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
   libnetblocker.so         committed, marked binary in .gitattributes
 ld_preloader/              netblocker sources and its own allow-list
@@ -58,7 +59,8 @@ Two consequences of using Landlock rather than a mount sandbox are worth knowing
 
 Landlock enforces **TCP ports**, so a policy that names a concrete port has that port enforced by the kernel, below anything a submission can do in user space. Landlock does not know hosts and does not cover UDP, so:
 
-- `libnetblocker`, preloaded through `LD_PRELOAD`, filters by host name and address as **defence in depth**. It is bypassable (a raw system call, or a re-exec without `LD_PRELOAD`, steps around it), so it is never the boundary on its own.
+- the **connect guard** (`phobos-connect-guard`) supervises every `connect()` with a seccomp user-notification and makes an allowed connection itself, so it enforces the `[connect]` allow-list by host and port from outside the process, which a raw system call cannot step around. It holds an IP-literal rule (and the name `localhost`) to that exact address; a rule naming a DNS hostname it cannot tie to an address is held to its port alone, with the host left to `libnetblocker`. A `connect` of another family, such as a UNIX-domain socket, is refused rather than made outside the sandbox.
+- `libnetblocker`, preloaded through `LD_PRELOAD`, filters by host name and address as **defence in depth** beside the guard. It is bypassable (a raw system call, or a re-exec without `LD_PRELOAD`, steps around it), so it is never the boundary on its own.
 - The boundary for external egress, and for UDP and DNS, is the container started with `--network none`. Under it, only loopback exists, and a loopback-only policy needs no port rules; an external host, if one is ever allowed, should name a concrete port so that Landlock can enforce it rather than leaving it to `libnetblocker` alone.
 
 ## Running the pruning phase

@@ -31,6 +31,7 @@ Override options (taken only from the command line, never from the environment):
   --landlock-bin <path>              The phobos-landlock binary (default: beside this script).
   --timeout-bin <path>              The timeout tool (default: timeout).
   --netblocker-so <path>            The libnetblocker library (default: beside this script).
+  --connect-guard-bin <path>        The connect guard (default: beside this script).
   --tail-flags-file <path>          The tail flags file (default: TailPhobos.cfg beside this script).
   --spec-parent <path>              Where the run's specification directory is made (default: /var/tmp).
 
@@ -71,6 +72,7 @@ allow_unsandboxed=0
 opt_landlock_bin=""
 opt_timeout_bin=""
 opt_netblocker_so=""
+opt_connect_guard_bin=""
 opt_tail_flags_file=""
 opt_spec_parent=""
 
@@ -100,6 +102,8 @@ while (( "$#" )); do
       shift; [[ $# -gt 0 ]] || usage; opt_timeout_bin="$1"; shift;;
     --netblocker-so)
       shift; [[ $# -gt 0 ]] || usage; opt_netblocker_so="$1"; shift;;
+    --connect-guard-bin)
+      shift; [[ $# -gt 0 ]] || usage; opt_connect_guard_bin="$1"; shift;;
     --tail-flags-file)
       shift; [[ $# -gt 0 ]] || usage; opt_tail_flags_file="$1"; shift;;
     --spec-parent)
@@ -153,6 +157,7 @@ tail_flags_file="${opt_tail_flags_file:-${HERE}/TailPhobos.cfg}"
 landlock_bin="${opt_landlock_bin:-${HERE}/phobos-landlock}"
 timeout_bin="${opt_timeout_bin:-timeout}"
 netblocker_so="${opt_netblocker_so:-${HERE}/libnetblocker.so}"
+connect_guard_bin="${opt_connect_guard_bin:-${HERE}/phobos-connect-guard}"
 
 # The specification directory is created before any scratch file, so every temporary file
 # this script makes lives under it and is removed with it. phobos.sh ends with exec, so its
@@ -182,7 +187,7 @@ for c in "${cfgs[@]}"; do policy_flags+=( --config "$c" ); done
 dbg=(); (( enable_debug )) && dbg=(--debug)
 chain=()
 if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeout.sh"   "${dbg[@]}" --timeout-bin "$timeout_bin" "$SPEC_DIR" -- ); fi
-if (( enable_network ));   then chain+=( "${HERE}/phobos-network.sh"   "${dbg[@]}" --netblocker-so "$netblocker_so" "$SPEC_DIR" -- ); fi
+if (( enable_network ));   then chain+=( "${HERE}/phobos-network.sh"   "${dbg[@]}" --netblocker-so "$netblocker_so" --connect-guard-bin "$connect_guard_bin" "$SPEC_DIR" -- ); fi
 if (( enable_resources )); then chain+=( "${HERE}/phobos-resources.sh" "${dbg[@]}" "$SPEC_DIR" -- ); fi
 fs_flags=( "${dbg[@]}" --landlock-bin "$landlock_bin" )
 if (( ! enable_filesystem )); then fs_flags+=( --no-landlock ); fi
