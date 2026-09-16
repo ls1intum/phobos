@@ -36,8 +36,7 @@ core/                      the sandbox itself
   phobos-landlock*.c/.h    the C program that applies the Landlock policy, then exec's the command
   phobos-connect-guard.c   the connect guard: supervises connect() and enforces [connect] by host and port
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
-  libnetblocker.so         committed, marked binary in .gitattributes
-ld_preloader/              netblocker sources and its own allow-list
+ld_preloader/              netblocker sources, its own allow-list, and the library built from them
 squid/                     an egress-proxy image and its configuration
 docker/prune_phase/        one image per language, plus the orchestrator
 docker/run_phase/          the image an exercise actually runs in

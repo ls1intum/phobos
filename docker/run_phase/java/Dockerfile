@@ -1,7 +1,7 @@
 # libnetblocker.so is built in a stage of its own, on the toolchain netblocker-build.sh
-# pins, so the copy this image ships is byte for byte the one CI builds and the
-# committed copies hold. The stage's C library is newer than the image's; CI refuses a
-# library that needs a newer one than the 2.39 the image below ships.
+# pins, and copied into the image; it is not committed anywhere. The stage's C library is
+# newer than the image's; CI refuses a library that needs a newer one than the 2.39 the
+# image below ships.
 FROM ubuntu:26.04@sha256:cd21a4f68a617580279d4b091cb18e3af9fa8a87500665f0ae5f7f757d17d367 AS netblocker
 COPY build/netblocker-build.sh /tmp/netblocker/netblocker-build.sh
 COPY netblocker/ /tmp/netblocker/source/

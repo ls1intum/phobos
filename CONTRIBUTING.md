@@ -72,9 +72,9 @@ pull request, not only in a commit message.
    nothing about Python, and a change that touches the shared configuration affects both.
 3. **State the negative case.** A change is not verified by a passing exercise alone. Say
    what must still be blocked and how you confirmed it is.
-4. **Rebuild `libnetblocker.so` from the source in this repository** if you change it, with
-   the pinned toolchain and the command in AGENTS.md, and say so. CI fails when a committed
-   copy differs from what the source builds.
+4. **Do not commit `libnetblocker.so`.** It is built from the source in this repository, once
+   per architecture, inside the run-phase image, and CI verifies each build. If you change the
+   source, say so; the command to rebuild and check it locally is in AGENTS.md.
 
 ## Changing the discovery phase
 

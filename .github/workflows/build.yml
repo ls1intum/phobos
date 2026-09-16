@@ -18,6 +18,10 @@ on:
     branches: [ "main", "feat/landlock-instead-of-bubblewrap" ]
   push:
     branches: [ "main" ]
+    # A release tag publishes an image under its own name; the publish steps below gate on
+    # refs/tags. Without this the workflow would never start on a tag and that path would be
+    # dead. The plain latest image still comes from the branch push above.
+    tags: [ "*" ]
   schedule:
     - cron: "0 17 * * 0"
   workflow_dispatch:
@@ -84,12 +88,12 @@ jobs:
       # perturbed run in the first place. tests/unit/mutation.sh is the stronger measure
       # of this suite and already runs weekly below.
 
-  # core/libnetblocker.so and ld_preloader/libnetblocker.so are committed, and nothing
-  # else would notice them going stale beside changed C. The container is the toolchain
-  # netblocker-build.sh pins its packages on, so a green run means both copies are
-  # exactly what the source builds.
+  # No libnetblocker.so is committed any more; it is built per architecture inside the
+  # run-phase image instead. This job stays as a fast, isolated check that the preload
+  # source still builds a valid library on the pinned amd64 toolchain (right symbols, no
+  # newer glibc than the run-phase image), without building the whole image around it.
   netblocker:
-    name: The committed libnetblocker.so is what its source builds
+    name: libnetblocker.so builds and verifies from its source
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -108,14 +112,9 @@ jobs:
       - name: Build the library from its source
         run: .github/scripts/netblocker-build.sh build ld_preloader "${RUNNER_TEMP}/libnetblocker.so"
 
-      # x86-64, no newer glibc than the run-phase image, both hooks defined and loadable.
+      # x86-64 here, no newer glibc than the run-phase image, the five hooks defined and loadable.
       - name: Check what was built
         run: .github/scripts/netblocker-build.sh verify "${RUNNER_TEMP}/libnetblocker.so"
-
-      - name: Compare both committed copies with the build
-        run: |
-          .github/scripts/netblocker-build.sh compare "${RUNNER_TEMP}/libnetblocker.so" \
-            core/libnetblocker.so ld_preloader/libnetblocker.so
 
   images:
     name: Build the ${{ matrix.name }} image
@@ -171,12 +170,27 @@ jobs:
           # shellcheck disable=SC2086
           docker build ${FRESH} -t "phobos-${IMAGE_SLUG}:ci" "${BUILD_CONTEXT}"
 
+  # Built and tested once per architecture on a native runner, never under emulation:
+  # Landlock and the seccomp user-notification the acceptance suites rest on are absent or
+  # unreliable under QEMU, so an emulated arm64 run would test nothing. Each leg builds the
+  # image for its own architecture, compiling the library and both C products from source
+  # there, and runs the whole acceptance suite against that exact image. The manifest job
+  # below folds the two into one multi-arch tag, so a puller gets its own architecture.
   run-phase:
-    name: Build the run-phase image and hold it to the acceptance suites
-    runs-on: ubuntu-26.04
+    name: Build the run-phase image (${{ matrix.platform }}) and hold it to the acceptance suites
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     permissions:
       contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: amd64
+            runner: ubuntu-26.04
+          - platform: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -203,19 +217,17 @@ jobs:
             -t phobos-run-phase:ci \
             "${RUNNER_TEMP}/run-phase-context"
 
-      # The image compiles its own library rather than copying a committed one, so the
-      # copy an exercise actually gets is taken out of this exact image and held to the
-      # committed bytes too. A /bin/true command, because the image names none and
-      # docker create needs one.
-      - name: The image's libnetblocker.so is the committed one
+      # The image compiles its own library rather than shipping a committed one, so the
+      # copy an exercise actually gets is taken out of this exact image and verified: built
+      # for this architecture, no newer glibc than the image, and exactly the five hooks. A
+      # /bin/true command, because the image names none and docker create needs one.
+      - name: The image's libnetblocker.so verifies
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           container="$(docker create phobos-run-phase:ci /bin/true)"
           docker cp "${container}:/var/tmp/opt/core/libnetblocker.so" "${RUNNER_TEMP}/image-libnetblocker.so"
           docker rm "${container}" > /dev/null
           .github/scripts/netblocker-build.sh verify "${RUNNER_TEMP}/image-libnetblocker.so"
-          .github/scripts/netblocker-build.sh compare "${RUNNER_TEMP}/image-libnetblocker.so" \
-            core/libnetblocker.so ld_preloader/libnetblocker.so
 
       # No --privileged, no --cap-add, no --security-opt, in any of the three. That is
       # the claim these suites exist to make, and CI is where it stops being a claim.
@@ -295,6 +307,52 @@ jobs:
         run: |
           docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
             phobos-run-phase:ci bash /testsuite/connect-guard-test.sh
+
+      # Only after every acceptance suite above has passed, and only on a push to main or a
+      # release tag, publish this architecture's tested image under its own arch tag. The
+      # manifest job folds the two arch tags into one multi-arch tag a plain docker pull
+      # resolves. Plain docker login and push: no third-party action is allowed here and the
+      # docker CLI is on the runner. The token is the workflow's own GITHUB_TOKEN, which the
+      # packages:write permission above lets it push with.
+      - name: Publish this architecture's image
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+          IMAGE_NAME: ghcr.io/ls1intum/phobos
+          IMAGE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          echo "${REGISTRY_TOKEN}" | docker login ghcr.io -u "${REGISTRY_USER}" --password-stdin
+          docker tag phobos-run-phase:ci "${IMAGE_NAME}:${IMAGE_TAG}-${PLATFORM}"
+          docker push "${IMAGE_NAME}:${IMAGE_TAG}-${PLATFORM}"
+
+  # Fold the two per-architecture images the matrix published into one multi-arch tag, so a
+  # docker pull selects the puller's own architecture. buildx imagetools ships with the
+  # docker CLI, so this needs no third-party action. `needs` waits for every matrix leg, so
+  # a tag is only assembled once both architectures have built, tested and pushed; it runs
+  # only on the events that published them.
+  publish-manifest:
+    name: Publish the multi-arch run-phase image
+    needs: run-phase
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Assemble and push the multi-arch manifest
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+          IMAGE_NAME: ghcr.io/ls1intum/phobos
+          IMAGE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+        run: |
+          echo "${REGISTRY_TOKEN}" | docker login ghcr.io -u "${REGISTRY_USER}" --password-stdin
+          docker buildx imagetools create -t "${IMAGE_NAME}:${IMAGE_TAG}" \
+            "${IMAGE_NAME}:${IMAGE_TAG}-amd64" \
+            "${IMAGE_NAME}:${IMAGE_TAG}-arm64"
 
   # Mutation testing installs clang and mull into a container and then runs the suite
   # once per mutant, which is minutes rather than seconds. Weekly and on request, so it

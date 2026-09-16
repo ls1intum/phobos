@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Installs, checks and runs the one toolchain libnetblocker.so is built with.
 #
-# The library is committed and is also built into the run-phase image. A committed
-# object is only worth trusting while it is exactly what its source produces, and that
-# needs one compiler, one linker and one C library, installed the same way everywhere.
-# The versions therefore live here and nowhere else: the Dockerfile, the CI comparison
-# and a maintainer rebuilding the committed copies all go through this script.
+# The library is not committed: it is built from source inside the run-phase image, once per
+# architecture. Reproducibility still needs one compiler, one linker and one C library,
+# installed the same way everywhere, so the versions live here and nowhere else: the
+# Dockerfile and this script are the single source of the toolchain.
 #
-# The packages come from a fixed Ubuntu snapshot rather than the moving archive, so an
-# update to gcc-14 does not change the bytes behind anyone's back. Ubuntu keeps a
-# snapshot for at least two years. Moving it is a deliberate change, and the pull
-# request that moves it rebuilds the committed objects.
+# On amd64 the packages come from a fixed Ubuntu snapshot rather than the moving archive, so an
+# update to gcc-14 does not change the bytes behind anyone's back; Ubuntu keeps a snapshot for
+# at least two years, and moving it is a deliberate change. On other architectures the snapshot
+# has no packages, so the toolchain comes from the ordinary archive and the build is functional
+# but not byte-reproducible.
 #
 #   netblocker-build.sh install [PACKAGE...]      as root, on Ubuntu 26.04
 #   netblocker-build.sh build SOURCE_DIRECTORY OUTPUT
@@ -24,7 +24,11 @@ readonly BINUTILS_VERSION="2.46-3ubuntu2"
 readonly LIBC_DEV_VERSION="2.43-2ubuntu2.4"
 # The C library of the run-phase image. A library needing a newer one would not load there.
 readonly HIGHEST_GLIBC="2.39"
-readonly MACHINE="Advanced Micro Devices X86-64"
+# The ELF machines Phobos supports, as readelf's --wide file header prints them, the two
+# architectures the images are built for. No library is committed any more: it is built
+# inside each architecture's image and verified there, so verify accepts either rather
+# than holding every build to x86-64.
+readonly SUPPORTED_MACHINES="Advanced Micro Devices X86-64|AArch64"
 # The only functions the library may export: its five hooks, in the order the C locale sorts them.
 readonly EXPORTED_FUNCTIONS="bind connect getaddrinfo sendmsg sendto"
 
@@ -114,7 +118,7 @@ check_toolchain() {
 #
 # -O2 is what switches _FORTIFY_SOURCE on: without an optimisation level it is off, and
 # this library sits on every connection a submission makes. -Wl,-z,now makes every
-# relocation resolve at load time. -fvisibility=hidden keeps every function but the four
+# relocation resolve at load time. -fvisibility=hidden keeps every function but the five
 # hooks, which ask for default visibility themselves, out of the dynamic symbol table.
 # The sources are compiled from their own directory under their bare names, in the
 # order the C locale sorts them, so the bytes depend neither on where the checkout lives
@@ -134,10 +138,10 @@ build_library() {
     )
 }
 
-# Refuses a library that is not built for x86-64, needs a newer C library than the
-# run-phase image has, exports any function but its five hooks, or that the network
-# layer would refuse at run time. Assumes readelf and the repository checkout this
-# script lives in.
+# Refuses a library built for neither architecture Phobos supports, that needs a newer C
+# library than the run-phase image has, exports any function but its five hooks, or that
+# the network layer would refuse at run time. Assumes readelf and the repository checkout
+# this script lives in.
 verify_library() {
     local library="$1"
     local machine
@@ -146,7 +150,7 @@ verify_library() {
     # shellcheck source=../../core/phobos-common.sh
     source "${HERE}/../../core/phobos-common.sh"
     machine="$(readelf --file-header --wide "${library}" | awk -F':[[:space:]]+' '$1 ~ /Machine$/ { print $2 }')"
-    [[ "${machine}" == "${MACHINE}" ]] || fail "${library} is built for '${machine}', not x86-64"
+    [[ "${machine}" =~ ^(${SUPPORTED_MACHINES})$ ]] || fail "${library} is built for '${machine}', which is neither x86-64 nor AArch64"
     highest="$(readelf --dyn-syms --wide "${library}" | { grep -o 'GLIBC_[0-9.]*' || true; } | sort -uV | tail -n 1)"
     [[ -n "${highest}" ]] || fail "${library} names no glibc symbol version, so it is not the dynamically linked library this job builds"
     highest="${highest#GLIBC_}"
@@ -169,7 +173,7 @@ compare_copies() {
     for copy in "$@"; do
         actual="$(sha256sum < "${copy}" | cut -d ' ' -f 1)"
         [[ "${actual}" == "${wanted}" ]] \
-            || fail "${copy} is ${actual}, but ${reference} is ${wanted}; rebuild the committed copies as AGENTS.md describes under 'Compiled artefacts in version control'"
+            || fail "${copy} is ${actual}, but ${reference} is ${wanted}"
     done
     printf 'identical: %s %s\n' "${wanted}" "$*"
 }

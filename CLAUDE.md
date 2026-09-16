@@ -129,8 +129,7 @@ core/                      the sandbox itself
   phobos-timeout.sh        the timeout layer
   phobos-common.sh         shared helpers, sourced by the others
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
-  libnetblocker.so         committed, binary in .gitattributes
-ld_preloader/              netblocker sources and its own allow-list
+ld_preloader/              netblocker sources, its own allow-list, and the library built from them
 squid/                     the egress proxy image and its configuration
 docker/prune_phase/        one image per language, plus the orchestrator
 docker/run_phase/          the image an exercise actually runs in
