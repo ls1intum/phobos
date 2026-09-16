@@ -2,7 +2,7 @@
 # pins, so the copy this image ships is byte for byte the one CI builds and the
 # committed copies hold. The stage's C library is newer than the image's; CI refuses a
 # library that needs a newer one than the 2.39 the image below ships.
-FROM ubuntu:26.04@sha256:513c074113a871b51a8d16ab445c88779d6452d937a164fb5cc479f32668a41d AS netblocker
+FROM ubuntu:26.04@sha256:5cf058a7d21293819d67c8514b422f782570e5f5126126201d0f1bcbb74f6414 AS netblocker
 COPY build/netblocker-build.sh /tmp/netblocker/netblocker-build.sh
 COPY netblocker/ /tmp/netblocker/source/
 RUN /tmp/netblocker/netblocker-build.sh install \
