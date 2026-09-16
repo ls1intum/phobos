@@ -18,6 +18,10 @@ on:
     branches: [ "main", "feat/landlock-instead-of-bubblewrap" ]
   push:
     branches: [ "main" ]
+    # A release tag publishes an image under its own name; the publish steps below gate on
+    # refs/tags. Without this the workflow would never start on a tag and that path would be
+    # dead. The plain latest image still comes from the branch push above.
+    tags: [ "*" ]
   schedule:
     - cron: "0 17 * * 0"
   workflow_dispatch:
@@ -108,7 +112,7 @@ jobs:
       - name: Build the library from its source
         run: .github/scripts/netblocker-build.sh build ld_preloader "${RUNNER_TEMP}/libnetblocker.so"
 
-      # x86-64, no newer glibc than the run-phase image, both hooks defined and loadable.
+      # x86-64 here, no newer glibc than the run-phase image, the five hooks defined and loadable.
       - name: Check what was built
         run: .github/scripts/netblocker-build.sh verify "${RUNNER_TEMP}/libnetblocker.so"
 
