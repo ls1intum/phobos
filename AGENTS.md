@@ -84,8 +84,8 @@ per architecture, inside the run-phase image, alongside the two C products the i
 - Never check the library in. The `netblocker` job in `build.yml` builds it from the source on
   the pinned amd64 toolchain and verifies it (right architecture, no newer glibc than the
   run-phase image, exactly the five hooks). The `run-phase` job builds the image for amd64 and
-  arm64 on native runners, verifies the copy each image compiled, and folds the two into one
-  multi-arch tag.
+  arm64 on native runners and verifies the copy each image compiled, so both architectures are
+  proven on every run; publishing the multi-arch image is a manual step (below).
 - On amd64 the toolchain is pinned for a deterministic build; on arm64 it comes from the
   ordinary archive, so the arm64 build is functional but not byte-reproducible.
 - The library must be built for x86-64 or AArch64 and need no glibc newer than the 2.39 the
@@ -101,6 +101,25 @@ per architecture, inside the run-phase image, alongside the two C products the i
      .github/scripts/netblocker-build.sh build ld_preloader /tmp/libnetblocker.so &&
      .github/scripts/netblocker-build.sh verify /tmp/libnetblocker.so'
   ```
+
+## Publishing the run-phase image
+
+CI builds and tests the run-phase image on both architectures but does not publish it, so no
+registry credentials live in the workflow. A maintainer publishes it by hand once CI is green,
+to their own registry namespace (for example `markuspaulsen/phobos`), from the repository root:
+
+```
+CTX="$(mktemp -d)"
+.github/scripts/assemble-run-phase-context.sh "$CTX"
+docker login                 # to the registry the tag below names
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -f docker/run_phase/java/Dockerfile -t <namespace>/phobos:latest --push "$CTX"
+```
+
+`buildx --push` builds both architectures and pushes one multi-arch manifest, so a `docker pull`
+selects the puller's architecture. The per-architecture acceptance suites ran natively in CI;
+this step only packages and publishes. An image that embeds Phobos, such as a grading image,
+then pulls it with `COPY --from=<namespace>/phobos:latest`.
 - `.gitignore` covers `*.o` and `*.a`, not `*.so`, for that reason.
 
 ## Opening a pull request
