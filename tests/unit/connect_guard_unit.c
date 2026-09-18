@@ -70,6 +70,19 @@ struct behaviour {
     int recvmsg_eintr_once;
     /* the notification descriptor traffic */
     int notif_recv_result;
+    int notif_recv_nr;
+    int notif_socket_domain;
+    int notif_socket_type;
+    int notif_socket_protocol;
+    unsigned int notif_send_flags;
+    int mmsg_mode;
+    int mmsg_name_missing;
+    int mmsg_addr_short;
+    int mmsg_hetero;
+    int addr_read_seen;
+    unsigned int mmsg_count;
+    int id_valid_seen;
+    int id_valid_fail_at;
     int notif_recv_family;
     uint16_t notif_recv_port;
     uint32_t notif_recv_target_fd;
@@ -94,6 +107,7 @@ struct behaviour {
     /* what was observed */
     int last_answer_error;
     int64_t last_answer_val;
+    uint32_t last_answer_flags;
     int answers;
     int addfd_calls;
     int connect_calls;
@@ -107,6 +121,7 @@ static struct behaviour *bx;
 static void reset_behaviour(void)
 {
     memset(bx, 0, sizeof(*bx));
+    bx->notif_recv_nr = __NR_connect;
     bx->seccomp_listener_result = 4;
     bx->notif_sizes_result = 0;
     bx->socketpair_result = 0;
@@ -300,15 +315,33 @@ ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned l
     if (bx->process_vm_readv_result == 0) {
         return 0; /* a short read: fewer bytes than asked */
     }
+    if (bx->mmsg_mode && local->iov_len == sizeof(struct mmsghdr)) {
+        struct mmsghdr batch_entry;
+        memset(&batch_entry, 0, sizeof(batch_entry));
+        if (!bx->mmsg_name_missing) {
+            batch_entry.msg_hdr.msg_name = (void *)0x5000;
+            batch_entry.msg_hdr.msg_namelen = sizeof(struct sockaddr_in);
+        }
+        memcpy(local->iov_base, &batch_entry, local->iov_len);
+        return (ssize_t)local->iov_len;
+    }
+    if (bx->mmsg_mode && bx->mmsg_addr_short) {
+        return 0;
+    }
     /* Fill the destination the guard is reading into with a socket address of the
      * requested family, so the read looks like the command's real connect target. */
     struct sockaddr_storage storage;
     memset(&storage, 0, sizeof(storage));
     socklen_t length;
+    bx->addr_read_seen++;
+    uint16_t effective_port = bx->notif_recv_port;
+    if (bx->mmsg_hetero && bx->addr_read_seen >= 2) {
+        effective_port = 9999;
+    }
     if (bx->notif_recv_family == AF_INET6) {
         struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&storage;
         v6->sin6_family = AF_INET6;
-        v6->sin6_port = htons(bx->notif_recv_port);
+        v6->sin6_port = htons(effective_port);
         inet_pton(AF_INET6, "2001:db8::1", &v6->sin6_addr);
         length = sizeof(*v6);
     } else if (bx->notif_recv_family == AF_UNIX) {
@@ -318,7 +351,7 @@ ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned l
     } else {
         struct sockaddr_in *v4 = (struct sockaddr_in *)&storage;
         v4->sin_family = AF_INET;
-        v4->sin_port = htons(bx->notif_recv_port);
+        v4->sin_port = htons(effective_port);
         v4->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         length = sizeof(*v4);
     }
@@ -428,14 +461,33 @@ int __wrap_ioctl(int fd, unsigned long request, ...)
         struct seccomp_notif *req = argument;
         req->id = 555;
         req->pid = 12345;
-        req->data.nr = __NR_connect;
-        req->data.args[0] = bx->notif_recv_target_fd;
-        req->data.args[1] = 0x4000; /* a plausible userspace pointer, never dereferenced here */
-        req->data.args[2] = bx->notif_recv_family == AF_INET6 ? sizeof(struct sockaddr_in6)
-                                                              : sizeof(struct sockaddr_in);
+        req->data.nr = bx->notif_recv_nr;
+        uint64_t address_length = bx->notif_recv_family == AF_INET6 ? sizeof(struct sockaddr_in6)
+                                                                    : sizeof(struct sockaddr_in);
+        if (bx->notif_recv_nr == __NR_socket) {
+            req->data.args[0] = (uint64_t)bx->notif_socket_domain;
+            req->data.args[1] = (uint64_t)bx->notif_socket_type;
+            req->data.args[2] = (uint64_t)bx->notif_socket_protocol;
+        } else if (bx->notif_recv_nr == __NR_sendto) {
+            req->data.args[3] = bx->notif_send_flags;
+            req->data.args[4] = bx->notif_recv_family == 0 ? 0 : 0x4000;
+            req->data.args[5] = bx->notif_recv_family == 0 ? 0 : address_length;
+        } else if (bx->notif_recv_nr == __NR_sendmmsg) {
+            req->data.args[1] = 0x4000;
+            req->data.args[2] = bx->mmsg_count ? bx->mmsg_count : 1;
+            req->data.args[3] = bx->notif_send_flags;
+        } else {
+            req->data.args[0] = bx->notif_recv_target_fd;
+            req->data.args[1] = 0x4000; /* a plausible userspace pointer, never dereferenced here */
+            req->data.args[2] = address_length;
+        }
         return 0;
     }
     if (request == SECCOMP_IOCTL_NOTIF_ID_VALID) {
+        bx->id_valid_seen++;
+        if (bx->id_valid_fail_at != 0 && bx->id_valid_seen == bx->id_valid_fail_at) {
+            return -1;
+        }
         return bx->notif_id_valid_result;
     }
     if (request == SECCOMP_IOCTL_NOTIF_ADDFD) {
@@ -450,6 +502,7 @@ int __wrap_ioctl(int fd, unsigned long request, ...)
         struct seccomp_notif_resp *resp = argument;
         bx->last_answer_error = resp->error;
         bx->last_answer_val = resp->val;
+        bx->last_answer_flags = resp->flags;
         bx->answers++;
         if (bx->notif_send_result != 0) {
             errno = bx->notif_send_result == -2 ? ENOENT : EPIPE;
@@ -541,7 +594,7 @@ static bool permits_v4(const char *ip, uint16_t port)
 static void test_policy_matching(void)
 {
     reset_behaviour();
-    check("an empty allow-list permits any connect", permits_v4("9.9.9.9", 443));
+    check("an empty allow-list denies every connect", !permits_v4("9.9.9.9", 443));
 
     reset_behaviour();
     remember_rule("127.0.0.1", "443");
@@ -710,6 +763,7 @@ static void test_service_paths(void)
     bx->notif_recv_port = 443;
     bx->notif_recv_target_fd = 5;
     bx->process_vm_readv_result = 1;
+    remember_rule("127.0.0.1", "443");
     service_once();
     check("a permitted connect is made and answered with success",
           bx->connect_calls == 1 && bx->addfd_calls == 1 && bx->answers == 1 &&
@@ -719,9 +773,219 @@ static void test_service_paths(void)
     bx->notif_recv_family = AF_INET6;
     bx->notif_recv_port = 443;
     bx->process_vm_readv_result = 1;
+    remember_rule("2001:db8::1", "443");
     service_once();
     check("a permitted IPv6 connect is made on the command's behalf",
           bx->connect_calls == 1 && bx->addfd_calls == 1 && bx->last_answer_error == 0);
+}
+
+/* The supervisor decides socket() and the send syscalls, not only connect. These drive each
+ * new branch through the notification dispatcher: a socket kind refused, a socket kind allowed,
+ * TCP Fast Open refused, and a datagram judged by its destination. */
+static void test_egress_syscalls(void)
+{
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_INET;
+    bx->notif_socket_type = SOCK_RAW;
+    service_once();
+    check("a raw socket is refused", bx->answers == 1 && bx->last_answer_error == -EACCES);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_INET;
+    bx->notif_socket_type = SOCK_DGRAM;
+    bx->notif_socket_protocol = IPPROTO_ICMP;
+    service_once();
+    check("an ICMP datagram socket is refused", bx->answers == 1 && bx->last_answer_error == -EACCES);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_PACKET;
+    bx->notif_socket_type = SOCK_RAW;
+    service_once();
+    check("a packet socket is refused", bx->answers == 1 && bx->last_answer_error == -EACCES);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_INET;
+    bx->notif_socket_type = SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK;
+    service_once();
+    check("an ordinary TCP socket is allowed to continue",
+          bx->answers == 1 && bx->last_answer_error == 0 &&
+              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendto;
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 443;
+    bx->notif_send_flags = MSG_FASTOPEN;
+    bx->process_vm_readv_result = 1;
+    remember_rule("127.0.0.1", "443");
+    service_once();
+    check("a TCP Fast Open send is refused even to a listed destination",
+          bx->answers == 1 && bx->last_answer_error == -EACCES);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendto;
+    bx->process_vm_readv_result = 1;
+    service_once();
+    check("a datagram with no destination is a connected send and continues",
+          bx->answers == 1 && bx->last_answer_error == 0 &&
+              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendto;
+    bx->notif_recv_family = AF_UNIX;
+    bx->process_vm_readv_result = 1;
+    service_once();
+    check("a datagram to a non-INET address continues untouched",
+          bx->answers == 1 && bx->last_answer_error == 0 &&
+              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendto;
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->process_vm_readv_result = 1;
+    remember_rule("127.0.0.1", "53");
+    service_once();
+    check("a datagram to a listed destination continues",
+          bx->answers == 1 && bx->last_answer_error == 0 &&
+              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendto;
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 9999;
+    bx->process_vm_readv_result = 1;
+    remember_rule("127.0.0.1", "53");
+    service_once();
+    check("a datagram to a destination the list does not name is refused",
+          bx->answers == 1 && bx->last_answer_error == -EACCES);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendto;
+    bx->notif_recv_family = AF_INET;
+    bx->process_vm_readv_result = 0;
+    service_once();
+    check("a datagram whose address cannot be read is refused",
+          bx->answers == 1 && bx->last_answer_error == -EACCES);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendmmsg;
+    bx->mmsg_mode = 1;
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->process_vm_readv_result = 1;
+    remember_rule("127.0.0.1", "53");
+    service_once();
+    check("a sendmmsg batch to a listed destination continues",
+          bx->answers == 1 && bx->last_answer_error == 0 &&
+              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendmmsg;
+    bx->mmsg_mode = 1;
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 9999;
+    bx->process_vm_readv_result = 1;
+    remember_rule("127.0.0.1", "53");
+    service_once();
+    check("a sendmmsg batch naming a disallowed destination is refused whole",
+          bx->answers == 1 && bx->last_answer_error == -EACCES);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendmmsg;
+    bx->mmsg_mode = 1;
+    bx->process_vm_readv_result = -1;
+    service_once();
+    check("a sendmmsg whose header cannot be read is refused",
+          bx->answers == 1 && bx->last_answer_error == -EACCES);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendmmsg;
+    bx->mmsg_mode = 1;
+    bx->mmsg_name_missing = 1;
+    bx->process_vm_readv_result = 1;
+    service_once();
+    check("a sendmmsg batch of connected sends continues",
+          bx->answers == 1 && bx->last_answer_error == 0 &&
+              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendmmsg;
+    bx->mmsg_mode = 1;
+    bx->mmsg_addr_short = 1;
+    bx->process_vm_readv_result = 1;
+    service_once();
+    check("a sendmmsg entry whose address cannot be read is refused",
+          bx->answers == 1 && bx->last_answer_error == -EACCES);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_getpid;
+    service_once();
+    check("a notification for a syscall the filter does not trap is refused closed",
+          bx->answers == 1 && bx->last_answer_error == -EACCES);
+
+    reset_behaviour();
+    verbose = true;
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_INET;
+    bx->notif_socket_type = SOCK_STREAM;
+    bx->notif_send_result = -1;
+    service_once();
+    verbose = false;
+    check("a continue whose notify send fails is tolerated", bx->answers == 1);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendto;
+    bx->notif_recv_family = AF_INET;
+    bx->process_vm_readv_result = 1;
+    bx->notif_id_valid_result = -1;
+    service_once();
+    check("a sendto whose notification turns invalid is dropped", bx->answers == 0);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendmmsg;
+    bx->mmsg_mode = 1;
+    bx->mmsg_name_missing = 1;
+    bx->mmsg_count = 2000;
+    bx->process_vm_readv_result = 1;
+    service_once();
+    check("a sendmmsg batch is capped and still continues",
+          bx->answers == 1 && bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendmmsg;
+    bx->mmsg_mode = 1;
+    bx->process_vm_readv_result = 1;
+    bx->id_valid_fail_at = 1;
+    service_once();
+    check("a sendmmsg whose notification turns invalid before the header check is dropped",
+          bx->answers == 0);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendmmsg;
+    bx->mmsg_mode = 1;
+    bx->process_vm_readv_result = 1;
+    bx->id_valid_fail_at = 2;
+    service_once();
+    check("a sendmmsg whose notification turns invalid after the address read is dropped",
+          bx->answers == 0);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendmmsg;
+    bx->mmsg_mode = 1;
+    bx->mmsg_hetero = 1;
+    bx->mmsg_count = 2;
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->process_vm_readv_result = 1;
+    remember_rule("127.0.0.1", "53");
+    service_once();
+    check("a sendmmsg batch is refused when a later entry names a disallowed destination",
+          bx->answers == 1 && bx->last_answer_error == -EACCES);
 }
 
 static void test_connect_on_behalf_paths(void)
@@ -996,6 +1260,7 @@ int main(void)
     test_read_peer_address_edges();
     test_receive_descriptor();
     test_service_paths();
+    test_egress_syscalls();
     test_connect_on_behalf_paths();
     test_supervise_loop();
     test_argument_errors();
