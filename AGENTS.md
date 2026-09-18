@@ -35,6 +35,14 @@ intention.
   `--cap-add` and no `--security-opt`. A suite that needs any of those is measuring a
   different sandbox from the one an exercise gets.
 
+The policy itself is additive by design, and that is not a hole to close. Everything is denied
+first, and the platform, language and exercise configurations each only widen the allow-list;
+`phobos-policy.sh` folds every config, base and exercise alike, through `fs_union_dir`, so an
+exercise config may add a path or a right the base did not grant. This rests on the exercise
+configuration being trusted input that the graded code cannot write, which SECURITY.md states
+as an integration requirement. Do not "fix" the union back to a narrow-only exercise merge:
+that would break the intended platform/language/exercise layering, not tighten it.
+
 ## Allow-list files are read line by line, so line endings are load-bearing
 
 `core/phobos-filesystem.sh` reads the path sets with `while IFS= read -r p` and binds each

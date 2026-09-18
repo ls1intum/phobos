@@ -275,6 +275,10 @@ def _write_cfg(read_set: set[str], write_set: set[str], dest: Path) -> None:
         writable = sorted(write_set)
         for section in ('write', 'create', 'delete'):
             lines += [f'[{section}]', *writable, '']
+    # An empty [connect] now denies every outbound connection, so a generated base names the
+    # loopback the grading tools need (the Gradle daemon and the JVM talk over it) explicitly.
+    # External egress stays a deliberate per-exercise [connect] plus a no-network container.
+    lines += ['[connect]', 'allow 127.0.0.1:*', 'allow [::1]', 'allow localhost', '']
     dest.write_text('\n'.join(lines))
 
 _write_cfg(read_union, write_union, write_cfg_path)

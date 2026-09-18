@@ -107,14 +107,21 @@ for b in "${base_cfgs[@]}"; do
   merge_limits
 done
 
-# Effective policy (start from base, then apply exercise overrides)
+# Effective policy: start from the base, then add each exercise config on top. The model is
+# additive in every dimension. Everything is denied first, and the platform, language and
+# exercise configs each only widen: the filesystem paths are unioned exactly as the base
+# configs were, matching the union already used for the network and bind sections and the
+# largest-wins merge used for the limits. An exercise cannot narrow below the base, so the
+# exercise/task config is trusted input and must not be writable by the graded code; see
+# SECURITY.md. build_path_args still refuses a nested path granted fewer rights than an
+# ancestor, which Landlock could not hold.
 eff_dir="$(mktemp -d -p "$PHOBOS_SCRATCH")"; eff_net="$(mktemp -p "$PHOBOS_SCRATCH")"; eff_bind="$(mktemp -p "$PHOBOS_SCRATCH")"
 for r in ${PHB_FS_RIGHTS}; do cp "${base_dir}/${r}.paths" "${eff_dir}/${r}.paths"; done
 cp "$base_net" "$eff_net"; cp "$base_bind" "$eff_bind"
 
 for c in "${cfgs[@]}"; do
   parse_cfg_policy "$c"
-  merge_fs_per_path "$base_dir" "$eff_dir" "$PARSED_FS_DIR"
+  fs_union_dir "$eff_dir" "$PARSED_FS_DIR"
   tmpnet="$(mktemp -p "$PHOBOS_SCRATCH")"; net_union "$tmpnet" "$eff_net" "$PARSED_NET_FILE"; mv "$tmpnet" "$eff_net"
   tmpbind="$(mktemp -p "$PHOBOS_SCRATCH")"; net_union "$tmpbind" "$eff_bind" "$PARSED_BIND_FILE"; mv "$tmpbind" "$eff_bind"
   merge_limits

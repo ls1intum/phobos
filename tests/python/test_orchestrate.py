@@ -111,6 +111,15 @@ def test_every_language_contributes_to_the_policy(tmp_path):
     assert "/home/build/python" in written
 
 
+def test_a_generated_base_names_loopback_connect(tmp_path):
+    result = run_orchestrator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    written = base_policy(tmp_path).read_text()
+    assert "[connect]" in written
+    assert "allow 127.0.0.1:*" in written
+    assert "allow localhost" in written
+
+
 def test_a_failing_language_stops_the_merge(tmp_path):
     result = run_orchestrator(tmp_path, failing="java")
     assert result.returncode != 0
