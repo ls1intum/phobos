@@ -89,6 +89,9 @@ struct behaviour {
     int notif_id_valid_result;
     int notif_addfd_result;
     int notif_send_result;
+    int readlink_kind;
+    unsigned long long readlink_inode;
+    int fcntl_fails;
     /* the peer-address read */
     ssize_t process_vm_readv_result;
     /* the outward connection */
@@ -133,6 +136,7 @@ static void reset_behaviour(void)
     bx->getsockopt_result = 0;
     connect_rule_count = 0;
     verbose = false;
+    memset(socket_type_table, 0, sizeof(socket_type_table));
 }
 
 /* ------------------------------------------------------------------- wraps */
@@ -374,6 +378,38 @@ int __wrap_socket(int domain, int type, int protocol)
         return -1;
     }
     return bx->socket_result;
+}
+
+int __wrap_fcntl(int fd, int command, ...)
+{
+    (void)fd;
+    (void)command;
+    if (bx->fcntl_fails) {
+        errno = EINVAL;
+        return -1;
+    }
+    return 0;
+}
+
+ssize_t __wrap_readlink(const char *path, char *buffer, size_t size)
+{
+    (void)path;
+    if (bx->readlink_kind == 2) {
+        errno = EACCES;
+        return -1;
+    }
+    char text[64];
+    if (bx->readlink_kind == 1) {
+        snprintf(text, sizeof(text), "pipe:[1]");
+    } else {
+        snprintf(text, sizeof(text), "socket:[%llu]", bx->readlink_inode);
+    }
+    size_t length = strlen(text);
+    if (length > size) {
+        length = size;
+    }
+    memcpy(buffer, text, length);
+    return (ssize_t)length;
 }
 
 int __wrap_connect(int fd, const struct sockaddr *address, socklen_t length)
@@ -753,6 +789,8 @@ static void test_service_paths(void)
     bx->notif_recv_port = 443;
     bx->notif_recv_target_fd = 5;
     bx->process_vm_readv_result = 1;
+    bx->readlink_inode = 5001;
+    record_socket_type(5001, FD_TYPE_STREAM);
     remember_rule("127.0.0.1", "443");
     service_once();
     check("a destination the list names by host and port is connected on the command's behalf",
@@ -763,6 +801,8 @@ static void test_service_paths(void)
     bx->notif_recv_port = 443;
     bx->notif_recv_target_fd = 5;
     bx->process_vm_readv_result = 1;
+    bx->readlink_inode = 5001;
+    record_socket_type(5001, FD_TYPE_STREAM);
     remember_rule("127.0.0.1", "443");
     service_once();
     check("a permitted connect is made and answered with success",
@@ -773,6 +813,8 @@ static void test_service_paths(void)
     bx->notif_recv_family = AF_INET6;
     bx->notif_recv_port = 443;
     bx->process_vm_readv_result = 1;
+    bx->readlink_inode = 5002;
+    record_socket_type(5002, FD_TYPE_STREAM);
     remember_rule("2001:db8::1", "443");
     service_once();
     check("a permitted IPv6 connect is made on the command's behalf",
@@ -810,10 +852,11 @@ static void test_egress_syscalls(void)
     bx->notif_recv_nr = __NR_socket;
     bx->notif_socket_domain = AF_INET;
     bx->notif_socket_type = SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK;
+    bx->readlink_inode = 8100;
     service_once();
-    check("an ordinary TCP socket is allowed to continue",
-          bx->answers == 1 && bx->last_answer_error == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+    check("an ordinary TCP socket is created and handed to the child, its type recorded",
+          bx->answers == 1 && bx->last_answer_error == 0 && bx->last_answer_val == 40 &&
+              lookup_socket_type(8100) == FD_TYPE_STREAM);
 
     reset_behaviour();
     bx->notif_recv_nr = __NR_sendto;
@@ -930,9 +973,7 @@ static void test_egress_syscalls(void)
 
     reset_behaviour();
     verbose = true;
-    bx->notif_recv_nr = __NR_socket;
-    bx->notif_socket_domain = AF_INET;
-    bx->notif_socket_type = SOCK_STREAM;
+    bx->notif_recv_nr = __NR_sendto;
     bx->notif_send_result = -1;
     service_once();
     verbose = false;
@@ -986,6 +1027,146 @@ static void test_egress_syscalls(void)
     service_once();
     check("a sendmmsg batch is refused when a later entry names a disallowed destination",
           bx->answers == 1 && bx->last_answer_error == -EACCES);
+}
+
+/* The guard creates each INET socket itself and records its type, so a later connect can tell a
+ * datagram socket (checked then let through) from a stream socket (injected, race-free). */
+static void test_socket_tracking(void)
+{
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_INET;
+    bx->notif_socket_type = SOCK_DGRAM;
+    bx->readlink_inode = 8200;
+    service_once();
+    check("a UDP socket is created and its type recorded",
+          bx->answers == 1 && bx->last_answer_error == 0 && bx->last_answer_val == 40 &&
+              lookup_socket_type(8200) == FD_TYPE_DGRAM);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_INET;
+    bx->notif_socket_type = SOCK_STREAM;
+    bx->socket_result = -1;
+    service_once();
+    check("a socket the guard cannot create is answered with the errno",
+          bx->answers == 1 && bx->last_answer_error < 0);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_INET;
+    bx->notif_socket_type = SOCK_STREAM;
+    bx->notif_addfd_result = -2;
+    service_once();
+    check("a socket whose ADDFD finds the child gone is dropped", bx->answers == 0);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_INET;
+    bx->notif_socket_type = SOCK_STREAM;
+    bx->notif_addfd_result = -1;
+    service_once();
+    check("a socket whose ADDFD fails is answered with the errno",
+          bx->answers == 1 && bx->last_answer_error < 0);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_INET6;
+    bx->notif_socket_type = SOCK_DGRAM | SOCK_NONBLOCK;
+    bx->fcntl_fails = 1;
+    bx->readlink_inode = 8201;
+    service_once();
+    check("a non-blocking socket is still created when its flag cannot be read",
+          bx->answers == 1 && bx->last_answer_val == 40 && lookup_socket_type(8201) == FD_TYPE_DGRAM);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_UNIX;
+    bx->notif_socket_type = SOCK_STREAM;
+    service_once();
+    check("a non-INET socket is left to the kernel untracked",
+          bx->answers == 1 && bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    reset_behaviour();
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->notif_recv_target_fd = 6;
+    bx->process_vm_readv_result = 1;
+    bx->readlink_inode = 8300;
+    record_socket_type(8300, FD_TYPE_DGRAM);
+    remember_rule("127.0.0.1", "53");
+    service_once();
+    check("a connect on a datagram socket is checked then let through, not injected",
+          bx->answers == 1 && bx->last_answer_error == 0 && bx->connect_calls == 0 &&
+              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    reset_behaviour();
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->notif_recv_target_fd = 9;
+    bx->process_vm_readv_result = 1;
+    bx->readlink_inode = 8301;
+    remember_rule("127.0.0.1", "53");
+    service_once();
+    check("a connect on an untracked socket is let through best-effort",
+          bx->answers == 1 && bx->connect_calls == 0 &&
+              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    reset_behaviour();
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->notif_recv_target_fd = 6;
+    bx->process_vm_readv_result = 1;
+    bx->readlink_kind = 1;
+    remember_rule("127.0.0.1", "53");
+    service_once();
+    check("a connect on a descriptor that is not a socket is not injected over",
+          bx->answers == 1 && bx->connect_calls == 0);
+
+    reset_behaviour();
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->notif_recv_target_fd = 6;
+    bx->process_vm_readv_result = 1;
+    bx->readlink_kind = 2;
+    bx->readlink_inode = 8300;
+    record_socket_type(8300, FD_TYPE_STREAM);
+    remember_rule("127.0.0.1", "53");
+    service_once();
+    check("a stream connect is not injected when /proc cannot name the inode",
+          bx->answers == 1 && bx->connect_calls == 0 &&
+              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    reset_behaviour();
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->notif_recv_target_fd = 6;
+    bx->process_vm_readv_result = 1;
+    bx->readlink_inode = 8400;
+    record_socket_type(8400, FD_TYPE_STREAM);
+    remember_rule("127.0.0.1", "53");
+    service_once();
+    check("a connect on a tracked stream socket is injected, race-free",
+          bx->answers == 1 && bx->connect_calls == 1 && bx->addfd_calls == 1);
+
+    reset_behaviour();
+    record_socket_type(0, FD_TYPE_STREAM);
+    bool map_ok = lookup_socket_type(0) == FD_TYPE_UNKNOWN
+                  && lookup_socket_type(9999) == FD_TYPE_UNKNOWN;
+    record_socket_type(4242, FD_TYPE_STREAM);
+    map_ok = map_ok && lookup_socket_type(4242) == FD_TYPE_STREAM;
+    record_socket_type(4242, FD_TYPE_DGRAM);
+    map_ok = map_ok && lookup_socket_type(4242) == FD_TYPE_DGRAM;
+    check("inode zero is ignored, an absent inode is unknown, and reuse overwrites", map_ok);
+
+    reset_behaviour();
+    for (unsigned long long inode = 1; inode <= SOCKET_TYPE_TABLE_SIZE; inode++) {
+        record_socket_type(inode, FD_TYPE_STREAM);
+    }
+    record_socket_type(SOCKET_TYPE_TABLE_SIZE + 1, FD_TYPE_DGRAM);
+    check("a full table still records by evicting a slot, and an absent inode reads unknown",
+          lookup_socket_type(SOCKET_TYPE_TABLE_SIZE + 1) == FD_TYPE_DGRAM
+              && lookup_socket_type(SOCKET_TYPE_TABLE_SIZE + 2) == FD_TYPE_UNKNOWN);
 }
 
 static void test_connect_on_behalf_paths(void)
@@ -1261,6 +1442,7 @@ int main(void)
     test_receive_descriptor();
     test_service_paths();
     test_egress_syscalls();
+    test_socket_tracking();
     test_connect_on_behalf_paths();
     test_supervise_loop();
     test_argument_errors();

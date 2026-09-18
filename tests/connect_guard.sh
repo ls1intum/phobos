@@ -83,6 +83,24 @@ int main(int argc, char **argv) {
         printf("SETSID-OK\n");
         return 0;
     }
+    if (argc >= 4 && strcmp(argv[1], "cudp") == 0) {
+        int fd = socket(AF_INET, SOCK_DGRAM, 0);
+        struct sockaddr_in address;
+        memset(&address, 0, sizeof(address));
+        address.sin_family = AF_INET;
+        address.sin_port = htons((unsigned short)atoi(argv[3]));
+        inet_pton(AF_INET, argv[2], &address.sin_addr);
+        if (connect(fd, (struct sockaddr *)&address, sizeof(address)) != 0) {
+            fprintf(stderr, "connect: %s\n", strerror(errno));
+            return 10;
+        }
+        if (send(fd, "x", 1, 0) < 0) {
+            fprintf(stderr, "send: %s\n", strerror(errno));
+            return 11;
+        }
+        printf("CUDP-OK\n");
+        return 0;
+    }
     if (argc >= 4 && strcmp(argv[1], "udp") == 0) {
         int fd = socket(AF_INET, SOCK_DGRAM, 0);
         struct sockaddr_in address;
@@ -331,6 +349,25 @@ if [[ $rc -eq 10 && "$out" == *"Permission denied"* ]]; then
   ok "a TCP Fast Open send is refused, so it cannot reach past connect"
 else
   bad "a TCP Fast Open send is refused, so it cannot reach past connect" "rc=$rc out=$out"
+fi
+
+# No listener runs on $PORT here. A datagram socket's connect only sets the default peer, so it
+# succeeds; the old behaviour turned it into a TCP socket, whose connect to a port with no
+# listener would fail with a refused connection. So CUDP-OK proves the socket stayed a datagram.
+out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" cudp 127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+if [[ $rc -eq 0 && "$out" == *CUDP-OK* ]]; then
+  ok "a connected datagram socket stays a datagram, not turned into TCP"
+else
+  bad "a connected datagram socket stays a datagram, not turned into TCP" "rc=$rc out=$out"
+fi
+
+out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" cudp 127.0.0.1 "$OTHER" 2>&1)"
+rc=$?
+if [[ $rc -eq 10 && "$out" == *"Permission denied"* ]]; then
+  ok "a connected datagram socket to an unlisted destination is refused at connect"
+else
+  bad "a connected datagram socket to an unlisted destination is refused at connect" "rc=$rc out=$out"
 fi
 
 # Prove the guard's own refusal, not the environment's. Each of these calls can also fail
