@@ -18,8 +18,10 @@ trap 'rm -rf "$WORK"' EXIT
 
 pass=0
 fail=0
-ok()  { printf 'ok    %s\n' "$1"; pass=$((pass + 1)); }
-bad() { printf 'FAIL  %s\n        %s\n' "$1" "$2"; fail=$((fail + 1)); }
+skipped=0
+ok()   { printf 'ok    %s\n' "$1"; pass=$((pass + 1)); }
+bad()  { printf 'FAIL  %s\n        %s\n' "$1" "$2"; fail=$((fail + 1)); }
+skip() { printf 'SKIP  %s\n        %s\n' "$1" "$2"; skipped=$((skipped + 1)); }
 
 if [[ ! -x "$GUARD" ]]; then
   bad "the image ships the connect guard" "no executable at ${GUARD}"
@@ -51,6 +53,73 @@ int main(int argc, char **argv) {
             return 10;
         }
         printf("UNIX-OK\n");
+        return 0;
+    }
+    if (argc >= 2 && strcmp(argv[1], "raw") == 0) {
+        int fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+        if (fd < 0) { fprintf(stderr, "socket: %s\n", strerror(errno)); return 10; }
+        printf("RAW-OK\n");
+        return 0;
+    }
+    if (argc >= 2 && strcmp(argv[1], "ping") == 0) {
+        int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
+        if (fd < 0) { fprintf(stderr, "socket: %s\n", strerror(errno)); return 10; }
+        printf("PING-OK\n");
+        return 0;
+    }
+    if (argc >= 2 && strcmp(argv[1], "setsid") == 0) {
+        if (setsid() == (pid_t)-1) { fprintf(stderr, "setsid: %s\n", strerror(errno)); return 10; }
+        printf("SETSID-OK\n");
+        return 0;
+    }
+    if (argc >= 4 && strcmp(argv[1], "udp") == 0) {
+        int fd = socket(AF_INET, SOCK_DGRAM, 0);
+        struct sockaddr_in address;
+        memset(&address, 0, sizeof(address));
+        address.sin_family = AF_INET;
+        address.sin_port = htons((unsigned short)atoi(argv[3]));
+        inet_pton(AF_INET, argv[2], &address.sin_addr);
+        if (sendto(fd, "x", 1, 0, (struct sockaddr *)&address, sizeof(address)) < 0) {
+            fprintf(stderr, "sendto: %s\n", strerror(errno));
+            return 10;
+        }
+        printf("UDP-OK\n");
+        return 0;
+    }
+    if (argc >= 4 && strcmp(argv[1], "tfo") == 0) {
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        struct sockaddr_in address;
+        memset(&address, 0, sizeof(address));
+        address.sin_family = AF_INET;
+        address.sin_port = htons((unsigned short)atoi(argv[3]));
+        inet_pton(AF_INET, argv[2], &address.sin_addr);
+        if (sendto(fd, "x", 1, MSG_FASTOPEN, (struct sockaddr *)&address, sizeof(address)) < 0) {
+            fprintf(stderr, "sendto: %s\n", strerror(errno));
+            return 10;
+        }
+        printf("TFO-OK\n");
+        return 0;
+    }
+    if (argc >= 4 && strcmp(argv[1], "csend") == 0) {
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        struct sockaddr_in address;
+        memset(&address, 0, sizeof(address));
+        address.sin_family = AF_INET;
+        address.sin_port = htons((unsigned short)atoi(argv[3]));
+        inet_pton(AF_INET, argv[2], &address.sin_addr);
+        if (connect(fd, (struct sockaddr *)&address, sizeof(address)) != 0) {
+            fprintf(stderr, "connect: %s\n", strerror(errno));
+            return 10;
+        }
+        if (send(fd, "ping", 4, 0) != 4) {
+            fprintf(stderr, "send: %s\n", strerror(errno));
+            return 11;
+        }
+        char reply[8] = { 0 };
+        if (read(fd, reply, 4) != 4 || memcmp(reply, "pong", 4) != 0) {
+            return 12;
+        }
+        printf("CSEND-OK\n");
         return 0;
     }
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -128,6 +197,7 @@ start_listener() {
 }
 
 printf '127.0.0.1 %s\n' "$PORT" > "$WORK/rules"
+: > "$WORK/empty"
 
 lp=$(start_listener "$PORT")
 out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" inet 127.0.0.1 "$PORT" 2>&1)"
@@ -156,6 +226,74 @@ else
   bad "a UNIX-domain connect is refused, not made outside the sandbox" "rc=$rc out=$out"
 fi
 
+lp=$(start_listener "$PORT")
+out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" csend 127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+kill "$lp" 2>/dev/null
+wait "$lp" 2>/dev/null
+if [[ $rc -eq 0 && "$out" == *CSEND-OK* ]]; then
+  ok "an ordinary send on a connected socket still works"
+else
+  bad "an ordinary send on a connected socket still works" "rc=$rc out=$out"
+fi
+
+out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" udp 127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+if [[ $rc -eq 0 && "$out" == *UDP-OK* ]]; then
+  ok "a datagram to a listed destination is allowed"
+else
+  bad "a datagram to a listed destination is allowed" "rc=$rc out=$out"
+fi
+
+out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" udp 127.0.0.1 "$OTHER" 2>&1)"
+rc=$?
+if [[ $rc -eq 10 && "$out" == *"Permission denied"* ]]; then
+  ok "a datagram to a destination the list does not name is refused"
+else
+  bad "a datagram to a destination the list does not name is refused" "rc=$rc out=$out"
+fi
+
+out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" tfo 127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+if [[ $rc -eq 10 && "$out" == *"Permission denied"* ]]; then
+  ok "a TCP Fast Open send is refused, so it cannot reach past connect"
+else
+  bad "a TCP Fast Open send is refused, so it cannot reach past connect" "rc=$rc out=$out"
+fi
+
+# Prove the guard's own refusal, not the environment's: run the probe without the guard first,
+# and only when the call is ambiently allowed require the guarded run to refuse it with EACCES.
+guard_refuses_ambiently_allowed() {
+  local label="$1"
+  shift
+  local base_out base_rc g_out g_rc
+  base_out="$("$WORK/probe" "$@" 2>&1)"
+  base_rc=$?
+  if [[ $base_rc -ne 0 ]]; then
+    skip "$label" "the environment itself refuses it (rc=$base_rc: $base_out), so the guard cannot be credited"
+    return
+  fi
+  g_out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" "$@" 2>&1)"
+  g_rc=$?
+  if [[ $g_rc -eq 10 && "$g_out" == *"Permission denied"* ]]; then
+    ok "$label"
+  else
+    bad "$label" "base_rc=$base_rc g_rc=$g_rc out=$g_out"
+  fi
+}
+
+guard_refuses_ambiently_allowed "a raw socket is refused" raw
+guard_refuses_ambiently_allowed "an ICMP datagram socket is refused" ping
+guard_refuses_ambiently_allowed "setsid is refused, so a submission cannot leave the timeout's process group" setsid
+
+out="$("$GUARD" --rules "$WORK/empty" -- "$WORK/probe" inet 127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+if [[ $rc -eq 10 && "$out" == *"Permission denied"* ]]; then
+  ok "an empty allow-list denies every connect, the deny-first baseline"
+else
+  bad "an empty allow-list denies every connect, the deny-first baseline" "rc=$rc out=$out"
+fi
+
 echo
-printf '%d passed, %d failed\n' "$pass" "$fail"
+printf '%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skipped"
 (( fail == 0 ))
