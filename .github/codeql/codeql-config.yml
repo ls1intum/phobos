@@ -1,0 +1,16 @@
+# CodeQL configuration for phobos, on top of the security-extended suite the workflow selects.
+#
+# cpp/path-injection is excluded as a true positive by design, not a defect. libnetblocker
+# (ld_preloader/netblocker-policy.c, ld_preloader/netblocker.c) and the connect guard
+# (core/phobos-connect-guard.c) open a rules file whose path phobos itself sets: NETBLOCKER_CONF
+# and NETBLOCKER_BIND_CONF, and the guard's --rules argument, all point into the per-run spec
+# directory core/phobos.sh makes with mktemp. CodeQL taints the getenv and argv value as user
+# input reaching open(), but it is trusted input the graded code cannot write, the open is
+# already hardened (O_NOFOLLOW, O_NONBLOCK and a regular-file check refuse a symlink, a FIFO or a
+# device), and the file is bound read-only by Landlock. SECURITY.md lists this under "Deliberately
+# dangerous code": assembling an access list from a configuration file is the mechanism, not a
+# flaw. Every edit to those C files re-fingerprints and re-raises the same alert, so it is
+# filtered here once rather than dismissed by hand each time.
+query-filters:
+  - exclude:
+      id: cpp/path-injection
