@@ -50,6 +50,8 @@ WRAPS=(
   -Wl,--wrap=poll
   -Wl,--wrap=getsockopt
   -Wl,--wrap=ioctl
+  -Wl,--wrap=fcntl
+  -Wl,--wrap=readlink
 )
 
 if [[ "${1:-}" == "--coverage" ]]; then

@@ -19,12 +19,14 @@
  *           the rest of the layer chain. The filter, and so the supervision,
  *           survives every exec down to the command.
  *
- * Why the supervisor connects on the command's behalf rather than letting the
- * kernel continue the trapped call (SECCOMP_USER_NOTIF_FLAG_CONTINUE): a continue
- * re-runs the original syscall against whatever is in the command's memory at that
- * later moment, so a command could show one address to the check and connect to
- * another once it passes. Making the connection here, from the address the check
- * read, closes that window. The command never runs connect() itself.
+ * Why the supervisor connects on the command's behalf, for a stream socket, rather than
+ * letting the kernel continue the trapped call (SECCOMP_USER_NOTIF_FLAG_CONTINUE): a continue
+ * re-runs the original syscall against whatever is in the command's memory at that later
+ * moment, so a command could show one address to the check and connect to another once it
+ * passes. Making the connection here, from the address the check read, closes that window for
+ * a stream connect. A datagram connect only sets a default peer, which cannot be injected, so
+ * it is checked and then let through; the boundary for a datagram is the checked send that
+ * follows and the no-network container. The command never runs a stream connect() itself.
  *
  * seccomp intercepts a connect at the syscall boundary, before the kernel path
  * where Landlock would check the port, and this supervisor then connects outside
@@ -590,11 +592,96 @@ static struct destination read_destination(const struct sockaddr_storage *storag
     return where;
 }
 
-/* Decide one trapped connect: read the destination from the child, confirm the notification
- * is still valid so the read belongs to this call, refuse a family this guard does not carry
- * or a destination the allow-list does not name, and otherwise make the connection here and
- * inject the connected socket, so the child's connect() returns already connected to the
- * address the check read. */
+/* The socket type the guard tracks, so that a connect can tell a stream socket (connected here
+ * and injected, a boundary a raw syscall cannot step around) from a datagram socket (whose
+ * connect only sets a default peer and is let through after the peer is checked). The guard
+ * governs a whole forking lineage through one listener, so a child descriptor number is not
+ * unique across it: two processes each hold their own descriptor N. A socket inode is unique
+ * among the live sockets of the system, so the type is keyed by inode instead. The table is
+ * open-addressed; an entry is overwritten when an inode is reused, because every socket()
+ * re-records it, and one evicted under pressure reads back as unknown, which the connect path
+ * then handles best-effort. */
+static constexpr size_t SOCKET_TYPE_TABLE_SIZE = 65536;
+static constexpr uint8_t FD_TYPE_UNKNOWN = 0;
+static constexpr uint8_t FD_TYPE_STREAM = 1;
+static constexpr uint8_t FD_TYPE_DGRAM = 2;
+struct socket_type_entry {
+    uint64_t inode;
+    uint8_t type;
+};
+static struct socket_type_entry socket_type_table[SOCKET_TYPE_TABLE_SIZE];
+
+/* Records the type of a socket by its inode, overwriting any earlier entry for that inode. A
+ * full table evicts the entry at the hash slot, which then reads back as unknown. Inode zero is
+ * not a socket and is ignored. */
+static void record_socket_type(uint64_t inode, uint8_t type)
+{
+    if (inode == 0) {
+        return;
+    }
+    size_t start = (size_t)(inode % SOCKET_TYPE_TABLE_SIZE);
+    for (size_t probe = 0; probe < SOCKET_TYPE_TABLE_SIZE; probe++) {
+        size_t slot = (start + probe) % SOCKET_TYPE_TABLE_SIZE;
+        if (socket_type_table[slot].inode == inode || socket_type_table[slot].inode == 0) {
+            socket_type_table[slot].inode = inode;
+            socket_type_table[slot].type = type;
+            return;
+        }
+    }
+    socket_type_table[start].inode = inode;
+    socket_type_table[start].type = type;
+}
+
+/* Answers the tracked type of a socket by its inode, or UNKNOWN for one the guard never
+ * recorded or one evicted from a full table. */
+static uint8_t lookup_socket_type(uint64_t inode)
+{
+    if (inode == 0) {
+        return FD_TYPE_UNKNOWN;
+    }
+    size_t start = (size_t)(inode % SOCKET_TYPE_TABLE_SIZE);
+    for (size_t probe = 0; probe < SOCKET_TYPE_TABLE_SIZE; probe++) {
+        size_t slot = (start + probe) % SOCKET_TYPE_TABLE_SIZE;
+        if (socket_type_table[slot].inode == inode) {
+            return socket_type_table[slot].type;
+        }
+        if (socket_type_table[slot].inode == 0) {
+            return FD_TYPE_UNKNOWN;
+        }
+    }
+    return FD_TYPE_UNKNOWN;
+}
+
+/* The socket inode behind a descriptor of the process named, read from /proc. It serves two
+ * callers: the supervisor's own fresh socket at socket() time, to record its type, and a child
+ * descriptor parked on a trapped connect, to recall it. Answers 0 when the descriptor is not a
+ * socket or /proc cannot answer; only a live socket yields an inode, so a descriptor since
+ * reused for something that is not a socket reads back 0 and is treated as untracked, which the
+ * connect path handles best-effort rather than injecting a socket over it. */
+static uint64_t fd_socket_inode(pid_t owner_pid, int descriptor)
+{
+    char link_path[64];
+    char target[64];
+    snprintf(link_path, sizeof(link_path), "/proc/%d/fd/%d", (int)owner_pid, descriptor);
+    ssize_t length = readlink(link_path, target, sizeof(target) - 1);
+    if (length < 0) {
+        return 0;
+    }
+    target[length] = '\0';
+    unsigned long long inode = 0;
+    if (sscanf(target, "socket:[%llu]", &inode) != 1) {
+        return 0;
+    }
+    return (uint64_t)inode;
+}
+
+/* Decide one trapped connect: read the destination from the child, confirm the notification is
+ * still valid so the read belongs to this call, refuse a family this guard does not carry or a
+ * destination the allow-list does not name. For a stream socket, make the connection here and
+ * inject it, so the child's connect() returns already connected to the address the check read
+ * and a second thread cannot redirect it. For a datagram socket connect() only sets the default
+ * peer, which cannot be injected, so the checked call is let through; an untracked descriptor is
+ * let through the same way, best-effort, since its type is unknown. */
 static void service_connect(int notify_descriptor, struct seccomp_notif *request,
                             struct seccomp_notif_resp *response)
 {
@@ -626,8 +713,13 @@ static void service_connect(int notify_descriptor, struct seccomp_notif *request
         answer(notify_descriptor, response, request->id, 0, -EACCES);
         return;
     }
-    connect_on_behalf(notify_descriptor, response, request->id, target_descriptor, where.family,
-                      (const struct sockaddr *)&storage, length);
+    uint64_t inode = fd_socket_inode(request->pid, target_descriptor);
+    if (lookup_socket_type(inode) == FD_TYPE_STREAM) {
+        connect_on_behalf(notify_descriptor, response, request->id, target_descriptor,
+                          where.family, (const struct sockaddr *)&storage, length);
+        return;
+    }
+    answer_continue(notify_descriptor, response, request->id);
 }
 
 /* Decide one trapped socket(): refuse the socket kinds that reach the network outside the
@@ -641,14 +733,50 @@ static void service_socket(int notify_descriptor, struct seccomp_notif *request,
     int domain = (int)request->data.args[0];
     int type = (int)request->data.args[1];
     int protocol = (int)request->data.args[2];
+    int base_type = type & SOCK_TYPE_MASK;
     bool icmp = protocol == IPPROTO_ICMP || protocol == IPPROTO_ICMPV6;
-    if (domain == AF_PACKET || (type & SOCK_TYPE_MASK) == SOCK_RAW
+    if (domain == AF_PACKET || base_type == SOCK_RAW
         || ((domain == AF_INET || domain == AF_INET6) && icmp)) {
         log_verbose("refusing socket(domain=%d, type=%d, protocol=%d)", domain, type, protocol);
         answer(notify_descriptor, response, request->id, 0, -EACCES);
         return;
     }
-    answer_continue(notify_descriptor, response, request->id);
+    bool tracked = (domain == AF_INET || domain == AF_INET6)
+                   && (base_type == SOCK_STREAM || base_type == SOCK_DGRAM);
+    if (!tracked) {
+        answer_continue(notify_descriptor, response, request->id);
+        return;
+    }
+    int made = socket(domain, base_type | SOCK_CLOEXEC, protocol);
+    if (made < 0) {
+        answer(notify_descriptor, response, request->id, 0, -errno);
+        return;
+    }
+    if (type & SOCK_NONBLOCK) {
+        int flags = fcntl(made, F_GETFL);
+        if (flags >= 0) {
+            (void)fcntl(made, F_SETFL, flags | O_NONBLOCK);
+        }
+    }
+    struct seccomp_notif_addfd addfd;
+    memset(&addfd, 0, sizeof(addfd));
+    addfd.id = request->id;
+    addfd.flags = 0;
+    addfd.srcfd = (__u32)made;
+    addfd.newfd = 0;
+    addfd.newfd_flags = (type & SOCK_CLOEXEC) ? O_CLOEXEC : 0;
+    int allocated = ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_ADDFD, &addfd);
+    if (allocated < 0) {
+        if (errno != ENOENT) {
+            answer(notify_descriptor, response, request->id, 0, -errno);
+        }
+        close(made);
+        return;
+    }
+    uint64_t inode = fd_socket_inode(getpid(), made);
+    close(made);
+    record_socket_type(inode, base_type == SOCK_STREAM ? FD_TYPE_STREAM : FD_TYPE_DGRAM);
+    answer(notify_descriptor, response, request->id, allocated, 0);
 }
 
 /* Answer one send whose destination has already been read: let a non-INET destination through
