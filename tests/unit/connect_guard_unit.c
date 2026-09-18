@@ -678,6 +678,73 @@ static void test_policy_matching(void)
           !connection_permitted(AF_INET6, &any6, 443));
 }
 
+static bool permits_v6(const char *ip, uint16_t port)
+{
+    struct in6_addr address;
+    inet_pton(AF_INET6, ip, &address);
+    return connection_permitted(AF_INET6, &address, port);
+}
+
+static void test_connect_ranges(void)
+{
+    reset_behaviour();
+    remember_rule("104.16.0.0/12", "443");
+    check("the range table kept the rule", connect_rule_count == 1);
+    check("an IPv4 address inside the range on its port is permitted",
+          permits_v4("104.16.5.5", 443));
+    check("an IPv4 address inside the range on another port is refused",
+          !permits_v4("104.16.5.5", 80));
+    check("an IPv4 address outside the range is refused", !permits_v4("8.8.8.8", 443));
+
+    reset_behaviour();
+    remember_rule("127.0.0.1/32", "443");
+    check("a /32 range matches exactly its address", permits_v4("127.0.0.1", 443));
+    check("a /32 range refuses the neighbouring address", !permits_v4("127.0.0.2", 443));
+
+    reset_behaviour();
+    remember_rule("2001:db8::/32", "443");
+    check("an IPv6 address inside the range is permitted", permits_v6("2001:db8::5", 443));
+    check("an IPv6 address outside the range is refused", !permits_v6("2001:dead::5", 443));
+
+    reset_behaviour();
+    remember_rule("10.0.0.0/33", "443");
+    remember_rule("10.0.0.0/0", "443");
+    remember_rule("10.0.0.0/x", "443");
+    remember_rule("nothost/8", "443");
+    check("a malformed range is dropped", connect_rule_count == 0);
+
+    reset_behaviour();
+    remember_rule("::ffff:104.16.0.0/12", "443");
+    check("an IPv4-mapped range with too short a prefix is dropped, as libnetblocker drops it",
+          connect_rule_count == 0);
+
+    reset_behaviour();
+    remember_rule("::ffff:104.16.0.0/108", "443");
+    check("an IPv4-mapped range with a long-enough prefix is kept", connect_rule_count == 1);
+    check("the mapped range matches an in-range IPv4 address", permits_v4("104.16.5.5", 443));
+    check("the mapped range refuses an out-of-range IPv4 address", !permits_v4("8.8.8.8", 443));
+
+    reset_behaviour();
+    remember_rule("104.16.0.0/12", "*");
+    check("an any-port range permits an in-range address on any port",
+          permits_v4("104.16.5.5", 12345));
+    check("an any-port range refuses an out-of-range address", !permits_v4("8.8.8.8", 12345));
+
+    struct in6_addr network;
+    struct in6_addr probe;
+    memset(&network, 0, sizeof(network));
+    memset(&probe, 0, sizeof(probe));
+    check("a non-positive prefix matches nothing", !address_within(&probe, &network, 0));
+    check("a prefix past the address width matches nothing", !address_within(&probe, &network, 200));
+
+    struct connect_rule range_rule;
+    memset(&range_rule, 0, sizeof(range_rule));
+    range_rule.is_range = true;
+    range_rule.prefix_length = 96;
+    check("a range rule refuses a family it cannot canonicalise",
+          !rule_host_matches(&range_rule, AF_UNIX, NULL));
+}
+
 static void test_address_and_destination(void)
 {
     reset_behaviour();
@@ -1435,6 +1502,7 @@ int main(void)
 
     test_rule_parsing();
     test_policy_matching();
+    test_connect_ranges();
     test_address_and_destination();
     test_exit_code_mapping();
     test_verbose_logging();

@@ -398,4 +398,25 @@ guard_refuses_ambiently_allowed "a raw socket is refused" raw
 guard_refuses_ambiently_allowed "an ICMP datagram socket is refused" ping
 guard_refuses_ambiently_allowed "setsid is refused, so a submission cannot leave the timeout's process group" setsid
 
+echo
+echo "== an IP range in [connect] enforces the host by network, not by port alone =="
+printf '127.0.0.0/8 %s\n' "$PORT" > "$WORK/rules"
+lp=$(start_listener "$PORT")
+out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" inet 127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+kill "$lp" 2>/dev/null
+wait "$lp" 2>/dev/null
+if [[ $rc -eq 0 && "$out" == *PROBE-OK* ]]; then
+  ok "an address inside the range is reached"
+else
+  bad "an address inside the range is reached" "rc=$rc out=$out"
+fi
+out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" inet 8.8.8.8 "$PORT" 2>&1)"
+rc=$?
+if [[ $rc -eq 10 && "$out" == *"Permission denied"* ]]; then
+  ok "an address outside the range is refused, though it shares the allowed port"
+else
+  bad "an address outside the range is refused, though it shares the allowed port" "rc=$rc out=$out"
+fi
+
 finish

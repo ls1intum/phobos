@@ -131,6 +131,12 @@ static constexpr int CONNECT_TIMEOUT_MS = 10000;
 static constexpr size_t MAXIMUM_RULES = 256;
 static constexpr size_t MAXIMUM_HOST = 256;
 
+/* The bit position at which an IPv4-mapped IPv6 address holds its four IPv4 bytes. A range
+ * must match libnetblocker's, so an IPv4 range's prefix is offset by this and a range written
+ * in IPv6 notation for a mapped address with a shorter prefix is refused, exactly as
+ * ld_preloader/netblocker-rule.c does; keep the two in step. */
+static constexpr int IPV4_MAPPED_PREFIX_BITS = 96;
+
 static bool verbose = false;
 
 static void log_verbose(const char *format, ...) __attribute__((format(printf, 1, 2)));
@@ -150,11 +156,16 @@ static void log_verbose(const char *format, ...)
 
 /* ------------------------------------------------- the allow-list, read once */
 
-/* One line of the outbound allow-list: a host and the port it is allowed on. */
+/* One line of the outbound allow-list: a host, or an IP range, and the port it is allowed on.
+ * A range keeps its network and prefix length in the canonical IPv6 form an IPv4 address maps
+ * to, so one comparison covers both families. */
 struct connect_rule {
     char host[MAXIMUM_HOST];
     bool any_port;
     uint16_t port;
+    bool is_range;
+    struct in6_addr network;
+    int prefix_length;
 };
 
 static struct connect_rule connect_rules[MAXIMUM_RULES];
@@ -169,6 +180,33 @@ static void remember_rule(const char *host, const char *port_text)
     struct connect_rule *rule = &connect_rules[connect_rule_count];
     memset(rule, 0, sizeof(*rule));
     snprintf(rule->host, sizeof(rule->host), "%s", host);
+    char *slash = strchr(rule->host, '/');
+    if (slash != nullptr) {
+        *slash = '\0';
+        const char *length_text = slash + 1;
+        struct in_addr v4;
+        bool ipv4 = inet_pton(AF_INET, rule->host, &v4) == 1;
+        char *length_unconverted = nullptr;
+        unsigned long length = strtoul(length_text, &length_unconverted, 10);
+        unsigned long longest = ipv4 ? 32 : 128;
+        if (*length_unconverted != '\0' || length == 0 || length > longest) {
+            return;
+        }
+        if (ipv4) {
+            rule->network.s6_addr[10] = 0xff;
+            rule->network.s6_addr[11] = 0xff;
+            memcpy(&rule->network.s6_addr[12], &v4, sizeof(v4));
+            rule->prefix_length = IPV4_MAPPED_PREFIX_BITS + (int)length;
+        } else if (inet_pton(AF_INET6, rule->host, &rule->network) == 1) {
+            if (IN6_IS_ADDR_V4MAPPED(&rule->network) && length < (unsigned long)IPV4_MAPPED_PREFIX_BITS) {
+                return;
+            }
+            rule->prefix_length = (int)length;
+        } else {
+            return;
+        }
+        rule->is_range = true;
+    }
     if (strcmp(port_text, "*") == 0) {
         rule->any_port = true;
         connect_rule_count++;
@@ -225,12 +263,55 @@ static bool address_is_loopback(int family, const void *address)
     return false;
 }
 
-/* Whether one rule's host covers this destination address. An IP literal, and the
- * name "localhost", are held to the exact address; any other hostname is one this
- * guard cannot tie to an address, so its host is not enforced here and the rule
- * rests on its port alone. */
+/* Writes the destination into the canonical IPv6 form ranges are compared in: an IPv6 address
+ * as itself, an IPv4 address as ::ffff:a.b.c.d, matching how a range's network was stored. */
+static struct in6_addr canonical_destination(int family, const void *address)
+{
+    struct in6_addr canonical;
+    memset(&canonical, 0, sizeof(canonical));
+    if (family == AF_INET6) {
+        memcpy(&canonical, address, sizeof(canonical));
+    } else if (family == AF_INET) {
+        canonical.s6_addr[10] = 0xff;
+        canonical.s6_addr[11] = 0xff;
+        memcpy(&canonical.s6_addr[12], address, sizeof(struct in_addr));
+    }
+    return canonical;
+}
+
+/* Whether an address falls within a network of the given prefix length, comparing whole bytes
+ * and then the remaining bits of the last byte under a mask. */
+static bool address_within(const struct in6_addr *address, const struct in6_addr *network,
+                           int prefix_length)
+{
+    if (prefix_length <= 0 || prefix_length > 128) {
+        return false;
+    }
+    int whole_bytes = prefix_length / 8;
+    int remaining_bits = prefix_length % 8;
+    if (memcmp(address, network, (size_t)whole_bytes) != 0) {
+        return false;
+    }
+    if (remaining_bits == 0) {
+        return true;
+    }
+    uint8_t mask = (uint8_t)~((1U << (8 - remaining_bits)) - 1U);
+    return (address->s6_addr[whole_bytes] & mask) == (network->s6_addr[whole_bytes] & mask);
+}
+
+/* Whether one rule's host covers this destination address. A range holds the address to its
+ * network. An IP literal, and the name "localhost", are held to the exact address; any other
+ * hostname is one this guard cannot tie to an address, so its host is not enforced here and the
+ * rule rests on its port alone, with libnetblocker checking the host of a dynamic command. */
 static bool rule_host_matches(const struct connect_rule *rule, int family, const void *address)
 {
+    if (rule->is_range) {
+        if (family != AF_INET && family != AF_INET6) {
+            return false;
+        }
+        struct in6_addr canonical = canonical_destination(family, address);
+        return address_within(&canonical, &rule->network, rule->prefix_length);
+    }
     if (strcmp(rule->host, "*") == 0) {
         return true;
     }

@@ -330,6 +330,26 @@ else
   bad "a connected datagram socket to an unlisted destination is refused at connect" "rc=$rc out=$out"
 fi
 
+printf '127.0.0.0/8 %s\n' "$PORT" > "$WORK/rules"
+lp=$(start_listener "$PORT")
+out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" inet 127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+kill "$lp" 2>/dev/null
+wait "$lp" 2>/dev/null
+if [[ $rc -eq 0 && "$out" == *PROBE-OK* ]]; then
+  ok "an IP range in [connect] reaches an address inside it"
+else
+  bad "an IP range in [connect] reaches an address inside it" "rc=$rc out=$out"
+fi
+
+out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" inet 8.8.8.8 "$PORT" 2>&1)"
+rc=$?
+if [[ $rc -eq 10 && "$out" == *"Permission denied"* ]]; then
+  ok "an IP range refuses an address outside it that shares the allowed port"
+else
+  bad "an IP range refuses an address outside it that shares the allowed port" "rc=$rc out=$out"
+fi
+
 echo
 printf '%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skipped"
 (( fail == 0 ))

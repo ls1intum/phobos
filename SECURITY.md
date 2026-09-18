@@ -29,8 +29,10 @@ rest exists to take privileges away. None of the following is a vulnerability.
   connection itself from outside the sandboxed process, so for `connect` it is a boundary a
   raw system call cannot step around, enforcing the `[connect]` allow-list by host and port.
   It reads the destination address of the connect, so it holds a rule that names an IP literal
-  (and the name `localhost`) to that exact address, and a rule that names a DNS hostname it
-  cannot tie to an address there to its port alone, leaving that host to libnetblocker. Since
+  (and the name `localhost`) to that exact address, a rule that names an IP range to that
+  network, and a rule that names a DNS hostname it cannot tie to an address there to its port
+  alone, leaving that host to libnetblocker (an instructor who needs a rotating, CDN-backed
+  host enforced by the guard names its address range rather than its name). Since
   seccomp stops the call before the kernel path where Landlock would check the port, the guard
   connects outside Landlock and so is the whole connect boundary where it runs; Landlock's
   `--connect-tcp` ports remain a second, kernel-enforced expression of the same ports. A
