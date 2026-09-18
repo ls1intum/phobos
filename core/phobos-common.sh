@@ -6,7 +6,6 @@
 set -euo pipefail
 PHB_OK=0
 PHB_EPOLICY=11
-PHB_EMERGE=12
 PHB_EBASE=13
 PHB_ETIMEOUT=14
 PHB_ERUNTIME=15
@@ -253,50 +252,6 @@ parse_cfg_policy() {
   done <"$cfg"
   PARSED_FS_DIR="$tdir"; PARSED_NET_FILE="$net"; PARSED_BIND_FILE="$bind"; : "${PARSED_TIMEOUT:=}"
 }
-# Merges one exercise config's per-right file sets (in add_dir) into the effective policy
-# (cur_dir), refusing any widening against the base (base_dir). Each directory holds one file
-# per right: read.paths, execute.paths, write.paths, create.paths, delete.paths.
-#
-# The effective policy starts as a copy of the base. An exercise may narrow a base path's
-# rights or re-affirm them, but may not grant a right, or name a path, the base does not. A
-# path the exercise mentions in any section has its effective rights REPLACED by exactly what
-# the exercise lists for it, so listing a base read+write path in [read] alone narrows it to
-# read; a path the exercise does not mention keeps its base rights.
-merge_fs_per_path() {
-  local base_dir="$1" cur_dir="$2" add_dir="$3"
-  local right p key cp newf
-  declare -A BASE_HAS=() ADD_HAS=() MENTIONED=()
-  for right in ${PHB_FS_RIGHTS}; do
-    if [[ -s "${base_dir}/${right}.paths" ]]; then
-      while IFS= read -r p; do [[ -z "$p" ]] && continue; BASE_HAS["${right} ${p}"]=1; done < <(canon_paths < "${base_dir}/${right}.paths")
-    fi
-    if [[ -s "${add_dir}/${right}.paths" ]]; then
-      while IFS= read -r p; do [[ -z "$p" ]] && continue; ADD_HAS["${right} ${p}"]=1; MENTIONED["$p"]=1; done < <(canon_paths < "${add_dir}/${right}.paths")
-    fi
-  done
-  for key in "${!ADD_HAS[@]}"; do
-    if [[ -z "${BASE_HAS["$key"]:-}" ]]; then
-      report "Policy merge failed: '${key%% *}' on path '${key#* }' is not granted by the base. (PHB-EMERGE)"; exit "${PHB_EMERGE}"
-    fi
-  done
-  for right in ${PHB_FS_RIGHTS}; do
-    newf="${cur_dir}/${right}.paths.new"
-    : > "$newf"
-    if [[ -s "${cur_dir}/${right}.paths" ]]; then
-      while IFS= read -r p; do
-        [[ -z "$p" ]] && continue
-        cp="$(printf '%s\n' "$p" | canon_paths)"
-        [[ -n "${MENTIONED["$cp"]:-}" ]] && continue
-        printf '%s\n' "$p" >> "$newf"
-      done < "${cur_dir}/${right}.paths"
-    fi
-    for key in "${!ADD_HAS[@]}"; do
-      [[ "${key%% *}" == "$right" ]] && printf '%s\n' "${key#* }" >> "$newf"
-    done
-    uniq_keep_order < "$newf" | depth_sort > "${cur_dir}/${right}.paths" || : > "${cur_dir}/${right}.paths"
-    rm -f "$newf"
-  done
-}
 net_union() {
   local out="$1"; shift
   : > "$out"
@@ -328,7 +283,9 @@ write_spec() {
   if [[ -n "$bind" && -s "$bind" ]]; then cp "$bind" "${spec_dir}/bind.rules"; else : > "${spec_dir}/bind.rules"; fi
 }
 # Unions the per-right file sets of in_dir into out_dir, canonicalising and de-duplicating
-# each right's paths. Used to build the base policy from several base cfgs.
+# each right's paths. This is the one additive merge: it builds the base policy from several
+# base cfgs, and phobos-policy.sh then folds each exercise cfg in the same way, so the policy
+# only ever widens from a deny-all baseline.
 fs_union_dir() {
   local out_dir="$1" in_dir="$2"
   local right tmp

@@ -65,6 +65,14 @@ derived empirically by the pruning phase, so it is only as tight as the referenc
 that produced it: a resource no reference exercise touched is hidden, and a resource one of
 them touched is permitted for every submission thereafter.
 
+The policy is additive: everything is denied first, and the platform, language and exercise
+configurations each only widen the allow-list. An exercise configuration may therefore name a
+path or grant a right the base did not, so the configuration files are *trusted input*, on the
+same footing as the reference exercises the pruning phase runs. They must be supplied by the
+instructor and must never be writable by the code being graded; a submission that could edit
+its own exercise configuration could grant itself any access, and that is an integration
+requirement Phobos relies on rather than a boundary it enforces.
+
 ## Scope
 
 A report is in scope when Phobos fails at what it claims to do, or when it causes harm nobody

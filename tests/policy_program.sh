@@ -34,7 +34,8 @@ fresh_spec() {
 
 echo "== phobos-policy.sh writes the specification files =="
 SPEC="$(fresh_spec)"
-# An exercise may narrow within the base and raise a limit, not add a path the base forbids.
+# The policy is additive: an exercise config adds paths, rights and the larger limit on top
+# of the base. Here it only raises a limit; the base paths are all carried through.
 printf '[limits]\nmem_mb=128\n' > "$WORK/exercise.cfg"
 bash "$CORE_X/phobos-policy.sh" --spec-dir "$SPEC" --config "$WORK/exercise.cfg"
 rc=$?
@@ -44,22 +45,25 @@ check "the base execute path is carried through" "/usr" "$(cat "$SPEC/execute.pa
 check "the base write path is carried through"   "/tmp" "$(cat "$SPEC/write.paths")"
 check "the base create path is carried through"  "/tmp" "$(cat "$SPEC/create.paths")"
 check "the largest memory limit wins in the merge" "mem_mb=128" "$(cat "$SPEC/limits.conf")"
+check "a path no config named is absent from the spec" "" "$(grep -F /never/granted "$SPEC/read.paths")"
 
 echo
-echo "== an exercise may narrow a base right but not widen it =="
+echo "== an exercise adds to the base and cannot remove a base right =="
+# Naming a base path in one section only adds; it does not strip the base's other rights on
+# that path. Listing /usr in [read] leaves the base's execute right on /usr in place.
 NSPEC="$(fresh_spec)"
-printf '[read]\n/usr\n' > "$WORK/narrow.cfg"
-bash "$CORE_X/phobos-policy.sh" --spec-dir "$NSPEC" --config "$WORK/narrow.cfg" >/dev/null 2>&1
-check "the narrowed read right is kept"          "/usr" "$(cat "$NSPEC/read.paths")"
-check "the narrowed-away execute right is gone"  ""     "$(cat "$NSPEC/execute.paths")"
+printf '[read]\n/usr\n' > "$WORK/reaffirm.cfg"
+bash "$CORE_X/phobos-policy.sh" --spec-dir "$NSPEC" --config "$WORK/reaffirm.cfg" >/dev/null 2>&1
+check "the base read right is kept"                 "/usr" "$(cat "$NSPEC/read.paths")"
+check "the base execute right is not removed"       "/usr" "$(cat "$NSPEC/execute.paths")"
+# An exercise may grant a right, and name a path, the base did not: the model is additive.
 WSPEC="$(fresh_spec)"
-printf '[write]\n/usr\n' > "$WORK/widen.cfg"
+printf '[write]\n/usr\n[read]\n/opt/extra\n' > "$WORK/widen.cfg"
 out="$(bash "$CORE_X/phobos-policy.sh" --spec-dir "$WSPEC" --config "$WORK/widen.cfg" 2>&1)"; rc=$?
-if [[ "$rc" -eq 12 && "$out" == *"EMERGE"* ]]; then
-  ok "an exercise widening a right the base forbids is refused (PHB-EMERGE)"
-else
-  bad "an exercise widening a right the base forbids is refused (PHB-EMERGE)" "exit 12 reporting EMERGE" "exit $rc: $out"
-fi
+if [[ "$rc" -eq 0 ]]; then ok "an exercise widening the sandbox is accepted (additive model)"; else bad "an exercise widening the sandbox is accepted (additive model)" "exit 0" "exit $rc: $out"; fi
+check "the exercise adds write on a base path"      "/usr"       "$(grep -Fx /usr "$WSPEC/write.paths")"
+check "the base write path is still present"         "/tmp"       "$(grep -Fx /tmp "$WSPEC/write.paths")"
+check "the exercise adds a path the base did not"    "/opt/extra" "$(grep -Fx /opt/extra "$WSPEC/read.paths")"
 
 echo
 echo "== phobos-policy.sh refuses when there is no base policy =="
