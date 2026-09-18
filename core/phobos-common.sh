@@ -692,7 +692,7 @@ build_bind_args() {
 # --------------------------------------------------------------------------
 
 # The functions the network layer relies on the preload library defining.
-PHB_NETBLOCKER_HOOKS="bind connect getaddrinfo sendmsg sendto"
+PHB_NETBLOCKER_HOOKS="bind connect getaddrinfo sendmmsg sendmsg sendto"
 
 # Prints the functions a shared object defines with default visibility, one per
 # line. Assumes readelf from binutils; prints nothing for a file it cannot read.

@@ -19,7 +19,7 @@ rest exists to take privileges away. None of the following is a vulnerability.
   restrict itself further.
 - `ld_preloader/` holds the sources of `libnetblocker.so`, the library built from them
   intercepts network calls through
-  `LD_PRELOAD`, hooking name resolution, `connect`, `bind`, and `sendto` and `sendmsg` for
+  `LD_PRELOAD`, hooking name resolution, `connect`, `bind`, and `sendto`, `sendmsg` and `sendmmsg` for
   the datagrams a UDP socket names without connecting, refusing outbound hosts an allow-list
   does not name and narrowing a local TCP bind to the addresses a `[bind]` allow-list names.
   Function interposition of libc symbols is what the component is for. It is
@@ -52,7 +52,7 @@ rest exists to take privileges away. None of the following is a vulnerability.
 
 `libnetblocker.so` is not committed. It is built from the C source beside it, once per
 architecture, inside the run-phase image, and CI verifies each build: the right architecture,
-no newer glibc than the image ships, and exactly the five hooks. On amd64 a pinned toolchain
+no newer glibc than the image ships, and exactly the six hooks. On amd64 a pinned toolchain
 keeps that build deterministic; on arm64 it is built from the ordinary archive. Where the
 loader cannot use the library the network layer refuses to start rather than run the command
 unfiltered, so a bare checkout with nothing built does not run. The delivery vehicle is the

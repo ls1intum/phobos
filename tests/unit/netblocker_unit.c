@@ -132,6 +132,7 @@ static int connect_calls = 0;
 static int bind_calls = 0;
 static int sendto_calls = 0;
 static int sendmsg_calls = 0;
+static int sendmmsg_calls = 0;
 static bool reload_during_lookup = false;
 
 static struct addrinfo *fake_answer_for(const char *text) {
@@ -224,6 +225,14 @@ static ssize_t fake_sendmsg(int descriptor, const struct msghdr *message, int fl
     return 0;
 }
 
+static int fake_sendmmsg(int descriptor, struct mmsghdr *messages, unsigned int count, int flags) {
+    (void)descriptor;
+    (void)messages;
+    (void)flags;
+    sendmmsg_calls++;
+    return (int)count;
+}
+
 void *__real_dlsym(void *handle, const char *name);
 void *__wrap_dlsym(void *handle, const char *name) {
     if (strcmp(name, "getaddrinfo") == 0) {
@@ -240,6 +249,9 @@ void *__wrap_dlsym(void *handle, const char *name) {
     }
     if (strcmp(name, "sendmsg") == 0) {
         return fake_sendmsg;
+    }
+    if (strcmp(name, "sendmmsg") == 0) {
+        return fake_sendmmsg;
     }
     return __real_dlsym(handle, name);
 }
@@ -721,6 +733,53 @@ static void test_hooks(void) {
     sendmsg_before = sendmsg_calls;
     check("a message with no destination is on a connected socket and passes",
           sendmsg(3, &connected_message, 0) == 0 && sendmsg_calls == sendmsg_before + 1);
+
+    /* sendmmsg carries a batch, each message with its own destination; it stops at the first
+     * one a rule does not cover. */
+    struct mmsghdr batch[2];
+    struct sockaddr_storage first;
+    struct sockaddr_storage second;
+    socklen_t first_length;
+    socklen_t second_length;
+    int sendmmsg_before = 0;
+
+    first_length = fill_destination(&first, "192.0.2.1", 80);
+    second_length = fill_destination(&second, "192.0.2.1", 80);
+    memset(batch, 0, sizeof(batch));
+    batch[0].msg_hdr.msg_name = &first;
+    batch[0].msg_hdr.msg_namelen = first_length;
+    batch[1].msg_hdr.msg_name = &second;
+    batch[1].msg_hdr.msg_namelen = second_length;
+    real_sendmmsg = nullptr;
+    sendmmsg_before = sendmmsg_calls;
+    check("a batch of allowed messages is sent",
+          sendmmsg(3, batch, 2, 0) == 2 && sendmmsg_calls == sendmmsg_before + 1);
+    check("the hook finds sendmmsg on first use", real_sendmmsg == fake_sendmmsg);
+
+    first_length = fill_destination(&first, "192.0.2.1", 81);
+    memset(batch, 0, sizeof(batch));
+    batch[0].msg_hdr.msg_name = &first;
+    batch[0].msg_hdr.msg_namelen = first_length;
+    sendmmsg_before = sendmmsg_calls;
+    errno = 0;
+    check("a batch whose first message is disallowed is refused",
+          sendmmsg(3, batch, 1, 0) == -1 && errno == EACCES && sendmmsg_calls == sendmmsg_before);
+
+    first_length = fill_destination(&first, "192.0.2.1", 80);
+    second_length = fill_destination(&second, "192.0.2.1", 81);
+    memset(batch, 0, sizeof(batch));
+    batch[0].msg_hdr.msg_name = &first;
+    batch[0].msg_hdr.msg_namelen = first_length;
+    batch[1].msg_hdr.msg_name = &second;
+    batch[1].msg_hdr.msg_namelen = second_length;
+    sendmmsg_before = sendmmsg_calls;
+    check("a batch stops at the first disallowed message, sending the prefix",
+          sendmmsg(3, batch, 2, 0) == 1 && sendmmsg_calls == sendmmsg_before + 1);
+
+    memset(batch, 0, sizeof(batch));
+    sendmmsg_before = sendmmsg_calls;
+    check("a batch message with no destination is on a connected socket and passes",
+          sendmmsg(3, batch, 1, 0) == 1 && sendmmsg_calls == sendmmsg_before + 1);
 }
 
 /* What a bind through the hook did. */
@@ -816,7 +875,7 @@ int main(void) {
     check("the functions the hooks hand calls to are found",
           real_getaddrinfo == fake_getaddrinfo && real_connect == fake_connect
               && real_bind == fake_bind && real_sendto == fake_sendto
-              && real_sendmsg == fake_sendmsg);
+              && real_sendmsg == fake_sendmsg && real_sendmmsg == fake_sendmmsg);
 
     test_addresses();
     test_rule_parsing();

@@ -91,7 +91,7 @@ per architecture, inside the run-phase image, alongside the two C products the i
 
 - Never check the library in. The `netblocker` job in `build.yml` builds it from the source on
   the pinned amd64 toolchain and verifies it (right architecture, no newer glibc than the
-  run-phase image, exactly the five hooks). The `run-phase` job builds the image for amd64 and
+  run-phase image, exactly the six hooks). The `run-phase` job builds the image for amd64 and
   arm64 on native runners and verifies the copy each image compiled, so both architectures are
   proven on every run; publishing the multi-arch image is a manual step (below).
 - On amd64 the toolchain is pinned for a deterministic build; on arm64 it comes from the
