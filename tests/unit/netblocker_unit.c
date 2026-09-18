@@ -776,7 +776,7 @@ static void test_hooks(void) {
     check("a batch stops at the first disallowed message, sending the prefix",
           sendmmsg(3, batch, 2, 0) == 1 && sendmmsg_calls == sendmmsg_before + 1);
 
-    memset(batch, 0, sizeof(batch));
+    batch[0].msg_hdr = (struct msghdr){0};
     sendmmsg_before = sendmmsg_calls;
     check("a batch message with no destination is on a connected socket and passes",
           sendmmsg(3, batch, 1, 0) == 1 && sendmmsg_calls == sendmmsg_before + 1);
