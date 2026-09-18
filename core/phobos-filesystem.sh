@@ -44,7 +44,7 @@ LANDLOCK="${LANDLOCK_BIN_OPT:-${HERE}/phobos-landlock}"
 if (( NO_LANDLOCK )); then
   if (( DEBUG )); then
     >&2 printf '[phobos] filesystem layer disabled; run '
-    printf '%q ' "${CMD[@]}"
+    >&2 printf '%q ' "${CMD[@]}"
     echo >&2
   fi
 
@@ -97,9 +97,9 @@ fi
 
 if (( DEBUG )); then
   >&2 printf '[phobos] %s ' "${LANDLOCK}"
-  printf '%q ' "${args[@]}"
-  printf ' -- '
-  printf '%q ' "${CMD[@]}"
+  >&2 printf '%q ' "${args[@]}"
+  >&2 printf ' -- '
+  >&2 printf '%q ' "${CMD[@]}"
   echo >&2
 fi
 
