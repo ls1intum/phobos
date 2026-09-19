@@ -2,7 +2,7 @@
 #
 # cpp/path-injection is excluded as a true positive by design, not a defect. libnetblocker
 # (ld_preloader/netblocker-policy.c, ld_preloader/netblocker.c) and the connect guard
-# (core/phobos-connect-guard.c) open a rules file whose path phobos itself sets: NETBLOCKER_CONF
+# (core/phobos-connect-guard-rules.c) open a rules file whose path phobos itself sets: NETBLOCKER_CONF
 # and NETBLOCKER_BIND_CONF, and the guard's --rules argument, all point into the per-run spec
 # directory core/phobos.sh makes with mktemp. CodeQL taints the getenv and argv value as user
 # input reaching open(), but it is trusted input the graded code cannot write, the open is

@@ -16,6 +16,12 @@
 /* Exit code for every policy failure, distinct from the command's own. */
 static constexpr int EXIT_CODE_POLICY_ERROR = 125;
 
+/* Exit code of a call made the wrong way. */
+static constexpr int EXIT_CODE_USAGE = 2;
+
+/* Exit code when the command itself cannot be executed, as a shell reports it. */
+static constexpr int EXIT_CODE_COMMAND_NOT_EXECUTABLE = 127;
+
 /* Set by --verbose. */
 extern bool verbose;
 

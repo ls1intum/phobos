@@ -19,9 +19,10 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=phobos-common.sh
 source "${HERE}/phobos-common.sh"
 
+# Prints how to call the policy program and ends with PHB_EXIT_USAGE.
 usage() {
   echo "Usage: phobos-policy.sh [--debug] --spec-dir <dir> [--tail-flags-file <file>] [--config <file>]..." >&2
-  exit 2
+  exit "${PHB_EXIT_USAGE}"
 }
 
 SPEC_DIR=""
@@ -36,7 +37,7 @@ while (( "$#" )); do
     *) usage;;
   esac
 done
-[[ -n "$SPEC_DIR" && -d "$SPEC_DIR" ]] || { echo "phobos-policy.sh: --spec-dir must name an existing directory" >&2; exit 2; }
+[[ -n "$SPEC_DIR" && -d "$SPEC_DIR" ]] || { echo "phobos-policy.sh: --spec-dir must name an existing directory" >&2; exit "${PHB_EXIT_USAGE}"; }
 
 # Scratch for the temporary files parse_cfg_policy and the merge make: a subdirectory of the
 # specification directory, so they are removed with it rather than left in /tmp. Passed to
@@ -56,11 +57,17 @@ if [[ ${#base_cfgs[@]} -eq 0 ]]; then
   exit "${PHB_EPOLICY}"
 fi
 
-base_dir="$(mktemp -d -p "$PHOBOS_SCRATCH")"; base_net="$(mktemp -p "$PHOBOS_SCRATCH")"; base_bind="$(mktemp -p "$PHOBOS_SCRATCH")"
+base_dir="$(mktemp -d -p "$PHOBOS_SCRATCH")"
+base_net="$(mktemp -p "$PHOBOS_SCRATCH")"
+base_bind="$(mktemp -p "$PHOBOS_SCRATCH")"
 for r in ${PHB_FS_RIGHTS}; do : >"${base_dir}/${r}.paths"; done
 : >"$base_net"; : >"$base_bind"
 timeout_eff=""
-eff_limit_mem_mb=""; eff_limit_nproc=""; eff_limit_nofile=""; eff_limit_fsize_mb=""; eff_limit_cpu=""
+eff_limit_mem_mb=""
+eff_limit_nproc=""
+eff_limit_nofile=""
+eff_limit_fsize_mb=""
+eff_limit_cpu=""
 
 # The timeout and each resource limit are pooled across every base and exercise cfg by the
 # same rule the setters use within a cfg: a zero anywhere disables that limit and wins, and
@@ -78,10 +85,15 @@ merge_limits() {
     local ms; ms="$(timeout_to_ms "$PARSED_TIMEOUT")"
     if (( ms > timeout_max_ms )); then timeout_max_ms="$ms"; fi
   fi
-  local key upper var dvar val
+  local key
+  local upper
+  local var
+  local dvar
+  local val
   for key in mem_mb nproc nofile fsize_mb cpu; do
     upper="${key^^}"
-    var="PARSED_LIMIT_${upper}"; dvar="PARSED_LIMIT_${upper}_DISABLED"
+    var="PARSED_LIMIT_${upper}"
+    dvar="PARSED_LIMIT_${upper}_DISABLED"
     if (( ${!dvar:-0} )); then limit_disabled[$key]=1; fi
     val="${!var:-}"
     if [[ -n "$val" ]] && (( 10#$val > limit_max[$key] )); then limit_max[$key]="$(( 10#$val ))"; fi
@@ -116,7 +128,9 @@ done
 # exercise/task config is trusted input and must not be writable by the graded code; see
 # SECURITY.md. build_path_args still refuses a nested path granted fewer rights than an
 # ancestor, which Landlock could not hold.
-eff_dir="$(mktemp -d -p "$PHOBOS_SCRATCH")"; eff_net="$(mktemp -p "$PHOBOS_SCRATCH")"; eff_bind="$(mktemp -p "$PHOBOS_SCRATCH")"
+eff_dir="$(mktemp -d -p "$PHOBOS_SCRATCH")"
+eff_net="$(mktemp -p "$PHOBOS_SCRATCH")"
+eff_bind="$(mktemp -p "$PHOBOS_SCRATCH")"
 for r in ${PHB_FS_RIGHTS}; do cp "${base_dir}/${r}.paths" "${eff_dir}/${r}.paths"; done
 cp "$base_net" "$eff_net"; cp "$base_bind" "$eff_bind"
 

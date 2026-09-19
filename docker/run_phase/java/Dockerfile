@@ -30,7 +30,8 @@ COPY *.sh                ${PHOBOS_HOME}/
 COPY --from=netblocker /tmp/netblocker/libnetblocker.so ${PHOBOS_HOME}/
 COPY phobos-landlock*.c           ${PHOBOS_HOME}/
 COPY phobos-landlock*.h           ${PHOBOS_HOME}/
-COPY phobos-connect-guard.c       ${PHOBOS_HOME}/
+COPY phobos-connect-guard*.c      ${PHOBOS_HOME}/
+COPY phobos-connect-guard*.h      ${PHOBOS_HOME}/
 COPY config/BaseLanguage-java.cfg                     ${PHOBOS_HOME}/
 COPY config/TailPhobos.cfg                     ${PHOBOS_HOME}/
 # -static-pie rather than -static: plain -static overrides the -fPIE default and
@@ -40,7 +41,7 @@ RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
     -o ${PHOBOS_HOME}/phobos-landlock ${PHOBOS_HOME}/phobos-landlock*.c
 # The connect guard is built the same way and held to the same hardening below.
 RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
-    -o ${PHOBOS_HOME}/phobos-connect-guard ${PHOBOS_HOME}/phobos-connect-guard.c
+    -o ${PHOBOS_HOME}/phobos-connect-guard ${PHOBOS_HOME}/phobos-connect-guard*.c
 # The hardening is measured, not assumed: a DYN type proves -static-pie kept the
 # binary position independent, and a BIND_NOW entry proves RELRO is complete.
 # Written to files rather than piped into grep, because a pipe here would need

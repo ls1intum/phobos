@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Assembles the build context the run-phase image expects.
 #
-# The Dockerfile copies flat names: *.sh, phobos-landlock*.c and .h, phobos-connect-guard.c,
+# The Dockerfile copies flat names: *.sh, phobos-landlock*.c and .h, phobos-connect-guard*.c and .h,
 # and config/*.cfg, plus the network filter's sources in netblocker/. Those files live in two directories of
 # this repository, so the context has to be put together before docker build can
 # see it, and no compose file or plain `docker build .` can express that.
@@ -14,7 +14,10 @@
 #   assemble-run-phase-context.sh <destination>
 set -euo pipefail
 
-[[ $# -eq 1 ]] || { printf 'usage: assemble-run-phase-context.sh <destination>\n' >&2; exit 2; }
+# The status this script ends with when it was called the wrong way.
+readonly EXIT_USAGE=2
+
+[[ $# -eq 1 ]] || { printf 'usage: assemble-run-phase-context.sh <destination>\n' >&2; exit "${EXIT_USAGE}"; }
 
 DESTINATION="$1"
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,7 +42,8 @@ mkdir -p "${DESTINATION}/config" "${DESTINATION}/build" "${DESTINATION}/netblock
 cp "${REPOSITORY}"/core/*.sh "${DESTINATION}/"
 cp "${REPOSITORY}"/core/phobos-landlock*.c "${DESTINATION}/"
 cp "${REPOSITORY}"/core/phobos-landlock*.h "${DESTINATION}/"
-cp "${REPOSITORY}/core/phobos-connect-guard.c" "${DESTINATION}/"
+cp "${REPOSITORY}"/core/phobos-connect-guard*.c "${DESTINATION}/"
+cp "${REPOSITORY}"/core/phobos-connect-guard*.h "${DESTINATION}/"
 cp "${REPOSITORY}"/core/config/*.cfg "${DESTINATION}/config/"
 cp "${REPOSITORY}"/ld_preloader/netblocker*.c "${REPOSITORY}"/ld_preloader/netblocker*.h "${DESTINATION}/netblocker/"
 # In a directory of its own: the Dockerfile copies every flat *.sh into the sandbox's

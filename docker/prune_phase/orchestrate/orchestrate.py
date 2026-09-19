@@ -36,6 +36,18 @@ from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+# The terminal escape sequences the progress output is coloured with.
+RED = '\033[31m'
+GREEN = '\033[32m'
+YELLOW = '\033[33m'
+BLUE = '\033[34m'
+BOLD = '\033[1m'
+RESET = '\033[0m'
+# A line of a *_union.paths file: its mode and its path.
+UNION_LINE_FIELDS = 2
+# How many languages are pruned at once when the machine cannot say how many CPUs it has.
+DEFAULT_JOBS = 4
+
 # ────────────────────────────────────────── CLI
 ap = argparse.ArgumentParser(
     formatter_class=argparse.RawTextHelpFormatter,
@@ -49,7 +61,7 @@ ap.add_argument('--path-dir', default='/var/tmp/path_sets',
                 help='Where <lang>_*.paths and *.json live (input).')
 ap.add_argument('--helpers-dir', default='/var/tmp/helpers',
                 help='Where helper scripts (make_lang_sets.py) reside.')
-ap.add_argument('--jobs', type=int, default=os.cpu_count() or 4)
+ap.add_argument('--jobs', type=int, default=os.cpu_count() or DEFAULT_JOBS)
 ap.add_argument('--skip-prune', action='store_true',
                 help='Skip running prune scripts; use existing artifacts in --path-dir.')
 ap.add_argument('--verbose', action='store_true')
@@ -80,18 +92,23 @@ def run(cmd: Sequence[str], tag: str = '') -> None:
     string form was dead code and only widened the injection surface.
     """
     pretty = ' '.join(shlex.quote(str(c)) for c in cmd)
-    print(f'\033[34m[{tag or "cmd"}]\033[0m', pretty)
+    print(f'{BLUE}[{tag or "cmd"}]{RESET}', pretty)
     t0 = time.time()
     rc = subprocess.call(cmd)
     dt = time.time() - t0
     if rc:
         raise RuntimeError(f'{tag} failed (rc={rc}, {dt:.1f}s)')
-    print(f'\033[32m✓ {tag} ({dt:.1f}s)\033[0m')
+    print(f'{GREEN}✓ {tag} ({dt:.1f}s){RESET}')
 
 
 # ────────────────────────────────────────── step 1 – prune
 
 def prune_language(lang: str) -> None:
+    """Prune every exercise of one language, unless --skip-prune says the artefacts exist.
+
+    PRUNE_SCRIPT infers the exercise root from /var/tmp/testing-dir/<lang> and writes the
+    per-exercise artefacts into PATH_DIR through emit_artifacts.py; see run_minimal_fs_all.sh.
+    """
     if args.skip_prune:
         print(f'[skip] prune:{lang}')
         return
@@ -100,9 +117,6 @@ def prune_language(lang: str) -> None:
     cmd: list[str] = [str(PRUNE_SCRIPT)]
     if args.verbose:
         cmd.append('--verbose')
-    # NOTE: PRUNE_SCRIPT infers EX_ROOT from /var/tmp/testing-dir/<lang>.  It
-    # writes per‑exercise artifacts into PATH_DIR via emit_artifacts.py.  See
-    # run_minimal_fs_all.sh.
     cmd.append(lang)
     run(cmd, f'prune:{lang}')
 
@@ -110,12 +124,14 @@ def prune_language(lang: str) -> None:
 # ────────────────────────────────────────── language union generation
 
 def gen_lang_sets(lang: str) -> None:
-    """Invoke make_lang_sets.py to produce <lang>_union.paths & _intersection.paths."""
+    """Invoke make_lang_sets.py to produce <lang>_union.paths & _intersection.paths.
+
+    A language with no per-exercise .paths, every exercise of it skipped, is skipped here too.
+    """
     if not MAKE_LANG_SETS.exists():
         raise FileNotFoundError(f'make_lang_sets.py not found: {MAKE_LANG_SETS}')
-    # Skip languages that have no per‑exercise .paths (all exercises skipped).
     if not any(PATH_DIR.glob(f"{lang}_*.paths")):
-        print(f'\033[33m[warn]\033[0m no {lang}_*.paths in {PATH_DIR}; skipping langsets.')
+        print(f'{YELLOW}[warn]{RESET} no {lang}_*.paths in {PATH_DIR}; skipping langsets.')
         return
     cmd = ['python3', str(MAKE_LANG_SETS), lang, str(PATH_DIR)]
     run(cmd, f'langsets:{lang}')
@@ -123,48 +139,52 @@ def gen_lang_sets(lang: str) -> None:
 
 # ────────────────────────────────────────── utilities
 
-def _read_union(path: Path) -> tuple[set[str], set[str]]:
-    """Return (readonly_set, write_set) from a *_union.paths file.
+def _read_union(path: Path) -> dict[str, set[str]]:
+    """Return {'r': readonly_set, 'w': write_set} from a *_union.paths file.
 
     Lines are expected in the form `r /abs/path` or `w /abs/path` as written by
-    make_lang_sets.py.  Blank/comment lines are ignored.
+    make_lang_sets.py.  Blank/comment lines, and lines without a path, are ignored.
     """
-    readonly, write = set(), set()
+    readonly: set[str] = set()
+    write: set[str] = set()
     for raw in path.read_text().splitlines():
         line = raw.strip()
         if not line or line.startswith('#'):
             continue
-        try:
-            mode, p = line.split(maxsplit=1)
-        except ValueError:
+        fields = line.split(maxsplit=1)
+        if len(fields) != UNION_LINE_FIELDS:
             continue
+        mode = fields[0]
+        p = fields[1]
         if mode == 'w':
-            write.add(p); readonly.discard(p)
+            write.add(p)
+            readonly.discard(p)
         elif p not in write:
             readonly.add(p)
-    return readonly, write
+    return {'r': readonly, 'w': write}
 
 
 def collect_language_data(langs: Iterable[str]) -> dict[str, dict[str, set[str]]]:
+    """Read the union of every requested language that has a usable one.
+
+    A union naming nothing is not a language that needs nothing, it is a language whose pruning
+    produced a file and no content: an unreadable log, or an emitter that wrote an empty
+    artefact. Every real exercise contributes the base bindings, so an empty union is a failure
+    wearing a success's file, and it is left out like a missing one.
+    """
     data: dict[str, dict[str, set[str]]] = {}
     for lang in langs:
         union_file = PATH_DIR / f'{lang}_union.paths'
         if not union_file.exists():
-            print(f'\033[33m[warn]\033[0m missing {union_file.name}')
+            print(f'{YELLOW}[warn]{RESET} missing {union_file.name}')
             continue
-        r_set, w_set = _read_union(union_file)
-        # A union naming nothing is not a language that needs nothing, it is a
-        # language whose pruning produced a file and no content: an unreadable log,
-        # or an emitter that wrote an empty artefact. Every real exercise contributes
-        # the base bindings, so an empty union is a failure wearing a success's file.
-        if not r_set and not w_set:
-            print(f'\033[33m[warn]\033[0m {union_file.name} names no path at all')
+        union = _read_union(union_file)
+        if not union['r'] and not union['w']:
+            print(f'{YELLOW}[warn]{RESET} {union_file.name} names no path at all')
             continue
-        data[lang] = {'r': r_set, 'w': w_set}
+        data[lang] = union
     return data
 
-
-# ────────────────────────────────────────── tail handling
 
 # ────────────────────────────────────────── tail handling
 
@@ -191,7 +211,7 @@ def build_runtime_tail(runtime_chdir: str) -> None:
 
 
 # ────────────────────────────────────────── main pipeline
-print('\n\033[1mOrchestrating for:\033[0m', ', '.join(langs), '\n')
+print(f'\n{BOLD}Orchestrating for:{RESET}', ', '.join(langs), '\n')
 
 # 1) prune in parallel (creates per‑exercise artifacts in PATH_DIR)
 # Artefacts of an earlier run would otherwise be indistinguishable from this run's.
@@ -215,7 +235,7 @@ with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         # one failing language must not abort the runs for the others. Every
         # failure is collected instead, so one run names all of them.
         except Exception as exc:  # noqa: BLE001
-            print(f'\033[31m{lang} prune failed:\033[0m', exc)
+            print(f'{RED}{lang} prune failed:{RESET}', exc)
             failed_languages.append(lang)
 
 # The files below are a security policy: everything not in them is denied. Built
@@ -223,7 +243,7 @@ with ThreadPoolExecutor(max_workers=args.jobs) as pool:
 # than anyone asked for, and nothing downstream could tell that from a correct
 # one. Refuse instead, and leave whatever is already on disk untouched.
 if failed_languages:
-    print('\033[31m[error]\033[0m pruning failed for:', ', '.join(sorted(failed_languages)))
+    print(f'{RED}[error]{RESET} pruning failed for:', ', '.join(sorted(failed_languages)))
     print('        Refusing to merge a policy from only the languages that succeeded.')
     sys.exit(1)
 
@@ -241,12 +261,13 @@ lang_data = collect_language_data(langs)
 # nothing downstream could tell that from a policy for all of them.
 missing_languages = sorted(set(langs) - set(lang_data))
 if missing_languages:
-    print('\033[31m[error]\033[0m no usable pruning result for:', ', '.join(missing_languages))
+    print(f'{RED}[error]{RESET} no usable pruning result for:', ', '.join(missing_languages))
     print('        Refusing to merge a policy that is missing a language that was asked for.')
     sys.exit(1)
 
 # 4) BasePhobos (UNION across langs)
-read_union, write_union = set(), set()
+read_union: set[str] = set()
+write_union: set[str] = set()
 for info in lang_data.values():
     write_union |= info['w']
 for info in lang_data.values():
@@ -254,10 +275,15 @@ for info in lang_data.values():
 write_cfg_path = CORE_DIR / 'BasePhobos.cfg'
 
 def _write_cfg(read_set: set[str], write_set: set[str], dest: Path) -> None:
+    """Write one policy cfg with a section per right.
+
+    A path pruning found read-only (an ro-bind) grants read and execute; a writable one grants
+    read, write, create and delete, since write implies read. An empty [connect] denies every
+    outbound connection, so a generated base names the loopback the grading tools need (the
+    Gradle daemon and the JVM talk over it) explicitly; external egress stays a deliberate
+    per-exercise [connect] plus a no-network container.
+    """
     lines: list[str] = []
-    # Per-right sections. A former read-only (ro-bind) path grants read+execute; a former
-    # writable path grants read+write+create+delete. Write implies read, so writable paths
-    # also appear in [read].
     read_all = sorted(read_set | write_set)
     if read_all:
         lines += ['[read]', *read_all, '']
@@ -267,9 +293,6 @@ def _write_cfg(read_set: set[str], write_set: set[str], dest: Path) -> None:
         writable = sorted(write_set)
         for section in ('write', 'create', 'delete'):
             lines += [f'[{section}]', *writable, '']
-    # An empty [connect] now denies every outbound connection, so a generated base names the
-    # loopback the grading tools need (the Gradle daemon and the JVM talk over it) explicitly.
-    # External egress stays a deliberate per-exercise [connect] plus a no-network container.
     lines += ['[connect]', 'allow 127.0.0.1:*', 'allow [::1]', 'allow localhost', '']
     dest.write_text('\n'.join(lines))
 
@@ -278,7 +301,8 @@ _write_cfg(read_union, write_union, write_cfg_path)
 # 5) BasePhobosIntersect (intersection across languages)
 all_sets = [(info['r'] | info['w']) for info in lang_data.values()]
 inter_all = set.intersection(*all_sets)
-read_inter_all, write_inter_all = set(), set()
+read_inter_all: set[str] = set()
+write_inter_all: set[str] = set()
 for p in inter_all:
     if any(p in info['w'] for info in lang_data.values()):
         write_inter_all.add(p)
@@ -296,4 +320,4 @@ for L, info in lang_data.items():
 # 7) TailPhobos (sanitize & inject runtime chdir)
 build_runtime_tail(args.runtime_chdir)
 
-print('\n\033[1mDone.\033[0m')
+print(f'\n{BOLD}Done.{RESET}')

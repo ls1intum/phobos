@@ -39,6 +39,20 @@
  */
 #define REQUIRED_LANDLOCK_ABI 4
 
+/*
+ * How many arguments each mode takes, the program name included, and where
+ * --enforce finds its own. An enum rather than constexpr, because
+ * runner-capability-probe.sh builds this file with the compiler's default
+ * standard, which may predate C23.
+ */
+enum probe_argument {
+    VERSION_ARGUMENT_COUNT = 2,
+    ENFORCE_ARGUMENT_DIRECTORY = 2,
+    ENFORCE_ARGUMENT_PERMITTED_FILE = 3,
+    ENFORCE_ARGUMENT_FORBIDDEN_FILE = 4,
+    ENFORCE_ARGUMENT_COUNT = 5
+};
+
 /* glibc ships no wrapper for this call, so it goes through syscall directly. */
 static long create_ruleset(const struct landlock_ruleset_attr *attributes, size_t size, uint32_t flags) {
     return syscall(__NR_landlock_create_ruleset, attributes, size, flags);
@@ -218,11 +232,12 @@ static void print_usage(void) {
 }
 
 int main(int argc, char **argv) {
-    if (argc == 2 && strcmp(argv[1], "--version") == 0) {
+    if (argc == VERSION_ARGUMENT_COUNT && strcmp(argv[1], "--version") == 0) {
         return report_version();
     }
-    if (argc == 5 && strcmp(argv[1], "--enforce") == 0) {
-        return probe_enforcement(argv[2], argv[3], argv[4]);
+    if (argc == ENFORCE_ARGUMENT_COUNT && strcmp(argv[1], "--enforce") == 0) {
+        return probe_enforcement(argv[ENFORCE_ARGUMENT_DIRECTORY], argv[ENFORCE_ARGUMENT_PERMITTED_FILE],
+                                 argv[ENFORCE_ARGUMENT_FORBIDDEN_FILE]);
     }
     print_usage();
     return PROBE_USAGE;

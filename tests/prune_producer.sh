@@ -64,7 +64,8 @@ STUB
 
 # One language holding one exercise, in the shape the producer expects.
 build_fixture() {
-    local root="$1" lang="$2"
+    local root="$1"
+    local lang="$2"
     mkdir -p "${root}/testing-dir/${lang}/exercise1/assignment" "${root}/helpers" "${root}/out"
     printf '#!/usr/bin/env bash\ntrue\n' >"${root}/testing-dir/${lang}/exercise1/build_script.sh"
     chmod +x "${root}/testing-dir/${lang}/exercise1/build_script.sh"
@@ -74,7 +75,8 @@ build_fixture() {
 
 # Runs the producer against a fixture, with every path pointed into it.
 run_producer() {
-    local root="$1" lang="$2"
+    local root="$1"
+    local lang="$2"
     shift 2
     TESTING_DIR="${root}/testing-dir" \
         PRUNE_SCRIPT="${root}/prune-stub.sh" \

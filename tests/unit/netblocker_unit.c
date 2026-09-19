@@ -33,6 +33,10 @@
 #define NETBLOCKER_UNIT_TEST
 #include "../../ld_preloader/netblocker.c"
 
+/* The exit status when the test itself cannot go on, a setup step or an allocation of its
+ * own having failed, kept apart from 1, which says that cases failed. */
+static constexpr int HARNESS_SETUP_FAILURE = 2;
+
 /* ------------------------------------------------------------ failures to inject */
 
 static bool fail_next_calloc = false;
@@ -108,9 +112,12 @@ FILE *__wrap_fdopen(int descriptor, const char *mode) {
 /* What the stand-in resolver answers for a name. "unprintable" is an address of a
  * family getnameinfo cannot write as text. "a.wild.test" is a name below the domain
  * wildcard "*.wild.test", whose addresses become reachable only through its lookup. */
+/* The most addresses the stand-in resolver answers for one name. */
+static constexpr size_t FAKE_HOST_ADDRESS_LIMIT = 3;
+
 struct fake_host {
     const char *name;
-    const char *addresses[3];
+    const char *addresses[FAKE_HOST_ADDRESS_LIMIT];
 };
 
 static const struct fake_host FAKE_HOSTS[] = {
@@ -126,6 +133,10 @@ struct fake_answer {
     struct sockaddr_storage address;
 };
 
+/* The socket every hooked connect and send is made on. The stand-ins behind the hooks never
+ * look at it. */
+static constexpr int FAKE_SOCKET_DESCRIPTOR = 3;
+
 static int resolver_calls = 0;
 static int connect_calls = 0;
 static int bind_calls = 0;
@@ -138,7 +149,7 @@ static struct addrinfo *fake_answer_for(const char *text) {
     struct fake_answer *answer = malloc(sizeof(*answer));
     if (answer == nullptr) {
         perror("malloc");
-        exit(2);
+        exit(HARNESS_SETUP_FAILURE);
     }
     memset(answer, 0, sizeof(*answer));
     answer->information.ai_addr = (struct sockaddr *)&answer->address;
@@ -178,7 +189,7 @@ static int fake_getaddrinfo(const char *node, const char *service, const struct 
             continue;
         }
         struct addrinfo **tail = results;
-        for (size_t index = 0; index < 3 && FAKE_HOSTS[host].addresses[index] != nullptr; index++) {
+        for (size_t index = 0; index < FAKE_HOST_ADDRESS_LIMIT && FAKE_HOSTS[host].addresses[index] != nullptr; index++) {
             *tail = fake_answer_for(FAKE_HOSTS[host].addresses[index]);
             tail = &(*tail)->ai_next;
         }
@@ -272,19 +283,22 @@ static void check(const char *what, bool condition) {
     }
 }
 
+/* The rules file is readable and writable by its owner only. */
+static constexpr mode_t RULES_FILE_MODE = 0600;
+
 /* Writes the rules file inside the private rules directory, readable and writable by its
  * owner only, and without following a link planted in its place. */
 static void write_rules(const char *body) {
-    int descriptor = open(rules_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0600);
+    int descriptor = open(rules_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, RULES_FILE_MODE);
     if (descriptor < 0) {
         perror("rules");
-        exit(2);
+        exit(HARNESS_SETUP_FAILURE);
     }
     FILE *file = fdopen(descriptor, "w");
     if (file == nullptr) {
         perror("rules");
         close(descriptor);
-        exit(2);
+        exit(HARNESS_SETUP_FAILURE);
     }
     fputs(body, file);
     fclose(file);
@@ -349,7 +363,7 @@ static enum connection_outcome connection_outcome(const char *address, uint16_t 
         length = sizeof(*ipv4);
     }
     errno = 0;
-    int status = connect(3, (struct sockaddr *)&destination, length);
+    int status = connect(FAKE_SOCKET_DESCRIPTOR, (struct sockaddr *)&destination, length);
     if (status == 0 && connect_calls == calls_before + 1) {
         return CONNECTION_ALLOWED;
     }
@@ -391,7 +405,7 @@ static enum datagram_outcome sendto_outcome(const char *address, uint16_t port) 
     socklen_t length = fill_destination(&destination, address, port);
     int calls_before = sendto_calls;
     errno = 0;
-    ssize_t status = sendto(3, "x", 1, 0, (struct sockaddr *)&destination, length);
+    ssize_t status = sendto(FAKE_SOCKET_DESCRIPTOR, "x", 1, 0, (struct sockaddr *)&destination, length);
     if (status == 1 && sendto_calls == calls_before + 1) {
         return DATAGRAM_SENT;
     }
@@ -411,7 +425,7 @@ static enum datagram_outcome sendmsg_outcome(const char *address, uint16_t port)
     message.msg_name = &destination;
     message.msg_namelen = length;
     errno = 0;
-    ssize_t status = sendmsg(3, &message, 0);
+    ssize_t status = sendmsg(FAKE_SOCKET_DESCRIPTOR, &message, 0);
     if (status == 0 && sendmsg_calls == calls_before + 1) {
         return DATAGRAM_SENT;
     }
@@ -552,6 +566,10 @@ static void test_rule_questions(void) {
     rule_destroy(range);
 }
 
+/* How many values one octet of a dotted address takes, so that each entry that fills the
+ * cache gets an address of its own. */
+static constexpr size_t OCTET_VALUES = 256;
+
 static void test_address_cache(void) {
     struct address_cache cache = ADDRESS_CACHE_INITIALISER;
     char address[INET6_ADDRSTRLEN];
@@ -580,7 +598,7 @@ static void test_address_cache(void) {
     check("clearing forgets everything",
           cache.entry_count == 0 && !address_cache_permits(&cache, "192.0.2.1", 80));
     for (size_t index = 0; index <= ADDRESS_CACHE_CAPACITY; index++) {
-        snprintf(address, sizeof(address), "10.0.%zu.%zu", index / 256, index % 256);
+        snprintf(address, sizeof(address), "10.0.%zu.%zu", index / OCTET_VALUES, index % OCTET_VALUES);
         address_cache_record(&cache, address, 1, false);
     }
     check("a full cache keeps its capacity", cache.entry_count == ADDRESS_CACHE_CAPACITY);
@@ -660,6 +678,91 @@ static void test_policy(void) {
           !policy_permits_connection(&policy, "203.0.113.9", 8080));
 }
 
+/* How many messages the sendmmsg cases put in a batch. */
+static constexpr int BATCH_LENGTH = 2;
+
+/* The UDP hooks. sendto and sendmsg filter a datagram named for an unconnected
+ * socket, which connect never sees. They share destination_permitted with connect,
+ * so the family branches are exercised through them here. */
+static void test_datagram_hooks(const struct sockaddr *unix_destination) {
+    int sendto_before = 0;
+    int sendmsg_before = 0;
+    struct msghdr connected_message;
+    real_sendto = nullptr;
+    check("a datagram an address rule covers is sent", sendto_outcome("192.0.2.1", 80) == DATAGRAM_SENT);
+    check("the hook finds sendto on first use", real_sendto == fake_sendto);
+    check("a datagram no rule covers is refused", sendto_outcome("192.0.2.1", 81) == DATAGRAM_DENIED);
+    check("an IPv6 datagram a rule covers is sent", sendto_outcome("2001:db8::99", 25) == DATAGRAM_SENT);
+
+    sendto_before = sendto_calls;
+    check("a datagram with no destination is on a connected socket and passes",
+          sendto(FAKE_SOCKET_DESCRIPTOR, "x", 1, 0, nullptr, 0) == 1 && sendto_calls == sendto_before + 1);
+    sendto_before = sendto_calls;
+    check("a datagram to a non-INET family is left to other layers and passes",
+          sendto(FAKE_SOCKET_DESCRIPTOR, "x", 1, 0, unix_destination, sizeof(sa_family_t)) == 1
+              && sendto_calls == sendto_before + 1);
+
+    real_sendmsg = nullptr;
+    check("a message an address rule covers is sent", sendmsg_outcome("192.0.2.1", 80) == DATAGRAM_SENT);
+    check("the hook finds sendmsg on first use", real_sendmsg == fake_sendmsg);
+    check("a message no rule covers is refused", sendmsg_outcome("192.0.2.1", 81) == DATAGRAM_DENIED);
+
+    memset(&connected_message, 0, sizeof(connected_message));
+    sendmsg_before = sendmsg_calls;
+    check("a message with no destination is on a connected socket and passes",
+          sendmsg(FAKE_SOCKET_DESCRIPTOR, &connected_message, 0) == 0 && sendmsg_calls == sendmsg_before + 1);
+}
+
+/* sendmmsg carries a batch, each message with its own destination; it stops at the first
+ * one a rule does not cover. */
+static void test_batch_hook(void) {
+    struct mmsghdr batch[BATCH_LENGTH];
+    struct sockaddr_storage first;
+    struct sockaddr_storage second;
+    socklen_t first_length;
+    socklen_t second_length;
+    int sendmmsg_before = 0;
+
+    first_length = fill_destination(&first, "192.0.2.1", 80);
+    second_length = fill_destination(&second, "192.0.2.1", 80);
+    memset(batch, 0, sizeof(batch));
+    batch[0].msg_hdr.msg_name = &first;
+    batch[0].msg_hdr.msg_namelen = first_length;
+    batch[1].msg_hdr.msg_name = &second;
+    batch[1].msg_hdr.msg_namelen = second_length;
+    real_sendmmsg = nullptr;
+    sendmmsg_before = sendmmsg_calls;
+    check("a batch of allowed messages is sent",
+          sendmmsg(FAKE_SOCKET_DESCRIPTOR, batch, BATCH_LENGTH, 0) == BATCH_LENGTH
+              && sendmmsg_calls == sendmmsg_before + 1);
+    check("the hook finds sendmmsg on first use", real_sendmmsg == fake_sendmmsg);
+
+    first_length = fill_destination(&first, "192.0.2.1", 81);
+    memset(batch, 0, sizeof(batch));
+    batch[0].msg_hdr.msg_name = &first;
+    batch[0].msg_hdr.msg_namelen = first_length;
+    sendmmsg_before = sendmmsg_calls;
+    errno = 0;
+    check("a batch whose first message is disallowed is refused",
+          sendmmsg(FAKE_SOCKET_DESCRIPTOR, batch, 1, 0) == -1 && errno == EACCES && sendmmsg_calls == sendmmsg_before);
+
+    first_length = fill_destination(&first, "192.0.2.1", 80);
+    second_length = fill_destination(&second, "192.0.2.1", 81);
+    memset(batch, 0, sizeof(batch));
+    batch[0].msg_hdr.msg_name = &first;
+    batch[0].msg_hdr.msg_namelen = first_length;
+    batch[1].msg_hdr.msg_name = &second;
+    batch[1].msg_hdr.msg_namelen = second_length;
+    sendmmsg_before = sendmmsg_calls;
+    check("a batch stops at the first disallowed message, sending the prefix",
+          sendmmsg(FAKE_SOCKET_DESCRIPTOR, batch, BATCH_LENGTH, 0) == 1 && sendmmsg_calls == sendmmsg_before + 1);
+
+    batch[0].msg_hdr = (struct msghdr){0};
+    sendmmsg_before = sendmmsg_calls;
+    check("a batch message with no destination is on a connected socket and passes",
+          sendmmsg(FAKE_SOCKET_DESCRIPTOR, batch, 1, 0) == 1 && sendmmsg_calls == sendmmsg_before + 1);
+}
+
 static void test_hooks(void) {
     int resolver_calls_before = 0;
     struct sockaddr unix_destination;
@@ -700,84 +803,10 @@ static void test_hooks(void) {
     unix_destination.sa_family = AF_UNIX;
     errno = 0;
     check("a connection of another family is refused with EACCES",
-          connect(3, &unix_destination, sizeof(sa_family_t)) == -1 && errno == EACCES);
+          connect(FAKE_SOCKET_DESCRIPTOR, &unix_destination, sizeof(sa_family_t)) == -1 && errno == EACCES);
 
-    /* The UDP hooks. sendto and sendmsg filter a datagram named for an unconnected
-     * socket, which connect never sees. They share destination_permitted with connect,
-     * so the family branches are exercised through them here. */
-    int sendto_before = 0;
-    int sendmsg_before = 0;
-    struct msghdr connected_message;
-    real_sendto = nullptr;
-    check("a datagram an address rule covers is sent", sendto_outcome("192.0.2.1", 80) == DATAGRAM_SENT);
-    check("the hook finds sendto on first use", real_sendto == fake_sendto);
-    check("a datagram no rule covers is refused", sendto_outcome("192.0.2.1", 81) == DATAGRAM_DENIED);
-    check("an IPv6 datagram a rule covers is sent", sendto_outcome("2001:db8::99", 25) == DATAGRAM_SENT);
-
-    sendto_before = sendto_calls;
-    check("a datagram with no destination is on a connected socket and passes",
-          sendto(3, "x", 1, 0, nullptr, 0) == 1 && sendto_calls == sendto_before + 1);
-    sendto_before = sendto_calls;
-    check("a datagram to a non-INET family is left to other layers and passes",
-          sendto(3, "x", 1, 0, &unix_destination, sizeof(sa_family_t)) == 1
-              && sendto_calls == sendto_before + 1);
-
-    real_sendmsg = nullptr;
-    check("a message an address rule covers is sent", sendmsg_outcome("192.0.2.1", 80) == DATAGRAM_SENT);
-    check("the hook finds sendmsg on first use", real_sendmsg == fake_sendmsg);
-    check("a message no rule covers is refused", sendmsg_outcome("192.0.2.1", 81) == DATAGRAM_DENIED);
-
-    memset(&connected_message, 0, sizeof(connected_message));
-    sendmsg_before = sendmsg_calls;
-    check("a message with no destination is on a connected socket and passes",
-          sendmsg(3, &connected_message, 0) == 0 && sendmsg_calls == sendmsg_before + 1);
-
-    /* sendmmsg carries a batch, each message with its own destination; it stops at the first
-     * one a rule does not cover. */
-    struct mmsghdr batch[2];
-    struct sockaddr_storage first;
-    struct sockaddr_storage second;
-    socklen_t first_length;
-    socklen_t second_length;
-    int sendmmsg_before = 0;
-
-    first_length = fill_destination(&first, "192.0.2.1", 80);
-    second_length = fill_destination(&second, "192.0.2.1", 80);
-    memset(batch, 0, sizeof(batch));
-    batch[0].msg_hdr.msg_name = &first;
-    batch[0].msg_hdr.msg_namelen = first_length;
-    batch[1].msg_hdr.msg_name = &second;
-    batch[1].msg_hdr.msg_namelen = second_length;
-    real_sendmmsg = nullptr;
-    sendmmsg_before = sendmmsg_calls;
-    check("a batch of allowed messages is sent",
-          sendmmsg(3, batch, 2, 0) == 2 && sendmmsg_calls == sendmmsg_before + 1);
-    check("the hook finds sendmmsg on first use", real_sendmmsg == fake_sendmmsg);
-
-    first_length = fill_destination(&first, "192.0.2.1", 81);
-    memset(batch, 0, sizeof(batch));
-    batch[0].msg_hdr.msg_name = &first;
-    batch[0].msg_hdr.msg_namelen = first_length;
-    sendmmsg_before = sendmmsg_calls;
-    errno = 0;
-    check("a batch whose first message is disallowed is refused",
-          sendmmsg(3, batch, 1, 0) == -1 && errno == EACCES && sendmmsg_calls == sendmmsg_before);
-
-    first_length = fill_destination(&first, "192.0.2.1", 80);
-    second_length = fill_destination(&second, "192.0.2.1", 81);
-    memset(batch, 0, sizeof(batch));
-    batch[0].msg_hdr.msg_name = &first;
-    batch[0].msg_hdr.msg_namelen = first_length;
-    batch[1].msg_hdr.msg_name = &second;
-    batch[1].msg_hdr.msg_namelen = second_length;
-    sendmmsg_before = sendmmsg_calls;
-    check("a batch stops at the first disallowed message, sending the prefix",
-          sendmmsg(3, batch, 2, 0) == 1 && sendmmsg_calls == sendmmsg_before + 1);
-
-    batch[0].msg_hdr = (struct msghdr){0};
-    sendmmsg_before = sendmmsg_calls;
-    check("a batch message with no destination is on a connected socket and passes",
-          sendmmsg(3, batch, 1, 0) == 1 && sendmmsg_calls == sendmmsg_before + 1);
+    test_datagram_hooks(&unix_destination);
+    test_batch_hook();
 }
 
 /* What a bind through the hook did. */
@@ -806,6 +835,15 @@ static enum bind_result bind_outcome(int socket_type, const char *address, uint1
     return result;
 }
 
+/* The bind hook.
+ *
+ * With no [bind] rule the hook passes every bind, matching Landlock leaving bind
+ * unrestricted when no bind port is named. With a bind rule, a TCP bind to an allowed
+ * local address passes, and to a disallowed address or port is refused. Only TCP is
+ * filtered, matching Landlock's TCP-only bind right: a datagram bind passes even where
+ * the address is not listed. A non-INET family is left to other layers. A descriptor
+ * whose type cannot be read passes, since the hook cannot tell it is TCP; a closed
+ * descriptor makes getsockopt fail. */
 static void test_bind(void) {
     struct sockaddr_storage local;
     struct sockaddr unix_local;
@@ -814,34 +852,25 @@ static void test_bind(void) {
     int calls_before;
     printf("\nThe bind hook\n");
 
-    /* With no [bind] rule the hook passes every bind, matching Landlock leaving bind
-     * unrestricted when no bind port is named. */
     policy_load(&bind_policy, nullptr);
     real_bind = nullptr;
     check("with no bind rule a bind passes", bind_outcome(SOCK_STREAM, "127.0.0.1", 8080) == BIND_BOUND);
     check("the hook finds bind on first use", real_bind == fake_bind);
 
-    /* With a bind rule, a TCP bind to an allowed local address passes, and to a disallowed
-     * address or port is refused. */
     load_bind_rules("127.0.0.1 8080\n");
     check("a TCP bind to an allowed local address passes", bind_outcome(SOCK_STREAM, "127.0.0.1", 8080) == BIND_BOUND);
     check("a TCP bind to a disallowed local address is refused", bind_outcome(SOCK_STREAM, "0.0.0.0", 8080) == BIND_DENIED);
     check("a TCP bind to a disallowed port is refused", bind_outcome(SOCK_STREAM, "127.0.0.1", 9090) == BIND_DENIED);
     check("an IPv6 TCP bind is filtered too", bind_outcome(SOCK_STREAM, "::1", 8080) == BIND_DENIED);
 
-    /* Only TCP is filtered, matching Landlock's TCP-only bind right: a datagram bind passes
-     * even where the address is not listed. */
     check("a UDP bind is not filtered and passes", bind_outcome(SOCK_DGRAM, "0.0.0.0", 8080) == BIND_BOUND);
 
-    /* A non-INET family is left to other layers. */
     memset(&unix_local, 0, sizeof(unix_local));
     unix_local.sa_family = AF_UNIX;
     calls_before = bind_calls;
     check("a bind of another family passes to other layers",
-          bind(3, &unix_local, sizeof(sa_family_t)) == 0 && bind_calls == calls_before + 1);
+          bind(FAKE_SOCKET_DESCRIPTOR, &unix_local, sizeof(sa_family_t)) == 0 && bind_calls == calls_before + 1);
 
-    /* A descriptor whose type cannot be read passes, since the hook cannot tell it is TCP;
-     * a closed descriptor makes getsockopt fail. */
     closed_descriptor = socket(AF_INET, SOCK_STREAM, 0);
     close(closed_descriptor);
     length = fill_destination(&local, "0.0.0.0", 8080);
@@ -855,14 +884,14 @@ static void test_bind(void) {
 int main(void) {
     if (mkdtemp(rules_directory) == nullptr) {
         perror("mkdtemp");
-        return 2;
+        return HARNESS_SETUP_FAILURE;
     }
     snprintf(rules_path, sizeof(rules_path), "%s/rules", rules_directory);
     snprintf(link_path, sizeof(link_path), "%s/link", rules_directory);
     write_rules(POLICY_RULES);
     if (symlink(rules_path, link_path) != 0) {
         perror("symlink");
-        return 2;
+        return HARNESS_SETUP_FAILURE;
     }
 
     setenv("NETBLOCKER_CONF", rules_path, 1);

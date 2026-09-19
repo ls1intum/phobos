@@ -17,7 +17,7 @@ while [[ "${1:-}" == --* ]]; do
     *) break ;;
   esac
 done
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] [--netblocker-so <path>] [--connect-guard-bin <path>] <SPEC_DIR> -- <cmd...>" >&2; exit 2; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] [--netblocker-so <path>] [--connect-guard-bin <path>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created if this layer ends before it hands over,

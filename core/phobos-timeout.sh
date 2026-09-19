@@ -17,7 +17,7 @@ while [[ "${1:-}" == --* ]]; do
     *) break ;;
   esac
 done
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-timeout.sh [--debug] [--timeout-bin <path>] <SPEC_DIR> -- <cmd...>" >&2; exit 2; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-timeout.sh [--debug] [--timeout-bin <path>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created. When a timeout is set this layer waits, so this
@@ -35,7 +35,7 @@ if [[ ! -s "${SPEC_DIR}/timeout.sec" ]]; then
 fi
 timeout_sec="$(<"${SPEC_DIR}/timeout.sec")"
 
-debug_log timeout "run" "${TIMEOUT_BIN}" --kill-after=5s "${timeout_sec}s" "$@"
+debug_log timeout "run" "${TIMEOUT_BIN}" "--kill-after=${PHB_KILL_AFTER_SECONDS}s" "${timeout_sec}s" "$@"
 
 # No --foreground: GNU timeout puts the command in a new process group and signals the whole
 # group, so the kill reaches the command's children too. --kill-after escalates to SIGKILL for
@@ -44,7 +44,7 @@ debug_log timeout "run" "${TIMEOUT_BIN}" --kill-after=5s "${timeout_sec}s" "$@"
 # itself back to the default disposition), and it is the SIGKILL that stops such a command.
 start_microseconds="$(epoch_realtime_microseconds "$EPOCHREALTIME")"
 set +e
-"${TIMEOUT_BIN}" "--kill-after=5s" "${timeout_sec}s" "$@"
+"${TIMEOUT_BIN}" "--kill-after=${PHB_KILL_AFTER_SECONDS}s" "${timeout_sec}s" "$@"
 rc=$?
 set -e
 elapsed_microseconds=$(( $(epoch_realtime_microseconds "$EPOCHREALTIME") - start_microseconds ))

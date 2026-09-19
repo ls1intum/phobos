@@ -18,6 +18,9 @@ import pathlib
 import subprocess
 import sys
 
+# How long the helper may run before the test gives up on it.
+HELPER_TIMEOUT_SECONDS = 60
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 HELPER = REPO_ROOT / "var" / "tmp" / "helpers" / "make_lang_sets.py"
 
@@ -33,7 +36,7 @@ def run_make_lang_sets(directory: pathlib.Path, lang: str = "java") -> subproces
         ],
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=HELPER_TIMEOUT_SECONDS,
         check=False,
     )
 

@@ -5,6 +5,7 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=phobos-common.sh
 source "${HERE}/phobos-common.sh"
 
+# Prints how to call phobos.sh and ends with PHB_EXIT_USAGE.
 usage() {
   cat >&2 <<USAGE
 Usage:
@@ -54,7 +55,7 @@ Notes:
   waits for the command removes it: the timeout layer when a timeout bounds the run, since the
   filesystem layer is then group-killed with the command, and the filesystem layer otherwise.
 USAGE
-  exit 2
+  exit "${PHB_EXIT_USAGE}"
 }
 
 [[ $# -lt 1 ]] && usage
