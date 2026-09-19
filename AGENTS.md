@@ -56,10 +56,7 @@ fails, and the sandbox does not start.
   are where a carriage return breaks the sandbox rather than a tool.
 - Changing the line endings of a file something reads at run time is a behaviour change, so
   the pull request says how the result was verified, by a Docker build where the file is a
-  Dockerfile. One exception was made when ls1intum/phobos#15 normalised the last CRLF files:
-  `squid/HTTP_PROXY_SQUID_Dockerfile` stops at a parse error and cannot be built, so it was
-  held to the same parse error and lint warning before and after instead. The exception
-  covers that file and nothing else.
+  Dockerfile.
 - To see whether anything is stored with CRLF rather than trusting this file:
   `git ls-files --eol | grep crlf`.
 

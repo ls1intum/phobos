@@ -4,9 +4,8 @@ orchestrate.py – prune, merge & build the Base*.cfg policy files that
 `core/phobos-policy.sh` applies at run time. Only the discovery (pruning) phase
 uses Bubblewrap; the run phase is enforced by Landlock, not Bubblewrap.
 
-Refactored to consume *pre‑generated* per‑exercise artifacts (.paths/.json) and a
-cumulative `TailPhobos.cfg` emitted upstream by `run_minimal_fs_all.sh` +
-`emit_artifacts.py`.
+Refactored to consume *pre‑generated* per‑exercise artifacts (.paths/.json) emitted
+upstream by `run_minimal_fs_all.sh` + `emit_artifacts.py`.
 
 ### Outputs (all in /var/tmp/opt/core/config)
 * **BasePhobos.cfg**            – **UNION** of bindings from *all* languages →
@@ -43,11 +42,11 @@ ap = argparse.ArgumentParser(
     description=textwrap.dedent(__doc__))
 
 ap.add_argument('--langs', required=True,
-                help='comma‑separated: java,python,c')
+                help='comma‑separated: java,python')
 ap.add_argument('--tests-dir', default='/var/tmp/testing-dir',
                 help='Root that contains <lang>/ sub‑dirs with exercises (passed to prune script).')
 ap.add_argument('--path-dir', default='/var/tmp/path_sets',
-                help='Where <lang>_*.paths, *.json & TailPhobos.cfg live (input).')
+                help='Where <lang>_*.paths and *.json live (input).')
 ap.add_argument('--helpers-dir', default='/var/tmp/helpers',
                 help='Where helper scripts (make_lang_sets.py) reside.')
 ap.add_argument('--jobs', type=int, default=os.cpu_count() or 4)
@@ -174,25 +173,18 @@ def build_runtime_tail(runtime_chdir: str) -> None:
     """
     Write CORE_DIR/TailPhobos.cfg holding only the runtime chdir.
 
-    A pruning run's TailPhobos.cfg carries the Bubblewrap mount and namespace flags its
-    discovery used (--proc, --dev, --share-net, --unshare-*, --new-session) and a
-    per-exercise --chdir. The runtime is phobos-landlock, and it accepts none of those
-    Bubblewrap flags: they are not Landlock concepts, and it exits on an option it does
-    not know. phobos.sh appends every tail token to phobos-landlock, so a tail carrying
-    a Bubblewrap flag would fail every run.
+    A pruning run measures under Bubblewrap mount and namespace flags (--proc, --dev,
+    --share-net, --unshare-*, --new-session) and a per-exercise --chdir. The runtime is
+    phobos-landlock, and it accepts none of those Bubblewrap flags: they are not Landlock
+    concepts, and it exits on an option it does not know. phobos.sh appends every tail
+    token to phobos-landlock, so a tail carrying a Bubblewrap flag would fail every run.
 
     Network intent reaches the runtime through the [connect] section rather than the tail,
     and a namespace is the container's boundary rather than Landlock's. So the runtime
     tail is the stable runtime chdir and nothing else; the pruning run's per-exercise
     chdir is ephemeral and is discarded.
     """
-    src_tail = PATH_DIR / 'TailPhobos.cfg'
     dst_tail = CORE_DIR / 'TailPhobos.cfg'
-
-    if not src_tail.exists():
-        print('\033[33m[warn]\033[0m TailPhobos.cfg missing in', PATH_DIR)
-        return
-
     dst_tail.write_text(f'--chdir {runtime_chdir}\n')
     print('  • wrote TailPhobos.cfg (runtime chdir set to', runtime_chdir + ')')
 

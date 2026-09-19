@@ -38,7 +38,7 @@ is a path set: every path the run needs, with the access mode it needs.
 **Sandbox application, at grading time.** The submission runs with only those paths mounted,
 everything else replaced by empty tmpfs. Network access goes through a preload library that
 intercepts name resolution and connection calls and permits only the hosts the discovery
-phase recorded, with a Squid proxy available for the cases that need one. A timeout layer
+phase recorded. A timeout layer
 bounds the run.
 
 The point of the split is that the expensive, fragile part happens once per language
@@ -86,12 +86,9 @@ yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 ```
 
-Two of those are narrower than they look. `bandit` runs over exactly two directories, not the
+One of those is narrower than it looks: `bandit` runs over exactly two directories, not the
 whole tree, because everything else Python here is fixture. `hadolint` matches `Dockerfile*` at
-any depth, but `-name` anchors at the start of the base name, so it reaches the five under
-`docker/` and not `squid/HTTP_PROXY_SQUID_Dockerfile`. That exclusion is deliberate: that file
-fails hadolint and cannot build either, because it copies directories this repository does not
-have. Repairing or deleting it is a decision about the file rather than about linting. CI runs
+any depth, which reaches the four under `docker/`. CI runs
 shellcheck, cppcheck and hadolint inside pinned container images; the commands above assume the
 tools are installed locally and will differ in version, which is the usual reason a local run
 and CI disagree.
@@ -129,8 +126,7 @@ core/                      the sandbox itself
   phobos-timeout.sh        the timeout layer
   phobos-common.sh         shared helpers, sourced by the others
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
-ld_preloader/              netblocker sources, its own allow-list, and the library built from them
-squid/                     the egress proxy image and its configuration
+ld_preloader/              the netblocker sources (the library is built from them in the image)
 docker/prune_phase/        one image per language, plus the orchestrator
 docker/run_phase/          the image an exercise actually runs in
 tests/                     the acceptance and probe suites

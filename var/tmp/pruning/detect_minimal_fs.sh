@@ -4,12 +4,10 @@ set -euo pipefail
 
 # ── logging ──────────────────────────────────────────────────────────────────
 err()   { echo -e "\e[31m[error]\e[0m $*" >&2; exit 1; }
-warn()  { echo -e "\e[33m[warn]\e[0m  $*" >&2; }
 # return 0, because without it the && returns 1 whenever logging is off and set -e
 # ends the run at the first call. run_minimal_fs_all.sh carried the same defect: a
 # prune without --verbose could never get past its first log line.
 log()   { [[ "${LOG_ENABLED:-0}" -eq 1 ]] && echo "[LOG] $*"; return 0; }
-error() { err "$@"; }
 
 # returns 0 if $1 has prefix of any subsequent args
 # Whether a path is one of the listed ones, or lives under it. By path component, not

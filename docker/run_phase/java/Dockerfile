@@ -33,7 +33,6 @@ COPY phobos-landlock*.h           ${PHOBOS_HOME}/
 COPY phobos-connect-guard.c       ${PHOBOS_HOME}/
 COPY config/BaseLanguage-java.cfg                     ${PHOBOS_HOME}/
 COPY config/TailPhobos.cfg                     ${PHOBOS_HOME}/
-COPY allowedList.cfg                  ${PHOBOS_HOME}/
 # -static-pie rather than -static: plain -static overrides the -fPIE default and
 # produces a fixed-address executable, so the binary that applies the sandbox
 # would be the one part of the image without address randomisation.
@@ -58,5 +57,5 @@ RUN readelf -h ${PHOBOS_HOME}/phobos-landlock > /tmp/wrapper-header.txt \
  && grep -q 'BIND_NOW' /tmp/library-dynamic.txt \
  && rm -f /tmp/wrapper-header.txt /tmp/wrapper-dynamic.txt /tmp/guard-header.txt /tmp/guard-dynamic.txt /tmp/library-dynamic.txt
 RUN chmod +x ${PHOBOS_HOME}/*.sh ${PHOBOS_HOME}/*.cfg \
- && chmod +w ${PHOBOS_HOME}/allowedList.cfg && ln -sf phobos.sh ${PHOBOS_HOME}/phobos
+ && ln -sf phobos.sh ${PHOBOS_HOME}/phobos
 ENV PATH=${PHOBOS_HOME}:$PATH

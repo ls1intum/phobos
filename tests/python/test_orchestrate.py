@@ -197,6 +197,14 @@ def test_the_runtime_tail_drops_the_bubblewrap_flags(tmp_path):
         assert flag not in written, f"{flag} should have been dropped, got {written!r}"
 
 
+def test_the_runtime_tail_needs_no_tail_from_the_pruning_run(tmp_path):
+    """The runtime tail is derived from the runtime chdir alone, so it is written even
+    when no pruning run left a tail of its own behind."""
+    result = run_orchestrator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert runtime_tail(tmp_path).split() == ["--chdir", "/var/tmp/testing-dir"]
+
+
 def test_the_runtime_tail_is_only_the_runtime_chdir(tmp_path):
     """The pruning run's per-exercise chdir is ephemeral, so the runtime tail is exactly
     the stable runtime chdir and nothing else."""

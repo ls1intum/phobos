@@ -4,9 +4,7 @@
 # source it, never here, so SC2034 would fire on all of them by design.
 # shellcheck disable=SC2034
 set -euo pipefail
-PHB_OK=0
 PHB_EPOLICY=11
-PHB_EBASE=13
 PHB_ETIMEOUT=14
 PHB_ERUNTIME=15
 # The filesystem sections, each granting exactly its own phobos-landlock right.
