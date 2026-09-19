@@ -106,9 +106,8 @@ FILE *__wrap_fdopen(int descriptor, const char *mode) {
 /* -------------------------------------------------- a resolver and a connect */
 
 /* What the stand-in resolver answers for a name. "unprintable" is an address of a
- * family getnameinfo cannot write as text. ".wild.test" keeps its leading dot because
- * that is the name the filter asks for when it looks up the suffix of "*.wild.test",
- * a behaviour it keeps rather than one this suite endorses. */
+ * family getnameinfo cannot write as text. "a.wild.test" is a name below the domain
+ * wildcard "*.wild.test", whose addresses become reachable only through its lookup. */
 struct fake_host {
     const char *name;
     const char *addresses[3];
@@ -117,7 +116,7 @@ struct fake_host {
 static const struct fake_host FAKE_HOSTS[] = {
     { "service.test", { "192.0.2.10", "2001:db8::10", nullptr } },
     { "mixed.test", { "unprintable", "192.0.2.20", nullptr } },
-    { ".wild.test", { "unprintable", "203.0.113.7", "203.0.113.8" } },
+    { "a.wild.test", { "unprintable", "203.0.113.7", "203.0.113.8" } },
 };
 
 /* One answer, its address in the same allocation, as the C library lays one out, so
@@ -574,6 +573,8 @@ static void test_address_cache(void) {
     check("an every-port authorisation for a recorded address is its own entry", cache.entry_count == 3);
     address_cache_record(&cache, "192.0.2.1", 81, false);
     check("another single port for a recorded address is its own entry", cache.entry_count == 4);
+    address_cache_record(&cache, "192.0.2.1", 81, false);
+    check("recording again an authorisation newer than others adds nothing", cache.entry_count == 4);
     fail_next_calloc = true;
     address_cache_record(&cache, "192.0.2.9", 1, false);
     check("an entry that cannot be allocated is not recorded",
@@ -631,8 +632,7 @@ static const char POLICY_RULES[] = "service.test 443\n"
                                    "192.0.2.1 80\n"
                                    "198.51.100.0/24\n"
                                    "* 25\n"
-                                   "*.wild.test 8080\n"
-                                   "*.none.test\n";
+                                   "*.wild.test 8080\n";
 
 static void test_policy(void) {
     printf("\nWhat the policy answers\n");
@@ -653,13 +653,15 @@ static void test_policy(void) {
     check("'*' with a port permits any address on it", policy_permits_connection(&policy, "203.0.113.5", 25));
     check("a host name is not an address to connect to", !policy_permits_connection(&policy, "service.test", 443));
     check("the empty text of another family is refused", !policy_permits_connection(&policy, "", 0));
-    check("a domain wildcard permits an address its suffix resolves to",
+    check("a domain wildcard by itself permits no address a lookup did not record",
+          !policy_permits_connection(&policy, "203.0.113.7", 8080));
+    policy_record_resolution(&policy, "a.wild.test", "203.0.113.7");
+    check("a name below a domain wildcard makes its resolved address reachable on the port",
           policy_permits_connection(&policy, "203.0.113.7", 8080));
-    check("that lookup recorded the rest of its answer", address_cache_permits(&policy.cache, "203.0.113.8", 8080));
-    check("a domain wildcard refuses an address its suffix does not resolve to",
+    check("but not on a port the wildcard does not grant",
+          !policy_permits_connection(&policy, "203.0.113.7", 9));
+    check("and no address the name did not resolve to",
           !policy_permits_connection(&policy, "203.0.113.9", 8080));
-    check("a domain wildcard refuses a port it does not grant",
-          !policy_permits_connection(&policy, "203.0.113.9", 9));
 }
 
 static void test_hooks(void) {
@@ -871,7 +873,7 @@ int main(void) {
     setenv("NETBLOCKER_CONF", rules_path, 1);
     netblocker_initialise();
     printf("Loading the library\n");
-    check("the rules NETBLOCKER_CONF names are loaded", rule_count() == 8);
+    check("the rules NETBLOCKER_CONF names are loaded", rule_count() == 7);
     check("the functions the hooks hand calls to are found",
           real_getaddrinfo == fake_getaddrinfo && real_connect == fake_connect
               && real_bind == fake_bind && real_sendto == fake_sendto
