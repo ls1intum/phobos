@@ -61,7 +61,8 @@ check "the base execute right is not removed"       "/usr" "$(cat "$NSPEC/execut
 # An exercise may grant a right, and name a path, the base did not: the model is additive.
 WSPEC="$(fresh_spec)"
 printf '[write]\n/usr\n[read]\n/opt/extra\n' > "$WORK/widen.cfg"
-out="$(bash "$CORE_X/phobos-policy.sh" --spec-dir "$WSPEC" --config "$WORK/widen.cfg" 2>&1)"; rc=$?
+out="$(bash "$CORE_X/phobos-policy.sh" --spec-dir "$WSPEC" --config "$WORK/widen.cfg" 2>&1)"
+rc=$?
 if [[ "$rc" -eq 0 ]]; then ok "an exercise widening the sandbox is accepted (additive model)"; else bad "an exercise widening the sandbox is accepted (additive model)" "exit 0" "exit $rc: $out"; fi
 check "the exercise adds write on a base path"      "/usr"       "$(grep -Fx /usr "$WSPEC/write.paths")"
 check "the base write path is still present"         "/tmp"       "$(grep -Fx /tmp "$WSPEC/write.paths")"

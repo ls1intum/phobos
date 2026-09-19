@@ -73,6 +73,7 @@ accepts() {
   check "$name" "0|value=$want" "$(run_parser "$body")"
 }
 
+# Asserts a policy body is refused with PHB-EPOLICY. PHB_EPOLICY is 11.
 rejects() {
   local name=$1
   local body=$2
@@ -82,7 +83,6 @@ rejects() {
   res=$(run_parser "$body")
   rc=${res%%|*}
   out=${res#*|}
-  # PHB_EPOLICY is 11.
   if [[ "$rc" == "$PHB_EPOLICY" && "$out" == *"PHB-EPOLICY"* ]]; then
     ok "$name"
   else
@@ -251,7 +251,10 @@ parsed_net_rules() {
 
 # Asserts parse_cfg_policy refuses a policy body with PHB-EPOLICY.
 rejects_net() {
-  local name=$1 body=$2 out rc
+  local name=$1
+  local body=$2
+  local out
+  local rc
   printf '%s\n' "$body" > "$WORK/net.cfg"
   out=$(bash -c 'source "$1/phobos-common.sh"; parse_cfg_policy "$2"' _ "$CORE" "$WORK/net.cfg" 2>&1)
   rc=$?

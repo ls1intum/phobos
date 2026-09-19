@@ -394,7 +394,10 @@ fi
 guard_refuses_ambiently_allowed() {
   local label="$1"
   shift
-  local base_out base_rc g_out g_rc
+  local base_out
+  local base_rc
+  local g_out
+  local g_rc
   base_out="$("$WORK/probe" "$@" 2>&1)"
   base_rc=$?
   if [[ $base_rc -ne 0 ]]; then

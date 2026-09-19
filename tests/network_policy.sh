@@ -28,7 +28,7 @@ run_rules() {
   printf '%s\n' "$body" > "$WORK/net.rules"
   local out
   out="$(
-    # shellcheck source=/dev/null
+    # shellcheck source=../core/phobos-common.sh
     source "${CORE}/phobos-common.sh"
     args=()
     build_network_args args "$WORK/net.rules" 2>"$WORK/log"
@@ -42,7 +42,8 @@ field() { cut -d'|' -f"$2" <<<"$1"; }
 
 echo "== a concrete port is enforced by the kernel =="
 r="$(run_rules "example.com 443")"
-check_rc="$(field "$r" 1)"; check_args="$(field "$r" 2)"
+check_rc="$(field "$r" 1)"
+check_args="$(field "$r" 2)"
 [[ "$check_rc" == 0 ]] && ok "an external concrete port is accepted" || bad "an external concrete port is accepted" "exit 0" "exit $check_rc"
 [[ "$check_args" == "--connect-tcp 443" ]] && ok "it emits --connect-tcp for the port" || bad "it emits --connect-tcp for the port" "--connect-tcp 443" "$check_args"
 
@@ -93,7 +94,7 @@ run_bind() {
   printf '%s\n' "$body" > "$WORK/bind.rules"
   local out
   out="$(
-    # shellcheck source=/dev/null
+    # shellcheck source=../core/phobos-common.sh
     source "${CORE}/phobos-common.sh"
     args=()
     build_bind_args args "$WORK/bind.rules" 2>"$WORK/blog"

@@ -481,14 +481,27 @@ static int phase_one(const char *self, const char *scenario) {
 
 /* ------------------------- phase two ------------------------- */
 
+/* No lookup happens first, so nothing may authorise this address. */
+static void run_no_lookup_scenario(const unsigned short *v4) {
+  printf("without_lookup=%s\n", connect_result(AF_INET, "127.0.0.1", v4[0]));
+}
+
+/* The same rule as literal_ip, reached over UDP: sendto and sendmsg name the
+   destination on an unconnected socket, which the connect hook never sees. */
+static void run_datagram_scenario(const unsigned short *v4) {
+  printf("sendto_permitted=%s\n", sendto_result(AF_INET, "127.0.0.1", v4[0]));
+  printf("sendto_other=%s\n", sendto_result(AF_INET, "127.0.0.1", v4[1]));
+  printf("sendmsg_permitted=%s\n", sendmsg_result(AF_INET, "127.0.0.1", v4[0]));
+  printf("sendmsg_other=%s\n", sendmsg_result(AF_INET, "127.0.0.1", v4[1]));
+}
+
 static int run_scenario(const char *scenario, int write_fd, const unsigned short *v4, const unsigned short *v6) {
   if (!strcmp(scenario, "port_specific")) {
     printf("resolve=%s\n", resolve_without_service("localhost", AF_INET) == 0 ? "ok" : "failed");
     printf("permitted_port=%s\n", connect_result(AF_INET, "127.0.0.1", v4[0]));
     printf("other_port=%s\n", connect_result(AF_INET, "127.0.0.1", v4[1]));
   } else if (!strcmp(scenario, "no_lookup")) {
-    /* No lookup happens first, so nothing may authorise this address. */
-    printf("without_lookup=%s\n", connect_result(AF_INET, "127.0.0.1", v4[0]));
+    run_no_lookup_scenario(v4);
   } else if (!strcmp(scenario, "multi_port")) {
     printf("resolve=%s\n", resolve_without_service("localhost", AF_INET) == 0 ? "ok" : "failed");
     printf("first_port=%s\n", connect_result(AF_INET, "127.0.0.1", v4[0]));
@@ -503,12 +516,7 @@ static int run_scenario(const char *scenario, int write_fd, const unsigned short
     printf("permitted_port=%s\n", connect_result(AF_INET, "127.0.0.1", v4[0]));
     printf("other_port=%s\n", connect_result(AF_INET, "127.0.0.1", v4[1]));
   } else if (!strcmp(scenario, "datagram")) {
-    /* The same rule as literal_ip, reached over UDP: sendto and sendmsg name the
-       destination on an unconnected socket, which the connect hook never sees. */
-    printf("sendto_permitted=%s\n", sendto_result(AF_INET, "127.0.0.1", v4[0]));
-    printf("sendto_other=%s\n", sendto_result(AF_INET, "127.0.0.1", v4[1]));
-    printf("sendmsg_permitted=%s\n", sendmsg_result(AF_INET, "127.0.0.1", v4[0]));
-    printf("sendmsg_other=%s\n", sendmsg_result(AF_INET, "127.0.0.1", v4[1]));
+    run_datagram_scenario(v4);
   } else if (!strcmp(scenario, "literal_ip_any")) {
     printf("first_port=%s\n", connect_result(AF_INET, "127.0.0.1", v4[0]));
     printf("second_port=%s\n", connect_result(AF_INET, "127.0.0.1", v4[1]));

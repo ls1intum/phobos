@@ -27,7 +27,7 @@ hdr() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 ok()   { PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m %s\n' "$*"; }
 bad()  { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$*"; }
 
-hdr "0. Umgebung"
+hdr "0. Environment"
 echo "  kernel:  $(uname -r) ($(uname -m))"
 # The wrapper names it "Landlock version", which is the same number the kernel calls
 # its ABI version. Matching on "Landlock ABI" printed a blank here and nothing asserts
@@ -35,7 +35,7 @@ echo "  kernel:  $(uname -r) ($(uname -m))"
 echo "  landlock ABI: $(phobos-landlock --verbose --rights=rx /usr -- /bin/true 2>&1 | sed -n 's/.*Landlock version \([0-9]*\).*/\1/p')"
 echo "  caps:    $(grep CapEff /proc/self/status)"
 
-# --- Testdaten ------------------------------------------------------------
+# --- Test data ------------------------------------------------------------
 mkdir -p "$TD/probe" "$TD/allowed-ro" "$TD/allowed-rw" /var/tmp/secret
 echo "public-data" > "$TD/allowed-ro/data.txt"
 echo "TOP-SECRET-TESTCASE" > /var/tmp/secret/secret.txt
@@ -44,15 +44,15 @@ mkdir -p /root && echo "home-secret" > /root/secret-home.txt
 javac -d "$TD/probe" /testsuite/PhobosProbe.java /testsuite/NetServers.java || exit 1
 cp /testsuite/BaseLanguage-java.cfg "$CORE/BaseLanguage-java.cfg"
 
-# --- Server ausserhalb der Sandbox ---------------------------------------
+# --- Servers outside the sandbox ----------------------------------------
 java -cp "$TD/probe" NetServers "$ALLOWED_PORT" "$DENIED_PORT" > /tmp/servers.log 2>&1 &
 SRV=$!
 for _ in $(seq 1 "$SERVER_WAIT_ATTEMPTS"); do grep -q servers-ready /tmp/servers.log 2>/dev/null && break; sleep "$SERVER_WAIT_SECONDS"; done
-grep -q servers-ready /tmp/servers.log || { echo "Server kamen nicht hoch"; cat /tmp/servers.log; exit 1; }
-echo "  servers: ${ALLOWED_PORT} (erlaubt) + ${DENIED_PORT} (verboten) laufen"
+grep -q servers-ready /tmp/servers.log || { echo "The servers did not come up"; cat /tmp/servers.log; exit 1; }
+echo "  servers: ${ALLOWED_PORT} (allowed) + ${DENIED_PORT} (forbidden) running"
 
-# --- Helfer ---------------------------------------------------------------
-# probe <erwartet OK|DENIED> <beschreibung> <probe-args...>
+# --- Helpers --------------------------------------------------------------
+# probe <expected OK|DENIED> <description> <probe-args...>
 probe() {
   local want="$1"; shift
   local desc="$1"; shift
@@ -65,51 +65,51 @@ probe() {
   if [[ "$got" == "$want" ]]; then
     ok "$desc -> $got"
   else
-    bad "$desc -> erwartet $want, bekommen ${got:-<keine RESULT-Zeile>}"
+    bad "$desc -> expected $want, got ${got:-<no RESULT line>}"
     printf '%s\n' "$out" | sed 's/^/       | /' | tail -n "$LOG_EXCERPT_LINES"
   fi
 }
 
-hdr "1. Dateizugriff, den die Policy NICHT erlaubt (Landlock muss sperren)"
-probe DENIED "lesen  /var/tmp/secret/secret.txt"    read  /var/tmp/secret/secret.txt
-probe DENIED "schreiben /var/tmp/secret/neu.txt"    write /var/tmp/secret/neu.txt
-probe DENIED "lesen  /root/secret-home.txt"         read  /root/secret-home.txt
-probe DENIED "schreiben $TD/nope.txt (Baum ist nur lesbar)" write "$TD/nope.txt"
+hdr "1. File access the policy does NOT allow (Landlock must block it)"
+probe DENIED "read   /var/tmp/secret/secret.txt"    read  /var/tmp/secret/secret.txt
+probe DENIED "write  /var/tmp/secret/new.txt"      write /var/tmp/secret/new.txt
+probe DENIED "read   /root/secret-home.txt"         read  /root/secret-home.txt
+probe DENIED "write  $TD/nope.txt (the tree is read-only)" write "$TD/nope.txt"
 
-hdr "2. Dateizugriff, den die Policy erlaubt (Landlock darf nicht stoeren)"
-probe OK "lesen  $TD/allowed-ro/data.txt"           read  "$TD/allowed-ro/data.txt"
-probe OK "schreiben $TD/allowed-rw/out.txt"         write "$TD/allowed-rw/out.txt"
+hdr "2. File access the policy allows (Landlock must not interfere)"
+probe OK "read   $TD/allowed-ro/data.txt"           read  "$TD/allowed-ro/data.txt"
+probe OK "write  $TD/allowed-rw/out.txt"             write "$TD/allowed-rw/out.txt"
 
-hdr "3. Netzwerk-Endpunkt, den die Policy NICHT erlaubt (libnetblocker muss sperren)"
+hdr "3. Network endpoint the policy does NOT allow (libnetblocker must block it)"
 probe DENIED "connect 127.0.0.1:${DENIED_PORT}"       connect 127.0.0.1 "$DENIED_PORT"
 
-hdr "4. Netzwerk-Endpunkt, den die Policy erlaubt (libnetblocker darf nicht stoeren)"
+hdr "4. Network endpoint the policy allows (libnetblocker must not interfere)"
 probe OK "connect 127.0.0.1:${ALLOWED_PORT}"           connect 127.0.0.1 "$ALLOWED_PORT"
 
-hdr "5. Timeout (JVM versucht aktiv, ihn per Shutdown-Hook zu blockieren)"
+hdr "5. Timeout (the JVM actively tries to block it with a shutdown hook)"
 START=$(date +%s)
 phobos.sh --config /testsuite/spin-timeout.cfg -- java -cp probe PhobosProbe spin > /tmp/spin.log 2>&1
 RC=$?
 ELAPSED=$(( $(date +%s) - START ))
-echo "  exit=$RC nach ${ELAPSED}s (PHB_ETIMEOUT=${PHB_ETIMEOUT} erwartet)"
+echo "  exit=$RC after ${ELAPSED}s (PHB_ETIMEOUT=${PHB_ETIMEOUT} expected)"
 sed 's/^/       | /' /tmp/spin.log | head -n "$LOG_EXCERPT_LINES"
 if [[ "$RC" -eq "$PHB_ETIMEOUT" ]]; then
-  ok "Timeout hat gegriffen trotz blockierendem Shutdown-Hook"
+  ok "The timeout took effect despite the blocking shutdown hook"
 else
-  bad "Timeout: exit $RC statt ${PHB_ETIMEOUT}"
+  bad "Timeout: exit $RC instead of ${PHB_ETIMEOUT}"
 fi
 if [[ "$ELAPSED" -ge "$SPIN_TIMEOUT_SECONDS" && "$ELAPSED" -le "$SPIN_LATEST_SECONDS" ]]; then
-  ok "Beendet nach ${ELAPSED}s (Deadline ${SPIN_TIMEOUT_SECONDS}s + kill-after ${PHB_KILL_AFTER_SECONDS}s)"
+  ok "Ended after ${ELAPSED}s (deadline ${SPIN_TIMEOUT_SECONDS}s + kill-after ${PHB_KILL_AFTER_SECONDS}s)"
 else
-  bad "Unplausible Dauer: ${ELAPSED}s"
+  bad "Implausible duration: ${ELAPSED}s"
 fi
 if pgrep -f "PhobosProbe spin" > /dev/null 2>&1; then
-  bad "Prozess laeuft nach dem Timeout weiter"
+  bad "The process is still running after the timeout"
 else
-  ok "Kein Restprozess nach dem Timeout"
+  ok "No leftover process after the timeout"
 fi
 
 kill "$SRV" 2>/dev/null
-hdr "Ergebnis"
-printf '  bestanden: %d, fehlgeschlagen: %d\n\n' "$PASS" "$FAIL"
+hdr "Result"
+printf '  passed: %d, failed: %d\n\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

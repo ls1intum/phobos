@@ -77,7 +77,8 @@ listener "$ALLOWED_PORT" & allowed_pid=$!
 listener "$DENIED_PORT" & denied_pid=$!
 sleep 1
 
-run() {  # port, extra landlock args...
+# Runs the raw-connect probe under phobos-landlock. Arguments: port, extra landlock args...
+run() {
     local port=$1; shift
     "$LANDLOCK" --rights=rx /opt --rights=rx /usr --rights=rx /lib --rights=rx "$WORK" "$@" \
         -- "$WORK/bypass" "$port" 2>&1

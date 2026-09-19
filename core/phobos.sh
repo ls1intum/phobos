@@ -5,6 +5,7 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=phobos-common.sh
 source "${HERE}/phobos-common.sh"
 
+# Prints how to call phobos.sh and ends with PHB_EXIT_USAGE.
 usage() {
   cat >&2 <<USAGE
 Usage:

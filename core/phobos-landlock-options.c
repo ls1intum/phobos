@@ -115,11 +115,12 @@ void remember_path_rule(struct options *options, const char *letters, const char
     options->path_rule_count++;
 }
 
+/* Records one --connect-tcp or --bind-tcp port. A port outside 1..65535 is a
+ * policy mistake, not something to pass on, and is refused. */
 static void remember_port(uint64_t *ports, size_t *count, const char *value, const char *what) {
     if (*count >= MAXIMUM_PORT_RULES) {
         exit_with_message(what);
     }
-    /* A port outside 1..65535 is a policy mistake, not something to pass on. */
     ports[*count] = (uint64_t)parse_number(value, 1, HIGHEST_TCP_PORT, "not a TCP port");
     (*count)++;
 }
@@ -140,7 +141,6 @@ void parse_arguments(int argument_count, char *arguments[], struct options *opti
             argument_index++;
             continue;
         }
-        /* Every remaining option takes a value, so it must not be the last word. */
         if (argument_index + 1 >= argument_count) {
             print_usage_and_exit();
         }

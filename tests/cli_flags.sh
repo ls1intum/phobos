@@ -152,7 +152,8 @@ echo "== --debug writes its trace to stderr, so the command's own stdout stays c
 # The filesystem layer runs the command under the pass-through stand-in, and --debug prints the
 # phobos-landlock invocation. That trace must not land on stdout, where it would corrupt output
 # a caller captures. stdout must carry only the command's own bytes.
-DBG_OUT="$WORK/dbg.out"; DBG_ERR="$WORK/dbg.err"
+DBG_OUT="$WORK/dbg.out"
+DBG_ERR="$WORK/dbg.err"
 bash "$CORE_X/phobos.sh" --spec-parent "$SPECS" --landlock-bin "$WORK/passthrough-landlock" \
   --debug -ntr -nnr -nrr --config "$BASE" -- /bin/echo debug-payload > "$DBG_OUT" 2>"$DBG_ERR"
 if [[ "$(cat "$DBG_OUT")" == "debug-payload" ]] && grep -q '\[phobos\]' "$DBG_ERR"; then
