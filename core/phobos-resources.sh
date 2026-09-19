@@ -9,7 +9,7 @@ source "${HERE}/phobos-common.sh"
 # the filesystem layer start it, and only when the resource limits are enabled, so there is no
 # enable flag to read. On its own, phobos-resources.sh SPEC -- CMD limits CMD.
 if [[ "${1:-}" == "--debug" ]]; then shift; fi
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-resources.sh [--debug] <SPEC_DIR> -- <cmd...>"; exit 2; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-resources.sh [--debug] <SPEC_DIR> -- <cmd...>" >&2; exit 2; }
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created if this layer ends before it hands over. The

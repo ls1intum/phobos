@@ -88,6 +88,8 @@ core/phobos.sh --config core/config/BaseLanguage-java.cfg -- ./gradlew test
 
 Run the grading container with **`--network none`** and with cgroup limits (`--memory`, `--pids-limit`, `--cpus`, and a size-bounded `--tmpfs` for scratch). Those are the outer wall Phobos relies on and cannot set for itself.
 
+stdout carries the command's own output and nothing else. Every message of Phobos itself, the `PHB-EPOLICY`, `PHB-ETIMEOUT`, `PHB-ERUNTIME` and `PHB-EDENY` reports among them, is written to stderr, and the exit status (11, 14 or 15 for a run Phobos stopped) is the contract a grader should read.
+
 To isolate which layer a failure belongs to, each layer can be turned off on its own:
 
 ```

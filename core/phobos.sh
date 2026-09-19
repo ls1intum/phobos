@@ -6,7 +6,7 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/phobos-common.sh"
 
 usage() {
-  cat <<USAGE
+  cat >&2 <<USAGE
 Usage:
   phobos.sh [layer options] [--config <file>]... -- <build_command> [args...]
   phobos.sh [layer options] [--config <file>]... <build_command> [args...]

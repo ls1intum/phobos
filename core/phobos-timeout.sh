@@ -18,7 +18,7 @@ while [[ "${1:-}" == --* ]]; do
     *) break ;;
   esac
 done
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-timeout.sh [--debug] [--timeout-bin <path>] <SPEC_DIR> -- <cmd...>"; exit 2; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-timeout.sh [--debug] [--timeout-bin <path>] <SPEC_DIR> -- <cmd...>" >&2; exit 2; }
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created. When a timeout is set this layer waits, so this

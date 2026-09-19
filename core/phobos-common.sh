@@ -24,7 +24,7 @@ PHB_NETWORK_DENIAL_PATTERN='EAI_AGAIN|EAI_FAIL|EAI_NONAME|Network is unreachable
 PHB_FILESYSTEM_DENIAL_PATTERN='Permission denied|EACCES|EROFS'
 _log()   { printf '%s\n' "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*" >&2; }
 die()    { _log "$1"; exit "${2:-1}"; }
-report() { printf '%s\n' "$1"; }
+report() { printf '%s\n' "$1" >&2; }
 uniq_keep_order() { awk '!seen[$0]++'; }
 depth_sort()      { awk '{print gsub(/\//,"/")+1 " " $0}' | sort -k1,1n -k2,2 | cut -d" " -f2-; }
 canon_paths() {
@@ -554,9 +554,9 @@ report_folded_widenings() {
 # and stays allowed; its effective set is the union, and the union is what the
 # kernel is handed, so the verbose output cannot disagree with what is enforced.
 #
-# The result goes to a named file rather than to stdout, because report() prints
-# on stdout and a refusal written while stdout is redirected would land in the
-# data file instead of in front of the person the message is for.
+# The result goes to a named file rather than to stdout, so that the function is
+# called plainly and never in a command substitution, whose subshell a refusal's
+# exit would end instead of the run.
 resolve_rights_hierarchy() {
   local table="$1"
   local output="$2"
@@ -662,8 +662,9 @@ is_loopback_host() {
 # Reads a "host port" allow-list, writing the concrete ports it names into the
 # second file and the first rule that names none into the third.
 #
-# Both results go to files rather than to stdout, because report() prints on
-# stdout and a refusal raised while stdout is captured would be swallowed.
+# Both results go to files rather than to stdout, so that the function is called
+# plainly and never in a command substitution, whose subshell a refusal's exit would
+# end instead of the run.
 #
 # net.rules holds pairs separated by a space, so the default field splitting is
 # what is wanted here: with IFS cleared, read puts the whole line into the first

@@ -167,6 +167,19 @@ else
     "stdout 'nofs-payload', stderr with the disabled-layer note" "stdout '$(cat "$DBG_OUT")', stderr '$(cat "$DBG_ERR")'"
 fi
 
+echo "== a refusal is written to stderr and leaves stdout to the command =="
+# A policy error ends the run before the command starts. Its message is for the person
+# reading the log, not part of the output a caller captures from the command.
+printf '[bogus]\n/x\n' > "$WORK/bogus.cfg"
+bash "$CORE_X/phobos.sh" --spec-parent "$SPECS" --landlock-bin "$WORK/passthrough-landlock" \
+  --config "$WORK/bogus.cfg" -- /bin/echo never > "$DBG_OUT" 2> "$DBG_ERR"
+if [[ ! -s "$DBG_OUT" ]] && grep -q 'PHB-EPOLICY' "$DBG_ERR"; then
+  ok "the PHB-EPOLICY refusal is on stderr and stdout stays empty"
+else
+  bad "the PHB-EPOLICY refusal is on stderr and stdout stays empty" \
+    "empty stdout, PHB-EPOLICY on stderr" "stdout '$(cat "$DBG_OUT")', stderr '$(cat "$DBG_ERR")'"
+fi
+
 echo
 printf '%d passed, %d failed\n' "$passed" "$failed"
 (( failed == 0 )) || exit 1
