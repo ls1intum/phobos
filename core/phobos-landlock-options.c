@@ -138,24 +138,19 @@ void parse_arguments(int argument_count, char *arguments[], struct options *opti
         const char *value = arguments[argument_index + 1];
         if (strncmp(argument, RIGHTS_PREFIX, RIGHTS_PREFIX_LENGTH) == 0) {
             remember_path_rule(options, argument + RIGHTS_PREFIX_LENGTH, value);
-        }
-        else if (strcmp(argument, "--connect-tcp") == 0) {
+        } else if (strcmp(argument, "--connect-tcp") == 0) {
             remember_port(options->connect_tcp_ports, &options->connect_tcp_port_count, value,
                           "too many --connect-tcp ports");
-        }
-        else if (strcmp(argument, "--bind-tcp") == 0) {
+        } else if (strcmp(argument, "--bind-tcp") == 0) {
             remember_port(options->bind_tcp_ports, &options->bind_tcp_port_count, value,
                           "too many --bind-tcp ports");
-        }
-        else if (strcmp(argument, "--chdir") == 0) {
+        } else if (strcmp(argument, "--chdir") == 0) {
             options->working_directory = value;
-        }
-        else if (strcmp(argument, "--minimum-landlock-version") == 0) {
+        } else if (strcmp(argument, "--minimum-landlock-version") == 0) {
             options->minimum_landlock_version =
                 (int)parse_number(value, 1, HIGHEST_KNOWN_LANDLOCK_VERSION,
                                   "not a usable Landlock version");
-        }
-        else {
+        } else {
             print_usage_and_exit();
         }
         argument_index += 2;

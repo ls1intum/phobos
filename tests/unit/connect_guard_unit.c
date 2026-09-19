@@ -121,8 +121,7 @@ struct behaviour {
 
 static struct behaviour *bx;
 
-static void reset_behaviour(void)
-{
+static void reset_behaviour(void) {
     memset(bx, 0, sizeof(*bx));
     bx->notif_recv_nr = __NR_connect;
     bx->seccomp_listener_result = 4;
@@ -147,8 +146,7 @@ static void reset_behaviour(void)
 extern void __gcov_dump(void) __attribute__((weak));
 void __real__exit(int status) __attribute__((noreturn));
 void __wrap__exit(int status) __attribute__((noreturn));
-void __wrap__exit(int status)
-{
+void __wrap__exit(int status) {
     if (__gcov_dump != NULL) {
         __gcov_dump();
     }
@@ -156,8 +154,7 @@ void __wrap__exit(int status)
 }
 
 void *__real_calloc(size_t count, size_t size);
-void *__wrap_calloc(size_t count, size_t size)
-{
+void *__wrap_calloc(size_t count, size_t size) {
     if (bx != NULL && bx->calloc_fails) {
         errno = ENOMEM;
         return NULL;
@@ -166,8 +163,7 @@ void *__wrap_calloc(size_t count, size_t size)
 }
 
 long __real_syscall(long number, ...);
-long __wrap_syscall(long number, ...)
-{
+long __wrap_syscall(long number, ...) {
     va_list arguments;
     va_start(arguments, number);
     unsigned long a1 = va_arg(arguments, unsigned long);
@@ -201,8 +197,7 @@ long __wrap_syscall(long number, ...)
     return __real_syscall(number, a1, a2, a3);
 }
 
-int __wrap_socketpair(int domain, int type, int protocol, int pair[2])
-{
+int __wrap_socketpair(int domain, int type, int protocol, int pair[2]) {
     (void)domain;
     (void)type;
     (void)protocol;
@@ -216,13 +211,11 @@ int __wrap_socketpair(int domain, int type, int protocol, int pair[2])
 }
 
 pid_t __real_fork(void);
-pid_t __wrap_fork(void)
-{
+pid_t __wrap_fork(void) {
     return (pid_t)bx->fork_result;
 }
 
-int __wrap_prctl(int option, ...)
-{
+int __wrap_prctl(int option, ...) {
     (void)option;
     if (bx->prctl_result != 0) {
         errno = EPERM;
@@ -231,15 +224,13 @@ int __wrap_prctl(int option, ...)
     return 0;
 }
 
-void (*__wrap_signal(int signum, void (*handler)(int)))(int)
-{
+void (*__wrap_signal(int signum, void (*handler)(int)))(int) {
     (void)signum;
     (void)handler;
     return NULL;
 }
 
-int __wrap_execvp(const char *file, char *const argv[])
-{
+int __wrap_execvp(const char *file, char *const argv[]) {
     (void)file;
     (void)argv;
     if (bx->execvp_returns) {
@@ -249,8 +240,7 @@ int __wrap_execvp(const char *file, char *const argv[])
     _exit(200); /* stands in for a successful exec */
 }
 
-pid_t __wrap_waitpid(pid_t pid, int *status, int options)
-{
+pid_t __wrap_waitpid(pid_t pid, int *status, int options) {
     (void)options;
     if (bx->waitpid_eintr_once) {
         bx->waitpid_eintr_once = 0;
@@ -263,8 +253,7 @@ pid_t __wrap_waitpid(pid_t pid, int *status, int options)
     return pid;
 }
 
-ssize_t __wrap_sendmsg(int fd, const struct msghdr *message, int flags)
-{
+ssize_t __wrap_sendmsg(int fd, const struct msghdr *message, int flags) {
     (void)fd;
     (void)message;
     (void)flags;
@@ -279,8 +268,7 @@ ssize_t __wrap_sendmsg(int fd, const struct msghdr *message, int flags)
     return bx->sendmsg_result;
 }
 
-ssize_t __wrap_recvmsg(int fd, struct msghdr *message, int flags)
-{
+ssize_t __wrap_recvmsg(int fd, struct msghdr *message, int flags) {
     (void)fd;
     (void)flags;
     if (bx->recvmsg_eintr_once) {
@@ -307,8 +295,7 @@ ssize_t __wrap_recvmsg(int fd, struct msghdr *message, int flags)
 
 ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned long liovcnt,
                                 const struct iovec *remote, unsigned long riovcnt,
-                                unsigned long flags)
-{
+                                unsigned long flags) {
     (void)pid;
     (void)riovcnt;
     (void)flags;
@@ -368,8 +355,7 @@ ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned l
     return (ssize_t)local->iov_len;
 }
 
-int __wrap_socket(int domain, int type, int protocol)
-{
+int __wrap_socket(int domain, int type, int protocol) {
     (void)domain;
     (void)type;
     (void)protocol;
@@ -380,8 +366,7 @@ int __wrap_socket(int domain, int type, int protocol)
     return bx->socket_result;
 }
 
-int __wrap_fcntl(int fd, int command, ...)
-{
+int __wrap_fcntl(int fd, int command, ...) {
     (void)fd;
     (void)command;
     if (bx->fcntl_fails) {
@@ -391,8 +376,7 @@ int __wrap_fcntl(int fd, int command, ...)
     return 0;
 }
 
-ssize_t __wrap_readlink(const char *path, char *buffer, size_t size)
-{
+ssize_t __wrap_readlink(const char *path, char *buffer, size_t size) {
     (void)path;
     if (bx->readlink_kind == 2) {
         errno = EACCES;
@@ -412,8 +396,7 @@ ssize_t __wrap_readlink(const char *path, char *buffer, size_t size)
     return (ssize_t)length;
 }
 
-int __wrap_connect(int fd, const struct sockaddr *address, socklen_t length)
-{
+int __wrap_connect(int fd, const struct sockaddr *address, socklen_t length) {
     (void)fd;
     (void)address;
     (void)length;
@@ -425,8 +408,7 @@ int __wrap_connect(int fd, const struct sockaddr *address, socklen_t length)
     return -1;
 }
 
-int __wrap_poll(struct pollfd *fds, nfds_t count, int timeout)
-{
+int __wrap_poll(struct pollfd *fds, nfds_t count, int timeout) {
     (void)timeout;
     (void)count;
     if (fds[0].events & POLLIN) {
@@ -467,8 +449,7 @@ int __wrap_poll(struct pollfd *fds, nfds_t count, int timeout)
     return bx->poll_result;
 }
 
-int __wrap_getsockopt(int fd, int level, int name, void *value, socklen_t *length)
-{
+int __wrap_getsockopt(int fd, int level, int name, void *value, socklen_t *length) {
     (void)fd;
     (void)level;
     (void)name;
@@ -482,8 +463,7 @@ int __wrap_getsockopt(int fd, int level, int name, void *value, socklen_t *lengt
     return 0;
 }
 
-int __wrap_ioctl(int fd, unsigned long request, ...)
-{
+int __wrap_ioctl(int fd, unsigned long request, ...) {
     (void)fd;
     va_list arguments;
     va_start(arguments, request);
@@ -555,8 +535,7 @@ int __wrap_ioctl(int fd, unsigned long request, ...)
 static int passed = 0;
 static int failed = 0;
 
-static void check(const char *what, bool condition)
-{
+static void check(const char *what, bool condition) {
     if (condition) {
         printf("ok    %s\n", what);
         passed++;
@@ -571,8 +550,7 @@ pid_t __real_waitpid(pid_t pid, int *status, int options);
 /* Runs the guard's main in a forked child of the test, with argv, and returns the
  * child's exit code. The guard's own fork is wrapped, so the child does not fork
  * again; this fork only isolates the exit() the guard makes on a setup failure. */
-static int run_main(char *const argv[])
-{
+static int run_main(char *const argv[]) {
     int count = 0;
     while (argv[count] != NULL) {
         count++;
@@ -588,8 +566,7 @@ static int run_main(char *const argv[])
 
 /* --------------------------------------------------------- the logic tests */
 
-static void test_rule_parsing(void)
-{
+static void test_rule_parsing(void) {
     reset_behaviour();
     char path[] = "/tmp/phobos-guard-rules.XXXXXX";
     int fd = mkstemp(path);
@@ -620,15 +597,13 @@ static void test_rule_parsing(void)
     check("the rule table does not overflow", connect_rule_count == MAXIMUM_RULES);
 }
 
-static bool permits_v4(const char *ip, uint16_t port)
-{
+static bool permits_v4(const char *ip, uint16_t port) {
     struct in_addr address;
     inet_pton(AF_INET, ip, &address);
     return connection_permitted(AF_INET, &address, port);
 }
 
-static void test_policy_matching(void)
-{
+static void test_policy_matching(void) {
     reset_behaviour();
     check("an empty allow-list denies every connect", !permits_v4("9.9.9.9", 443));
 
@@ -678,15 +653,13 @@ static void test_policy_matching(void)
           !connection_permitted(AF_INET6, &any6, 443));
 }
 
-static bool permits_v6(const char *ip, uint16_t port)
-{
+static bool permits_v6(const char *ip, uint16_t port) {
     struct in6_addr address;
     inet_pton(AF_INET6, ip, &address);
     return connection_permitted(AF_INET6, &address, port);
 }
 
-static void test_connect_ranges(void)
-{
+static void test_connect_ranges(void) {
     reset_behaviour();
     remember_rule("104.16.0.0/12", "443");
     check("the range table kept the rule", connect_rule_count == 1);
@@ -745,8 +718,7 @@ static void test_connect_ranges(void)
           !rule_host_matches(&range_rule, AF_UNIX, NULL));
 }
 
-static void test_address_and_destination(void)
-{
+static void test_address_and_destination(void) {
     reset_behaviour();
     struct in6_addr v6loop;
     inet_pton(AF_INET6, "::1", &v6loop);
@@ -784,8 +756,7 @@ static void test_address_and_destination(void)
     check("a non-INET destination carries no address", where.address == NULL);
 }
 
-static void test_exit_code_mapping(void)
-{
+static void test_exit_code_mapping(void) {
     int status = 0;
     check("a clean exit maps to its code", exit_code_from_status((7 << 8)) == 7);
     status = SIGKILL;
@@ -793,8 +764,7 @@ static void test_exit_code_mapping(void)
     check("an unusual status maps to the setup error", exit_code_from_status(0x7f) == EXIT_SETUP_ERROR);
 }
 
-static void test_verbose_logging(void)
-{
+static void test_verbose_logging(void) {
     reset_behaviour();
     verbose = false;
     log_verbose("quiet %d", 1); /* returns without writing */
@@ -806,8 +776,7 @@ static void test_verbose_logging(void)
 
 /* ------------------------------------------------- the notification service */
 
-static void service_once(void)
-{
+static void service_once(void) {
     struct seccomp_notif request;
     struct seccomp_notif_resp response;
     memset(&request, 0, sizeof(request));
@@ -815,8 +784,7 @@ static void service_once(void)
     service_one(9, &request, &response, sizeof(request));
 }
 
-static void test_service_paths(void)
-{
+static void test_service_paths(void) {
     reset_behaviour();
     bx->notif_recv_result = -1;
     service_once();
@@ -891,8 +859,7 @@ static void test_service_paths(void)
 /* The supervisor decides socket() and the send syscalls, not only connect. These drive each
  * new branch through the notification dispatcher: a socket kind refused, a socket kind allowed,
  * TCP Fast Open refused, and a datagram judged by its destination. */
-static void test_egress_syscalls(void)
-{
+static void test_egress_syscalls(void) {
     reset_behaviour();
     bx->notif_recv_nr = __NR_socket;
     bx->notif_socket_domain = AF_INET;
@@ -1098,8 +1065,7 @@ static void test_egress_syscalls(void)
 
 /* The guard creates each INET socket itself and records its type, so a later connect can tell a
  * datagram socket (checked then let through) from a stream socket (injected, race-free). */
-static void test_socket_tracking(void)
-{
+static void test_socket_tracking(void) {
     reset_behaviour();
     bx->notif_recv_nr = __NR_socket;
     bx->notif_socket_domain = AF_INET;
@@ -1236,8 +1202,7 @@ static void test_socket_tracking(void)
               && lookup_socket_type(SOCKET_TYPE_TABLE_SIZE + 2) == FD_TYPE_UNKNOWN);
 }
 
-static void test_connect_on_behalf_paths(void)
-{
+static void test_connect_on_behalf_paths(void) {
     struct sockaddr_in address;
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
@@ -1328,8 +1293,7 @@ static void test_connect_on_behalf_paths(void)
     check("a send error is logged", bx->answers == 1);
 }
 
-static void test_read_peer_address_edges(void)
-{
+static void test_read_peer_address_edges(void) {
     reset_behaviour();
     bx->notif_recv_family = AF_INET;
     struct sockaddr_storage out;
@@ -1340,8 +1304,7 @@ static void test_read_peer_address_edges(void)
           read_peer_address(1, 0x4000, 4096, &out) > 0);
 }
 
-static void test_receive_descriptor(void)
-{
+static void test_receive_descriptor(void) {
     reset_behaviour();
     check("a valid descriptor message yields the descriptor", receive_descriptor(5) == 30);
     reset_behaviour();
@@ -1361,8 +1324,7 @@ static void test_receive_descriptor(void)
     check("a message of the wrong control length is refused", receive_descriptor(5) == -1);
 }
 
-static void test_supervise_loop(void)
-{
+static void test_supervise_loop(void) {
     reset_behaviour();
     bx->notif_sizes_result = -1; /* falls back to the compiled sizes */
     bx->supervise_services = 1;
@@ -1401,8 +1363,7 @@ static void test_supervise_loop(void)
 
 /* ---------------------------------------------------------- the exit paths */
 
-static void test_argument_errors(void)
-{
+static void test_argument_errors(void) {
     char *none[] = { "guard", NULL };
     check("no command is a usage error", run_main(none) == 2);
     char *only_dashes[] = { "guard", "--", NULL };
@@ -1415,8 +1376,7 @@ static void test_argument_errors(void)
     check("an unreadable rules file refuses the run", run_main(unreadable) == EXIT_SETUP_ERROR);
 }
 
-static void test_child_setup_failures(void)
-{
+static void test_child_setup_failures(void) {
     char *argv[] = { "guard", "--", "cmd", NULL };
 
     reset_behaviour();
@@ -1456,8 +1416,7 @@ static void test_child_setup_failures(void)
     check("the child that hands over and cannot exec exits 127", run_main(argv) == 127);
 }
 
-static void test_parent_paths(void)
-{
+static void test_parent_paths(void) {
     char *argv[] = { "guard", "--", "cmd", NULL };
 
     reset_behaviour();
@@ -1487,8 +1446,7 @@ static void test_parent_paths(void)
           run_main(argv) == 0);
 }
 
-int main(void)
-{
+int main(void) {
     /* Line-buffer stdout so a forked test-child never inherits a partial buffer and
      * re-emits it on exit, which would otherwise print every line several times when
      * stdout is a pipe rather than a terminal, as it is under CI. */

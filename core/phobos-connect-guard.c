@@ -141,8 +141,7 @@ static bool verbose = false;
 
 static void log_verbose(const char *format, ...) __attribute__((format(printf, 1, 2)));
 
-static void log_verbose(const char *format, ...)
-{
+static void log_verbose(const char *format, ...) {
     if (!verbose) {
         return;
     }
@@ -172,8 +171,7 @@ static struct connect_rule connect_rules[MAXIMUM_RULES];
 static size_t connect_rule_count = 0;
 
 /* Records one "host port" line, unless the table is full or the line is malformed. */
-static void remember_rule(const char *host, const char *port_text)
-{
+static void remember_rule(const char *host, const char *port_text) {
     if (connect_rule_count >= MAXIMUM_RULES || strlen(host) >= MAXIMUM_HOST) {
         return;
     }
@@ -227,8 +225,7 @@ static void remember_rule(const char *host, const char *port_text)
  * outbound policy. Returns false only when a rules file was named but could not be read for a
  * reason other than its absence, so the caller refuses the run rather than fall open to
  * allow-all on an unreadable policy. */
-static bool load_rules(const char *path)
-{
+static bool load_rules(const char *path) {
     if (path == nullptr) {
         return true;
     }
@@ -250,8 +247,7 @@ static bool load_rules(const char *path)
 
 /* -------------------------------------------------------- the address decision */
 
-static bool address_is_loopback(int family, const void *address)
-{
+static bool address_is_loopback(int family, const void *address) {
     if (family == AF_INET) {
         const struct in_addr *v4 = address;
         return (ntohl(v4->s_addr) >> 24) == 127;
@@ -265,8 +261,7 @@ static bool address_is_loopback(int family, const void *address)
 
 /* Writes the destination into the canonical IPv6 form ranges are compared in: an IPv6 address
  * as itself, an IPv4 address as ::ffff:a.b.c.d, matching how a range's network was stored. */
-static struct in6_addr canonical_destination(int family, const void *address)
-{
+static struct in6_addr canonical_destination(int family, const void *address) {
     struct in6_addr canonical;
     memset(&canonical, 0, sizeof(canonical));
     if (family == AF_INET6) {
@@ -282,8 +277,7 @@ static struct in6_addr canonical_destination(int family, const void *address)
 /* Whether an address falls within a network of the given prefix length, comparing whole bytes
  * and then the remaining bits of the last byte under a mask. */
 static bool address_within(const struct in6_addr *address, const struct in6_addr *network,
-                           int prefix_length)
-{
+                           int prefix_length) {
     if (prefix_length <= 0 || prefix_length > 128) {
         return false;
     }
@@ -303,8 +297,7 @@ static bool address_within(const struct in6_addr *address, const struct in6_addr
  * network. An IP literal, and the name "localhost", are held to the exact address; any other
  * hostname is one this guard cannot tie to an address, so its host is not enforced here and the
  * rule rests on its port alone, with libnetblocker checking the host of a dynamic command. */
-static bool rule_host_matches(const struct connect_rule *rule, int family, const void *address)
-{
+static bool rule_host_matches(const struct connect_rule *rule, int family, const void *address) {
     if (rule->is_range) {
         if (family != AF_INET && family != AF_INET6) {
             return false;
@@ -334,8 +327,7 @@ static bool rule_host_matches(const struct connect_rule *rule, int family, const
  * destination reaches none, matching the deny-first model and libnetblocker's own empty
  * outbound policy. Otherwise a rule permits it when its port covers the port and its host
  * covers the address. */
-static bool connection_permitted(int family, const void *address, uint16_t port)
-{
+static bool connection_permitted(int family, const void *address, uint16_t port) {
     if (connect_rule_count == 0) {
         return false;
     }
@@ -370,8 +362,7 @@ static bool connection_permitted(int family, const void *address, uint16_t port)
  * supervisor rather than here because a classic BPF program cannot follow a pointer to read an
  * address, and deciding the scalar cases there too keeps the one decision in one testable
  * place. */
-static int install_connect_filter(void)
-{
+static int install_connect_filter(void) {
     struct sock_filter instructions[] = {
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, GUARD_NATIVE_AUDIT_ARCH, 1, 0),
@@ -414,8 +405,7 @@ static int install_connect_filter(void)
 }
 
 /* Hand one file descriptor to the supervisor over the socket pair. */
-static bool send_descriptor(int socket_descriptor, int descriptor_to_send)
-{
+static bool send_descriptor(int socket_descriptor, int descriptor_to_send) {
     char payload = 'N';
     struct iovec vector = { .iov_base = &payload, .iov_len = 1 };
     union {
@@ -446,8 +436,7 @@ static bool send_descriptor(int socket_descriptor, int descriptor_to_send)
 
 /* The child. Installs the filter, sends its notification descriptor up, then
  * becomes the rest of the chain. Never returns: it execs, or it exits. */
-[[noreturn]] static void run_child(int send_descriptor_to_parent, char *const command[])
-{
+[[noreturn]] static void run_child(int send_descriptor_to_parent, char *const command[]) {
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
         fprintf(stderr, "[phobos-connect-guard] prctl(NO_NEW_PRIVS): %s\n", strerror(errno));
         _exit(EXIT_SETUP_ERROR);
@@ -474,8 +463,7 @@ static bool send_descriptor(int socket_descriptor, int descriptor_to_send)
 
 /* Receive the one descriptor the child sends. Returns it, or -1 on any failure,
  * including the child exiting before it sent one (an end of file here). */
-static int receive_descriptor(int socket_descriptor)
-{
+static int receive_descriptor(int socket_descriptor) {
     char payload = 0;
     struct iovec vector = { .iov_base = &payload, .iov_len = 1 };
     union {
@@ -513,8 +501,7 @@ static int receive_descriptor(int socket_descriptor)
  * value 0 is a success. A send that finds the command already gone is not a failure
  * of ours. */
 static void answer(int notify_descriptor, struct seccomp_notif_resp *response, __u64 id,
-                   __s64 value, __s32 error)
-{
+                   __s64 value, __s32 error) {
     memset(response, 0, sizeof(*response));
     response->id = id;
     response->val = value;
@@ -532,8 +519,7 @@ static void answer(int notify_descriptor, struct seccomp_notif_resp *response, _
  * there is nothing a second thread could rewrite; a destination behind a pointer is the one
  * case where CONTINUE is best-effort, which is why the send guard is defence in depth beside a
  * no-network container, not a boundary. */
-static void answer_continue(int notify_descriptor, struct seccomp_notif_resp *response, __u64 id)
-{
+static void answer_continue(int notify_descriptor, struct seccomp_notif_resp *response, __u64 id) {
     memset(response, 0, sizeof(*response));
     response->id = id;
     response->val = 0;
@@ -547,8 +533,7 @@ static void answer_continue(int notify_descriptor, struct seccomp_notif_resp *re
 /* Read a fixed-size structure out of the command's memory. Returns whether the whole of it
  * was read; a short or failed read leaves the destination partly written and answers false,
  * so the caller refuses rather than act on half a structure. */
-static bool read_child_bytes(pid_t command_pid, uintptr_t remote_pointer, void *out, size_t size)
-{
+static bool read_child_bytes(pid_t command_pid, uintptr_t remote_pointer, void *out, size_t size) {
     struct iovec local = { .iov_base = out, .iov_len = size };
     struct iovec remote = { .iov_base = (void *)remote_pointer, .iov_len = size };
     ssize_t read_count = process_vm_readv(command_pid, &local, 1, &remote, 1, 0);
@@ -558,8 +543,7 @@ static bool read_child_bytes(pid_t command_pid, uintptr_t remote_pointer, void *
 /* Read the peer address out of the command's memory. Returns the length read, or 0
  * if it could not be read or is too short to carry a family. */
 static socklen_t read_peer_address(pid_t command_pid, uintptr_t address_pointer,
-                                   socklen_t claimed_length, struct sockaddr_storage *out)
-{
+                                   socklen_t claimed_length, struct sockaddr_storage *out) {
     socklen_t length = claimed_length;
     if (length > sizeof(*out)) {
         length = sizeof(*out);
@@ -581,8 +565,7 @@ static socklen_t read_peer_address(pid_t command_pid, uintptr_t address_pointer,
  * an ordinary socket is, or a negative errno. This is a fresh socket, so options the command
  * set on its own before connecting, and a non-blocking mode, are not carried onto it: that is
  * the documented limit of connecting on the command's behalf rather than letting it connect. */
-static int connect_within_deadline(int family, const struct sockaddr *address, socklen_t length)
-{
+static int connect_within_deadline(int family, const struct sockaddr *address, socklen_t length) {
     int outward = socket(family, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (outward < 0) {
         return -errno;
@@ -626,8 +609,7 @@ static int connect_within_deadline(int family, const struct sockaddr *address, s
  * returns 0 with a socket already connected to the address the check saw. */
 static void connect_on_behalf(int notify_descriptor, struct seccomp_notif_resp *response,
                               __u64 id, int target_descriptor, int family,
-                              const struct sockaddr *address, socklen_t length)
-{
+                              const struct sockaddr *address, socklen_t length) {
     int outward = connect_within_deadline(family, address, length);
     if (outward < 0) {
         answer(notify_descriptor, response, id, 0, outward);
@@ -658,8 +640,7 @@ struct destination {
     uint16_t port;
 };
 
-static struct destination read_destination(const struct sockaddr_storage *storage)
-{
+static struct destination read_destination(const struct sockaddr_storage *storage) {
     struct destination where = { .family = storage->ss_family, .address = nullptr, .port = 0 };
     if (storage->ss_family == AF_INET) {
         const struct sockaddr_in *v4 = (const struct sockaddr_in *)storage;
@@ -695,8 +676,7 @@ static struct socket_type_entry socket_type_table[SOCKET_TYPE_TABLE_SIZE];
 /* Records the type of a socket by its inode, overwriting any earlier entry for that inode. A
  * full table evicts the entry at the hash slot, which then reads back as unknown. Inode zero is
  * not a socket and is ignored. */
-static void record_socket_type(uint64_t inode, uint8_t type)
-{
+static void record_socket_type(uint64_t inode, uint8_t type) {
     if (inode == 0) {
         return;
     }
@@ -715,8 +695,7 @@ static void record_socket_type(uint64_t inode, uint8_t type)
 
 /* Answers the tracked type of a socket by its inode, or UNKNOWN for one the guard never
  * recorded or one evicted from a full table. */
-static uint8_t lookup_socket_type(uint64_t inode)
-{
+static uint8_t lookup_socket_type(uint64_t inode) {
     if (inode == 0) {
         return FD_TYPE_UNKNOWN;
     }
@@ -739,8 +718,7 @@ static uint8_t lookup_socket_type(uint64_t inode)
  * socket or /proc cannot answer; only a live socket yields an inode, so a descriptor since
  * reused for something that is not a socket reads back 0 and is treated as untracked, which the
  * connect path handles best-effort rather than injecting a socket over it. */
-static uint64_t fd_socket_inode(pid_t owner_pid, int descriptor)
-{
+static uint64_t fd_socket_inode(pid_t owner_pid, int descriptor) {
     char link_path[64];
     char target[64];
     snprintf(link_path, sizeof(link_path), "/proc/%d/fd/%d", (int)owner_pid, descriptor);
@@ -764,8 +742,7 @@ static uint64_t fd_socket_inode(pid_t owner_pid, int descriptor)
  * peer, which cannot be injected, so the checked call is let through; an untracked descriptor is
  * let through the same way, best-effort, since its type is unknown. */
 static void service_connect(int notify_descriptor, struct seccomp_notif *request,
-                            struct seccomp_notif_resp *response)
-{
+                            struct seccomp_notif_resp *response) {
     int target_descriptor = (int)request->data.args[0];
     uintptr_t address_pointer = (uintptr_t)request->data.args[1];
     socklen_t claimed_length = (socklen_t)request->data.args[2];
@@ -809,8 +786,7 @@ static void service_connect(int notify_descriptor, struct seccomp_notif *request
  * let the kernel create it. The arguments are the kernel's own scalar copy in the notification,
  * so there is nothing to read from the child and nothing a second thread could rewrite. */
 static void service_socket(int notify_descriptor, struct seccomp_notif *request,
-                           struct seccomp_notif_resp *response)
-{
+                           struct seccomp_notif_resp *response) {
     int domain = (int)request->data.args[0];
     int type = (int)request->data.args[1];
     int protocol = (int)request->data.args[2];
@@ -866,8 +842,7 @@ static void service_socket(int notify_descriptor, struct seccomp_notif *request,
  * the send. */
 static void forward_or_refuse(int notify_descriptor, struct seccomp_notif *request,
                               struct seccomp_notif_resp *response,
-                              const struct sockaddr_storage *storage, socklen_t length)
-{
+                              const struct sockaddr_storage *storage, socklen_t length) {
     if (length == 0) {
         answer(notify_descriptor, response, request->id, 0, -EACCES);
         return;
@@ -888,8 +863,7 @@ static void forward_or_refuse(int notify_descriptor, struct seccomp_notif *reque
 
 /* The flags argument of the two send syscalls the guard traps, sendto and sendmmsg, is the
  * fourth. sendmsg is not trapped (see the filter), so it is not among them. */
-static unsigned int send_flags(const struct seccomp_notif *request)
-{
+static unsigned int send_flags(const struct seccomp_notif *request) {
     return (unsigned int)request->data.args[3];
 }
 
@@ -897,8 +871,7 @@ static unsigned int send_flags(const struct seccomp_notif *request)
  * socket, whose connect() the guard decided when it was made, so it is not re-examined here; a
  * call carrying a destination has that destination read and judged. */
 static void service_sendto(int notify_descriptor, struct seccomp_notif *request,
-                           struct seccomp_notif_resp *response)
-{
+                           struct seccomp_notif_resp *response) {
     uintptr_t address_pointer = (uintptr_t)request->data.args[4];
     socklen_t claimed_length = (socklen_t)request->data.args[5];
     if (address_pointer == 0 || claimed_length == 0) {
@@ -918,8 +891,7 @@ static void service_sendto(int notify_descriptor, struct seccomp_notif *request,
  * lets the kernel send them all, so a batch is refused whole if any entry names an INET
  * destination the allow-list does not name. The count is capped at the kernel's own limit. */
 static void service_sendmmsg(int notify_descriptor, struct seccomp_notif *request,
-                             struct seccomp_notif_resp *response)
-{
+                             struct seccomp_notif_resp *response) {
     uintptr_t vector = (uintptr_t)request->data.args[1];
     unsigned int count = (unsigned int)request->data.args[2];
     if (count > 1024) {
@@ -965,8 +937,7 @@ static void service_sendmmsg(int notify_descriptor, struct seccomp_notif *reques
 /* Decide one trapped send: refuse TCP Fast Open outright, since it carries a destination past
  * connect(), then judge the destination by the send syscall it came from. */
 static void service_send(int notify_descriptor, struct seccomp_notif *request,
-                         struct seccomp_notif_resp *response)
-{
+                         struct seccomp_notif_resp *response) {
     if (send_flags(request) & MSG_FASTOPEN) {
         log_verbose("refusing a send with MSG_FASTOPEN, which opens a connection past connect()");
         answer(notify_descriptor, response, request->id, 0, -EACCES);
@@ -982,8 +953,7 @@ static void service_send(int notify_descriptor, struct seccomp_notif *request,
 /* Service one notification: receive it, then decide it by the syscall it trapped. Only the
  * syscalls the filter traps arrive here; any other is refused closed. */
 static void service_one(int notify_descriptor, struct seccomp_notif *request,
-                        struct seccomp_notif_resp *response, size_t request_size)
-{
+                        struct seccomp_notif_resp *response, size_t request_size) {
     memset(request, 0, request_size);
     if (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_RECV, request) != 0) {
         return;
@@ -1006,8 +976,7 @@ static void service_one(int notify_descriptor, struct seccomp_notif *request,
 /* Wait on the notification descriptor and service it until the sandboxed lineage is
  * gone, which the kernel signals as a hangup once every process the filter covers
  * has exited. */
-static void supervise(int notify_descriptor)
-{
+static void supervise(int notify_descriptor) {
     struct seccomp_notif_sizes sizes;
     memset(&sizes, 0, sizeof(sizes));
     if (syscall(SYS_seccomp, SECCOMP_GET_NOTIF_SIZES, 0, &sizes) != 0) {
@@ -1052,8 +1021,7 @@ static void supervise(int notify_descriptor)
 
 /* The child's wait status, turned into an exit code the way a shell would: the
  * command's own code, or 128 plus the signal that ended it. */
-static int exit_code_from_status(int status)
-{
+static int exit_code_from_status(int status) {
     if (WIFEXITED(status)) {
         return WEXITSTATUS(status);
     }
@@ -1071,15 +1039,13 @@ struct guard_options {
     bool verbose;
 };
 
-[[noreturn]] static void print_usage_and_exit(void)
-{
+[[noreturn]] static void print_usage_and_exit(void) {
     fprintf(stderr,
             "Usage: phobos-connect-guard [--verbose] [--rules FILE] -- COMMAND [ARGUMENTS...]\n");
     exit(2);
 }
 
-static void parse_arguments(int argument_count, char *arguments[], struct guard_options *options)
-{
+static void parse_arguments(int argument_count, char *arguments[], struct guard_options *options) {
     memset(options, 0, sizeof(*options));
     int index = 1;
     for (; index < argument_count; index++) {
@@ -1109,8 +1075,7 @@ static void parse_arguments(int argument_count, char *arguments[], struct guard_
 
 /* ------------------------------------------------------------------ the call */
 
-int main(int argument_count, char *arguments[])
-{
+int main(int argument_count, char *arguments[]) {
     struct guard_options options;
     parse_arguments(argument_count, arguments, &options);
     verbose = options.verbose;

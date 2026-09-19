@@ -145,14 +145,12 @@ static struct addrinfo *fake_answer_for(const char *text) {
     if (strcmp(text, "unprintable") == 0) {
         answer->address.ss_family = AF_UNSPEC;
         answer->information.ai_addrlen = sizeof(sa_family_t);
-    }
-    else if (strchr(text, ':') != nullptr) {
+    } else if (strchr(text, ':') != nullptr) {
         struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)&answer->address;
         ipv6->sin6_family = AF_INET6;
         inet_pton(AF_INET6, text, &ipv6->sin6_addr);
         answer->information.ai_addrlen = sizeof(*ipv6);
-    }
-    else {
+    } else {
         struct sockaddr_in *ipv4 = (struct sockaddr_in *)&answer->address;
         ipv4->sin_family = AF_INET;
         inet_pton(AF_INET, text, &ipv4->sin_addr);
@@ -268,8 +266,7 @@ static void check(const char *what, bool condition) {
     if (condition) {
         printf("  ok    %s\n", what);
         passed++;
-    }
-    else {
+    } else {
         printf("  FAIL  %s\n", what);
         failed++;
     }
@@ -344,8 +341,7 @@ static enum connection_outcome connection_outcome(const char *address, uint16_t 
         ipv6->sin6_port = htons(port);
         inet_pton(AF_INET6, address, &ipv6->sin6_addr);
         length = sizeof(*ipv6);
-    }
-    else {
+    } else {
         struct sockaddr_in *ipv4 = (struct sockaddr_in *)&destination;
         ipv4->sin_family = AF_INET;
         ipv4->sin_port = htons(port);
@@ -801,8 +797,7 @@ static enum bind_result bind_outcome(int socket_type, const char *address, uint1
     enum bind_result result = BIND_UNEXPECTED;
     if (status == 0 && bind_calls == calls_before + 1) {
         result = BIND_BOUND;
-    }
-    else if (status == -1 && errno == EACCES && bind_calls == calls_before) {
+    } else if (status == -1 && errno == EACCES && bind_calls == calls_before) {
         result = BIND_DENIED;
     }
     if (descriptor >= 0) {
