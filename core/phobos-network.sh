@@ -32,7 +32,7 @@ NETBLOCKER_SO="$(realpath --canonicalize-missing -- "${NETBLOCKER_SO}")"
 # command would run with no network filtering. Refuse instead.
 refuse_unusable_netblocker "${NETBLOCKER_SO}"
 
-# Remember the path so the filesystem layer can bind it into the sandbox.
+# Remember the path so the filesystem layer can grant it read and execute under Landlock.
 export PHB_NETBLOCKER_SO="${NETBLOCKER_SO}"
 
 case ":${LD_PRELOAD:-}:" in

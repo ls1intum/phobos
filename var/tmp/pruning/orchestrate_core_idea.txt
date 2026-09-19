@@ -1,27 +1,30 @@
-┌────────────────────┐
-│ host filesystem    │
-│  /var/tmp/path_sets│  ← single bind-mount
-│  /var/tmp/testing-dir
-│  /var/tmp/opt/core │
-└────────┬───────────┘
-         │
-┌────────▼─────────┐     ┌────────▼─────────┐     ┌────────▼─────────┐
-│ python-env ctr   │     │ java-env ctr     │     │  c-env ctr       │
-│ pytest, pip, …   │     │ maven/gradle …   │     │ gcc, make, …     │
-│ runs prune:py    │     │ runs prune:java  │     │ runs prune:c     │
-└──────────────────┘     └──────────────────┘     └──────────────────┘
+┌─────────────────────────────┐
+│ host: ./var/tmp             │  ← one bind mount, shared by every container
+│   path_sets/                │
+│   testing-dir/<lang>/...    │
+│   opt/core/config/          │
+└──────────────┬──────────────┘
+               │
+       ┌───────┴──────────────┐
+┌──────▼───────────┐   ┌──────▼───────────┐
+│ prune_python     │   │ prune_java       │
+│ pytest, pip, …   │   │ maven, gradle, … │
+│ prunes python    │   │ prunes java      │
+└──────────────────┘   └──────────────────┘
+               │
+┌──────────────▼──────────────┐
+│ orchestrate                 │  starts once both have finished successfully
+└─────────────────────────────┘
 
 
-    Every container mounts the same host directory (read-write) at
-    /var/tmp so they all see the same path_sets and opt/core.
+    Every container mounts the same host directory, read-write, at /var/tmp, so they all
+    see the same path_sets and opt/core.
 
-    The pruning script writes python_union.paths, java_union.paths, … into
-    that shared volume.
+    Each prune container writes one <lang>_<exercise>.paths (and .json) per exercise into
+    path_sets.
 
-    After all language containers finish, you run one instance of
-    orchestrate.py (either on the host or in a thin “control” container that
-    also binds /var/tmp).
-    -→ It sees a single directory full of *_union.paths and the workflow
-    doesn’t change.
+    The orchestrate service then folds each language's results into <lang>_union.paths,
+    merges the languages, and writes BaseLanguage-<lang>.cfg and TailPhobos.cfg into
+    opt/core/config. Copying them into core/config is a reviewed step of its own.
 
-No cross-container network IPC, no docker cp, just a shared bind-mount.
+No network between the containers and no docker cp: the shared bind mount is the only channel.

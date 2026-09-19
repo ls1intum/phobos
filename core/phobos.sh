@@ -16,8 +16,8 @@ Restriction options (every restriction is applied by default):
   --no-runtime-restriction, -ntr     Disable the timeout (phobos-timeout.sh).
   --no-networksystem-restriction, -nnr
                                      Disable the whole network restriction: the
-                                     libnetblocker preload filter and the Landlock
-                                     TCP-port rules.
+                                     connect guard, the libnetblocker preload filter
+                                     and the Landlock TCP-port rules.
   --no-resources-restriction, -nrr   Disable the resource limits (rlimits /
                                      phobos-resources.sh).
   --no-filesystem-restriction, -nfr  Disable the filesystem sandbox (Landlock). This
@@ -136,7 +136,7 @@ done
 if (( allow_unsandboxed )); then
   _log "WARNING: --allow-unsandboxed given; running the command RAW, with NO sandbox."
   _log "runtime restriction (timeout) DISABLED"
-  _log "network-system restriction (libnetblocker) DISABLED"
+  _log "network-system restriction (connect guard, libnetblocker) DISABLED"
   _log "resources restriction (rlimits) DISABLED"
   _log "filesystem restriction (Landlock) DISABLED"
   (( ${#cfgs[@]} )) && _log "--allow-unsandboxed ignores the ${#cfgs[@]} --config file(s) given: there is no sandbox to apply them to."
@@ -146,7 +146,7 @@ fi
 # Loudly record every restriction the caller switched off, so a run with a layer
 # disabled cannot look like an ordinary one in a log.
 (( enable_timeout ))    || _log "runtime restriction (timeout) DISABLED by --no-runtime-restriction"
-(( enable_network ))    || _log "network-system restriction (libnetblocker) DISABLED by --no-networksystem-restriction"
+(( enable_network ))    || _log "network-system restriction (connect guard, libnetblocker) DISABLED by --no-networksystem-restriction"
 (( enable_resources ))  || _log "resources restriction (rlimits) DISABLED by --no-resources-restriction"
 (( enable_filesystem )) || _log "filesystem restriction (Landlock) DISABLED by --no-filesystem-restriction"
 

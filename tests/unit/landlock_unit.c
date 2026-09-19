@@ -13,9 +13,8 @@
  * failure can be injected without a special kernel. Cases that end in exit()
  * run in a forked child and are judged by the exit status.
  */
-/* The system headers this file needs itself. They used to arrive indirectly,
- * through the single large source file; now that it is split, the test states
- * its own. */
+/* The system headers this file needs itself, stated here rather than taken for
+ * granted from the sources it includes. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -34,8 +33,7 @@
 
 /* Only the stage sequence is included, so that its main can be called from
  * here under another name. The modules beside it are linked in the normal way,
- * which is what the split into files bought: their functions no longer have to
- * be reached through an include. */
+ * so their functions are reached through their headers rather than an include. */
 #define main sut_main
 #include "../../core/phobos-landlock.c"
 #undef main
@@ -293,11 +291,11 @@ static void reset_record(void) {
     memset(record, 0, sizeof(*record));
 }
 
-/* The child's diagnostics used to go to /dev/null, so a case could only judge
- * how a run ended, never what it said. Several mutations changed nothing else:
- * a warning that appears one version too early, a refusal that names the wrong
- * reason. The message is what a person reads when a policy is turned down, so
- * it is worth as much as the exit code. */
+/* The child's diagnostics are captured rather than discarded, so a case can judge
+ * what a run said as well as how it ended. Some mutations change nothing else: a
+ * warning that appears one version too early, a refusal that names the wrong
+ * reason. The message is what a person reads when a policy is turned down, so it
+ * is worth as much as the exit code. */
 /* Room for everything one case writes to stderr. */
 static constexpr size_t CAPTURED_STDERR_LENGTH = 8192;
 

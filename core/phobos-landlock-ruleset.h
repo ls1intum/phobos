@@ -2,10 +2,10 @@
  * The Landlock ruleset: the kernel object that says what a process may still
  * reach, and the operations on it.
  *
- * This is the module that will become a class: a ruleset is a descriptor plus
- * the operations that add rules to it and finally apply it. The three
- * attribute structures below stay raw data, because their layout is fixed by
- * the kernel and they exist only to be handed to a system call.
+ * A ruleset is a descriptor plus the operations that add rules to it and
+ * finally apply it. The three attribute structures below stay raw data,
+ * because their layout is fixed by the kernel and they exist only to be handed
+ * to a system call.
  *
  * Names are spelled out here, while the kernel abbreviates them. The mapping,
  * so that the kernel documentation stays searchable from this file:

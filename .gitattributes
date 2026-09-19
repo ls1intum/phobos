@@ -1,15 +1,15 @@
 # Every file Git detects as text is stored with LF line endings, on every platform.
 # Phobos runs on Linux throughout: the path sets are read with `while IFS= read -r`, where a
-# carriage return becomes part of a bind path, and a CRLF script fails with "bad
-# interpreter". CRLF was only ever an editor artefact here, and ls1intum/phobos#15 removed
+# carriage return becomes part of a path and the run loses access the policy granted, and a
+# CRLF script fails with "bad interpreter". CRLF was only ever an editor artefact here, and ls1intum/phobos#15 removed
 # the last of it. To check rather than trust this comment:
 #
 #     git ls-files --eol | grep crlf
 * text=auto eol=lf
 
-# Binary files, so that Git never applies text conversion to them. Phobos ships no
-# compiled artefact in version control any more (the preload library and both C products
-# are built per architecture inside the image), but a stray one must never be normalised.
+# Binary files, so that Git never applies text conversion to them. Phobos keeps no compiled
+# artefact in version control (the preload library and both C products are built per
+# architecture inside the image), but a stray one must never be normalised.
 *.so       binary
 *.png      binary
 *.jpg      binary

@@ -27,7 +27,8 @@ POM
 echo 'public class App { public static void main(String[] a){ System.out.println("app"); } }' > $P/src/main/java/App.java
 
 # The rights profiles of the individual phases.
-# /dev/null must be allowed explicitly: bwrap used to supply /dev through --dev.
+# /dev/null must be allowed explicitly: Landlock grants nothing that is not named, /dev
+# included.
 COMMON="--rights=rx /opt/java --rights=rx /usr --rights=r /etc --rights=rwmd /tmp --rights=rwmd /root/.m2 --rights=rwmd /dev/null"
 COMPILE="$COMMON --rights=rwmd $P"
 TEST_ONLY="$COMMON --rights=rx $P/target --rights=rx $P/pom.xml --rights=rwmd $P/target/surefire"

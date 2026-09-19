@@ -1,5 +1,5 @@
 ################################################################################
-# docker/python/Dockerfile  – pruning-only image for Python exercises
+# docker/prune_phase/python/Dockerfile: the pruning-only image for Python exercises
 #
 #   • Installs just what the prune step needs: python3, pip, pytest, ruff,
 #     bubblewrap, tree.

@@ -55,7 +55,7 @@ if unshare -Ur true 2>/dev/null; then
 else
   ok "unshare -Ur fails ($(unshare -Ur true 2>&1 | head -1)) -> bwrap could not run here"
 fi
-if [[ -x /usr/bin/bwrap ]]; then bad "bwrap is still in the image"; else ok "bwrap is no longer in the image"; fi
+if [[ -x /usr/bin/bwrap ]]; then bad "bwrap is still in the image"; else ok "bwrap is not in the image"; fi
 
 hdr "D. The same picture as non-root (Artemis does not run the build script as root)"
 useradd -m -u "$SANDBOX_UID" sandboxuser 2>/dev/null || true
@@ -194,7 +194,7 @@ allowed "d allows deleting" \
 # The device numbers of /dev/null, for a device node the sandbox must not be able to make.
 NULL_DEVICE_MAJOR=1
 NULL_DEVICE_MINOR=3
-hdr "G. What is no longer granted at all"
+hdr "G. What is never granted"
 denied "create a device file" \
   $LL $BASE --rights=rwmd "$TD/fine" -- /bin/sh -c "mknod $TD/fine/device c ${NULL_DEVICE_MAJOR} ${NULL_DEVICE_MINOR}"
 denied "create a symbolic link" \
