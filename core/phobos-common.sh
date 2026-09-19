@@ -836,11 +836,10 @@ build_network_args() {
 #
 # The [bind] section names local TCP ports a submission may listen on. Each rule is "addr port";
 # Landlock enforces the port, so several rules that share a port (different local addresses)
-# collapse to one --bind-tcp, and the address is left to libnetblocker. Landlock's bind right
-# is per-port and knows no local address, so this emits one --bind-tcp per port. Which local
-# address a service may bind to is a separate, stacked change (the libnetblocker bind hook);
-# the parser already refuses a [bind] line that names more than a bare port, so every line
-# here is a port. A port outside 1..65535 is a policy mistake and ends the run.
+# collapse to one --bind-tcp, and the address is left to libnetblocker's bind hook. Landlock's
+# bind right is per-port and knows no local address, so this emits one --bind-tcp per port.
+# The parser has already refused a [bind] line with no concrete port. A port outside 1..65535
+# is a policy mistake and ends the run.
 build_bind_args() {
   local arguments_name="$1"
   local rules="$2"

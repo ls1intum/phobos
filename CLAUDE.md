@@ -17,7 +17,7 @@ one disagree, the full one is right.
 - Never add a bind, a capability or an allowed host to make a test pass. That turns a
   containment failure into a widened boundary, and the suite goes green either way.
 - `*.cfg` and `*.paths` are read with `while IFS= read -r`, so a carriage return ends up
-  inside a bind path and the sandbox does not start. Every text file is stored with LF, and
+  inside a path and the run silently loses access the policy granted. Every text file is stored with LF, and
   `.gitattributes` keeps it that way.
 - `gh pr create --body` bypasses `.github/PULL_REQUEST_TEMPLATE.md` silently, so read that
   file before writing a body, and check it with
@@ -35,11 +35,18 @@ breaks the run is restored, read-only first and writable only if that is not eno
 is top-down, so an unused subtree is dropped in one step rather than file by file. The result
 is a path set: every path the run needs, with the access mode it needs.
 
-**Sandbox application, at grading time.** The submission runs with only those paths mounted,
-everything else replaced by empty tmpfs. Network access goes through a preload library that
-intercepts name resolution and connection calls and permits only the hosts the discovery
-phase recorded. A timeout layer
-bounds the run.
+**Sandbox application, at grading time.** The submission runs under a Landlock ruleset that
+grants exactly the rights the policy names on those paths; every other path is denied, though
+it stays visible by name. Outbound connections are supervised by the connect guard, which
+enforces the `[connect]` allow-list by host and port from outside the process, with a preload
+library (libnetblocker) filtering host names as defence in depth. A timeout and resource limits
+bound the run, and the container around it supplies `--network none` and the cgroup caps.
+
+The two phases do not deny in the same way. While pruning, a hidden directory is an empty,
+writable tmpfs; while grading, a path the policy does not name is refused with EACCES. A tool
+that only needs some writable scratch directory can therefore pass the prune with that
+directory hidden and still be refused at grading time, which is worth checking when a pruned
+policy fails a run that passed its prune.
 
 The point of the split is that the expensive, fragile part happens once per language
 environment, offline, and grading itself only applies a fixed configuration.
@@ -47,7 +54,7 @@ environment, offline, and grading itself only applies a fixed configuration.
 ## Tech Stack
 
 - POSIX shell for the wrapper and the layers, which is the bulk of the repository
-- C for the preload library and for `phobos-landlock`, both compiled inside the run-phase image
+- C for the preload library, `phobos-landlock` and the connect guard, all compiled inside the run-phase image
 - Python for the prune orchestrator and the artefact helpers
 - Docker for both phases, one image per language environment
 - Java for exactly one file, `.github/scripts/CheckPullRequestTemplate.java`

@@ -1,7 +1,7 @@
 /*
  * The allow-list a process runs under.
  *
- * This becomes a class: the rules read from one file, the addresses name lookups
+ * It holds the rules read from one file, the addresses name lookups
  * authorised under them, and the lock that lets every thread ask while the rules are
  * replaced. What it answers is whether a host may be looked up for a port, and whether
  * an address may be connected to on a port.

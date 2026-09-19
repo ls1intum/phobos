@@ -1,7 +1,7 @@
 /*
  * Everything the command line asked for.
  *
- * This becomes a class: the collected policy plus the reading of it, so that
+ * It holds the collected policy plus the reading of it, so that
  * each stage of the run takes one object rather than eight loose values.
  */
 #ifndef PHOBOS_LANDLOCK_OPTIONS_H

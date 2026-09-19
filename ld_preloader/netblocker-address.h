@@ -1,8 +1,8 @@
 /*
  * One network address in the form the filter compares it in.
  *
- * This becomes a class: the address as the 128 bits of an IPv6 address plus the text
- * it is compared by, and the questions asked about it: whether it equals another,
+ * It holds the address as the 128 bits of an IPv6 address plus the text
+ * it is compared by, and answers the questions asked about it: whether it equals another,
  * whether it lies in a range, and whether it is an IPv4 address in IPv6 form.
  *
  * An IPv4 address is held as the IPv4-mapped IPv6 address ::ffff:a.b.c.d, so that one

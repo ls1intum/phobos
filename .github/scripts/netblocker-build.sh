@@ -27,8 +27,8 @@ readonly LIBC_DEV_VERSION="2.43-2ubuntu2.4"
 # The C library of the run-phase image. A library needing a newer one would not load there.
 readonly HIGHEST_GLIBC="2.39"
 # The ELF machines Phobos supports, as readelf's --wide file header prints them, the two
-# architectures the images are built for. No library is committed any more: it is built
-# inside each architecture's image and verified there, so verify accepts either rather
+# architectures the images are built for. No library is committed: it is built inside each
+# architecture's image and verified there, so verify accepts either rather
 # than holding every build to x86-64.
 readonly SUPPORTED_MACHINES="Advanced Micro Devices X86-64|AArch64"
 # The only functions the library may export: its six hooks, in the order the C locale sorts them.

@@ -1,8 +1,8 @@
 /*
  * One line of the allow-list.
  *
- * This becomes a class: a host, an address or an address range with the port it
- * grants, and the questions the policy asks about it: which host names it covers,
+ * It holds a host, an address or an address range with the port it
+ * grants, and answers the questions the policy asks about it: which host names it covers,
  * which addresses, and on which ports.
  *
  * A line names one of four things. "*" is any host, "*.example.org" any name ending in
