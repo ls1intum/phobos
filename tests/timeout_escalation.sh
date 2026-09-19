@@ -176,4 +176,29 @@ else
   bad "no timeout is reported for a command within its limit" "unexpected PHB-ETIMEOUT: ${out}"
 fi
 
+echo
+echo "== a command's own 124 or 137 is not reported as a timeout =="
+# GNU timeout passes the command's status through when it did not time out, and a command that
+# someone else kills with SIGKILL, the OOM killer among them, ends with 137 like the escalation.
+# Neither, well inside a long timeout, is the timeout's doing.
+LONG_TIMEOUT_SECONDS=60
+res="$(run_chain landlock "$LONG_TIMEOUT_SECONDS" bash -c 'exit 124')"
+rc="${res%%|*}"
+out="${res#*|}"
+out="${out#*|}"
+if [[ "$rc" == "124" && "$out" != *"PHB-ETIMEOUT"* ]]; then
+  ok "a command exiting 124 at once keeps its status and no timeout is reported"
+else
+  bad "a command exiting 124 at once keeps its status and no timeout is reported" "exit 124 without PHB-ETIMEOUT, got exit ${rc}: ${out}"
+fi
+res="$(run_chain landlock "$LONG_TIMEOUT_SECONDS" bash -c 'kill -KILL $$')"
+rc="${res%%|*}"
+out="${res#*|}"
+out="${out#*|}"
+if [[ "$rc" == "137" && "$out" != *"PHB-ETIMEOUT"* ]]; then
+  ok "a command killed by SIGKILL at once keeps its status and no timeout is reported"
+else
+  bad "a command killed by SIGKILL at once keeps its status and no timeout is reported" "exit 137 without PHB-ETIMEOUT, got exit ${rc}: ${out}"
+fi
+
 finish

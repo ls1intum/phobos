@@ -36,6 +36,12 @@ canon_paths() {
     cat
   fi
 }
+# GNU timeout's own exit statuses: the command ran past its limit and was stopped by the
+# SIGTERM, or it ignored the SIGTERM and the --kill-after escalation's SIGKILL ended it
+# (128 + 9). A command can end with either status on its own, so neither alone is a timeout.
+PHB_TIMEOUT_EXPIRED_EXIT=124
+PHB_TIMEOUT_KILLED_EXIT=137
+PHB_MICROSECONDS_PER_MILLISECOND=1000
 # Timeout values are seconds: either a whole number, or seconds with
 # millisecond precision written as exactly three decimal places.
 # GNU timeout receives the value with an explicit seconds suffix, so no unit
@@ -57,6 +63,31 @@ ms_to_timeout() {
   local ms="$1" seconds fraction
   seconds=$(( ms / 1000 )); fraction=$(( ms % 1000 ))
   if (( fraction == 0 )); then printf '%s' "$seconds"; else printf '%d.%03d' "$seconds" "$fraction"; fi
+}
+
+# Prints the given EPOCHREALTIME value in whole microseconds. Every character that is not a
+# digit is dropped, because bash writes the decimal separator of the current locale (a comma
+# under de_DE), and EPOCHREALTIME always carries exactly six decimals, so the digits that are
+# left are the microseconds.
+epoch_realtime_microseconds() {
+  printf '%s' "${1//[!0-9]/}"
+}
+
+# Answers whether a run that ended with the given GNU timeout status after the given number of
+# microseconds was stopped by the given timeout. GNU timeout passes the command's own status
+# through when it did not time out, and a command killed by someone else, the OOM killer among
+# them, ends with the same 137 as the escalation, so the status alone decides nothing: only a
+# 124 or a 137 that came no earlier than the timeout is one. The time is the wall clock
+# (EPOCHREALTIME), so a clock stepped backwards during a run can make a real expiry look too
+# short and be passed through without PHB-ETIMEOUT; the run itself is never extended by it.
+run_reached_timeout() {
+  local status="$1"
+  local elapsed_microseconds="$2"
+  local timeout_value="$3"
+  local limit_microseconds
+  (( status == PHB_TIMEOUT_EXPIRED_EXIT || status == PHB_TIMEOUT_KILLED_EXIT )) || return 1
+  limit_microseconds=$(( $(timeout_to_ms "$timeout_value") * PHB_MICROSECONDS_PER_MILLISECOND ))
+  (( elapsed_microseconds >= limit_microseconds ))
 }
 
 # Merges one configured timeout value into PARSED_TIMEOUT and PARSED_TIMEOUT_DISABLED, which

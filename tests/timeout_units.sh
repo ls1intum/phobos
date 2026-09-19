@@ -285,6 +285,33 @@ rejects_net "a bare value in a [limits] section is refused" '[limits]
 
 
 # ---------------------------------------------------------------------
+# Deciding whether a run was stopped by its timeout
+# ---------------------------------------------------------------------
+
+# Prints "timeout" when run_reached_timeout accepts the status, elapsed microseconds and
+# configured value, and "passed-through" otherwise.
+reached() {
+  bash -c '
+      source "$1/phobos-common.sh"
+      if run_reached_timeout "$2" "$3" "$4"; then echo timeout; else echo passed-through; fi
+    ' _ "$CORE" "$1" "$2" "$3"
+}
+
+TWO_SECONDS_MICROSECONDS=2000000
+check "attribution: 124 at the timeout is a timeout"           "timeout"        "$(reached 124 "$TWO_SECONDS_MICROSECONDS" 2)"
+check "attribution: 137 after the timeout is a timeout"        "timeout"        "$(reached 137 "$((TWO_SECONDS_MICROSECONDS * 3))" 2)"
+check "attribution: 124 before the timeout is the command's"   "passed-through" "$(reached 124 "$((TWO_SECONDS_MICROSECONDS - 1))" 2)"
+check "attribution: 137 before the timeout is the command's"   "passed-through" "$(reached 137 0 2)"
+check "attribution: another status is never a timeout"         "passed-through" "$(reached 1 "$((TWO_SECONDS_MICROSECONDS * 3))" 2)"
+check "attribution: milliseconds of the timeout count"         "passed-through" "$(reached 124 "$TWO_SECONDS_MICROSECONDS" 2.001)"
+
+microseconds_of() {
+  bash -c 'source "$1/phobos-common.sh"; epoch_realtime_microseconds "$2"' _ "$CORE" "$1"
+}
+check "clock: a point as the decimal separator"                "1789821309904702" "$(microseconds_of 1789821309.904702)"
+check "clock: a comma as the decimal separator (de_DE)"        "1789821309904702" "$(microseconds_of 1789821309,904702)"
+
+# ---------------------------------------------------------------------
 
 echo
 printf '%d passed, %d failed, %d skipped\n' "$passed" "$failed" "$skipped"

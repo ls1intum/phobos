@@ -46,13 +46,16 @@ fi
 # a command that ignores SIGTERM. That escalation only fires while GNU timeout's own child is
 # still alive, so the layers below keep themselves alive across SIGTERM (they set the command
 # itself back to the default disposition), and it is the SIGKILL that stops such a command.
+start_microseconds="$(epoch_realtime_microseconds "$EPOCHREALTIME")"
 set +e
 "${TIMEOUT_BIN}" "--kill-after=5s" "${timeout_sec}s" "$@"
 rc=$?
 set -e
+elapsed_microseconds=$(( $(epoch_realtime_microseconds "$EPOCHREALTIME") - start_microseconds ))
 
-# 124 is GNU timeout's own "timed out" code; 137 is 128+SIGKILL, the escalation having fired.
-if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+# A timeout only when GNU timeout's status says so and the run lasted at least the timeout;
+# any other status, a 124 or 137 of the command's own included, passes through unchanged.
+if run_reached_timeout "$rc" "$elapsed_microseconds" "$timeout_sec"; then
   report "Timed out after ${timeout_sec}s. (PHB-ETIMEOUT)"
   exit "${PHB_ETIMEOUT}"
 fi
