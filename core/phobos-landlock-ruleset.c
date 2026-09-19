@@ -71,7 +71,9 @@ int detect_landlock_version(int minimum_landlock_version, bool network_rules_wan
         exit(EXIT_CODE_POLICY_ERROR);
     }
     if (network_rules_wanted && landlock_version < FIRST_VERSION_WITH_NETWORK) {
-        exit_with_message("network rules require Landlock version 4 (kernel 6.7)");
+        fprintf(stderr, "[phobos-landlock] network rules require Landlock version %d (kernel 6.7)\n",
+                FIRST_VERSION_WITH_NETWORK);
+        exit(EXIT_CODE_POLICY_ERROR);
     }
     return (int)landlock_version;
 }

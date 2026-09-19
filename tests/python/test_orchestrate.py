@@ -17,6 +17,9 @@ import pathlib
 import subprocess
 import sys
 
+# How long the orchestrator may run before the test gives up on it.
+ORCHESTRATOR_TIMEOUT_SECONDS = 120
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 ORCHESTRATOR = REPO_ROOT / "docker" / "prune_phase" / "orchestrate" / "orchestrate.py"
 HELPERS = REPO_ROOT / "var" / "tmp" / "helpers"
@@ -85,7 +88,7 @@ def run_orchestrator(
         },
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=ORCHESTRATOR_TIMEOUT_SECONDS,
         check=False,
     )
 

@@ -1,6 +1,8 @@
 #define _GNU_SOURCE
 #include "phobos-connect-guard-options.h"
 
+#include "phobos-connect-guard-diagnostics.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,7 +10,7 @@
 [[noreturn]] void print_usage_and_exit(void) {
     fprintf(stderr,
             "Usage: phobos-connect-guard [--verbose] [--rules FILE] -- COMMAND [ARGUMENTS...]\n");
-    exit(2);
+    exit(EXIT_USAGE);
 }
 
 void parse_arguments(int argument_count, char *arguments[], struct guard_options *options) {

@@ -33,6 +33,12 @@ import time
 # Regex and helpers
 # -----------------------------------------------------------------------------
 RX_DETAIL = re.compile(r"^(\/[^ ]+)\s+->\s+([rwn])$")  # /path -> r|w|n
+# The words of the label in front of the options on a "Base options:" or "Tail options:" line.
+OPTIONS_LABEL_WORDS = 2
+# How far the JSON record is indented, for a reader rather than for a parser.
+JSON_INDENT = 2
+# The status the helper ends with when the log it was pointed at does not exist.
+EXIT_NO_LOG = 2
 
 
 def canon(p: str) -> str:
@@ -84,7 +90,7 @@ list[str]]:
 
             # Base static binds
             if line.startswith("Base options:"):
-                tokens = line.split()[2:]
+                tokens = line.split()[OPTIONS_LABEL_WORDS:]
                 it = iter(tokens)
                 for flag in it:
                     try:
@@ -104,7 +110,7 @@ list[str]]:
 
             # Tail flags
             if line.startswith("Tail options:"):
-                tail_flags.extend(line.split()[2:])
+                tail_flags.extend(line.split()[OPTIONS_LABEL_WORDS:])
                 continue
 
     return dyn_pairs, base_modes, tail_flags
@@ -159,7 +165,7 @@ def write_json(lang: str, ex: str,
     }
     out_dir.mkdir(parents=True, exist_ok=True)
     dest = out_dir / f"{lang}_{ex}.json"
-    dest.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    dest.write_text(json.dumps(data, indent=JSON_INDENT, sort_keys=True) + "\n")
     return dest
 
 
@@ -183,7 +189,7 @@ def main() -> int:
 
     if not log_path.is_file():
         print(f"emit_artifacts: no log file {log_path}", file=sys.stderr)
-        return 2
+        return EXIT_NO_LOG
 
     dyn_pairs, base_modes, tail_flags = parse_log(log_path, args.workdir, args.runtime_root)
     merged_pairs = merge_pairs(dyn_pairs, base_modes)

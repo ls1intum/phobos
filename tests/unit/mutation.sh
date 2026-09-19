@@ -24,14 +24,16 @@ trap 'rm -rf "$WORK"' EXIT
 # mull reads this from its working directory and offers no way to point it
 # elsewhere, so the run happens on a copy inside the container. The repository
 # is mounted read-only and never gains a file.
-cat > "$WORK/mull.yml" <<'CONFIG'
+# How long one mutant's run may take, in milliseconds, before mull counts it as killed by timeout.
+MUTANT_TIMEOUT_MILLISECONDS=30000
+cat > "$WORK/mull.yml" <<CONFIG
 mutators:
   - cxx_all
 includePaths:
   - core/phobos-landlock.*
 excludePaths:
   - tests/.*
-timeout: 30000
+timeout: ${MUTANT_TIMEOUT_MILLISECONDS}
 CONFIG
 
 cat > "$WORK/run-inside.sh" <<'INNER'
@@ -65,7 +67,9 @@ done
   -Wl,--wrap=open -Wl,--wrap=fstat -Wl,--wrap=syscall -Wl,--wrap=prctl \
   -Wl,--wrap=chdir -Wl,--wrap=execvp -Wl,--wrap=close
 
-"mull-runner-${LLVM_VERSION}" --workers 4 /tmp/unit-mutated
+# The mutants run in parallel on this many workers.
+MULL_WORKERS=4
+"mull-runner-${LLVM_VERSION}" --workers "${MULL_WORKERS}" /tmp/unit-mutated
 INNER
 
 docker run --rm \

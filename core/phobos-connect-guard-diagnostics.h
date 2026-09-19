@@ -8,6 +8,12 @@
 /* The exit status of every failure to set the supervision up, distinct from the command's own. */
 static constexpr int EXIT_SETUP_ERROR = 125;
 
+/* The exit status of a call made the wrong way. */
+static constexpr int EXIT_USAGE = 2;
+
+/* The exit status when the command itself cannot be executed, as a shell reports it. */
+static constexpr int EXIT_COMMAND_NOT_EXECUTABLE = 127;
+
 /* Switches the --verbose lines on or off. */
 void set_verbose(bool enabled);
 

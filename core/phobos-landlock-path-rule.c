@@ -22,7 +22,7 @@ uint64_t rights_granted_for(const struct path_rule *rule, int landlock_version) 
     }
     if (rule->writable) {
         granted_rights |= LANDLOCK_ACCESS_FILESYSTEM_WRITE_FILE;
-        if (landlock_version >= 3) {
+        if (landlock_version >= FIRST_VERSION_WITH_TRUNCATE) {
             granted_rights |= LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE;
         }
     }
@@ -40,10 +40,10 @@ uint64_t rights_granted_for(const struct path_rule *rule, int landlock_version) 
      * deleting it on the other, so it is granted only where both are. Without
      * it the kernel answers EXDEV, which makes a copying tool succeed quietly
      * and an atomic move fail. */
-    if (rule->makeable && rule->removable && landlock_version >= 2) {
+    if (rule->makeable && rule->removable && landlock_version >= FIRST_VERSION_WITH_REFER) {
         granted_rights |= LANDLOCK_ACCESS_FILESYSTEM_REFER;
     }
-    if (rule->ioctl_device && landlock_version >= 5) {
+    if (rule->ioctl_device && landlock_version >= FIRST_VERSION_WITH_IOCTL_DEVICE) {
         granted_rights |= LANDLOCK_ACCESS_FILESYSTEM_IOCTL_DEVICE;
     }
     return granted_rights & filesystem_rights_for_version(landlock_version);

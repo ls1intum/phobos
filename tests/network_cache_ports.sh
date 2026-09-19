@@ -12,6 +12,8 @@
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../core/phobos-constants.sh
+source "${HERE}/../core/phobos-constants.sh"
 SOURCE_DIRECTORY="${HERE}/../ld_preloader"
 PROBE_SOURCE="${HERE}/netcache_probe.c"
 
@@ -333,11 +335,11 @@ refused_because() {
   local name=$1
   local reason=$2
   local out=$3
-  if [[ "$out" == *"EXIT=15"* && "$out" == *"PHB-ERUNTIME"* && "$out" == *"$reason"* \
+  if [[ "$out" == *"EXIT=${PHB_ERUNTIME}"* && "$out" == *"PHB-ERUNTIME"* && "$out" == *"$reason"* \
         && "$out" != *"command-ran"* ]]; then
     ok "$name"
   else
-    bad "$name" "exit 15, PHB-ERUNTIME naming '$reason', and no command run" "$out"
+    bad "$name" "exit ${PHB_ERUNTIME}, PHB-ERUNTIME naming '$reason', and no command run" "$out"
   fi
 }
 
@@ -382,13 +384,15 @@ refused_because "a file that is not a library is refused" "does not define bind"
 # The same library with its ELF machine field, at offset 18, set to another
 # architecture: x86-64 is 0x3e and AArch64 is 0xb7. Its symbols still read, so only
 # the loader can tell that it would never be mapped.
+# Where an ELF header keeps the machine field.
+ELF_MACHINE_OFFSET=18
 cp "$WORK/libnetblocker.so" "$WORK/foreign.so"
-if [[ "$(od -An -tx1 -j18 -N1 "$WORK/foreign.so" | tr -d ' ')" == "3e" ]]; then
+if [[ "$(od -An -tx1 -j"$ELF_MACHINE_OFFSET" -N1 "$WORK/foreign.so" | tr -d ' ')" == "3e" ]]; then
   foreign_machine='\xb7'
 else
   foreign_machine='\x3e'
 fi
-printf '%b' "$foreign_machine" | dd of="$WORK/foreign.so" bs=1 seek=18 conv=notrunc status=none
+printf '%b' "$foreign_machine" | dd of="$WORK/foreign.so" bs=1 seek="$ELF_MACHINE_OFFSET" conv=notrunc status=none
 refused_because "a library for another architecture is refused" "does not load cleanly" \
   "$(run_network_layer "$WORK/foreign.so")"
 
@@ -462,10 +466,10 @@ run_with_write_path() {
 refused_as_unenforceable() {
   local name=$1
   local out=$2
-  if [[ "$out" == *"EXIT=11"* && "$out" == *"lies beneath the write path"* && "$out" != *"command-ran"* ]]; then
+  if [[ "$out" == *"EXIT=${PHB_EPOLICY}"* && "$out" == *"lies beneath the write path"* && "$out" != *"command-ran"* ]]; then
     ok "$name"
   else
-    bad "$name" "exit 11, PHB-EPOLICY naming the write path, and no command run" "$out"
+    bad "$name" "exit ${PHB_EPOLICY}, PHB-EPOLICY naming the write path, and no command run" "$out"
   fi
 }
 
@@ -571,22 +575,22 @@ left_nothing "after a command that fails" "$parent" 1 "" \
 
 mkdir -p "$WORK/writable/specs"
 left_nothing "after a policy refusal, for a specification beneath a write path" \
-  "$WORK/writable/specs" 11 "lies beneath the write path" \
+  "$WORK/writable/specs" "$PHB_EPOLICY" "lies beneath the write path" \
   "$(run_phobos "$WORK/writable/specs" -- /bin/echo command-ran)"
 
 parent="$(fresh_parent unusable-library)"
-left_nothing "after the network layer refuses its library" "$parent" 15 "PHB-ERUNTIME" \
+left_nothing "after the network layer refuses its library" "$parent" "$PHB_ERUNTIME" "PHB-ERUNTIME" \
   "$(NETBLOCKER_SO_FOR_RUN="$WORK/absent.so" run_phobos "$parent" -- /bin/echo command-ran)"
 
 parent="$(fresh_parent timeout)"
-left_nothing "after a run that times out" "$parent" 14 "PHB-ETIMEOUT" \
+left_nothing "after a run that times out" "$parent" "$PHB_ETIMEOUT" "PHB-ETIMEOUT" \
   "$(run_phobos "$parent" --config "$WORK/one-second.cfg" -- /bin/sleep 10)"
 
 out="$(run_phobos relative-parent -- /bin/echo command-ran)"
-if [[ "$out" == *"EXIT=11"* && "$out" == *"not an absolute path"* && "$out" != *"command-ran"* ]]; then
+if [[ "$out" == *"EXIT=${PHB_EPOLICY}"* && "$out" == *"not an absolute path"* && "$out" != *"command-ran"* ]]; then
   ok "a relative --spec-parent is refused"
 else
-  bad "a relative --spec-parent is refused" "exit 11 naming the parent, and no command run" "$out"
+  bad "a relative --spec-parent is refused" "exit ${PHB_EPOLICY} naming the parent, and no command run" "$out"
 fi
 
 # The command leaves a file of its own in the specification directory, so it cannot be
@@ -594,11 +598,11 @@ fi
 parent="$(fresh_parent unremovable)"
 out="$(run_phobos "$parent" -- /bin/sh -c 'touch "$(dirname "$NETBLOCKER_CONF")/left-by-command"')"
 left="$(find "$parent" -mindepth 1 -maxdepth 1 -name 'phobos-spec.*' | wc -l | tr -d ' ')"
-if [[ "$out" == *"EXIT=15"* && "$out" == *"could not remove the specification directory"* && "$left" == "1" ]]; then
+if [[ "$out" == *"EXIT=${PHB_ERUNTIME}"* && "$out" == *"could not remove the specification directory"* && "$left" == "1" ]]; then
   ok "a specification that cannot be removed fails the run instead of passing silently"
 else
   bad "a specification that cannot be removed fails the run instead of passing silently" \
-      "exit 15, the cleanup failure reported, and the directory with the command's file kept" \
+      "exit ${PHB_ERUNTIME}, the cleanup failure reported, and the directory with the command's file kept" \
       "${left} left: $out"
 fi
 
@@ -623,11 +627,11 @@ mkdir -p "$nobase"
 cp "$WORK/core/"*.sh "$nobase/"
 out="$(bash "$nobase/phobos.sh" --landlock-bin "$WORK/record-landlock" -- /bin/echo should-not-run 2>&1)"
 rc=$?
-if [[ "$rc" -eq 11 && "$out" == *"PHB-EPOLICY"* && "$out" != *"should-not-run"* ]]; then
+if [[ "$rc" -eq "$PHB_EPOLICY" && "$out" == *"PHB-EPOLICY"* && "$out" != *"should-not-run"* ]]; then
   ok "no Base*.cfg refuses to run unconfined (PHB-EPOLICY), and runs nothing"
 else
   bad "no Base*.cfg refuses to run unconfined (PHB-EPOLICY), and runs nothing" \
-      "exit 11 naming PHB-EPOLICY, command not run" "exit ${rc}: $out"
+      "exit ${PHB_EPOLICY} naming PHB-EPOLICY, command not run" "exit ${rc}: $out"
 fi
 
 out="$(bash "$nobase/phobos.sh" --landlock-bin "$WORK/record-landlock" --allow-unsandboxed -- /bin/echo ran-raw 2>&1)"

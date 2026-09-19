@@ -64,12 +64,15 @@ command -v "$compiler" >/dev/null 2>&1 || compiler=gcc
 "$compiler" -O2 -o "$WORK/bypass" "$WORK/bypass.c" 2>"$WORK/cc.log"
 [[ -x "$WORK/bypass" ]] || { bad "compile the raw-connect probe" "$(cat "$WORK/cc.log")"; echo; printf '%d passed, %d failed\n' "$pass" "$fail"; exit 1; }
 
+# How many connections may wait to be accepted on each loopback listener.
+LISTEN_BACKLOG=16
+
 # Loopback listeners, so an allowed connect actually completes rather than being refused.
 listener() { perl -e '
     use IO::Socket::INET;
     my $s = IO::Socket::INET->new(LocalAddr=>"127.0.0.1", LocalPort=>$ARGV[0],
-        Listen=>16, ReuseAddr=>1, Proto=>"tcp") or exit 1;
-    while (my $c = $s->accept) { close $c }' "$1"; }
+        Listen=>$ARGV[1], ReuseAddr=>1, Proto=>"tcp") or exit 1;
+    while (my $c = $s->accept) { close $c }' "$1" "$LISTEN_BACKLOG"; }
 listener "$ALLOWED_PORT" & allowed_pid=$!
 listener "$DENIED_PORT" & denied_pid=$!
 sleep 1

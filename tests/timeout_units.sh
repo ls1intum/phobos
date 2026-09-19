@@ -9,6 +9,8 @@ set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE="${HERE}/../core"
+# shellcheck source=../core/phobos-constants.sh
+source "${CORE}/phobos-constants.sh"
 
 WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
@@ -81,10 +83,10 @@ rejects() {
   rc=${res%%|*}
   out=${res#*|}
   # PHB_EPOLICY is 11.
-  if [[ "$rc" == "11" && "$out" == *"PHB-EPOLICY"* ]]; then
+  if [[ "$rc" == "$PHB_EPOLICY" && "$out" == *"PHB-EPOLICY"* ]]; then
     ok "$name"
   else
-    bad "$name" "exit 11 reporting PHB-EPOLICY" "exit $rc: $out"
+    bad "$name" "exit ${PHB_EPOLICY} reporting PHB-EPOLICY" "exit $rc: $out"
   fi
 }
 
@@ -151,11 +153,11 @@ rm -f "$WORK/pwned"
 res=$(run_parser "[limits]
 timeout=\$(touch $WORK/pwned)")
 rc=${res%%|*}
-if [[ "$rc" == "11" && ! -e "$WORK/pwned" ]]; then
+if [[ "$rc" == "$PHB_EPOLICY" && ! -e "$WORK/pwned" ]]; then
   ok "command substitution is rejected and not executed"
 else
   bad "command substitution is rejected and not executed" \
-      "exit 11 and no side effect" "exit $rc, pwned exists: $([[ -e "$WORK/pwned" ]] && echo yes || echo no)"
+      "exit ${PHB_EPOLICY} and no side effect" "exit $rc, pwned exists: $([[ -e "$WORK/pwned" ]] && echo yes || echo no)"
 fi
 
 # ---------------------------------------------------------------------
@@ -253,10 +255,10 @@ rejects_net() {
   printf '%s\n' "$body" > "$WORK/net.cfg"
   out=$(bash -c 'source "$1/phobos-common.sh"; parse_cfg_policy "$2"' _ "$CORE" "$WORK/net.cfg" 2>&1)
   rc=$?
-  if [[ "$rc" == "11" && "$out" == *"PHB-EPOLICY"* ]]; then
+  if [[ "$rc" == "$PHB_EPOLICY" && "$out" == *"PHB-EPOLICY"* ]]; then
     ok "$name"
   else
-    bad "$name" "exit 11 reporting PHB-EPOLICY" "exit $rc: $out"
+    bad "$name" "exit ${PHB_EPOLICY} reporting PHB-EPOLICY" "exit $rc: $out"
   fi
 }
 
@@ -298,12 +300,12 @@ reached() {
 }
 
 TWO_SECONDS_MICROSECONDS=2000000
-check "attribution: 124 at the timeout is a timeout"           "timeout"        "$(reached 124 "$TWO_SECONDS_MICROSECONDS" 2)"
-check "attribution: 137 after the timeout is a timeout"        "timeout"        "$(reached 137 "$((TWO_SECONDS_MICROSECONDS * 3))" 2)"
-check "attribution: 124 before the timeout is the command's"   "passed-through" "$(reached 124 "$((TWO_SECONDS_MICROSECONDS - 1))" 2)"
-check "attribution: 137 before the timeout is the command's"   "passed-through" "$(reached 137 0 2)"
+check "attribution: 124 at the timeout is a timeout"           "timeout"        "$(reached "$PHB_TIMEOUT_EXPIRED_EXIT" "$TWO_SECONDS_MICROSECONDS" 2)"
+check "attribution: 137 after the timeout is a timeout"        "timeout"        "$(reached "$PHB_TIMEOUT_KILLED_EXIT" "$((TWO_SECONDS_MICROSECONDS * 3))" 2)"
+check "attribution: 124 before the timeout is the command's"   "passed-through" "$(reached "$PHB_TIMEOUT_EXPIRED_EXIT" "$((TWO_SECONDS_MICROSECONDS - 1))" 2)"
+check "attribution: 137 before the timeout is the command's"   "passed-through" "$(reached "$PHB_TIMEOUT_KILLED_EXIT" 0 2)"
 check "attribution: another status is never a timeout"         "passed-through" "$(reached 1 "$((TWO_SECONDS_MICROSECONDS * 3))" 2)"
-check "attribution: milliseconds of the timeout count"         "passed-through" "$(reached 124 "$TWO_SECONDS_MICROSECONDS" 2.001)"
+check "attribution: milliseconds of the timeout count"         "passed-through" "$(reached "$PHB_TIMEOUT_EXPIRED_EXIT" "$TWO_SECONDS_MICROSECONDS" 2.001)"
 
 microseconds_of() {
   bash -c 'source "$1/phobos-common.sh"; epoch_realtime_microseconds "$2"' _ "$CORE" "$1"

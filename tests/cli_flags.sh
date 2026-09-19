@@ -8,6 +8,8 @@ set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE="${HERE}/../core"
+# shellcheck source=../core/phobos-constants.sh
+source "${CORE}/phobos-constants.sh"
 WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
 cleanup() { rm -rf "$WORK"; }
@@ -71,10 +73,10 @@ echo
 echo "== an unknown or obsolete option is refused before anything runs =="
 for opt in --no-timeout --no-fs --bogus -x; do
   run_phobos "$SPECS" "$opt" --config "$BASE" -- /bin/echo should-not-run
-  if [[ "$RC" -eq 2 && "$OUT" == *"Unknown option: $opt"* && "$OUT" != *"should-not-run"* ]]; then
+  if [[ "$RC" -eq "$PHB_EXIT_USAGE" && "$OUT" == *"Unknown option: $opt"* && "$OUT" != *"should-not-run"* ]]; then
     ok "refuses '$opt' and runs nothing"
   else
-    bad "refuses '$opt' and runs nothing" "exit 2 naming the option, command not run" "exit ${RC}: $OUT"
+    bad "refuses '$opt' and runs nothing" "exit ${PHB_EXIT_USAGE} naming the option, command not run" "exit ${RC}: $OUT"
   fi
 done
 
@@ -96,6 +98,9 @@ else
 fi
 
 echo
+# The layers a run has, each of which --allow-unsandboxed reports as disabled: the timeout,
+# the network, the resource limits and the filesystem.
+LAYER_COUNT=4
 echo "== --allow-unsandboxed runs raw even with a base, warns, and leaves no specification =="
 RAWSPECS="$WORK/rawspecs"
 mkdir -p "$RAWSPECS"
@@ -103,7 +108,7 @@ run_phobos "$RAWSPECS" --allow-unsandboxed --config "$BASE" -- /bin/echo raw-ran
 disabled=$(grep -c 'DISABLED' <<<"$OUT")
 left="$(find "$RAWSPECS" -mindepth 1 -maxdepth 1 -name 'phobos-spec.*' 2>/dev/null | wc -l | tr -d ' ')"
 if [[ "$RC" -eq 0 && "$OUT" == *"raw-ran"* && "$OUT" == *"running the command RAW"* \
-      && "$disabled" -eq 4 && "$left" -eq 0 ]]; then
+      && "$disabled" -eq "$LAYER_COUNT" && "$left" -eq 0 ]]; then
   ok "--allow-unsandboxed with a base runs raw, warns, names four disabled layers, leaves no spec"
 else
   bad "--allow-unsandboxed with a base runs raw, warns, names four disabled layers, leaves no spec" \
@@ -206,6 +211,21 @@ else
   bad "PHB_DEBUG_ENABLED in the environment does not switch debugging on" \
     "no debug line and no --verbose" "stderr '$(cat "$DBG_ERR")', landlock '$(tr '\n' ' ' < "$WORK/ll-env")'"
 fi
+
+echo "== the exit statuses keep their documented values =="
+# The statuses a run ends with are read by whatever grades it, so they are a contract, not a
+# detail. Every other suite compares against the names; this is the one place that pins the
+# names to the values the documentation promises.
+for pair in "PHB_EPOLICY=11" "PHB_ETIMEOUT=14" "PHB_ERUNTIME=15" "PHB_EXIT_USAGE=2" \
+            "PHB_ENFORCER_REFUSED_EXIT=125"; do
+  constant="${pair%%=*}"
+  documented="${pair#*=}"
+  if [[ "${!constant}" == "$documented" ]]; then
+    ok "${constant} is ${documented}"
+  else
+    bad "${constant} is ${documented}" "$documented" "${!constant}"
+  fi
+done
 
 echo "== a refusal is written to stderr and leaves stdout to the command =="
 # A policy error ends the run before the command starts. Its message is for the person

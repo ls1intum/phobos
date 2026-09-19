@@ -4,21 +4,10 @@
 # source it, never here, so SC2034 would fire on all of them by design.
 # shellcheck disable=SC2034
 set -euo pipefail
-PHB_EPOLICY=11
-PHB_ETIMEOUT=14
-PHB_ERUNTIME=15
+# shellcheck source=phobos-constants.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/phobos-constants.sh"
 # The filesystem sections, each granting exactly its own phobos-landlock right.
 PHB_FS_RIGHTS="read execute write create delete"
-# How long the filesystem layer waits, after the command has ended, for the denial counts. A
-# process the command left behind can keep its stderr, and so the counter, alive; the layer
-# then reports no counts rather than wait for it. Kept below the timeout layer's --kill-after,
-# so GNU timeout never escalates to SIGKILL while the layer is still waiting here.
-PHB_DENIAL_COUNT_GRACE_SECONDS=2
-# The counter's own limits. It runs outside the command's rlimits, so without these a single
-# endless stderr line could grow it without bound. A counter that hits them dies, and the run
-# then reports no counts; the command's output is never affected.
-PHB_DENIAL_COUNTER_MEMORY_KB=65536
-PHB_DENIAL_COUNTER_CPU_SECONDS=60
 # What the denial report counts in the command's stderr, one extended regular expression each.
 PHB_NETWORK_DENIAL_PATTERN='EAI_AGAIN|EAI_FAIL|EAI_NONAME|Network is unreachable|Connection timed out'
 PHB_FILESYSTEM_DENIAL_PATTERN='Permission denied|EACCES|EROFS'
@@ -54,12 +43,6 @@ canon_paths() {
     cat
   fi
 }
-# GNU timeout's own exit statuses: the command ran past its limit and was stopped by the
-# SIGTERM, or it ignored the SIGTERM and the --kill-after escalation's SIGKILL ended it
-# (128 + 9). A command can end with either status on its own, so neither alone is a timeout.
-PHB_TIMEOUT_EXPIRED_EXIT=124
-PHB_TIMEOUT_KILLED_EXIT=137
-PHB_MICROSECONDS_PER_MILLISECOND=1000
 # Timeout values are seconds: either a whole number, or seconds with
 # millisecond precision written as exactly three decimal places.
 # GNU timeout receives the value with an explicit seconds suffix, so no unit
@@ -70,16 +53,16 @@ PHB_TIMEOUT_PATTERN='^[0-9]+(\.[0-9]{3})?$'
 # than as text. The pattern guarantees a digit before the point and exactly three after it,
 # so both parts are read in base ten, never as octal, and never with an empty field.
 timeout_to_ms() {
-  local value="$1" integer fraction="000"
+  local value="$1" integer fraction="0"
   if [[ "$value" == *.* ]]; then integer="${value%%.*}"; fraction="${value#*.}"; else integer="$value"; fi
-  printf '%s' "$(( 10#$integer * 1000 + 10#$fraction ))"
+  printf '%s' "$(( 10#$integer * PHB_MILLISECONDS_PER_SECOND + 10#$fraction ))"
 }
 
 # The inverse, canonical: whole seconds print without a fraction, so 2 and 2.000 come back as
 # the one spelling and the written specification does not depend on which cfg named it.
 ms_to_timeout() {
   local ms="$1" seconds fraction
-  seconds=$(( ms / 1000 )); fraction=$(( ms % 1000 ))
+  seconds=$(( ms / PHB_MILLISECONDS_PER_SECOND )); fraction=$(( ms % PHB_MILLISECONDS_PER_SECOND ))
   if (( fraction == 0 )); then printf '%s' "$seconds"; else printf '%d.%03d' "$seconds" "$fraction"; fi
 }
 
@@ -166,15 +149,11 @@ apply_resource_limits() {
   local nofile="$3"
   local fsize_mb="$4"
   local cpu="$5"
-  # A megabyte value is multiplied by 1024 for ulimit's kilobyte argument. Refuse one so
-  # large the multiplication would overflow the shell's signed 64-bit arithmetic and wrap to
-  # a small or negative limit, rather than setting a limit far tighter than the policy asked.
-  local mb_max=8796093022207
   # Zero means the limit is switched off, so it is not applied. Every value is read in base
   # ten, so a leading zero is not taken for octal.
   if [[ -n "$mem_mb" ]] && (( 10#$mem_mb != 0 )); then
-    (( 10#$mem_mb <= mb_max )) || die "the memory limit of ${mem_mb} MB is too large to set safely" "${PHB_EPOLICY}"
-    ulimit -v "$(( 10#$mem_mb * 1024 ))" || die "cannot set the memory limit of ${mem_mb} MB" "${PHB_ERUNTIME}"
+    (( 10#$mem_mb <= PHB_LARGEST_MEGABYTES )) || die "the memory limit of ${mem_mb} MB is too large to set safely" "${PHB_EPOLICY}"
+    ulimit -v "$(( 10#$mem_mb * PHB_KILOBYTES_PER_MEGABYTE ))" || die "cannot set the memory limit of ${mem_mb} MB" "${PHB_ERUNTIME}"
   fi
   if [[ -n "$nproc" ]] && (( 10#$nproc != 0 )); then
     ulimit -u "$(( 10#$nproc ))" || die "cannot set the process limit of ${nproc}" "${PHB_ERUNTIME}"
@@ -183,8 +162,8 @@ apply_resource_limits() {
     ulimit -n "$(( 10#$nofile ))" || die "cannot set the open-file limit of ${nofile}" "${PHB_ERUNTIME}"
   fi
   if [[ -n "$fsize_mb" ]] && (( 10#$fsize_mb != 0 )); then
-    (( 10#$fsize_mb <= mb_max )) || die "the file-size limit of ${fsize_mb} MB is too large to set safely" "${PHB_EPOLICY}"
-    ulimit -f "$(( 10#$fsize_mb * 1024 ))" || die "cannot set the file-size limit of ${fsize_mb} MB" "${PHB_ERUNTIME}"
+    (( 10#$fsize_mb <= PHB_LARGEST_MEGABYTES )) || die "the file-size limit of ${fsize_mb} MB is too large to set safely" "${PHB_EPOLICY}"
+    ulimit -f "$(( 10#$fsize_mb * PHB_KILOBYTES_PER_MEGABYTE ))" || die "cannot set the file-size limit of ${fsize_mb} MB" "${PHB_ERUNTIME}"
   fi
   if [[ -n "$cpu" ]] && (( 10#$cpu != 0 )); then
     ulimit -t "$(( 10#$cpu ))" || die "cannot set the CPU-time limit of ${cpu} s" "${PHB_ERUNTIME}"
@@ -249,7 +228,7 @@ parse_network_target() {
     exit "${PHB_EPOLICY}"
   else
     local colons="${target//[^:]/}"
-    if (( ${#colons} >= 2 )); then
+    if (( ${#colons} >= PHB_IPV6_MINIMUM_COLONS )); then
       host_ref="$target"; port_ref="*"
     elif [[ "$target" == *:* ]]; then
       host_ref="${target%:*}"; port_ref="${target##*:}"
@@ -663,7 +642,7 @@ build_path_args() {
 refuse_unusable_port() {
   local host="$1"
   local port="$2"
-  [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) && return 0
+  [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= PHB_HIGHEST_PORT )) && return 0
   report "Policy invalid: '${host}:${port}' names no usable TCP port. (PHB-EPOLICY)"
   exit "${PHB_EPOLICY}"
 }

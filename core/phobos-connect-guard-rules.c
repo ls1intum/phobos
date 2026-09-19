@@ -8,6 +8,33 @@
 #include <string.h>
 #include <sys/socket.h>
 
+/* strtoul's base for the ports and prefix lengths a rule names. */
+static constexpr int DECIMAL = 10;
+/* The address widths a prefix length may reach, IPv4 and IPv6. */
+static constexpr unsigned long IPV4_ADDRESS_BITS = 32;
+static constexpr unsigned long IPV6_ADDRESS_BITS = 128;
+static constexpr int BITS_PER_BYTE = 8;
+/* The IPv4-mapped IPv6 form ::ffff:a.b.c.d: two marker bytes of 0xff, then the four bytes of
+ * the IPv4 address, the same layout as ld_preloader/netblocker-address.c. */
+static constexpr size_t MAPPED_MARKER_FIRST_BYTE = 10;
+static constexpr size_t MAPPED_MARKER_SECOND_BYTE = 11;
+static constexpr size_t MAPPED_IPV4_FIRST_BYTE = 12;
+static constexpr uint8_t MAPPED_MARKER = 0xff;
+/* The highest TCP or UDP port; the lowest is 1. */
+static constexpr unsigned long HIGHEST_PORT = 65535;
+/* The longest line of the rules file read at once, and the longest port word. */
+static constexpr size_t RULE_LINE_LENGTH = 512;
+static constexpr size_t PORT_TEXT_LENGTH = 16;
+/* A rules line is two words, the host and the port. */
+static constexpr int RULE_WORDS = 2;
+/* The field widths of the sscanf format in load_rules are MAXIMUM_HOST - 1 and
+ * PORT_TEXT_LENGTH - 1. A format cannot name a constant, so the two are tied together here. */
+static_assert(MAXIMUM_HOST == 256 && PORT_TEXT_LENGTH == 16,
+              "the widths in load_rules' sscanf format must follow the buffer sizes");
+/* 127.0.0.0/8 is IPv4 loopback: the first octet, the top eight of the address's 32 bits. */
+static constexpr uint32_t IPV4_LOOPBACK_FIRST_OCTET = 127;
+static constexpr int IPV4_FIRST_OCTET_SHIFT = 24;
+
 static struct connect_rule connect_rules[MAXIMUM_RULES];
 static size_t connect_rule_count = 0;
 
@@ -25,15 +52,15 @@ void remember_rule(const char *host, const char *port_text) {
         struct in_addr v4;
         bool ipv4 = inet_pton(AF_INET, rule->host, &v4) == 1;
         char *length_unconverted = nullptr;
-        unsigned long length = strtoul(length_text, &length_unconverted, 10);
-        unsigned long longest = ipv4 ? 32 : 128;
+        unsigned long length = strtoul(length_text, &length_unconverted, DECIMAL);
+        unsigned long longest = ipv4 ? IPV4_ADDRESS_BITS : IPV6_ADDRESS_BITS;
         if (*length_unconverted != '\0' || length == 0 || length > longest) {
             return;
         }
         if (ipv4) {
-            rule->network.s6_addr[10] = 0xff;
-            rule->network.s6_addr[11] = 0xff;
-            memcpy(&rule->network.s6_addr[12], &v4, sizeof(v4));
+            rule->network.s6_addr[MAPPED_MARKER_FIRST_BYTE] = MAPPED_MARKER;
+            rule->network.s6_addr[MAPPED_MARKER_SECOND_BYTE] = MAPPED_MARKER;
+            memcpy(&rule->network.s6_addr[MAPPED_IPV4_FIRST_BYTE], &v4, sizeof(v4));
             rule->prefix_length = IPV4_MAPPED_PREFIX_BITS + (int)length;
         } else if (inet_pton(AF_INET6, rule->host, &rule->network) == 1) {
             if (IN6_IS_ADDR_V4MAPPED(&rule->network) && length < (unsigned long)IPV4_MAPPED_PREFIX_BITS) {
@@ -51,8 +78,8 @@ void remember_rule(const char *host, const char *port_text) {
         return;
     }
     char *unconverted = nullptr;
-    unsigned long value = strtoul(port_text, &unconverted, 10);
-    if (*unconverted != '\0' || value == 0 || value > 65535) {
+    unsigned long value = strtoul(port_text, &unconverted, DECIMAL);
+    if (*unconverted != '\0' || value == 0 || value > HIGHEST_PORT) {
         return;
     }
     rule->any_port = false;
@@ -68,11 +95,11 @@ bool load_rules(const char *path) {
     if (file == nullptr) {
         return errno == ENOENT;
     }
-    char line[512];
+    char line[RULE_LINE_LENGTH];
     while (fgets(line, sizeof(line), file) != nullptr) {
         char host[MAXIMUM_HOST] = "";
-        char port_text[16] = "";
-        if (sscanf(line, "%255s %15s", host, port_text) == 2) {
+        char port_text[PORT_TEXT_LENGTH] = "";
+        if (sscanf(line, "%255s %15s", host, port_text) == RULE_WORDS) {
             remember_rule(host, port_text);
         }
     }
@@ -83,7 +110,7 @@ bool load_rules(const char *path) {
 bool address_is_loopback(int family, const void *address) {
     if (family == AF_INET) {
         const struct in_addr *v4 = address;
-        return (ntohl(v4->s_addr) >> 24) == 127;
+        return (ntohl(v4->s_addr) >> IPV4_FIRST_OCTET_SHIFT) == IPV4_LOOPBACK_FIRST_OCTET;
     }
     if (family == AF_INET6) {
         const struct in6_addr *v6 = address;
@@ -98,27 +125,27 @@ struct in6_addr canonical_destination(int family, const void *address) {
     if (family == AF_INET6) {
         memcpy(&canonical, address, sizeof(canonical));
     } else if (family == AF_INET) {
-        canonical.s6_addr[10] = 0xff;
-        canonical.s6_addr[11] = 0xff;
-        memcpy(&canonical.s6_addr[12], address, sizeof(struct in_addr));
+        canonical.s6_addr[MAPPED_MARKER_FIRST_BYTE] = MAPPED_MARKER;
+        canonical.s6_addr[MAPPED_MARKER_SECOND_BYTE] = MAPPED_MARKER;
+        memcpy(&canonical.s6_addr[MAPPED_IPV4_FIRST_BYTE], address, sizeof(struct in_addr));
     }
     return canonical;
 }
 
 bool address_within(const struct in6_addr *address, const struct in6_addr *network,
                     int prefix_length) {
-    if (prefix_length <= 0 || prefix_length > 128) {
+    if (prefix_length <= 0 || prefix_length > (int)IPV6_ADDRESS_BITS) {
         return false;
     }
-    int whole_bytes = prefix_length / 8;
-    int remaining_bits = prefix_length % 8;
+    int whole_bytes = prefix_length / BITS_PER_BYTE;
+    int remaining_bits = prefix_length % BITS_PER_BYTE;
     if (memcmp(address, network, (size_t)whole_bytes) != 0) {
         return false;
     }
     if (remaining_bits == 0) {
         return true;
     }
-    uint8_t mask = (uint8_t)~((1U << (8 - remaining_bits)) - 1U);
+    uint8_t mask = (uint8_t)~((1U << (BITS_PER_BYTE - remaining_bits)) - 1U);
     return (address->s6_addr[whole_bytes] & mask) == (network->s6_addr[whole_bytes] & mask);
 }
 

@@ -4,6 +4,21 @@
 set -uo pipefail
 
 CORE=/var/tmp/opt/core
+# The image carries the constants beside the scripts under test.
+# shellcheck source=/dev/null
+source "${CORE}/phobos-constants.sh"
+# The loopback ports of the network checks: BaseLanguage-java.cfg beside this suite allows the
+# first and not the second, so the two must stay in step with it;
+# how often and how far apart the servers' start is awaited; how many lines of a failing
+# command's output a failure shows; and the timeout spin-timeout.cfg sets, with the latest a
+# run under it may end once the escalation and a loaded runner are allowed for.
+ALLOWED_PORT=18080
+DENIED_PORT=18081
+SERVER_WAIT_ATTEMPTS=50
+SERVER_WAIT_SECONDS=0.2
+LOG_EXCERPT_LINES=6
+SPIN_TIMEOUT_SECONDS=5
+SPIN_LATEST_SECONDS=20
 TD=/var/tmp/testing-dir
 PASS=0
 FAIL=0
@@ -30,11 +45,11 @@ javac -d "$TD/probe" /testsuite/PhobosProbe.java /testsuite/NetServers.java || e
 cp /testsuite/BaseLanguage-java.cfg "$CORE/BaseLanguage-java.cfg"
 
 # --- Server ausserhalb der Sandbox ---------------------------------------
-java -cp "$TD/probe" NetServers 18080 18081 > /tmp/servers.log 2>&1 &
+java -cp "$TD/probe" NetServers "$ALLOWED_PORT" "$DENIED_PORT" > /tmp/servers.log 2>&1 &
 SRV=$!
-for _ in $(seq 1 50); do grep -q servers-ready /tmp/servers.log 2>/dev/null && break; sleep 0.2; done
+for _ in $(seq 1 "$SERVER_WAIT_ATTEMPTS"); do grep -q servers-ready /tmp/servers.log 2>/dev/null && break; sleep "$SERVER_WAIT_SECONDS"; done
 grep -q servers-ready /tmp/servers.log || { echo "Server kamen nicht hoch"; cat /tmp/servers.log; exit 1; }
-echo "  servers: 18080 (erlaubt) + 18081 (verboten) laufen"
+echo "  servers: ${ALLOWED_PORT} (erlaubt) + ${DENIED_PORT} (verboten) laufen"
 
 # --- Helfer ---------------------------------------------------------------
 # probe <erwartet OK|DENIED> <beschreibung> <probe-args...>
@@ -51,7 +66,7 @@ probe() {
     ok "$desc -> $got"
   else
     bad "$desc -> erwartet $want, bekommen ${got:-<keine RESULT-Zeile>}"
-    printf '%s\n' "$out" | sed 's/^/       | /' | tail -6
+    printf '%s\n' "$out" | sed 's/^/       | /' | tail -n "$LOG_EXCERPT_LINES"
   fi
 }
 
@@ -66,25 +81,25 @@ probe OK "lesen  $TD/allowed-ro/data.txt"           read  "$TD/allowed-ro/data.t
 probe OK "schreiben $TD/allowed-rw/out.txt"         write "$TD/allowed-rw/out.txt"
 
 hdr "3. Netzwerk-Endpunkt, den die Policy NICHT erlaubt (libnetblocker muss sperren)"
-probe DENIED "connect 127.0.0.1:18081"              connect 127.0.0.1 18081
+probe DENIED "connect 127.0.0.1:${DENIED_PORT}"       connect 127.0.0.1 "$DENIED_PORT"
 
 hdr "4. Netzwerk-Endpunkt, den die Policy erlaubt (libnetblocker darf nicht stoeren)"
-probe OK "connect 127.0.0.1:18080"                  connect 127.0.0.1 18080
+probe OK "connect 127.0.0.1:${ALLOWED_PORT}"           connect 127.0.0.1 "$ALLOWED_PORT"
 
 hdr "5. Timeout (JVM versucht aktiv, ihn per Shutdown-Hook zu blockieren)"
 START=$(date +%s)
 phobos.sh --config /testsuite/spin-timeout.cfg -- java -cp probe PhobosProbe spin > /tmp/spin.log 2>&1
 RC=$?
 ELAPSED=$(( $(date +%s) - START ))
-echo "  exit=$RC nach ${ELAPSED}s (PHB_ETIMEOUT=14 erwartet)"
-sed 's/^/       | /' /tmp/spin.log | head -4
-if [[ "$RC" -eq 14 ]]; then
+echo "  exit=$RC nach ${ELAPSED}s (PHB_ETIMEOUT=${PHB_ETIMEOUT} erwartet)"
+sed 's/^/       | /' /tmp/spin.log | head -n "$LOG_EXCERPT_LINES"
+if [[ "$RC" -eq "$PHB_ETIMEOUT" ]]; then
   ok "Timeout hat gegriffen trotz blockierendem Shutdown-Hook"
 else
-  bad "Timeout: exit $RC statt 14"
+  bad "Timeout: exit $RC statt ${PHB_ETIMEOUT}"
 fi
-if [[ "$ELAPSED" -ge 5 && "$ELAPSED" -le 20 ]]; then
-  ok "Beendet nach ${ELAPSED}s (Deadline 5s + kill-after 5s)"
+if [[ "$ELAPSED" -ge "$SPIN_TIMEOUT_SECONDS" && "$ELAPSED" -le "$SPIN_LATEST_SECONDS" ]]; then
+  ok "Beendet nach ${ELAPSED}s (Deadline ${SPIN_TIMEOUT_SECONDS}s + kill-after ${PHB_KILL_AFTER_SECONDS}s)"
 else
   bad "Unplausible Dauer: ${ELAPSED}s"
 fi

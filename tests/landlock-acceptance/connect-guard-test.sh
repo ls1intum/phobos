@@ -41,6 +41,11 @@ cat > "$WORK/probe.c" <<'C'
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+/* The statuses the probe ends with, which the suite reads: the call was refused, the message
+ * could not be sent, the reply was not the expected one, or it was called the wrong way. */
+enum probe_status { PROBE_USAGE = 2, PROBE_REFUSED = 10, PROBE_SEND_FAILED = 11, PROBE_REPLY_WRONG = 12 };
+/* The length of the "ping" the probe sends and the "pong" it expects back. */
+enum { MESSAGE_LENGTH = sizeof("ping") - 1 };
 int main(int argc, char **argv) {
     if (argc >= 3 && strcmp(argv[1], "unix") == 0) {
         int fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -50,25 +55,25 @@ int main(int argc, char **argv) {
         snprintf(address.sun_path, sizeof(address.sun_path), "%s", argv[2]);
         if (connect(fd, (struct sockaddr *)&address, sizeof(address)) != 0) {
             fprintf(stderr, "connect: %s\n", strerror(errno));
-            return 10;
+            return PROBE_REFUSED;
         }
         printf("UNIX-OK\n");
         return 0;
     }
     if (argc >= 2 && strcmp(argv[1], "raw") == 0) {
         int fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
-        if (fd < 0) { fprintf(stderr, "socket: %s\n", strerror(errno)); return 10; }
+        if (fd < 0) { fprintf(stderr, "socket: %s\n", strerror(errno)); return PROBE_REFUSED; }
         printf("RAW-OK\n");
         return 0;
     }
     if (argc >= 2 && strcmp(argv[1], "ping") == 0) {
         int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
-        if (fd < 0) { fprintf(stderr, "socket: %s\n", strerror(errno)); return 10; }
+        if (fd < 0) { fprintf(stderr, "socket: %s\n", strerror(errno)); return PROBE_REFUSED; }
         printf("PING-OK\n");
         return 0;
     }
     if (argc >= 2 && strcmp(argv[1], "setsid") == 0) {
-        if (setsid() == (pid_t)-1) { fprintf(stderr, "setsid: %s\n", strerror(errno)); return 10; }
+        if (setsid() == (pid_t)-1) { fprintf(stderr, "setsid: %s\n", strerror(errno)); return PROBE_REFUSED; }
         printf("SETSID-OK\n");
         return 0;
     }
@@ -81,11 +86,11 @@ int main(int argc, char **argv) {
         inet_pton(AF_INET, argv[2], &address.sin_addr);
         if (connect(fd, (struct sockaddr *)&address, sizeof(address)) != 0) {
             fprintf(stderr, "connect: %s\n", strerror(errno));
-            return 10;
+            return PROBE_REFUSED;
         }
         if (send(fd, "x", 1, 0) < 0) {
             fprintf(stderr, "send: %s\n", strerror(errno));
-            return 11;
+            return PROBE_SEND_FAILED;
         }
         printf("CUDP-OK\n");
         return 0;
@@ -99,7 +104,7 @@ int main(int argc, char **argv) {
         inet_pton(AF_INET, argv[2], &address.sin_addr);
         if (sendto(fd, "x", 1, 0, (struct sockaddr *)&address, sizeof(address)) < 0) {
             fprintf(stderr, "sendto: %s\n", strerror(errno));
-            return 10;
+            return PROBE_REFUSED;
         }
         printf("UDP-OK\n");
         return 0;
@@ -113,7 +118,7 @@ int main(int argc, char **argv) {
         inet_pton(AF_INET, argv[2], &address.sin_addr);
         if (sendto(fd, "x", 1, MSG_FASTOPEN, (struct sockaddr *)&address, sizeof(address)) < 0) {
             fprintf(stderr, "sendto: %s\n", strerror(errno));
-            return 10;
+            return PROBE_REFUSED;
         }
         printf("TFO-OK\n");
         return 0;
@@ -127,15 +132,15 @@ int main(int argc, char **argv) {
         inet_pton(AF_INET, argv[2], &address.sin_addr);
         if (connect(fd, (struct sockaddr *)&address, sizeof(address)) != 0) {
             fprintf(stderr, "connect: %s\n", strerror(errno));
-            return 10;
+            return PROBE_REFUSED;
         }
-        if (send(fd, "ping", 4, 0) != 4) {
+        if (send(fd, "ping", MESSAGE_LENGTH, 0) != MESSAGE_LENGTH) {
             fprintf(stderr, "send: %s\n", strerror(errno));
-            return 11;
+            return PROBE_SEND_FAILED;
         }
-        char reply[8] = { 0 };
-        if (read(fd, reply, 4) != 4 || memcmp(reply, "pong", 4) != 0) {
-            return 12;
+        char reply[MESSAGE_LENGTH + 1] = { 0 };
+        if (read(fd, reply, MESSAGE_LENGTH) != MESSAGE_LENGTH || memcmp(reply, "pong", MESSAGE_LENGTH) != 0) {
+            return PROBE_REPLY_WRONG;
         }
         printf("CSEND-OK\n");
         return 0;
@@ -148,14 +153,14 @@ int main(int argc, char **argv) {
     inet_pton(AF_INET, argv[2], &address.sin_addr);
     if (connect(fd, (struct sockaddr *)&address, sizeof(address)) != 0) {
         fprintf(stderr, "connect: %s\n", strerror(errno));
-        return 10;
+        return PROBE_REFUSED;
     }
-    if (write(fd, "ping", 4) != 4) {
-        return 11;
+    if (write(fd, "ping", MESSAGE_LENGTH) != MESSAGE_LENGTH) {
+        return PROBE_SEND_FAILED;
     }
-    char reply[8] = { 0 };
-    if (read(fd, reply, 4) != 4 || memcmp(reply, "pong", 4) != 0) {
-        return 12;
+    char reply[MESSAGE_LENGTH + 1] = { 0 };
+    if (read(fd, reply, MESSAGE_LENGTH) != MESSAGE_LENGTH || memcmp(reply, "pong", MESSAGE_LENGTH) != 0) {
+        return PROBE_REPLY_WRONG;
     }
     printf("PROBE-OK\n");
     close(fd);
@@ -171,6 +176,12 @@ cat > "$WORK/listener.c" <<'C'
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+/* The status the listener ends with when it cannot bind its port. */
+enum { LISTENER_BIND_FAILED = 3 };
+/* How many connections may wait to be accepted. */
+enum { LISTEN_BACKLOG = 4 };
+/* The length of the "ping" it expects and the "pong" it answers with. */
+enum { MESSAGE_LENGTH = sizeof("ping") - 1 };
 int main(int argc, char **argv) {
     int server = socket(AF_INET, SOCK_STREAM, 0);
     int one = 1;
@@ -182,15 +193,15 @@ int main(int argc, char **argv) {
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (bind(server, (struct sockaddr *)&address, sizeof(address)) != 0) {
         perror("bind");
-        return 3;
+        return LISTENER_BIND_FAILED;
     }
-    listen(server, 4);
+    listen(server, LISTEN_BACKLOG);
     printf("LISTENING\n");
     fflush(stdout);
     int client = accept(server, NULL, NULL);
-    char buffer[8] = { 0 };
-    if (read(client, buffer, 4) == 4 && memcmp(buffer, "ping", 4) == 0) {
-        ssize_t wrote = write(client, "pong", 4);
+    char buffer[MESSAGE_LENGTH + 1] = { 0 };
+    if (read(client, buffer, MESSAGE_LENGTH) == MESSAGE_LENGTH && memcmp(buffer, "ping", MESSAGE_LENGTH) == 0) {
+        ssize_t wrote = write(client, "pong", MESSAGE_LENGTH);
         (void)wrote;
     }
     close(client);
@@ -206,12 +217,17 @@ command -v "$compiler" >/dev/null 2>&1 || compiler=gcc
 "$compiler" -O2 -o "$WORK/listener" "$WORK/listener.c" 2>"$WORK/cc.log" \
     || { bad "compile the listener" "$(cat "$WORK/cc.log")"; echo; printf '%d passed, %d failed\n' "$pass" "$fail"; exit 1; }
 
+# The status the probe ends with when its call was refused; the probe's source names it too.
+PROBE_REFUSED=10
+# How often, and how far apart, the suite looks for the listener to be ready.
+LISTENER_WAIT_ATTEMPTS=100
+LISTENER_WAIT_SECONDS=0.05
 PORT=18091
 OTHER=18092
 start_listener() {
   "$WORK/listener" "$1" > "$WORK/listener.out" 2>&1 &
   echo $!
-  for _ in $(seq 1 100); do grep -q LISTENING "$WORK/listener.out" 2>/dev/null && break; sleep 0.05; done
+  for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do grep -q LISTENING "$WORK/listener.out" 2>/dev/null && break; sleep "$LISTENER_WAIT_SECONDS"; done
 }
 
 printf '127.0.0.1 %s\n' "$PORT" > "$WORK/rules"
@@ -230,7 +246,7 @@ fi
 
 out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" inet 127.0.0.1 "$OTHER" 2>&1)"
 rc=$?
-if [[ $rc -eq 10 && "$out" == *"Permission denied"* ]]; then
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "a connect to a port the allow-list does not name is refused"
 else
   bad "a connect to a port the allow-list does not name is refused" "rc=$rc out=$out"
@@ -238,7 +254,7 @@ fi
 
 out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" unix "$WORK/nosuch.sock" 2>&1)"
 rc=$?
-if [[ $rc -eq 10 && "$out" == *"Permission denied"* ]]; then
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "a UNIX-domain connect is refused, not made outside the sandbox"
 else
   bad "a UNIX-domain connect is refused, not made outside the sandbox" "rc=$rc out=$out"
@@ -265,7 +281,7 @@ fi
 
 out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" udp 127.0.0.1 "$OTHER" 2>&1)"
 rc=$?
-if [[ $rc -eq 10 && "$out" == *"Permission denied"* ]]; then
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "a datagram to a destination the list does not name is refused"
 else
   bad "a datagram to a destination the list does not name is refused" "rc=$rc out=$out"
@@ -273,7 +289,7 @@ fi
 
 out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" tfo 127.0.0.1 "$PORT" 2>&1)"
 rc=$?
-if [[ $rc -eq 10 && "$out" == *"Permission denied"* ]]; then
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "a TCP Fast Open send is refused, so it cannot reach past connect"
 else
   bad "a TCP Fast Open send is refused, so it cannot reach past connect" "rc=$rc out=$out"
@@ -293,7 +309,7 @@ guard_refuses_ambiently_allowed() {
   fi
   g_out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" "$@" 2>&1)"
   g_rc=$?
-  if [[ $g_rc -eq 10 && "$g_out" == *"Permission denied"* ]]; then
+  if [[ $g_rc -eq "$PROBE_REFUSED" && "$g_out" == *"Permission denied"* ]]; then
     ok "$label"
   else
     bad "$label" "base_rc=$base_rc g_rc=$g_rc out=$g_out"
@@ -306,7 +322,7 @@ guard_refuses_ambiently_allowed "setsid is refused, so a submission cannot leave
 
 out="$("$GUARD" --rules "$WORK/empty" -- "$WORK/probe" inet 127.0.0.1 "$PORT" 2>&1)"
 rc=$?
-if [[ $rc -eq 10 && "$out" == *"Permission denied"* ]]; then
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "an empty allow-list denies every connect, the deny-first baseline"
 else
   bad "an empty allow-list denies every connect, the deny-first baseline" "rc=$rc out=$out"
@@ -324,7 +340,7 @@ fi
 
 out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" cudp 127.0.0.1 "$OTHER" 2>&1)"
 rc=$?
-if [[ $rc -eq 10 && "$out" == *"Permission denied"* ]]; then
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "a connected datagram socket to an unlisted destination is refused at connect"
 else
   bad "a connected datagram socket to an unlisted destination is refused at connect" "rc=$rc out=$out"
@@ -344,7 +360,7 @@ fi
 
 out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" inet 8.8.8.8 "$PORT" 2>&1)"
 rc=$?
-if [[ $rc -eq 10 && "$out" == *"Permission denied"* ]]; then
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "an IP range refuses an address outside it that shares the allowed port"
 else
   bad "an IP range refuses an address outside it that shares the allowed port" "rc=$rc out=$out"

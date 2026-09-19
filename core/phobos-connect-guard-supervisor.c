@@ -33,7 +33,28 @@
 #define MSG_FASTOPEN 0x20000000
 #endif
 
+/* How long the supervisor waits for one connection it makes on the command's behalf. */
 static constexpr int CONNECT_TIMEOUT_MS = 10000;
+/* Where each trapped syscall keeps the arguments the supervisor reads, as the kernel numbers
+ * them in struct seccomp_data: connect(fd, address, length), socket(domain, type, protocol),
+ * sendto(fd, buffer, length, flags, address, address_length) and
+ * sendmmsg(fd, vector, count, flags). */
+static constexpr int CONNECT_ARGUMENT_DESCRIPTOR = 0;
+static constexpr int CONNECT_ARGUMENT_ADDRESS = 1;
+static constexpr int CONNECT_ARGUMENT_LENGTH = 2;
+static constexpr int SOCKET_ARGUMENT_DOMAIN = 0;
+static constexpr int SOCKET_ARGUMENT_TYPE = 1;
+static constexpr int SOCKET_ARGUMENT_PROTOCOL = 2;
+static constexpr int SEND_ARGUMENT_FLAGS = 3;
+static constexpr int SENDTO_ARGUMENT_ADDRESS = 4;
+static constexpr int SENDTO_ARGUMENT_ADDRESS_LENGTH = 5;
+static constexpr int SENDMMSG_ARGUMENT_VECTOR = 1;
+static constexpr int SENDMMSG_ARGUMENT_COUNT = 2;
+/* The most messages the kernel sends in one sendmmsg call (UIO_MAXIOV); a larger count is
+ * cut down to it, so no more entries than it would send are read. */
+static constexpr unsigned int SENDMMSG_MAXIMUM_BATCH = 1024;
+/* A shell reports a command killed by a signal as this plus the signal's number. */
+static constexpr int SIGNALLED_EXIT_BASE = 128;
 
 int receive_descriptor(int socket_descriptor) {
     char payload = 0;
@@ -172,9 +193,9 @@ void connect_on_behalf(int notify_descriptor, struct seccomp_notif_resp *respons
  * let through the same way, best-effort, since its type is unknown. */
 static void service_connect(int notify_descriptor, struct seccomp_notif *request,
                             struct seccomp_notif_resp *response) {
-    int target_descriptor = (int)request->data.args[0];
-    uintptr_t address_pointer = (uintptr_t)request->data.args[1];
-    socklen_t claimed_length = (socklen_t)request->data.args[2];
+    int target_descriptor = (int)request->data.args[CONNECT_ARGUMENT_DESCRIPTOR];
+    uintptr_t address_pointer = (uintptr_t)request->data.args[CONNECT_ARGUMENT_ADDRESS];
+    socklen_t claimed_length = (socklen_t)request->data.args[CONNECT_ARGUMENT_LENGTH];
 
     struct sockaddr_storage storage;
     memset(&storage, 0, sizeof(storage));
@@ -216,9 +237,9 @@ static void service_connect(int notify_descriptor, struct seccomp_notif *request
  * so there is nothing to read from the child and nothing a second thread could rewrite. */
 static void service_socket(int notify_descriptor, struct seccomp_notif *request,
                            struct seccomp_notif_resp *response) {
-    int domain = (int)request->data.args[0];
-    int type = (int)request->data.args[1];
-    int protocol = (int)request->data.args[2];
+    int domain = (int)request->data.args[SOCKET_ARGUMENT_DOMAIN];
+    int type = (int)request->data.args[SOCKET_ARGUMENT_TYPE];
+    int protocol = (int)request->data.args[SOCKET_ARGUMENT_PROTOCOL];
     int base_type = type & SOCK_TYPE_MASK;
     bool icmp = protocol == IPPROTO_ICMP || protocol == IPPROTO_ICMPV6;
     if (domain == AF_PACKET || base_type == SOCK_RAW
@@ -293,7 +314,7 @@ static void forward_or_refuse(int notify_descriptor, struct seccomp_notif *reque
 /* The flags argument of the two send syscalls the guard traps, sendto and sendmmsg, is the
  * fourth. sendmsg is not trapped (see the filter), so it is not among them. */
 static unsigned int send_flags(const struct seccomp_notif *request) {
-    return (unsigned int)request->data.args[3];
+    return (unsigned int)request->data.args[SEND_ARGUMENT_FLAGS];
 }
 
 /* Decide one trapped sendto: a call with no destination is a send on an already-connected
@@ -301,8 +322,8 @@ static unsigned int send_flags(const struct seccomp_notif *request) {
  * call carrying a destination has that destination read and judged. */
 static void service_sendto(int notify_descriptor, struct seccomp_notif *request,
                            struct seccomp_notif_resp *response) {
-    uintptr_t address_pointer = (uintptr_t)request->data.args[4];
-    socklen_t claimed_length = (socklen_t)request->data.args[5];
+    uintptr_t address_pointer = (uintptr_t)request->data.args[SENDTO_ARGUMENT_ADDRESS];
+    socklen_t claimed_length = (socklen_t)request->data.args[SENDTO_ARGUMENT_ADDRESS_LENGTH];
     if (address_pointer == 0 || claimed_length == 0) {
         answer_continue(notify_descriptor, response, request->id);
         return;
@@ -321,10 +342,10 @@ static void service_sendto(int notify_descriptor, struct seccomp_notif *request,
  * destination the allow-list does not name. The count is capped at the kernel's own limit. */
 static void service_sendmmsg(int notify_descriptor, struct seccomp_notif *request,
                              struct seccomp_notif_resp *response) {
-    uintptr_t vector = (uintptr_t)request->data.args[1];
-    unsigned int count = (unsigned int)request->data.args[2];
-    if (count > 1024) {
-        count = 1024;
+    uintptr_t vector = (uintptr_t)request->data.args[SENDMMSG_ARGUMENT_VECTOR];
+    unsigned int count = (unsigned int)request->data.args[SENDMMSG_ARGUMENT_COUNT];
+    if (count > SENDMMSG_MAXIMUM_BATCH) {
+        count = SENDMMSG_MAXIMUM_BATCH;
     }
     for (unsigned int index = 0; index < count; index++) {
         struct mmsghdr entry;
@@ -448,7 +469,7 @@ int exit_code_from_status(int status) {
         return WEXITSTATUS(status);
     }
     if (WIFSIGNALED(status)) {
-        return 128 + WTERMSIG(status);
+        return SIGNALLED_EXIT_BASE + WTERMSIG(status);
     }
     return EXIT_SETUP_ERROR;
 }

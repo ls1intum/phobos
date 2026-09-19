@@ -36,6 +36,16 @@ from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+# The terminal escape sequences the progress output is coloured with.
+RED = '\033[31m'
+GREEN = '\033[32m'
+YELLOW = '\033[33m'
+BLUE = '\033[34m'
+BOLD = '\033[1m'
+RESET = '\033[0m'
+# How many languages are pruned at once when the machine cannot say how many CPUs it has.
+DEFAULT_JOBS = 4
+
 # ────────────────────────────────────────── CLI
 ap = argparse.ArgumentParser(
     formatter_class=argparse.RawTextHelpFormatter,
@@ -49,7 +59,7 @@ ap.add_argument('--path-dir', default='/var/tmp/path_sets',
                 help='Where <lang>_*.paths and *.json live (input).')
 ap.add_argument('--helpers-dir', default='/var/tmp/helpers',
                 help='Where helper scripts (make_lang_sets.py) reside.')
-ap.add_argument('--jobs', type=int, default=os.cpu_count() or 4)
+ap.add_argument('--jobs', type=int, default=os.cpu_count() or DEFAULT_JOBS)
 ap.add_argument('--skip-prune', action='store_true',
                 help='Skip running prune scripts; use existing artifacts in --path-dir.')
 ap.add_argument('--verbose', action='store_true')
@@ -80,13 +90,13 @@ def run(cmd: Sequence[str], tag: str = '') -> None:
     string form was dead code and only widened the injection surface.
     """
     pretty = ' '.join(shlex.quote(str(c)) for c in cmd)
-    print(f'\033[34m[{tag or "cmd"}]\033[0m', pretty)
+    print(f'{BLUE}[{tag or "cmd"}]{RESET}', pretty)
     t0 = time.time()
     rc = subprocess.call(cmd)
     dt = time.time() - t0
     if rc:
         raise RuntimeError(f'{tag} failed (rc={rc}, {dt:.1f}s)')
-    print(f'\033[32m✓ {tag} ({dt:.1f}s)\033[0m')
+    print(f'{GREEN}✓ {tag} ({dt:.1f}s){RESET}')
 
 
 # ────────────────────────────────────────── step 1 – prune
@@ -115,7 +125,7 @@ def gen_lang_sets(lang: str) -> None:
         raise FileNotFoundError(f'make_lang_sets.py not found: {MAKE_LANG_SETS}')
     # Skip languages that have no per‑exercise .paths (all exercises skipped).
     if not any(PATH_DIR.glob(f"{lang}_*.paths")):
-        print(f'\033[33m[warn]\033[0m no {lang}_*.paths in {PATH_DIR}; skipping langsets.')
+        print(f'{YELLOW}[warn]{RESET} no {lang}_*.paths in {PATH_DIR}; skipping langsets.')
         return
     cmd = ['python3', str(MAKE_LANG_SETS), lang, str(PATH_DIR)]
     run(cmd, f'langsets:{lang}')
@@ -150,7 +160,7 @@ def collect_language_data(langs: Iterable[str]) -> dict[str, dict[str, set[str]]
     for lang in langs:
         union_file = PATH_DIR / f'{lang}_union.paths'
         if not union_file.exists():
-            print(f'\033[33m[warn]\033[0m missing {union_file.name}')
+            print(f'{YELLOW}[warn]{RESET} missing {union_file.name}')
             continue
         r_set, w_set = _read_union(union_file)
         # A union naming nothing is not a language that needs nothing, it is a
@@ -158,7 +168,7 @@ def collect_language_data(langs: Iterable[str]) -> dict[str, dict[str, set[str]]
         # or an emitter that wrote an empty artefact. Every real exercise contributes
         # the base bindings, so an empty union is a failure wearing a success's file.
         if not r_set and not w_set:
-            print(f'\033[33m[warn]\033[0m {union_file.name} names no path at all')
+            print(f'{YELLOW}[warn]{RESET} {union_file.name} names no path at all')
             continue
         data[lang] = {'r': r_set, 'w': w_set}
     return data
@@ -191,7 +201,7 @@ def build_runtime_tail(runtime_chdir: str) -> None:
 
 
 # ────────────────────────────────────────── main pipeline
-print('\n\033[1mOrchestrating for:\033[0m', ', '.join(langs), '\n')
+print(f'\n{BOLD}Orchestrating for:{RESET}', ', '.join(langs), '\n')
 
 # 1) prune in parallel (creates per‑exercise artifacts in PATH_DIR)
 # Artefacts of an earlier run would otherwise be indistinguishable from this run's.
@@ -215,7 +225,7 @@ with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         # one failing language must not abort the runs for the others. Every
         # failure is collected instead, so one run names all of them.
         except Exception as exc:  # noqa: BLE001
-            print(f'\033[31m{lang} prune failed:\033[0m', exc)
+            print(f'{RED}{lang} prune failed:{RESET}', exc)
             failed_languages.append(lang)
 
 # The files below are a security policy: everything not in them is denied. Built
@@ -223,7 +233,7 @@ with ThreadPoolExecutor(max_workers=args.jobs) as pool:
 # than anyone asked for, and nothing downstream could tell that from a correct
 # one. Refuse instead, and leave whatever is already on disk untouched.
 if failed_languages:
-    print('\033[31m[error]\033[0m pruning failed for:', ', '.join(sorted(failed_languages)))
+    print(f'{RED}[error]{RESET} pruning failed for:', ', '.join(sorted(failed_languages)))
     print('        Refusing to merge a policy from only the languages that succeeded.')
     sys.exit(1)
 
@@ -241,7 +251,7 @@ lang_data = collect_language_data(langs)
 # nothing downstream could tell that from a policy for all of them.
 missing_languages = sorted(set(langs) - set(lang_data))
 if missing_languages:
-    print('\033[31m[error]\033[0m no usable pruning result for:', ', '.join(missing_languages))
+    print(f'{RED}[error]{RESET} no usable pruning result for:', ', '.join(missing_languages))
     print('        Refusing to merge a policy that is missing a language that was asked for.')
     sys.exit(1)
 
@@ -296,4 +306,4 @@ for L, info in lang_data.items():
 # 7) TailPhobos (sanitize & inject runtime chdir)
 build_runtime_tail(args.runtime_chdir)
 
-print('\n\033[1mDone.\033[0m')
+print(f'\n{BOLD}Done.{RESET}')

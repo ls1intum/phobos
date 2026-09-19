@@ -36,6 +36,40 @@
 #define PORTS_V4 3
 #define PORTS_V6 2
 
+/* How the probe ends when no scenario ran. */
+static constexpr int PROBE_EXIT_CANNOT_RUN = 2;   /* misused, or a setup step failed */
+static constexpr int PROBE_EXIT_NO_LISTENER = 3;  /* no IPv4 loopback listener could be bound */
+static constexpr int PROBE_EXIT_EXEC_FAILED = 4;  /* the second phase could not be started */
+
+/* The program name and a scenario, or "child" in the second phase. */
+static constexpr int MINIMUM_ARGUMENT_COUNT = 2;
+
+/* Where the second phase finds each of its arguments. The ports follow the last, and a
+   terminating null follows the ports. */
+enum child_argument {
+  CHILD_ARGUMENT_SCENARIO = 2,
+  CHILD_ARGUMENT_DIRECTORY,
+  CHILD_ARGUMENT_WRITE_DESCRIPTOR,
+  CHILD_ARGUMENT_FIRST_PORT
+};
+
+/* How many connections a listener queues; the probes make one at a time. */
+static constexpr int LISTEN_BACKLOG = 16;
+
+/* Room for an "errno:<n>" answer. */
+static constexpr size_t RESULT_TEXT_LENGTH = 32;
+
+/* Room for a descriptor or a port written out as decimal text. */
+static constexpr size_t NUMBER_TEXT_LENGTH = 16;
+
+/* Room for the rules a scenario writes. */
+static constexpr size_t RULES_BODY_LENGTH = 1024;
+
+/* The rules file, and the FIFO standing in for it, are readable and writable by their owner
+   only; the directory standing in for it is reachable by its owner only. */
+static constexpr mode_t OWNER_ONLY_FILE_MODE = 0600;
+static constexpr mode_t OWNER_ONLY_DIRECTORY_MODE = 0700;
+
 /* The fixed part of the rules directory's name; mkdtemp fills in the rest. */
 static const char RULES_DIRECTORY_TEMPLATE[] = "/tmp/phobos-netcache-probe.XXXXXX";
 
@@ -70,7 +104,7 @@ static int listen_ephemeral(int family, struct listener *out) {
     len = sizeof *v6;
   }
 
-  if (bind(fd, (struct sockaddr *) &addr, len) != 0 || listen(fd, 16) != 0) {
+  if (bind(fd, (struct sockaddr *) &addr, len) != 0 || listen(fd, LISTEN_BACKLOG) != 0) {
     close(fd);
     return -1;
   }
@@ -89,7 +123,7 @@ static int listen_ephemeral(int family, struct listener *out) {
 }
 
 static const char *connect_result(int family, const char *ip, unsigned short port) {
-  static char buf[32];
+  static char buf[RESULT_TEXT_LENGTH];
   int fd = socket(family, SOCK_STREAM, 0);
   if (fd < 0) return "socket-failed";
 
@@ -144,7 +178,7 @@ static socklen_t loopback_address(struct sockaddr_storage *addr, int family, con
    for anything else. A loopback datagram needs no listener: the kernel accepts it into
    the socket buffer, so a send that is not refused returns at once. */
 static const char *send_words(ssize_t rc, int err) {
-  static char buf[32];
+  static char buf[RESULT_TEXT_LENGTH];
   if (rc >= 0) return "allowed";
   if (err == EACCES) return "denied";
   snprintf(buf, sizeof buf, "errno:%d", err);
@@ -220,7 +254,7 @@ static const char *resolve_with_service(const char *host, const char *service) {
    so no path is needed: a refusal shows as "denied", and what the kernel says about
    an address without a path as "errno:<n>". */
 static const char *unix_connect_result(void) {
-  static char buf[32];
+  static char buf[RESULT_TEXT_LENGTH];
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0) return "socket-failed";
   struct sockaddr_storage addr;
@@ -255,7 +289,7 @@ static int write_rules(const char *directory, const char *body, int keep_writabl
   char path[PATH_MAX];
   *write_fd = -1;
   snprintf(path, sizeof path, "%s/%s", directory, RULES_NAME);
-  int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+  int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, OWNER_ONLY_FILE_MODE);
   if (fd < 0) { perror("rules"); return -1; }
   FILE *f = fdopen(fd, "w");
   if (!f) { perror("rules"); close(fd); return -1; }
@@ -276,8 +310,8 @@ static int create_entry(const char *directory, const char *entry) {
   char path[PATH_MAX];
   snprintf(path, sizeof path, "%s/%s", directory, entry);
   if (!strcmp(entry, LINK_NAME)) return symlink(RULES_NAME, path);
-  if (!strcmp(entry, DIRECTORY_NAME)) return mkdir(path, 0700);
-  if (!strcmp(entry, FIFO_NAME)) return mkfifo(path, 0600);
+  if (!strcmp(entry, DIRECTORY_NAME)) return mkdir(path, OWNER_ONLY_DIRECTORY_MODE);
+  if (!strcmp(entry, FIFO_NAME)) return mkfifo(path, OWNER_ONLY_FILE_MODE);
   return 0;
 }
 
@@ -311,14 +345,14 @@ static int phase_one(const char *self, const char *scenario) {
   const char *lib = getenv("PROBE_LIB");
   if (!lib) {
     fprintf(stderr, "PROBE_LIB must be set\n");
-    return 2;
+    return PROBE_EXIT_CANNOT_RUN;
   }
 
   struct listener v4[PORTS_V4];
   for (int i = 0; i < PORTS_V4; i++) {
     if (listen_ephemeral(AF_INET, &v4[i]) != 0) {
       fprintf(stderr, "cannot bind an IPv4 loopback listener\n");
-      return 3;
+      return PROBE_EXIT_NO_LISTENER;
     }
   }
 
@@ -328,7 +362,7 @@ static int phase_one(const char *self, const char *scenario) {
     if (listen_ephemeral(AF_INET6, &v6[i]) != 0) { have_v6 = 0; break; }
   }
 
-  char body[1024];
+  char body[RULES_BODY_LENGTH];
   const char *entry = RULES_NAME;
   int ignore_hangup = 0;
   int keep_writable = 0;
@@ -396,27 +430,27 @@ static int phase_one(const char *self, const char *scenario) {
     snprintf(body, sizeof body, "#%510s127.0.0.1 *\n", "");
   } else {
     fprintf(stderr, "unknown scenario: %s\n", scenario);
-    return 2;
+    return PROBE_EXIT_CANNOT_RUN;
   }
 
   char directory[sizeof RULES_DIRECTORY_TEMPLATE];
   memcpy(directory, RULES_DIRECTORY_TEMPLATE, sizeof directory);
   if (!mkdtemp(directory)) {
     perror("mkdtemp");
-    return 2;
+    return PROBE_EXIT_CANNOT_RUN;
   }
   int write_fd = -1;
   if (write_rules(directory, body, keep_writable, &write_fd) != 0 || create_entry(directory, entry) != 0) {
     perror("rules directory");
     if (write_fd >= 0) close(write_fd);
     remove_rules_directory(directory);
-    return 2;
+    return PROBE_EXIT_CANNOT_RUN;
   }
 
   char conf[PATH_MAX];
-  char descriptor[16];
-  char args[PORTS_V4 + PORTS_V6][16];
-  char *argv[6 + PORTS_V4 + PORTS_V6];
+  char descriptor[NUMBER_TEXT_LENGTH];
+  char args[PORTS_V4 + PORTS_V6][NUMBER_TEXT_LENGTH];
+  char *argv[CHILD_ARGUMENT_FIRST_PORT + PORTS_V4 + PORTS_V6 + 1];
   int n = 0;
   snprintf(conf, sizeof conf, "%s/%s", directory, entry);
   snprintf(descriptor, sizeof descriptor, "%d", write_fd);
@@ -442,7 +476,7 @@ static int phase_one(const char *self, const char *scenario) {
   execv(self, argv);
   perror("execv");
   remove_rules_directory(directory);
-  return 4;
+  return PROBE_EXIT_EXEC_FAILED;
 }
 
 /* ------------------------- phase two ------------------------- */
@@ -517,29 +551,29 @@ static int run_scenario(const char *scenario, int write_fd, const unsigned short
   } else if (!strcmp(scenario, "kept_unix_socket")) {
     printf("unix_socket=%s\n", unix_connect_result());
   } else if (!strcmp(scenario, "kept_named_service")) {
-    char other[16];
+    char other[NUMBER_TEXT_LENGTH];
     snprintf(other, sizeof other, "%u", (unsigned int) v4[1]);
     printf("named_service=%s\n", resolve_with_service("localhost", "http"));
     printf("other_service=%s\n", resolve_with_service("localhost", other));
   } else {
     fprintf(stderr, "unknown scenario: %s\n", scenario);
-    return 2;
+    return PROBE_EXIT_CANNOT_RUN;
   }
   return 0;
 }
 
 static int phase_two(int argc, char **argv) {
-  if (argc < 5 + PORTS_V4 + PORTS_V6) {
+  if (argc < CHILD_ARGUMENT_FIRST_PORT + PORTS_V4 + PORTS_V6) {
     fprintf(stderr, "child invoked without the expected arguments\n");
-    return 2;
+    return PROBE_EXIT_CANNOT_RUN;
   }
-  const char *scenario = argv[2];
-  const char *directory = argv[3];
-  int write_fd = atoi(argv[4]);
+  const char *scenario = argv[CHILD_ARGUMENT_SCENARIO];
+  const char *directory = argv[CHILD_ARGUMENT_DIRECTORY];
+  int write_fd = atoi(argv[CHILD_ARGUMENT_WRITE_DESCRIPTOR]);
   unsigned short v4[PORTS_V4];
   unsigned short v6[PORTS_V6];
-  for (int i = 0; i < PORTS_V4; i++) v4[i] = (unsigned short) atoi(argv[5 + i]);
-  for (int i = 0; i < PORTS_V6; i++) v6[i] = (unsigned short) atoi(argv[5 + PORTS_V4 + i]);
+  for (int i = 0; i < PORTS_V4; i++) v4[i] = (unsigned short) atoi(argv[CHILD_ARGUMENT_FIRST_PORT + i]);
+  for (int i = 0; i < PORTS_V6; i++) v6[i] = (unsigned short) atoi(argv[CHILD_ARGUMENT_FIRST_PORT + PORTS_V4 + i]);
 
   int status = run_scenario(scenario, write_fd, v4, v6);
   fflush(stdout);
@@ -548,9 +582,9 @@ static int phase_two(int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
-  if (argc < 2) {
+  if (argc < MINIMUM_ARGUMENT_COUNT) {
     fprintf(stderr, "usage: %s <scenario>\n", argv[0]);
-    return 2;
+    return PROBE_EXIT_CANNOT_RUN;
   }
   if (!strcmp(argv[1], "child")) return phase_two(argc, argv);
   return phase_one(argv[0], argv[1]);
