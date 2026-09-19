@@ -33,8 +33,10 @@ core/                      the sandbox itself
   phobos-resources.sh      the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
   phobos-timeout.sh        the timeout layer
   phobos-common.sh         shared helpers, sourced by the others
+  phobos-constants.sh      the numbers the scripts share, named once, the exit statuses among them
   phobos-landlock*.c/.h    the C program that applies the Landlock policy, then exec's the command
-  phobos-connect-guard.c   the connect guard: supervises connect() and enforces [connect] by host and port
+  phobos-connect-guard*.c/.h  the connect guard: supervises connect() and enforces [connect] by host and port;
+                           phobos-connect-guard.c is the sequence of stages, the modules beside it do the work
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
 ld_preloader/              the netblocker sources (the library is built from them in the image)
 docker/prune_phase/        one image per language, plus the orchestrator
@@ -88,11 +90,15 @@ core/phobos.sh --config core/config/BaseLanguage-java.cfg -- ./gradlew test
 
 Run the grading container with **`--network none`** and with cgroup limits (`--memory`, `--pids-limit`, `--cpus`, and a size-bounded `--tmpfs` for scratch). Those are the outer wall Phobos relies on and cannot set for itself.
 
+stdout carries the command's own output and nothing else. Every message of Phobos itself, the `PHB-EPOLICY`, `PHB-ETIMEOUT`, `PHB-ERUNTIME` and `PHB-EDENY` reports among them, is written to stderr, and the exit status (11, 14 or 15 for a run Phobos stopped) is the contract a grader should read.
+
 To isolate which layer a failure belongs to, each layer can be turned off on its own:
 
 ```
 core/phobos.sh --no-runtime-restriction --config core/config/BaseLanguage-java.cfg -- <command>
 ```
+
+`--debug` makes every layer say on stderr what it does and what it runs, and has `phobos-landlock` and the connect guard report verbosely too; stdout stays the command's own. It prints the whole effective policy, so it is meant for diagnosing a run, not for grading logs. It can only be switched on by the flag, never through the environment.
 
 ## Configuration format
 

@@ -8,6 +8,8 @@ set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE="${HERE}/../core"
+# shellcheck source=../core/phobos-constants.sh
+source "${CORE}/phobos-constants.sh"
 WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
 cleanup() { rm -rf "$WORK"; }
@@ -128,11 +130,11 @@ rm -f "$WORK/pwned"
 printf 'mem_mb=$(touch %s/pwned)\n' "$WORK" > "$SPEC/limits.conf"
   bash "$CORE_X/phobos-resources.sh" "$SPEC" -- /bin/echo ran >/dev/null 2>&1
 rc=$?
-if [[ "$rc" -eq 11 && ! -e "$WORK/pwned" ]]; then
+if [[ "$rc" -eq "$PHB_EPOLICY" && ! -e "$WORK/pwned" ]]; then
   ok "a malformed limit is refused (PHB-EPOLICY) and never evaluated"
 else
   bad "a malformed limit is refused (PHB-EPOLICY) and never evaluated" \
-      "exit 11 and no side effect" "exit ${rc}, pwned exists: $([[ -e "$WORK/pwned" ]] && echo yes || echo no)"
+      "exit ${PHB_EPOLICY} and no side effect" "exit ${rc}, pwned exists: $([[ -e "$WORK/pwned" ]] && echo yes || echo no)"
 fi
 
 echo

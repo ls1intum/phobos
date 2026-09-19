@@ -14,6 +14,15 @@
 static const char RIGHTS_PREFIX[] = "--rights=";
 static constexpr size_t RIGHTS_PREFIX_LENGTH = sizeof(RIGHTS_PREFIX) - 1;
 
+/* strtoul's base for every number this tool reads. */
+static constexpr int DECIMAL = 10;
+
+/* The highest TCP port; the lowest is 1. */
+static constexpr unsigned long HIGHEST_TCP_PORT = 65535;
+
+/* An option and the one value it takes. */
+static constexpr int OPTION_AND_VALUE_WORDS = 2;
+
 [[noreturn]] void print_usage_and_exit(void) {
     fprintf(stderr,
             "Usage: phobos-landlock --rights=LETTERS PATH [--rights=LETTERS PATH ...]\n"
@@ -31,7 +40,7 @@ static constexpr size_t RIGHTS_PREFIX_LENGTH = sizeof(RIGHTS_PREFIX) - 1;
             "  i  ioctl on a character or block device\n"
             "\n"
             "Creating device nodes and symbolic links is never granted.\n");
-    exit(2);
+    exit(EXIT_CODE_USAGE);
 }
 
 /* atoi and a bare strtoull both answer 0 for input that is not a number at
@@ -45,7 +54,7 @@ unsigned long parse_number(const char *text, unsigned long lowest, unsigned long
     }
     errno = 0;
     char *first_unconverted = nullptr;
-    unsigned long value = strtoul(text, &first_unconverted, 10);
+    unsigned long value = strtoul(text, &first_unconverted, DECIMAL);
     if (errno != 0 || *first_unconverted != '\0' || value < lowest || value > highest) {
         fprintf(stderr, "[phobos-landlock] %s: '%s'\n", what, text);
         exit(EXIT_CODE_POLICY_ERROR);
@@ -106,12 +115,13 @@ void remember_path_rule(struct options *options, const char *letters, const char
     options->path_rule_count++;
 }
 
+/* Records one --connect-tcp or --bind-tcp port. A port outside 1..65535 is a
+ * policy mistake, not something to pass on, and is refused. */
 static void remember_port(uint64_t *ports, size_t *count, const char *value, const char *what) {
     if (*count >= MAXIMUM_PORT_RULES) {
         exit_with_message(what);
     }
-    /* A port outside 1..65535 is a policy mistake, not something to pass on. */
-    ports[*count] = (uint64_t)parse_number(value, 1, 65535, "not a TCP port");
+    ports[*count] = (uint64_t)parse_number(value, 1, HIGHEST_TCP_PORT, "not a TCP port");
     (*count)++;
 }
 
@@ -131,34 +141,28 @@ void parse_arguments(int argument_count, char *arguments[], struct options *opti
             argument_index++;
             continue;
         }
-        /* Every remaining option takes a value, so it must not be the last word. */
         if (argument_index + 1 >= argument_count) {
             print_usage_and_exit();
         }
         const char *value = arguments[argument_index + 1];
         if (strncmp(argument, RIGHTS_PREFIX, RIGHTS_PREFIX_LENGTH) == 0) {
             remember_path_rule(options, argument + RIGHTS_PREFIX_LENGTH, value);
-        }
-        else if (strcmp(argument, "--connect-tcp") == 0) {
+        } else if (strcmp(argument, "--connect-tcp") == 0) {
             remember_port(options->connect_tcp_ports, &options->connect_tcp_port_count, value,
                           "too many --connect-tcp ports");
-        }
-        else if (strcmp(argument, "--bind-tcp") == 0) {
+        } else if (strcmp(argument, "--bind-tcp") == 0) {
             remember_port(options->bind_tcp_ports, &options->bind_tcp_port_count, value,
                           "too many --bind-tcp ports");
-        }
-        else if (strcmp(argument, "--chdir") == 0) {
+        } else if (strcmp(argument, "--chdir") == 0) {
             options->working_directory = value;
-        }
-        else if (strcmp(argument, "--minimum-landlock-version") == 0) {
+        } else if (strcmp(argument, "--minimum-landlock-version") == 0) {
             options->minimum_landlock_version =
                 (int)parse_number(value, 1, HIGHEST_KNOWN_LANDLOCK_VERSION,
                                   "not a usable Landlock version");
-        }
-        else {
+        } else {
             print_usage_and_exit();
         }
-        argument_index += 2;
+        argument_index += OPTION_AND_VALUE_WORDS;
     }
     if (argument_index >= argument_count) {
         print_usage_and_exit();
