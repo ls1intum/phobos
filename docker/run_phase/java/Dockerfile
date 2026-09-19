@@ -2,7 +2,7 @@
 # pins, and copied into the image; it is not committed anywhere. The stage's C library is
 # newer than the image's; CI refuses a library that needs a newer one than the 2.39 the
 # image below ships.
-FROM ubuntu:26.04@sha256:9559ceb7c21e528e233e8dff26a0fb2682f4094cce06176eeb075d87a22b31de AS netblocker
+FROM ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78 AS netblocker
 COPY build/netblocker-build.sh /tmp/netblocker/netblocker-build.sh
 COPY netblocker/ /tmp/netblocker/source/
 RUN /tmp/netblocker/netblocker-build.sh install \
