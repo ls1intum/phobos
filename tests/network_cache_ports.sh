@@ -355,6 +355,23 @@ echo
 echo "== the network layer refuses an unusable library =="
 ran "a freshly built interposer lets the command run" "$(run_network_layer "$WORK/libnetblocker.so")"
 
+# Under --debug the network layer says what it preloads and runs, on stderr, and hands the
+# connect guard --verbose. A stand-in guard records the options it was given, then hands over.
+printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$@" > "$GUARD_RECORD"' \
+  'while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done' 'shift' 'exec "$@"' > "$WORK/record-guard"
+chmod +x "$WORK/record-guard"
+GUARD_RECORD="$WORK/guard-record" bash "$NETWORK_LAYER" --debug --netblocker-so "$WORK/libnetblocker.so" \
+  --connect-guard-bin "$WORK/record-guard" "$WORK/spec" -- /bin/echo command-ran \
+  > "$WORK/debug.out" 2> "$WORK/debug.err"
+if [[ "$(cat "$WORK/debug.out")" == "command-ran" ]] && grep -q '^\[phobos\] network: ' "$WORK/debug.err" \
+   && grep -qx -- '--verbose' "$WORK/guard-record"; then
+  ok "under --debug the network layer reports on stderr and the guard is handed --verbose"
+else
+  bad "under --debug the network layer reports on stderr and the guard is handed --verbose" \
+    "stdout 'command-ran', a '[phobos] network:' line, --verbose for the guard" \
+    "stdout '$(cat "$WORK/debug.out")', stderr '$(cat "$WORK/debug.err")', guard '$(tr '\n' ' ' < "$WORK/guard-record")'"
+fi
+
 refused_because "a missing library is refused" "does not exist" \
   "$(run_network_layer "$WORK/absent.so")"
 

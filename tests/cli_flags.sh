@@ -167,6 +167,46 @@ else
     "stdout 'nofs-payload', stderr with the disabled-layer note" "stdout '$(cat "$DBG_OUT")', stderr '$(cat "$DBG_ERR")'"
 fi
 
+echo "== --debug speaks for every layer on stderr and turns on the helpers' verbosity =="
+# A base with a timeout and a resource limit, so the timeout and resource layers have work to
+# report, and a stand-in for phobos-landlock that records its arguments and then runs the
+# command, so the --verbose the filesystem layer hands on can be read back.
+DEBUG_CORE="$WORK/core-debug"
+cp -R "$CORE" "$DEBUG_CORE"
+chmod +x "$DEBUG_CORE"/*.sh
+printf '[read]\n/usr\n[limits]\ntimeout = 30\nnofile = 256\n' > "$DEBUG_CORE/BaseTest.cfg"
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$@" > "$LL_RECORD"' \
+  'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift; exec "$@"' > "$WORK/record-then-run-landlock"
+chmod +x "$WORK/record-then-run-landlock"
+LL_RECORD="$WORK/ll-debug" bash "$DEBUG_CORE/phobos.sh" --spec-parent "$SPECS" \
+  --landlock-bin "$WORK/record-then-run-landlock" --debug -nnr -- /bin/echo debug-payload > "$DBG_OUT" 2> "$DBG_ERR"
+if [[ "$(cat "$DBG_OUT")" == "debug-payload" ]]; then
+  ok "with --debug stdout is still only the command's output"
+else
+  bad "with --debug stdout is still only the command's output" "debug-payload" "$(cat "$DBG_OUT")"
+fi
+for layer in phobos policy timeout resources filesystem; do
+  if grep -q "^\[phobos\] ${layer}: " "$DBG_ERR"; then
+    ok "the ${layer} step reports under --debug"
+  else
+    bad "the ${layer} step reports under --debug" "a '[phobos] ${layer}:' line on stderr" "$(cat "$DBG_ERR")"
+  fi
+done
+if grep -qx -- '--verbose' "$WORK/ll-debug"; then
+  ok "phobos-landlock is handed --verbose under --debug"
+else
+  bad "phobos-landlock is handed --verbose under --debug" "a --verbose argument" "$(tr '\n' ' ' < "$WORK/ll-debug")"
+fi
+
+PHB_DEBUG_ENABLED=1 LL_RECORD="$WORK/ll-env" bash "$DEBUG_CORE/phobos.sh" --spec-parent "$SPECS" \
+  --landlock-bin "$WORK/record-then-run-landlock" -nnr -- /bin/echo quiet-payload > "$DBG_OUT" 2> "$DBG_ERR"
+if ! grep -q '^\[phobos\] ' "$DBG_ERR" && ! grep -qx -- '--verbose' "$WORK/ll-env"; then
+  ok "PHB_DEBUG_ENABLED in the environment does not switch debugging on"
+else
+  bad "PHB_DEBUG_ENABLED in the environment does not switch debugging on" \
+    "no debug line and no --verbose" "stderr '$(cat "$DBG_ERR")', landlock '$(tr '\n' ' ' < "$WORK/ll-env")'"
+fi
+
 echo "== a refusal is written to stderr and leaves stdout to the command =="
 # A policy error ends the run before the command starts. Its message is for the person
 # reading the log, not part of the output a caller captures from the command.

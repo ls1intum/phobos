@@ -25,6 +25,26 @@ PHB_FILESYSTEM_DENIAL_PATTERN='Permission denied|EACCES|EROFS'
 _log()   { printf '%s\n' "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*" >&2; }
 die()    { _log "$1"; exit "${2:-1}"; }
 report() { printf '%s\n' "$1" >&2; }
+# Whether --debug was given to the script that sourced this file. Reset on every source,
+# because bash imports each environment variable as a shell variable of the same name, and
+# --debug must never be switched on from the environment: only a script's own option parsing
+# sets it.
+PHB_DEBUG_ENABLED=0
+# Switches debug_log on for the rest of this script. Called only from a script's own --debug
+# option, never from anything the environment decides.
+enable_debug_log() { PHB_DEBUG_ENABLED=1; }
+# Prints one line on stderr, "[phobos] <layer>: <message>", followed by any further arguments
+# quoted the way the shell would read them back, when --debug was given. Assumes the calling
+# script set PHB_DEBUG_ENABLED from its own options.
+debug_log() {
+  (( PHB_DEBUG_ENABLED )) || return 0
+  local layer="$1"
+  local message="$2"
+  local quoted=""
+  shift 2
+  if (( $# > 0 )); then quoted=" $(printf '%q ' "$@")"; fi
+  printf '[phobos] %s: %s%s\n' "$layer" "$message" "${quoted% }" >&2
+}
 uniq_keep_order() { awk '!seen[$0]++'; }
 depth_sort()      { awk '{print gsub(/\//,"/")+1 " " $0}' | sort -k1,1n -k2,2 | cut -d" " -f2-; }
 canon_paths() {

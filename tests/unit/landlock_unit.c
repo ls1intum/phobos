@@ -220,18 +220,15 @@ long __wrap_syscall(long number, ...) {
             int probe_size = va_arg(arguments, int);
             unsigned probe_flags = va_arg(arguments, unsigned);
             result = mock_landlock_version_probe((size_t)probe_size, probe_flags);
-        }
-        else {
+        } else {
             result = mock_create_ruleset(attributes, va_arg(arguments, size_t));
         }
-    }
-    else if (number == SYSCALL_NUMBER_LANDLOCK_ADD_RULE) {
+    } else if (number == SYSCALL_NUMBER_LANDLOCK_ADD_RULE) {
         int ruleset_descriptor = va_arg(arguments, int);
         int rule_type = va_arg(arguments, int);
         const void *rule_attributes = va_arg(arguments, const void *);
         result = mock_add_rule(ruleset_descriptor, rule_type, rule_attributes);
-    }
-    else if (number == SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF) {
+    } else if (number == SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF) {
         result = mock_restrict_self(va_arg(arguments, int));
     }
     va_end(arguments);

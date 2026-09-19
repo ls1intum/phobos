@@ -108,8 +108,7 @@ static void describe_destination(const struct sockaddr *destination, char *text,
         const struct sockaddr_in *ipv4 = (const struct sockaddr_in *)destination;
         inet_ntop(AF_INET, &ipv4->sin_addr, text, size);
         *port = ntohs(ipv4->sin_port);
-    }
-    else if (destination->sa_family == AF_INET6) {
+    } else if (destination->sa_family == AF_INET6) {
         const struct sockaddr_in6 *ipv6 = (const struct sockaddr_in6 *)destination;
         inet_ntop(AF_INET6, &ipv6->sin6_addr, text, size);
         *port = ntohs(ipv6->sin6_port);

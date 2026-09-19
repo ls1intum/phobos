@@ -25,7 +25,10 @@ Restriction options (every restriction is applied by default):
   --allow-unsandboxed                Debug switch: run the command raw, with every
                                      layer disabled, EVEN when a base policy is
                                      present. For deliberate unconfined runs only.
-  --debug                            Print the exact command each layer runs.
+  --debug                            Print on stderr what each layer does and runs, and
+                                     have phobos-landlock and the connect guard report
+                                     verbosely too. It prints the whole effective policy,
+                                     so it is for diagnosis, not for grading logs.
 
 Override options (taken only from the command line, never from the environment):
   --landlock-bin <path>              The phobos-landlock binary (default: beside this script).
@@ -95,7 +98,7 @@ while (( "$#" )); do
     --allow-unsandboxed)
       allow_unsandboxed=1; shift;;
     --debug)
-      enable_debug=1; shift;;
+      enable_debug=1; enable_debug_log; shift;;
     --landlock-bin)
       shift; [[ $# -gt 0 ]] || usage; opt_landlock_bin="$1"; shift;;
     --timeout-bin)
@@ -176,6 +179,7 @@ trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 # Build the run's specification: base discovery, parse, merge and every spec file, all in
 # the one policy program, over the directory this script owns and the chain below reads.
 policy_flags=( --spec-dir "$SPEC_DIR" --tail-flags-file "$tail_flags_file" )
+if (( enable_debug )); then policy_flags+=( --debug ); fi
 for c in "${cfgs[@]}"; do policy_flags+=( --config "$c" ); done
 "${HERE}/phobos-policy.sh" "${policy_flags[@]}"
 
@@ -199,4 +203,5 @@ if (( ! enable_filesystem )); then fs_flags+=( --no-landlock ); fi
 # filesystem layer to skip the port rules too.
 if (( ! enable_network )); then fs_flags+=( --no-network-ports ); fi
 chain+=( "${HERE}/phobos-filesystem.sh" "${fs_flags[@]}" "$SPEC_DIR" -- )
+debug_log phobos "run the layer chain" "${chain[@]}" "${cmd[@]}"
 exec "${chain[@]}" "${cmd[@]}"
