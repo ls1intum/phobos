@@ -8,7 +8,12 @@ source "${HERE}/phobos-common.sh"
 # A generic layer: it sets the resource limits and execs the rest of the chain. phobos.sh has
 # the filesystem layer start it, and only when the resource limits are enabled, so there is no
 # enable flag to read. On its own, phobos-resources.sh SPEC -- CMD limits CMD.
-if [[ "${1:-}" == "--debug" ]]; then shift; fi
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --debug) enable_debug_log; shift ;;
+    *) break ;;
+  esac
+done
 [[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-resources.sh [--debug] <SPEC_DIR> -- <cmd...>" >&2; exit 2; }
 SPEC_DIR="$1"; shift 2
 
@@ -34,4 +39,5 @@ read_limits_conf "${SPEC_DIR}/limits.conf" limits
 # cgroups the container is started with; these rlimits are the in-process line beside them.
 apply_resource_limits "${limits[mem_mb]}" "${limits[nproc]}" "${limits[nofile]}" "${limits[fsize_mb]}" "${limits[cpu]}"
 
+debug_log resources "limits mem_mb=${limits[mem_mb]:-none} nproc=${limits[nproc]:-none} nofile=${limits[nofile]:-none} fsize_mb=${limits[fsize_mb]:-none} cpu=${limits[cpu]:-none}; run" "$@"
 exec "$@"

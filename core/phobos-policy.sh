@@ -10,7 +10,7 @@
 # specification and then run any single layer script over that directory itself.
 #
 # Usage:
-#   phobos-policy.sh --spec-dir <dir> [--tail-flags-file <file>] [--config <file>]...
+#   phobos-policy.sh [--debug] --spec-dir <dir> [--tail-flags-file <file>] [--config <file>]...
 #
 # The caller creates and owns --spec-dir and removes it when the run ends. This script only
 # writes into it, using a scratch subdirectory of it for its own temporary files.
@@ -20,7 +20,7 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/phobos-common.sh"
 
 usage() {
-  echo "Usage: phobos-policy.sh --spec-dir <dir> [--tail-flags-file <file>] [--config <file>]..." >&2
+  echo "Usage: phobos-policy.sh [--debug] --spec-dir <dir> [--tail-flags-file <file>] [--config <file>]..." >&2
   exit 2
 }
 
@@ -32,6 +32,7 @@ while (( "$#" )); do
     --spec-dir)        shift; [[ $# -gt 0 ]] || usage; SPEC_DIR="$1"; shift;;
     --tail-flags-file) shift; [[ $# -gt 0 ]] || usage; tail_flags_file="$1"; shift;;
     --config|-c)       shift; [[ $# -gt 0 ]] || usage; cfgs+=("$1"); shift;;
+    --debug)           enable_debug_log; shift;;
     *) usage;;
   esac
 done
@@ -155,6 +156,12 @@ write_spec "$SPEC_DIR" "$eff_dir" "$eff_net" "$timeout_eff" "$tail_flags_file" "
   [[ -n "$eff_limit_fsize_mb" ]] && printf 'fsize_mb=%s\n' "$eff_limit_fsize_mb"
   [[ -n "$eff_limit_cpu"      ]] && printf 'cpu=%s\n'      "$eff_limit_cpu"
 } > "${SPEC_DIR}/limits.conf"
+
+# Under --debug, the effective specification each layer below reads, one line per file.
+for spec_file in ${PHB_SPEC_FILES}; do
+  [[ -f "${SPEC_DIR}/${spec_file}" ]] || continue
+  debug_log policy "${spec_file}: $(tr '\n' ' ' < "${SPEC_DIR}/${spec_file}")"
+done
 
 # The last conditional above can leave a non-zero status when the final limit is unset, which
 # would otherwise become this script's exit status. The specification is written; report success.

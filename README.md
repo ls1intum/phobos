@@ -96,6 +96,8 @@ To isolate which layer a failure belongs to, each layer can be turned off on its
 core/phobos.sh --no-runtime-restriction --config core/config/BaseLanguage-java.cfg -- <command>
 ```
 
+`--debug` makes every layer say on stderr what it does and what it runs, and has `phobos-landlock` and the connect guard report verbosely too; stdout stays the command's own. It prints the whole effective policy, so it is meant for diagnosing a run, not for grading logs. It can only be switched on by the flag, never through the environment.
+
 ## Configuration format
 
 A policy is an INI-like file with these sections. Each filesystem section grants exactly its
