@@ -8,8 +8,9 @@
  * that times out, a descriptor handoff that breaks. Those decide whether the guard
  * fails closed, so they are the ones that must not go untested.
  *
- * The source is included rather than linked, so the static functions are reachable,
- * and main is renamed so this file can provide its own. Every syscall the guard
+ * The file holding main is included with main renamed, so this file can provide its own,
+ * and the modules beside it are linked, built with PHOBOS_CONNECT_GUARD_UNIT_TEST so the
+ * functions that reset their tables for each case exist. Every syscall the guard
  * makes is interposed through the linker's --wrap, so success and failure can be
  * injected without a special kernel, and fork is wrapped so the parent and the child
  * halves of the guard can each be driven in turn. Cases that end in exit() run in a
@@ -41,9 +42,14 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 
+#ifndef PHOBOS_CONNECT_GUARD_UNIT_TEST
+#define PHOBOS_CONNECT_GUARD_UNIT_TEST
+#endif
 #define main sut_main
 #include "../../core/phobos-connect-guard.c"
 #undef main
+#include "../../core/phobos-connect-guard-destination.h"
+#include "../../core/phobos-connect-guard-socket-types.h"
 
 /* ------------------------------------------------------------ the behaviour */
 
@@ -133,9 +139,9 @@ static void reset_behaviour(void) {
     bx->socket_result = 7;
     bx->connect_result = 0;
     bx->getsockopt_result = 0;
-    connect_rule_count = 0;
-    verbose = false;
-    memset(socket_type_table, 0, sizeof(socket_type_table));
+    connect_rules_reset_for_tests();
+    set_verbose(false);
+    socket_types_reset_for_tests();
 }
 
 /* ------------------------------------------------------------------- wraps */
@@ -574,7 +580,7 @@ static void test_rule_parsing(void) {
     close(fd);
     check("a rules file loads", load_rules(path));
     unlink(path);
-    check("the three well-formed rules were kept", connect_rule_count == 3);
+    check("the three well-formed rules were kept", connect_rules_count_for_tests() == 3);
 
     reset_behaviour();
     check("a null path is no rules and no error", load_rules(NULL));
@@ -585,16 +591,16 @@ static void test_rule_parsing(void) {
     remember_rule("h", "0");
     remember_rule("h", "70000");
     remember_rule("h", "notanumber");
-    check("port zero, out of range and non-numeric are dropped", connect_rule_count == 0);
+    check("port zero, out of range and non-numeric are dropped", connect_rules_count_for_tests() == 0);
     char big[MAXIMUM_HOST + 8];
     memset(big, 'a', sizeof(big) - 1);
     big[sizeof(big) - 1] = '\0';
     remember_rule(big, "443");
-    check("an over-long host is dropped", connect_rule_count == 0);
+    check("an over-long host is dropped", connect_rules_count_for_tests() == 0);
     for (size_t i = 0; i < MAXIMUM_RULES + 4; i++) {
         remember_rule("127.0.0.1", "443");
     }
-    check("the rule table does not overflow", connect_rule_count == MAXIMUM_RULES);
+    check("the rule table does not overflow", connect_rules_count_for_tests() == MAXIMUM_RULES);
 }
 
 static bool permits_v4(const char *ip, uint16_t port) {
@@ -662,7 +668,7 @@ static bool permits_v6(const char *ip, uint16_t port) {
 static void test_connect_ranges(void) {
     reset_behaviour();
     remember_rule("104.16.0.0/12", "443");
-    check("the range table kept the rule", connect_rule_count == 1);
+    check("the range table kept the rule", connect_rules_count_for_tests() == 1);
     check("an IPv4 address inside the range on its port is permitted",
           permits_v4("104.16.5.5", 443));
     check("an IPv4 address inside the range on another port is refused",
@@ -684,16 +690,16 @@ static void test_connect_ranges(void) {
     remember_rule("10.0.0.0/0", "443");
     remember_rule("10.0.0.0/x", "443");
     remember_rule("nothost/8", "443");
-    check("a malformed range is dropped", connect_rule_count == 0);
+    check("a malformed range is dropped", connect_rules_count_for_tests() == 0);
 
     reset_behaviour();
     remember_rule("::ffff:104.16.0.0/12", "443");
     check("an IPv4-mapped range with too short a prefix is dropped, as libnetblocker drops it",
-          connect_rule_count == 0);
+          connect_rules_count_for_tests() == 0);
 
     reset_behaviour();
     remember_rule("::ffff:104.16.0.0/108", "443");
-    check("an IPv4-mapped range with a long-enough prefix is kept", connect_rule_count == 1);
+    check("an IPv4-mapped range with a long-enough prefix is kept", connect_rules_count_for_tests() == 1);
     check("the mapped range matches an in-range IPv4 address", permits_v4("104.16.5.5", 443));
     check("the mapped range refuses an out-of-range IPv4 address", !permits_v4("8.8.8.8", 443));
 
@@ -766,11 +772,11 @@ static void test_exit_code_mapping(void) {
 
 static void test_verbose_logging(void) {
     reset_behaviour();
-    verbose = false;
+    set_verbose(false);
     log_verbose("quiet %d", 1); /* returns without writing */
-    verbose = true;
+    set_verbose(true);
     log_verbose("loud %d", 2); /* writes, exercising the va_list block */
-    verbose = false;
+    set_verbose(false);
     check("verbose logging runs both ways", true);
 }
 
@@ -1006,11 +1012,11 @@ static void test_egress_syscalls(void) {
           bx->answers == 1 && bx->last_answer_error == -EACCES);
 
     reset_behaviour();
-    verbose = true;
+    set_verbose(true);
     bx->notif_recv_nr = __NR_sendto;
     bx->notif_send_result = -1;
     service_once();
-    verbose = false;
+    set_verbose(false);
     check("a continue whose notify send fails is tolerated", bx->answers == 1);
 
     reset_behaviour();
@@ -1286,10 +1292,10 @@ static void test_connect_on_behalf_paths(void) {
     check("a send to a vanished command is not an error", bx->answers == 1);
 
     reset_behaviour();
-    verbose = true;
+    set_verbose(true);
     bx->notif_send_result = -1; /* other error: logged under verbose */
     answer(9, &response, 1, 0, -EACCES);
-    verbose = false;
+    set_verbose(false);
     check("a send error is logged", bx->answers == 1);
 }
 

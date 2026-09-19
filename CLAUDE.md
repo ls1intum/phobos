@@ -121,6 +121,8 @@ core/                      the sandbox itself
   phobos.sh                entry point: parses the configuration, applies the layers
   phobos-filesystem.sh     the filesystem layer, reads the path sets and applies Landlock
   phobos-landlock*.c/.h    the C program that applies the Landlock policy, then exec's
+  phobos-connect-guard*.c/.h  the connect guard: supervises connect() and enforces [connect] by host and port
+  phobos-policy.sh         turns the base and exercise configuration into a run's specification
   phobos-network.sh        the network layer, drives the preload library
   phobos-resources.sh      the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
   phobos-timeout.sh        the timeout layer
