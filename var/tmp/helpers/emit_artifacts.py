@@ -16,14 +16,12 @@ Parse a `final_bindings.txt` log produced by `detect_minimal_fs.sh` and emit:
          paths_all     : list[ {mode,path} ]       # merged r/w (w overrides r)
          tail_flags    : list[str]                 # from 'Tail options:' line
          provenance    : log SHA256, timestamp, schema_version
-
-  • <out_dir>/TailPhobos.cfg
-      Merges/uniquifies all tail flags across every exercise processed.
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import pathlib
@@ -35,19 +33,30 @@ import time
 # -----------------------------------------------------------------------------
 # Regex and helpers
 # -----------------------------------------------------------------------------
-RX_DETAIL = re.compile(r"^(\/[^ ]+)\s+->\s+([rwn])$")  # /path -> r|w|n
+RX_DETAIL = re.compile(r"^(?P<path>\/[^ ]+)\s+->\s+(?P<mode>[rwn])$")  # /path -> r|w|n
+# The words of the label in front of the options on a "Base options:" or "Tail options:" line.
+OPTIONS_LABEL_WORDS = 2
+# How far the JSON record is indented, for a reader rather than for a parser.
+JSON_INDENT = 2
+# The status the helper ends with when the log it was pointed at does not exist.
+EXIT_NO_LOG = 2
 
 
 def canon(p: str) -> str:
-    """Canonicalize path (resolve symlinks, keep non-existent)"""
+    """Canonicalise a path as it is written, without resolving symbolic links, keeping one that
+    does not exist.
+
+    Any failure of the external realpath falls back to the pure-Python resolution rather than
+    abort the artefact run, which is why the exception caught is deliberately broad. That
+    fallback does resolve symbolic links, so a run without GNU realpath can record a link's
+    target where it would otherwise record the link.
+    """
     try:
         out = subprocess.check_output(
             ["realpath", "--canonicalize-missing", "--no-symlinks", p],
             text=True,
         ).strip()
         return out or p
-    # Deliberately broad: any failure of the external realpath must fall back to
-    # the pure-Python resolution rather than abort the artefact run.
     except Exception:  # noqa: BLE001
         return str(pathlib.Path(p).resolve(strict=False))
 
@@ -55,62 +64,69 @@ def canon(p: str) -> str:
 # -----------------------------------------------------------------------------
 # Parse detect_minimal_fs log
 # -----------------------------------------------------------------------------
-def parse_log(path: pathlib.Path, workdir, runtime_root) -> tuple[list[tuple[str, str]],
-dict[str, str],
-list[str]]:
-    """
-    Returns:
-        dyn_pairs  – [('r'|'w'|'n', /path), ...] from per-path lines
-        base_modes – {path: 'r'|'w'} from 'Base options:' line
-        tail_flags – ['--flag', 'value', ...] from 'Tail options:' line
-    """
-    dyn_pairs: list[tuple[str, str]] = []
-    base_modes: dict[str, str] = {}
-    tail_flags: list[str] = []
+@dataclasses.dataclass
+class ParsedLog:
+    """What a final_bindings.txt log holds.
 
+    dyn_pairs  – [('r'|'w'|'n', /path), ...] from the per-path lines
+    base_modes – {path: 'r'|'w'} from the 'Base options:' line
+    tail_flags – ['--flag', 'value', ...] from the 'Tail options:' line
+    """
+
+    dyn_pairs: list[tuple[str, str]]
+    base_modes: dict[str, str]
+    tail_flags: list[str]
+
+
+def detail_pair(match: re.Match, workdir, runtime_root) -> tuple[str, str]:
+    """The (mode, path) of one per-path line, its path canonical and moved from the pruning
+    run's temporary workdir to the runtime root the policy is written for."""
+    cp = canon(match["path"])
+    if cp.startswith(workdir):
+        cp = cp.replace(workdir, runtime_root, 1)
+    return (match["mode"], cp)
+
+
+def base_modes_from(line: str) -> dict[str, str]:
+    """The static bind mounts of a 'Base options:' line, each path with 'r' for a read-only bind
+    and 'w' for a writable one. The operands of the other mount options are skipped."""
+    base_modes: dict[str, str] = {}
+    it = iter(line.split()[OPTIONS_LABEL_WORDS:])
+    for flag in it:
+        try:
+            if flag == "--ro-bind":
+                p = canon(next(it))
+                next(it)
+                base_modes[p] = "r"
+            elif flag == "--bind":
+                p = canon(next(it))
+                next(it)
+                base_modes[p] = "w"
+            elif flag in ("--proc", "--dev", "--tmpfs"):
+                _ = next(it)
+        except StopIteration:
+            break
+    return base_modes
+
+
+def parse_log(path: pathlib.Path, workdir, runtime_root) -> ParsedLog:
+    """Reads a final_bindings.txt log: its per-path lines, its 'Base options:' line and its
+    'Tail options:' line, with the pruner's "[LOG] " prefix stripped where it has one."""
+    parsed = ParsedLog(dyn_pairs=[], base_modes={}, tail_flags=[])
     with path.open(encoding="utf-8") as fh:
         for raw in fh:
             line = raw.strip()
             if not line:
                 continue
-            line = line.removeprefix("[LOG] ")  # strip detect's log prefix
-
-            # per-path detail block
+            line = line.removeprefix("[LOG] ")
             m = RX_DETAIL.match(line)
             if m:
-                p, mode = m.groups()
-                cp = canon(p)
-                if cp.startswith(workdir):
-                        cp = cp.replace(workdir, runtime_root, 1)
-                dyn_pairs.append((mode, cp))
-                continue
-
-            # Base static binds
-            if line.startswith("Base options:"):
-                tokens = line.split()[2:]
-                it = iter(tokens)
-                for flag in it:
-                    try:
-                        if flag == "--ro-bind":
-                            p = canon(next(it))
-                            next(it)
-                            base_modes[p] = "r"
-                        elif flag == "--bind":
-                            p = canon(next(it))
-                            next(it)
-                            base_modes[p] = "w"
-                        elif flag in ("--proc", "--dev", "--tmpfs"):
-                            _ = next(it)
-                    except StopIteration:
-                        break
-                continue
-
-            # Tail flags
-            if line.startswith("Tail options:"):
-                tail_flags.extend(line.split()[2:])
-                continue
-
-    return dyn_pairs, base_modes, tail_flags
+                parsed.dyn_pairs.append(detail_pair(m, workdir, runtime_root))
+            elif line.startswith("Base options:"):
+                parsed.base_modes.update(base_modes_from(line))
+            elif line.startswith("Tail options:"):
+                parsed.tail_flags.extend(line.split()[OPTIONS_LABEL_WORDS:])
+    return parsed
 
 
 # -----------------------------------------------------------------------------
@@ -118,14 +134,15 @@ list[str]]:
 # -----------------------------------------------------------------------------
 def merge_pairs(dyn: list[tuple[str, str]],
                 base: dict[str, str]) -> list[tuple[str, str]]:
-    merged: dict[str, str] = dict(base)  # start with static
+    """The static base binds merged with the pruned paths, a writable mode winning over a
+    read-only one and hidden paths left out, sorted by path so the result is deterministic."""
+    merged: dict[str, str] = dict(base)
     for mode, path in dyn:
         if mode == "n":
             continue
         prev = merged.get(path)
         if prev is None or (prev == "r" and mode == "w"):
             merged[path] = mode
-    # sort paths for determinism
     return sorted(((m, p) for p, m in merged.items()), key=lambda t: t[1])
 
 
@@ -162,65 +179,7 @@ def write_json(lang: str, ex: str,
     }
     out_dir.mkdir(parents=True, exist_ok=True)
     dest = out_dir / f"{lang}_{ex}.json"
-    dest.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
-    return dest
-
-
-# Every tail flag the pruner actually passes, so that the generated policy is the
-# sandbox the pruning run measured. It used to allow three of these, which quietly
-# dropped /proc, /dev, the PID namespace and the new session from any generated policy.
-# Kept identical to _ALLOWED_TAIL_FLAGS in orchestrate.py. They are two implementations
-# of one rule, and they had already drifted: --unshare-net survived orchestration and was
-# then dropped when artefacts were merged on the next run.
-_TAIL_ALLOW = {"--share-net", "--unshare-net", "--unshare-uts", "--unshare-ipc",
-               "--unshare-pid", "--new-session"}
-
-# The mount options, each with the one operand it is allowed to carry. A different
-# operand is not a variation worth keeping: it did not come from this pruner, and a
-# half-checked mount in a security policy is worse than no mount at all.
-_TAIL_MOUNTS = {"--proc": "/proc", "--dev": "/dev"}
-
-
-def _filter_tail(tokens: list[str]) -> list[str]:
-    """
-Drop any (--chdir <path>) pairs and keep only allow‑listed tail flags.
-We do this so ephemeral per‑exercise workdirs never end up in TailPhobos.cfg.
-"""
-    out: list[tuple[str, ...]] = []
-    it = iter(tokens)
-    for t in it:
-        if t == "--chdir":
-            next(it, None)  # discard operand and add correct runtime chdir later (path to test repository)
-            continue
-        if t in _TAIL_MOUNTS:
-            operand = next(it, None)
-            if operand == _TAIL_MOUNTS[t]:
-                out.append((t, operand))
-            continue
-        if t in _TAIL_ALLOW:
-            out.append((t,))
-    return out
-
-
-def merge_tail(flags: list[str], out_dir: pathlib.Path) -> pathlib.Path | None:
-    if not flags and not (out_dir / "TailPhobos.cfg").exists():
-        return None
-    dest = out_dir / "TailPhobos.cfg"
-    existing_tokens: list[str] = []
-    if dest.exists():
-        existing_tokens = dest.read_text().split()
-    new_tokens = _filter_tail(flags)
-    old_tokens = _filter_tail(existing_tokens)
-    # merge & distinct, preserve order (old first)
-    # Over whole options, not over tokens. Deduplicating "--proc" and "/proc"
-    # separately would drop the operand of a repeated mount and leave the flag dangling.
-    merged: list[str] = []
-    seen = set()
-    for option in old_tokens + new_tokens:
-        if option not in seen:
-            seen.add(option)
-            merged.extend(option)
-    dest.write_text(" ".join(merged) + "\n")
+    dest.write_text(json.dumps(data, indent=JSON_INDENT, sort_keys=True) + "\n")
     return dest
 
 
@@ -244,21 +203,16 @@ def main() -> int:
 
     if not log_path.is_file():
         print(f"emit_artifacts: no log file {log_path}", file=sys.stderr)
-        return 2
+        return EXIT_NO_LOG
 
-    dyn_pairs, base_modes, tail_flags = parse_log(log_path, args.workdir, args.runtime_root)
-    merged_pairs = merge_pairs(dyn_pairs, base_modes)
+    parsed = parse_log(log_path, args.workdir, args.runtime_root)
+    merged_pairs = merge_pairs(parsed.dyn_pairs, parsed.base_modes)
 
     p_file = write_paths(args.lang, args.exercise, merged_pairs, out_dir)
     j_file = write_json(args.lang, args.exercise,
-                        dyn_pairs, base_modes, merged_pairs,
-                        tail_flags, log_path, out_dir)
-    t_file = merge_tail(tail_flags, out_dir)
-
-    msg = f"emit_artifacts: wrote {p_file.name}, {j_file.name}"
-    if t_file:
-        msg += f", updated {t_file.name}"
-    print(msg)
+                        parsed.dyn_pairs, parsed.base_modes, merged_pairs,
+                        parsed.tail_flags, log_path, out_dir)
+    print(f"emit_artifacts: wrote {p_file.name}, {j_file.name}")
     return 0
 
 

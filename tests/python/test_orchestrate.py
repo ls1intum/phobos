@@ -17,6 +17,9 @@ import pathlib
 import subprocess
 import sys
 
+# How long the orchestrator may run before the test gives up on it.
+ORCHESTRATOR_TIMEOUT_SECONDS = 120
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 ORCHESTRATOR = REPO_ROOT / "docker" / "prune_phase" / "orchestrate" / "orchestrate.py"
 HELPERS = REPO_ROOT / "var" / "tmp" / "helpers"
@@ -85,7 +88,7 @@ def run_orchestrator(
         },
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=ORCHESTRATOR_TIMEOUT_SECONDS,
         check=False,
     )
 
@@ -195,6 +198,14 @@ def test_the_runtime_tail_drops_the_bubblewrap_flags(tmp_path):
     for flag in ("--proc", "/proc", "--dev", "/dev", "--share-net", "--new-session",
                  "--unshare-pid", "--unshare-uts", "--unshare-ipc"):
         assert flag not in written, f"{flag} should have been dropped, got {written!r}"
+
+
+def test_the_runtime_tail_needs_no_tail_from_the_pruning_run(tmp_path):
+    """The runtime tail is derived from the runtime chdir alone, so it is written even
+    when no pruning run left a tail of its own behind."""
+    result = run_orchestrator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert runtime_tail(tmp_path).split() == ["--chdir", "/var/tmp/testing-dir"]
 
 
 def test_the_runtime_tail_is_only_the_runtime_chdir(tmp_path):

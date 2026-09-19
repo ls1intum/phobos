@@ -60,7 +60,6 @@ reviews:
     - "ld_preloader/**"
     - "docker/**"
     - "tests/**"
-    - "squid/**"
     - "var/tmp/helpers/**"
     - "var/tmp/pruning/**"
     - "assets/**"

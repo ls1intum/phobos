@@ -37,6 +37,8 @@ LARGE_LINE_BYTES=100000000
 LEFTOVER_SECONDS=8
 LEFTOVER_RUN_BOUND_MS=6000
 MICROSECONDS_PER_MILLISECOND=1000
+# A status of the command's own, which the report must hand on unchanged.
+COMMAND_OWN_EXIT=3
 
 # Runs a bash snippet under phobos.sh with the timeout and the network layer off, capturing
 # stdout and stderr together in OUT and the status in RC, in this shell so both survive.
@@ -73,11 +75,11 @@ else
   bad "a last stderr line without a newline is counted" "network=0, filesystem=1" "$OUT"
 fi
 
-run_snippet 'echo "x: EACCES" >&2; exit 3'
-if [[ "$RC" -eq 3 && "$OUT" == *"PHB-EDENY"* ]]; then
+run_snippet "echo 'x: EACCES' >&2; exit ${COMMAND_OWN_EXIT}"
+if [[ "$RC" -eq "$COMMAND_OWN_EXIT" && "$OUT" == *"PHB-EDENY"* ]]; then
   ok "the report keeps the command's own exit status"
 else
-  bad "the report keeps the command's own exit status" "exit 3 with a PHB-EDENY report" "exit ${RC}: $OUT"
+  bad "the report keeps the command's own exit status" "exit ${COMMAND_OWN_EXIT} with a PHB-EDENY report" "exit ${RC}: $OUT"
 fi
 
 echo

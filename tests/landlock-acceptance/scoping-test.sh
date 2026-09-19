@@ -22,10 +22,15 @@ ok()   { printf 'ok    %s\n' "$1"; pass=$((pass + 1)); }
 bad()  { printf 'FAIL  %s\n        %s\n' "$1" "$2"; fail=$((fail + 1)); }
 skip() { printf 'SKIP  %s\n        %s\n' "$1" "$2"; skipped=$((skipped + 1)); }
 
+# The Landlock version that brings scoping, and how long the processes the checks signal live:
+# long enough to outlast the checks, and killed when they are done.
+FIRST_LANDLOCK_VERSION_WITH_SCOPING=6
+OUTSIDE_PROCESS_SECONDS=300
+INSIDE_PROCESS_SECONDS=30
 version="$("$LANDLOCK" --verbose --rights=rx /usr -- /bin/true 2>&1 \
     | sed -n 's/.*Landlock version \([0-9][0-9]*\).*/\1/p' | head -1)"
 
-if [[ -z "$version" ]] || (( version < 6 )); then
+if [[ -z "$version" ]] || (( version < FIRST_LANDLOCK_VERSION_WITH_SCOPING )); then
     skip "Landlock scoping" "the kernel offers Landlock version ${version:-<none>}; scoping needs 6"
     echo
     printf '%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skipped"
@@ -34,7 +39,7 @@ fi
 
 # A process outside the sandbox, started before it, that the sandboxed process will try to
 # reach with a harmless signal-0 (an existence check that still needs signal permission).
-sleep 300 &
+sleep "$OUTSIDE_PROCESS_SECONDS" &
 outside_pid=$!
 
 out="$("$LANDLOCK" --rights=rx /usr --rights=rx /lib -- \
@@ -49,7 +54,7 @@ fi
 # A process the sandbox starts itself is inside the same Landlock domain, so signalling it
 # must still work: scoping confines signals, it does not forbid them.
 out="$("$LANDLOCK" --rights=rx /usr --rights=rx /lib -- \
-    /bin/sh -c 'sleep 30 & inside=$!; kill -0 "$inside" && echo inside=ok || echo inside=DENIED; kill "$inside" 2>/dev/null' 2>&1)"
+    /bin/sh -c "sleep ${INSIDE_PROCESS_SECONDS}"' & inside=$!; kill -0 "$inside" && echo inside=ok || echo inside=DENIED; kill "$inside" 2>/dev/null' 2>&1)"
 if [[ "$out" == *"inside=ok"* && "$out" != *"inside=DENIED"* ]]; then
     ok "a sandboxed process can still signal a process inside the sandbox"
 else

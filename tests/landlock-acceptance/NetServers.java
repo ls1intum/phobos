@@ -4,10 +4,13 @@ import java.net.Socket;
 /** Two loopback TCP servers: one the policy allows, one it does not. */
 public final class NetServers {
 
+    /** How many connections may wait to be accepted on each server. */
+    private static final int BACKLOG = 16;
+
     public static void main(String[] args) throws Exception {
         for (String arg : args) {
             int port = Integer.parseInt(arg);
-            ServerSocket server = new ServerSocket(port, 16);
+            ServerSocket server = new ServerSocket(port, BACKLOG);
             Thread thread = new Thread(() -> accept(server, port));
             thread.setDaemon(true);
             thread.start();

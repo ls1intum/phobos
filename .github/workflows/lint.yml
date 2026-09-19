@@ -2,11 +2,7 @@ name: Lint
 
 on:
   pull_request:
-    # feat/landlock-instead-of-bubblewrap is here because work is currently stacked on
-    # that branch, and a base-branch filter is matched against the pull request's base.
-    # Without the entry this workflow does not run on those pull requests at all.
-    # Remove it once that branch has landed.
-    branches: ["main", "feat/landlock-instead-of-bubblewrap"]
+    branches: ["main"]
   push:
     branches: ["main"]
   workflow_dispatch:
@@ -157,13 +153,6 @@ jobs:
             docker run --rm -i -v "$PWD/.hadolint.yaml:/cfg.yaml:ro" \
               "${HADOLINT_IMAGE}" hadolint --config /cfg.yaml - < "$f" || failed=1
             echo "::endgroup::"
-          # -name 'Dockerfile*' does not match squid/HTTP_PROXY_SQUID_Dockerfile, and that
-          # exclusion is left in place rather than widened: that file fails hadolint on a
-          # bare _JAVA_OPTIONS line that is not an instruction at all, on a deprecated
-          # MAINTAINER and on both ADD instructions, and it cannot build either, since it
-          # copies directories this repository does not have. Repairing or deleting it is
-          # a decision about the file, not about linting. The job name says "buildable"
-          # so that a green run is not read as covering it.
           done < <(find . -name 'Dockerfile*' -type f)
           exit "$failed"
 

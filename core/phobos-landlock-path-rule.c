@@ -10,7 +10,12 @@
  * "makeable" set. No build tool needs either, a device node is a way to reach
  * hardware the policy never named, and a symbolic link is a way to point a
  * later write somewhere the policy never named. They stay in the handled set,
- * so they are denied rather than unregulated. */
+ * so they are denied rather than unregulated.
+ *
+ * Moving a file into or out of a directory is creating it on one side and
+ * deleting it on the other, so REFER is granted only where both are. Without it
+ * the kernel answers EXDEV, which makes a copying tool succeed quietly and an
+ * atomic move fail. */
 uint64_t rights_granted_for(const struct path_rule *rule, int landlock_version) {
     uint64_t granted_rights = 0;
     if (rule->readable) {
@@ -22,7 +27,7 @@ uint64_t rights_granted_for(const struct path_rule *rule, int landlock_version) 
     }
     if (rule->writable) {
         granted_rights |= LANDLOCK_ACCESS_FILESYSTEM_WRITE_FILE;
-        if (landlock_version >= 3) {
+        if (landlock_version >= FIRST_VERSION_WITH_TRUNCATE) {
             granted_rights |= LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE;
         }
     }
@@ -36,14 +41,10 @@ uint64_t rights_granted_for(const struct path_rule *rule, int landlock_version) 
         granted_rights |=
             LANDLOCK_ACCESS_FILESYSTEM_REMOVE_FILE | LANDLOCK_ACCESS_FILESYSTEM_REMOVE_DIRECTORY;
     }
-    /* Moving a file into or out of a directory is creating it on one side and
-     * deleting it on the other, so it is granted only where both are. Without
-     * it the kernel answers EXDEV, which makes a copying tool succeed quietly
-     * and an atomic move fail. */
-    if (rule->makeable && rule->removable && landlock_version >= 2) {
+    if (rule->makeable && rule->removable && landlock_version >= FIRST_VERSION_WITH_REFER) {
         granted_rights |= LANDLOCK_ACCESS_FILESYSTEM_REFER;
     }
-    if (rule->ioctl_device && landlock_version >= 5) {
+    if (rule->ioctl_device && landlock_version >= FIRST_VERSION_WITH_IOCTL_DEVICE) {
         granted_rights |= LANDLOCK_ACCESS_FILESYSTEM_IOCTL_DEVICE;
     }
     return granted_rights & filesystem_rights_for_version(landlock_version);
