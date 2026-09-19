@@ -74,12 +74,12 @@ if ! "$COMPILER" -std=gnu23 -O2 -Wall -Wextra -fPIC -shared -fvisibility=hidden 
 fi
 ok "build the interposer"
 
-# Only the five hooks may be visible. Any other function the library exported could
+# Only the six hooks may be visible. Any other function the library exported could
 # take the place of one the program, or another library, defines under the same name.
 exported="$(readelf --dyn-syms --wide "$WORK/libnetblocker.so" 2>/dev/null \
   | awk '$4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" { print $8 }' \
   | LC_ALL=C sort | paste -s -d ' ' -)"
-check "the library exports exactly its five hooks" "bind connect getaddrinfo sendmsg sendto" "$exported"
+check "the library exports exactly its six hooks" "bind connect getaddrinfo sendmmsg sendmsg sendto" "$exported"
 
 if ! "$COMPILER" -std=gnu23 -O0 -g -o "$WORK/probe" "$PROBE_SOURCE" 2>"$WORK/probe.log"; then
   bad "build the probe client" "an executable" "$(cat "$WORK/probe.log")"

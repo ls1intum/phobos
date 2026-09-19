@@ -2,14 +2,15 @@
  * libnetblocker -- refuse the network access an allow-list does not name.
  *
  * Preloaded into every process of a graded run, it interposes getaddrinfo, connect,
- * bind, sendto and sendmsg. A lookup of a host no rule covers fails with EAI_FAIL, an
+ * bind, sendto, sendmsg and sendmmsg. A lookup of a host no rule covers fails with EAI_FAIL, an
  * outbound connection or datagram to an address no rule covers fails with EACCES, and a
  * TCP bind to a local address no [bind] rule covers fails with EACCES too. It is defence
  * in depth that a process can step around, as SECURITY.md says.
  *
- * connect covers TCP and a connected UDP socket. sendto and sendmsg cover the other
- * way a UDP datagram names its destination, on a socket that was never connected, which
- * connect would never see. bind covers the local address a service asks to listen on:
+ * connect covers TCP and a connected UDP socket. sendto, sendmsg and sendmmsg cover the
+ * other way a UDP datagram names its destination, on a socket that was never connected, which
+ * connect would never see; sendmmsg carries a batch, each message with its own destination.
+ * bind covers the local address a service asks to listen on:
  * Landlock enforces a bind only by port, so this host filter narrows it to the local
  * addresses the policy names. Only a TCP bind under an actual [bind] rule is filtered, so
  * a run whose policy names no bind port keeps binding freely, exactly as it does under
@@ -17,7 +18,7 @@
  * library cannot interpose, so this does not disturb DNS; it filters the calls a
  * submission makes itself.
  *
- * This file is the five hooks and the loading of the library, and nothing else. What
+ * This file is the six hooks and the loading of the library, and nothing else. What
  * they work with lives beside it:
  *
  *   netblocker-policy.h         the allow-list, its lock and its answers
@@ -25,7 +26,7 @@
  *   netblocker-address-cache.h  the addresses name lookups authorised
  *   netblocker-address.h        one address in the form it is compared in
  *
- * Only the five hooks are visible outside the library. It is built with
+ * Only the six hooks are visible outside the library. It is built with
  * -fvisibility=hidden, so no other function of it can take the place of one a program
  * or another library defines under the same name.
  */
@@ -54,6 +55,7 @@ typedef int connect_function(int, const struct sockaddr *, socklen_t);
 typedef ssize_t sendto_function(int, const void *, size_t, int, const struct sockaddr *,
                                 socklen_t);
 typedef ssize_t sendmsg_function(int, const struct msghdr *, int);
+typedef int sendmmsg_function(int, struct mmsghdr *, unsigned int, int);
 
 /* The outbound allow-list of this process. Initialised statically, so that a hook running
  * before this library's constructor, from another library's, finds it empty and
@@ -70,6 +72,7 @@ static connect_function *real_connect = nullptr;
 static connect_function *real_bind = nullptr;
 static sendto_function *real_sendto = nullptr;
 static sendmsg_function *real_sendmsg = nullptr;
+static sendmmsg_function *real_sendmmsg = nullptr;
 
 /* Reads a service as a port: a whole number up to 65535. Anything else, a service name
  * and an empty text included, counts as no port. */
@@ -223,6 +226,29 @@ ssize_t sendmsg(int descriptor, const struct msghdr *message, int flags) {
     return real_sendmsg(descriptor, message, flags);
 }
 
+[[gnu::visibility("default")]]
+int sendmmsg(int descriptor, struct mmsghdr *messages, unsigned int count, int flags) {
+    if (real_sendmmsg == nullptr) {
+        real_sendmmsg = (sendmmsg_function *)dlsym(RTLD_NEXT, "sendmmsg");
+    }
+    /* Each message carries its own destination in msg_name, null on a connected socket. The
+     * kernel sends the batch in order and stops at the first message that fails, returning how
+     * many it sent, so a disallowed destination stops the batch there: the first message is
+     * refused outright, a later one lets the allowed prefix through and leaves the rest for the
+     * caller to retry, where it is refused again. */
+    for (unsigned int index = 0; index < count; index++) {
+        const struct msghdr *header = &messages[index].msg_hdr;
+        if (header->msg_name != nullptr && !destination_permitted(header->msg_name)) {
+            if (index == 0) {
+                errno = EACCES;
+                return -1;
+            }
+            return real_sendmmsg(descriptor, messages, index, flags);
+        }
+    }
+    return real_sendmmsg(descriptor, messages, count, flags);
+}
+
 /* Loads the allow-list and finds the functions the hooks hand permitted calls to. */
 static void netblocker_initialise(void) {
     policy_load(&policy, getenv(RULES_VARIABLE));
@@ -232,6 +258,7 @@ static void netblocker_initialise(void) {
     real_bind = (connect_function *)dlsym(RTLD_NEXT, "bind");
     real_sendto = (sendto_function *)dlsym(RTLD_NEXT, "sendto");
     real_sendmsg = (sendmsg_function *)dlsym(RTLD_NEXT, "sendmsg");
+    real_sendmmsg = (sendmmsg_function *)dlsym(RTLD_NEXT, "sendmmsg");
 }
 
 /* The unit tests include this file and call netblocker_initialise themselves, once

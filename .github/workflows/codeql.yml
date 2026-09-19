@@ -66,6 +66,11 @@ jobs:
           # trade. It buys reach at the cost of precision, which makes a finding here a
           # question to answer rather than a defect by itself.
           queries: security-extended
+          # The config file records the one finding already answered: cpp/path-injection on the
+          # rules files phobos opens from its own per-run spec directory, a deliberately
+          # dangerous pattern SECURITY.md documents. It is filtered there rather than dismissed
+          # by hand on every edit to the C that reads those files.
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Set up JDK 21
         if: ${{ matrix.language == 'java-kotlin' }}

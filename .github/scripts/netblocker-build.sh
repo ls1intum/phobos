@@ -29,8 +29,8 @@ readonly HIGHEST_GLIBC="2.39"
 # inside each architecture's image and verified there, so verify accepts either rather
 # than holding every build to x86-64.
 readonly SUPPORTED_MACHINES="Advanced Micro Devices X86-64|AArch64"
-# The only functions the library may export: its five hooks, in the order the C locale sorts them.
-readonly EXPORTED_FUNCTIONS="bind connect getaddrinfo sendmsg sendto"
+# The only functions the library may export: its six hooks, in the order the C locale sorts them.
+readonly EXPORTED_FUNCTIONS="bind connect getaddrinfo sendmmsg sendmsg sendto"
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -118,7 +118,7 @@ check_toolchain() {
 #
 # -O2 is what switches _FORTIFY_SOURCE on: without an optimisation level it is off, and
 # this library sits on every connection a submission makes. -Wl,-z,now makes every
-# relocation resolve at load time. -fvisibility=hidden keeps every function but the five
+# relocation resolve at load time. -fvisibility=hidden keeps every function but the six
 # hooks, which ask for default visibility themselves, out of the dynamic symbol table.
 # The sources are compiled from their own directory under their bare names, in the
 # order the C locale sorts them, so the bytes depend neither on where the checkout lives
@@ -139,7 +139,7 @@ build_library() {
 }
 
 # Refuses a library built for neither architecture Phobos supports, that needs a newer C
-# library than the run-phase image has, exports any function but its five hooks, or that
+# library than the run-phase image has, exports any function but its six hooks, or that
 # the network layer would refuse at run time. Assumes readelf and the repository checkout
 # this script lives in.
 verify_library() {

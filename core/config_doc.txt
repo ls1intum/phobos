@@ -1,7 +1,7 @@
 
 1. The libc functions libnetblocker actually interposes
 
-libnetblocker (ld_preloader/netblocker.c) defines exactly five hooks with
+libnetblocker (ld_preloader/netblocker.c) defines exactly six hooks with
 default visibility. Everything else in the library is hidden, so no other
 symbol can take the place of a program's own.
 
@@ -14,10 +14,12 @@ symbol can take the place of a program's own.
 |                   |                     | (EACCES); only while a [bind] rule exists, and only for TCP.    |
 | UDP datagram      | `sendto()`          | Refuse a datagram whose destination no rule covers (EACCES).    |
 | UDP datagram      | `sendmsg()`         | The same, for a destination named in `msg_name`.                |
+| UDP datagram      | `sendmmsg()`        | The same for each message of a batch, stopping at the first     |
+|                   |                     | one a rule does not cover.                                       |
 
 There is NO hook on `socket()`, `listen()`, `accept()`/`accept4()`,
 `send()`/`recv()` or `read()`/`write()`. libnetblocker sees outbound name
-resolution, outbound connect, the local address of a TCP bind, and the two ways
+resolution, outbound connect, the local address of a TCP bind, and the ways
 an unconnected UDP socket names its destination. It does not filter inbound
 connections, and it is defence in depth that a raw system call steps around, as
 SECURITY.md says.
