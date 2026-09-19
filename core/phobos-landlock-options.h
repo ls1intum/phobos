@@ -1,7 +1,7 @@
 /*
  * Everything the command line asked for.
  *
- * This becomes a class: the collected policy plus the reading of it, so that
+ * It holds the collected policy plus the reading of it, so that
  * each stage of the run takes one object rather than eight loose values.
  */
 #ifndef PHOBOS_LANDLOCK_OPTIONS_H
@@ -35,7 +35,8 @@ struct options {
     char **command;
 };
 
-/* Reads the command line into options, or refuses the call. */
+/* Reads the command line into options, or refuses the call. Every option but
+ * --verbose takes a value, so it must not be the last word before the command. */
 void parse_arguments(int argument_count, char *arguments[], struct options *options);
 
 /* True when any network rule was asked for, which decides whether the run needs

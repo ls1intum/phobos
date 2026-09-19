@@ -11,11 +11,7 @@ name: Build
 
 on:
   pull_request:
-    # feat/landlock-instead-of-bubblewrap is here because this change is stacked on
-    # that branch, and a base-branch filter is matched against the pull request's base.
-    # Without the entry this workflow would not run on the pull request introducing it.
-    # Remove it once that branch has landed.
-    branches: [ "main", "feat/landlock-instead-of-bubblewrap" ]
+    branches: [ "main" ]
   push:
     branches: [ "main" ]
   schedule:
@@ -84,8 +80,8 @@ jobs:
       # perturbed run in the first place. tests/unit/mutation.sh is the stronger measure
       # of this suite and already runs weekly below.
 
-  # No libnetblocker.so is committed any more; it is built per architecture inside the
-  # run-phase image instead. This job stays as a fast, isolated check that the preload
+  # No libnetblocker.so is committed; it is built per architecture inside the run-phase
+  # image. This job is a fast, isolated check that the preload
   # source still builds a valid library on the pinned amd64 toolchain (right symbols, no
   # newer glibc than the run-phase image), without building the whole image around it.
   netblocker:
@@ -108,7 +104,7 @@ jobs:
       - name: Build the library from its source
         run: .github/scripts/netblocker-build.sh build ld_preloader "${RUNNER_TEMP}/libnetblocker.so"
 
-      # x86-64 here, no newer glibc than the run-phase image, the five hooks defined and loadable.
+      # x86-64 here, no newer glibc than the run-phase image, the six hooks defined and loadable.
       - name: Check what was built
         run: .github/scripts/netblocker-build.sh verify "${RUNNER_TEMP}/libnetblocker.so"
 
@@ -122,9 +118,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: prune c
-            slug: prune-c
-            context: docker/prune_phase/c
           - name: prune java
             slug: prune-java
             context: docker/prune_phase/java
@@ -146,10 +139,6 @@ jobs:
       #
       # The run-phase image is deliberately absent: the job below builds it and then
       # tests that exact image, and building it here as well would prove nothing twice.
-      #
-      # squid/HTTP_PROXY_SQUID_Dockerfile is absent too, and for a worse reason: it
-      # cannot build. It copies test-repos, student-exercises, pruning and helpers from a
-      # repository root that holds none of them. A green run here says nothing about it.
       - name: Build
         env:
           # The weekly run is the one that has to notice a moved base image or a changed
@@ -214,7 +203,7 @@ jobs:
 
       # The image compiles its own library rather than shipping a committed one, so the
       # copy an exercise actually gets is taken out of this exact image and verified: built
-      # for this architecture, no newer glibc than the image, and exactly the five hooks. A
+      # for this architecture, no newer glibc than the image, and exactly the six hooks. A
       # /bin/true command, because the image names none and docker create needs one.
       - name: The image's libnetblocker.so verifies
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}

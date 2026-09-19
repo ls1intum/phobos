@@ -108,8 +108,7 @@ static void describe_destination(const struct sockaddr *destination, char *text,
         const struct sockaddr_in *ipv4 = (const struct sockaddr_in *)destination;
         inet_ntop(AF_INET, &ipv4->sin_addr, text, size);
         *port = ntohs(ipv4->sin_port);
-    }
-    else if (destination->sa_family == AF_INET6) {
+    } else if (destination->sa_family == AF_INET6) {
         const struct sockaddr_in6 *ipv6 = (const struct sockaddr_in6 *)destination;
         inet_ntop(AF_INET6, &ipv6->sin6_addr, text, size);
         *port = ntohs(ipv6->sin6_port);
@@ -131,6 +130,8 @@ static bool destination_permitted(const struct sockaddr *destination) {
     return policy_permits_connection(&policy, text, port);
 }
 
+/* Refuses a lookup of a host no rule covers, with EAI_FAIL, and records the addresses a
+ * permitted lookup returned under the ports the rules grant the host. */
 [[gnu::visibility("default")]]
 int getaddrinfo(const char *node, const char *service, const struct addrinfo *hints,
                 struct addrinfo **results) {
@@ -148,6 +149,8 @@ int getaddrinfo(const char *node, const char *service, const struct addrinfo *hi
     return status;
 }
 
+/* Refuses a connection to an address no rule covers and no permitted lookup recorded, with
+ * EACCES. */
 [[gnu::visibility("default")]]
 int connect(int descriptor, const struct sockaddr *destination, socklen_t length) {
     char text[INET6_ADDRSTRLEN] = "";
@@ -163,30 +166,36 @@ int connect(int descriptor, const struct sockaddr *destination, socklen_t length
     return -1;
 }
 
+/* Whether the local-bind list speaks about this bind at all. Without a [bind] rule binding is
+ * unrestricted, matching the absence of a Landlock bind-port rule; bind_policy is loaded once at
+ * start-up and never replaced, so reading first_rule without the lock is safe. Only an IPv4 or
+ * IPv6 local bind is filtered: any other family, an AF_UNIX socket among them, names no local
+ * address this list governs and is left to the filesystem layer. And Landlock enforces a bind
+ * only for TCP, so the filter keeps that scope: a datagram or any other socket type, or one whose
+ * type cannot be read, is not what a [bind] rule speaks about. */
+static bool bind_is_filtered(int descriptor, const struct sockaddr *address) {
+    int socket_type = 0;
+    socklen_t type_length = sizeof(socket_type);
+    if (bind_policy.first_rule == nullptr) {
+        return false;
+    }
+    if (address->sa_family != AF_INET && address->sa_family != AF_INET6) {
+        return false;
+    }
+    return getsockopt(descriptor, SOL_SOCKET, SO_TYPE, &socket_type, &type_length) == 0
+           && socket_type == SOCK_STREAM;
+}
+
+/* Refuses a TCP bind to a local address no [bind] rule covers, with EACCES, and passes every
+ * bind bind_is_filtered leaves alone. */
 [[gnu::visibility("default")]]
 int bind(int descriptor, const struct sockaddr *address, socklen_t length) {
     char text[INET6_ADDRSTRLEN] = "";
     uint16_t port = 0;
-    int socket_type = 0;
-    socklen_t type_length = sizeof(socket_type);
     if (real_bind == nullptr) {
         real_bind = (connect_function *)dlsym(RTLD_NEXT, "bind");
     }
-    /* No [bind] rule means binding is unrestricted here, matching the absence of a Landlock
-     * bind-port rule. bind_policy is loaded once at start-up and never replaced, so reading
-     * first_rule without the lock is safe. */
-    if (bind_policy.first_rule == nullptr) {
-        return real_bind(descriptor, address, length);
-    }
-    /* Only an IPv4 or IPv6 local bind is filtered; any other family, an AF_UNIX socket among
-     * them, names no local address this list governs and passes to the filesystem layer. */
-    if (address->sa_family != AF_INET && address->sa_family != AF_INET6) {
-        return real_bind(descriptor, address, length);
-    }
-    /* Landlock enforces a bind only for TCP, so match that scope: a datagram or any other
-     * socket type is not what a [bind] rule speaks about and passes untouched. */
-    if (getsockopt(descriptor, SOL_SOCKET, SO_TYPE, &socket_type, &type_length) != 0
-        || socket_type != SOCK_STREAM) {
+    if (!bind_is_filtered(descriptor, address)) {
         return real_bind(descriptor, address, length);
     }
     describe_destination(address, text, sizeof(text), &port);
@@ -197,14 +206,14 @@ int bind(int descriptor, const struct sockaddr *address, socklen_t length) {
     return -1;
 }
 
+/* Refuses a datagram whose destination no rule covers, with EACCES. A null destination is a
+ * datagram on a connected socket, which connect already vetted, so it passes untouched. */
 [[gnu::visibility("default")]]
 ssize_t sendto(int descriptor, const void *buffer, size_t length, int flags,
                const struct sockaddr *destination, socklen_t address_length) {
     if (real_sendto == nullptr) {
         real_sendto = (sendto_function *)dlsym(RTLD_NEXT, "sendto");
     }
-    /* A null destination is a datagram on a connected socket, which connect already
-     * vetted, so it passes untouched. */
     if (destination != nullptr && !destination_permitted(destination)) {
         errno = EACCES;
         return -1;
@@ -212,13 +221,14 @@ ssize_t sendto(int descriptor, const void *buffer, size_t length, int flags,
     return real_sendto(descriptor, buffer, length, flags, destination, address_length);
 }
 
+/* Refuses a message whose destination no rule covers, with EACCES. msg_name carries the
+ * destination of a datagram on an unconnected socket; it is null on a connected one, which
+ * connect already vetted, and such a message passes untouched. */
 [[gnu::visibility("default")]]
 ssize_t sendmsg(int descriptor, const struct msghdr *message, int flags) {
     if (real_sendmsg == nullptr) {
         real_sendmsg = (sendmsg_function *)dlsym(RTLD_NEXT, "sendmsg");
     }
-    /* msg_name carries the destination of a datagram on an unconnected socket; it is
-     * null on a connected one, which connect already vetted. */
     if (message->msg_name != nullptr && !destination_permitted(message->msg_name)) {
         errno = EACCES;
         return -1;
@@ -226,16 +236,16 @@ ssize_t sendmsg(int descriptor, const struct msghdr *message, int flags) {
     return real_sendmsg(descriptor, message, flags);
 }
 
+/* Sends a batch only as far as its destinations are allowed. Each message carries its own
+ * destination in msg_name, null on a connected socket. The kernel sends the batch in order and
+ * stops at the first message that fails, returning how many it sent, so a disallowed destination
+ * stops the batch there: the first message is refused outright, a later one lets the allowed
+ * prefix through and leaves the rest for the caller to retry, where it is refused again. */
 [[gnu::visibility("default")]]
 int sendmmsg(int descriptor, struct mmsghdr *messages, unsigned int count, int flags) {
     if (real_sendmmsg == nullptr) {
         real_sendmmsg = (sendmmsg_function *)dlsym(RTLD_NEXT, "sendmmsg");
     }
-    /* Each message carries its own destination in msg_name, null on a connected socket. The
-     * kernel sends the batch in order and stops at the first message that fails, returning how
-     * many it sent, so a disallowed destination stops the batch there: the first message is
-     * refused outright, a later one lets the allowed prefix through and leaves the rest for the
-     * caller to retry, where it is refused again. */
     for (unsigned int index = 0; index < count; index++) {
         const struct msghdr *header = &messages[index].msg_hdr;
         if (header->msg_name != nullptr && !destination_permitted(header->msg_name)) {

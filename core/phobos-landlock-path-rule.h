@@ -1,8 +1,8 @@
 /*
  * One allow-listed path and the rights it grants.
  *
- * This becomes a class: the path plus what may be done with it, and the three
- * questions that are asked about it, which rights it grants at a given
+ * It holds the path plus what may be done with it, and answers the three
+ * questions asked about it: which rights it grants at a given
  * Landlock version, whether it may change anything, and how it has to be
  * opened.
  *

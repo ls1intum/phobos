@@ -13,9 +13,8 @@
  * failure can be injected without a special kernel. Cases that end in exit()
  * run in a forked child and are judged by the exit status.
  */
-/* The system headers this file needs itself. They used to arrive indirectly,
- * through the single large source file; now that it is split, the test states
- * its own. */
+/* The system headers this file needs itself, stated here rather than taken for
+ * granted from the sources it includes. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -34,8 +33,7 @@
 
 /* Only the stage sequence is included, so that its main can be called from
  * here under another name. The modules beside it are linked in the normal way,
- * which is what the split into files bought: their functions no longer have to
- * be reached through an include. */
+ * so their functions are reached through their headers rather than an include. */
 #define main sut_main
 #include "../../core/phobos-landlock.c"
 #undef main
@@ -88,8 +86,16 @@ static void remember_string(char *destination, const char *value) {
 
 /* ------------------------------------------------------------------- mocks */
 
-static long mock_landlock_version = 8; /* what the kernel reports */
-static int mock_ruleset_descriptor = 42;
+/* The Landlock version the mock kernel reports unless a case says otherwise: the highest
+ * this build knows, written out rather than taken from HIGHEST_KNOWN_LANDLOCK_VERSION so
+ * that lowering that constant makes the default kernel look newer and warn. */
+static constexpr long MOCK_KERNEL_LANDLOCK_VERSION = 8;
+
+/* The ruleset descriptor the mock kernel hands out unless a case says otherwise. */
+static constexpr int FAKE_RULESET_DESCRIPTOR = 42;
+
+static long mock_landlock_version = MOCK_KERNEL_LANDLOCK_VERSION; /* what the kernel reports */
+static int mock_ruleset_descriptor = FAKE_RULESET_DESCRIPTOR;
 static int fail_create = 0;
 static int fail_add_path = 0;
 static int fail_add_port = 0;
@@ -136,10 +142,11 @@ int __wrap_fstat(int fd, struct stat *st) {
 
 /* Each of the three calls takes its own arguments, so they are read inside the
  * branch that knows their types rather than once with a guess. Reading the
- * attribute pointer as anything narrower is how it stayed unexamined. */
+ * attribute pointer as anything narrower is how it stayed unexamined. A null
+ * ruleset is only ever the version probe, so anything else is refused with EINVAL. */
 static long mock_landlock_version_probe(size_t attributes_size, unsigned flags) {
     if (attributes_size != 0 || flags != LANDLOCK_CREATE_RULESET_VERSION) {
-        errno = EINVAL; /* a null ruleset is only ever the version probe */
+        errno = EINVAL;
         return -1;
     }
     if (mock_landlock_version < 0) {
@@ -204,34 +211,31 @@ static long mock_restrict_self(int ruleset_descriptor) {
     return 0;
 }
 
+/* Stands in for the three Landlock system calls. The version probe passes a null
+ * pointer followed by a plain 0, which is an int, so the size is only read once it
+ * is known to be a size_t. Reading it unconditionally would read a wider type than
+ * was passed. The probe passes its size and flags as an int and an unsigned, so they
+ * are read as those and not as the size_t a real create call passes. */
 long __wrap_syscall(long number, ...) {
     va_list arguments;
     va_start(arguments, number);
     long result = 0;
     if (number == SYSCALL_NUMBER_LANDLOCK_CREATE_RULESET) {
-        /* The version probe passes a null pointer followed by a plain 0, which
-         * is an int, so the size is only read once it is known to be a size_t.
-         * Reading it unconditionally would read a wider type than was passed. */
         const struct landlock_ruleset_attributes *attributes =
             va_arg(arguments, const struct landlock_ruleset_attributes *);
         if (attributes == NULL) {
-            /* The probe passes them as an int and an unsigned, so they are read
-             * as those and not as the size_t a real create call passes. */
             int probe_size = va_arg(arguments, int);
             unsigned probe_flags = va_arg(arguments, unsigned);
             result = mock_landlock_version_probe((size_t)probe_size, probe_flags);
-        }
-        else {
+        } else {
             result = mock_create_ruleset(attributes, va_arg(arguments, size_t));
         }
-    }
-    else if (number == SYSCALL_NUMBER_LANDLOCK_ADD_RULE) {
+    } else if (number == SYSCALL_NUMBER_LANDLOCK_ADD_RULE) {
         int ruleset_descriptor = va_arg(arguments, int);
         int rule_type = va_arg(arguments, int);
         const void *rule_attributes = va_arg(arguments, const void *);
         result = mock_add_rule(ruleset_descriptor, rule_type, rule_attributes);
-    }
-    else if (number == SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF) {
+    } else if (number == SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF) {
         result = mock_restrict_self(va_arg(arguments, int));
     }
     va_end(arguments);
@@ -256,6 +260,8 @@ int __wrap_chdir(const char *path) {
     return 0;
 }
 
+/* Fails when asked to, and otherwise ends the child with status 0, which stands in
+ * for a successful exec. */
 int __wrap_execvp(const char *file, char *const argv[]) {
     (void)file;
     (void)argv;
@@ -263,7 +269,7 @@ int __wrap_execvp(const char *file, char *const argv[]) {
         errno = ENOENT;
         return -1;
     }
-    _exit(0); /* stands in for a successful exec */
+    _exit(0);
 }
 
 int __wrap_close(int fd) {
@@ -285,13 +291,23 @@ static void reset_record(void) {
     memset(record, 0, sizeof(*record));
 }
 
-/* The child's diagnostics used to go to /dev/null, so a case could only judge
- * how a run ended, never what it said. Several mutations changed nothing else:
- * a warning that appears one version too early, a refusal that names the wrong
- * reason. The message is what a person reads when a policy is turned down, so
- * it is worth as much as the exit code. */
+/* The child's diagnostics are captured rather than discarded, so a case can judge
+ * what a run said as well as how it ended. Some mutations change nothing else: a
+ * warning that appears one version too early, a refusal that names the wrong
+ * reason. The message is what a person reads when a policy is turned down, so it
+ * is worth as much as the exit code. */
+/* Room for everything one case writes to stderr. */
+static constexpr size_t CAPTURED_STDERR_LENGTH = 8192;
+
+/* A forked case exits with this when it cannot redirect its stderr, so its run is not
+ * judged. */
+static constexpr int CAPTURE_FAILED_EXIT_STATUS = 98;
+
+/* A forked case exits with this when the code under test returned rather than exiting. */
+static constexpr int RETURNED_WITHOUT_EXIT_STATUS = 99;
+
 static FILE *captured_stderr;
-static char captured_stderr_text[8192];
+static char captured_stderr_text[CAPTURED_STDERR_LENGTH];
 
 static void reset_captured_stderr(void) {
     captured_stderr_text[0] = '\0';
@@ -331,8 +347,8 @@ static int descriptor_was_closed(int descriptor) {
 }
 
 static void reset_mocks(void) {
-    mock_landlock_version = 8;
-    mock_ruleset_descriptor = 42;
+    mock_landlock_version = MOCK_KERNEL_LANDLOCK_VERSION;
+    mock_ruleset_descriptor = FAKE_RULESET_DESCRIPTOR;
     fail_create = 0;
     fail_add_path = 0;
     fail_add_port = 0;
@@ -348,7 +364,12 @@ static void reset_mocks(void) {
     verbose = 0;
 }
 
-/* Runs sut_main in a child so that a case ending in exit() can be judged. */
+/* Runs sut_main in a child so that a case ending in exit() can be judged.
+ *
+ * One child per case. gcov accumulates into the same data file, and the parent adds
+ * its own counters on top when it exits, so nothing is lost. longjmp would be simpler
+ * but loses counters, because it leaves the normal control flow that gcov updates
+ * them on. */
 static void expect_exit(const char *what, int want, char **argv) {
     reset_record();
     reset_captured_stderr();
@@ -356,18 +377,14 @@ static void expect_exit(const char *what, int want, char **argv) {
     while (argv[argc] != NULL) {
         argc++;
     }
-    /* One child per case. gcov accumulates into the same data file, and the
-     * parent adds its own counters on top when it exits, so nothing is lost.
-     * longjmp would be simpler but loses counters, because it leaves the
-     * normal control flow that gcov updates them on. */
     fflush(NULL);
     pid_t pid = fork();
     if (pid == 0) {
         if (dup2(fileno(captured_stderr), STDERR_FILENO) < 0) {
-            _exit(98); /* cannot collect the child's output, so do not judge it */
+            _exit(CAPTURE_FAILED_EXIT_STATUS);
         }
         sut_main(argc, argv);
-        _exit(99);
+        _exit(RETURNED_WITHOUT_EXIT_STATUS);
     }
     int status = 0;
     waitpid(pid, &status, 0);
@@ -470,33 +487,48 @@ static void test_rights_tables(void) {
           (open_flags_for_rule(&ro) & O_NOFOLLOW) == 0);
 }
 
+/* Calls refused before anything is applied. The bounds check on the arguments is what
+ * keeps an option that reads its value from reading past the end of them. */
 static void test_usage_errors(void) {
     printf("\nCalls that are refused before anything is applied\n");
     char *no_args[] = {"phobos-landlock", NULL};
-    expect_exit("no arguments at all", 2, no_args);
+    expect_exit("no arguments at all", EXIT_CODE_USAGE, no_args);
     check("a call with no arguments says how to call it", stderr_says("Usage: phobos-landlock"));
 
     char *unknown[] = {"phobos-landlock", "--nonsense", "x", "--", "/bin/true", NULL};
-    expect_exit("an unknown option", 2, unknown);
+    expect_exit("an unknown option", EXIT_CODE_USAGE, unknown);
 
     char *dangling[] = {"phobos-landlock", "--rights=r", NULL};
-    expect_exit("an option whose value is missing", 2, dangling);
+    expect_exit("an option whose value is missing", EXIT_CODE_USAGE, dangling);
 
-    /* The bounds check on the arguments is what keeps an option that reads its
-     * value from reading past the end of them. */
     char *dangling_port[] = {"phobos-landlock", "--rights=r", "/usr", "--connect-tcp", NULL};
-    expect_exit("an option that reads a value, with nothing after it", 2, dangling_port);
+    expect_exit("an option that reads a value, with nothing after it", EXIT_CODE_USAGE, dangling_port);
 
     char *no_cmd[] = {"phobos-landlock", "--rights=r", "/usr", "--", NULL};
-    expect_exit("nothing to run after --", 2, no_cmd);
+    expect_exit("nothing to run after --", EXIT_CODE_USAGE, no_cmd);
 
     char *only_verbose[] = {"phobos-landlock", "--verbose", NULL};
-    expect_exit("--verbose but no command", 2, only_verbose);
+    expect_exit("--verbose but no command", EXIT_CODE_USAGE, only_verbose);
 }
 
+/* Each rule on the command line is two words, the option and its value. */
+static constexpr size_t WORDS_PER_RULE = 2;
+
+/* Room beside the rules for the program name, "--", the command and the terminating null,
+ * with some to spare. */
+static constexpr size_t ARGUMENT_HEADROOM = 8;
+
+/* Exactly the room beside the rules for the program name, "--", the command and the
+ * terminating null. */
+static constexpr size_t FULL_TABLE_HEADROOM = 4;
+
+/* One rule more than each fixed-size table holds is refused. For the path table the
+ * exit code alone did not say why. With the guard moved by one the run wrote past the
+ * table and failed later, for another reason entirely, and the case stayed green, so
+ * the case also checks that no rule reached the kernel. */
 static void test_limits(void) {
     printf("\nLimits of the fixed-size tables\n");
-    static char *many[MAXIMUM_PATH_RULES * 2 + 8];
+    static char *many[MAXIMUM_PATH_RULES * WORDS_PER_RULE + ARGUMENT_HEADROOM];
     size_t n = 0;
     many[n++] = "phobos-landlock";
     for (size_t r = 0; r <= MAXIMUM_PATH_RULES; r++) {
@@ -507,12 +539,9 @@ static void test_limits(void) {
     many[n++] = "/bin/true";
     many[n] = NULL;
     expect_exit("one path rule more than the table holds", EXIT_CODE_POLICY_ERROR, many);
-    /* The exit code alone did not say why. With the guard moved by one the run
-     * wrote past the table and failed later, for another reason entirely, and
-     * the case stayed green. */
     check("a refused table hands no rule to the kernel", record->path_rule_count == 0);
 
-    static char *ports[MAXIMUM_PORT_RULES * 2 + 8];
+    static char *ports[MAXIMUM_PORT_RULES * WORDS_PER_RULE + ARGUMENT_HEADROOM];
     n = 0;
     ports[n++] = "phobos-landlock";
     for (size_t p = 0; p <= MAXIMUM_PORT_RULES; p++) {
@@ -524,7 +553,7 @@ static void test_limits(void) {
     ports[n] = NULL;
     expect_exit("one connect port more than the table holds", EXIT_CODE_POLICY_ERROR, ports);
 
-    static char *binds[MAXIMUM_PORT_RULES * 2 + 8];
+    static char *binds[MAXIMUM_PORT_RULES * WORDS_PER_RULE + ARGUMENT_HEADROOM];
     n = 0;
     binds[n++] = "phobos-landlock";
     for (size_t p = 0; p <= MAXIMUM_PORT_RULES; p++) {
@@ -537,6 +566,15 @@ static void test_limits(void) {
     expect_exit("one bind port more than the table holds", EXIT_CODE_POLICY_ERROR, binds);
 }
 
+/* What the kernel can enforce against what the call demands.
+ *
+ * Version 0 is a kernel that answers the question but has nothing to offer. It is too
+ * old, which is not the same as having no Landlock, and the two must not be reported
+ * as one another.
+ *
+ * The demanded version has to be one this build knows, otherwise it is refused while
+ * the arguments are read and the comparison with the kernel's version is never
+ * reached. */
 static void test_version_gate(void) {
     printf("\nWhat the kernel can enforce\n");
     char *plain[] = {"phobos-landlock", "--rights=r", "/usr", "--", "/bin/true", NULL};
@@ -546,17 +584,11 @@ static void test_version_gate(void) {
     check("a kernel without Landlock is named as the reason",
           stderr_says("[phobos-landlock] Landlock is not available on this kernel"));
 
-    /* Version 0 is a kernel that answers the question but has nothing to
-     * offer. It is too old, which is not the same as having no Landlock, and
-     * the two must not be reported as one another. */
     mock_landlock_version = 0;
     expect_exit("a kernel offering version 0 refuses to run", EXIT_CODE_POLICY_ERROR, plain);
     check("version 0 is reported as too old rather than as absent",
           stderr_says("kernel offers Landlock version 0 but version 1 is required"));
 
-    /* The demanded version has to be one this build knows, otherwise it is
-     * refused while the arguments are read and the comparison below is never
-     * reached. */
     char *demanding[] = {"phobos-landlock",
                          "--minimum-landlock-version",
                          "5",
@@ -598,7 +630,11 @@ static void test_version_gate(void) {
 }
 
 /* Numbers that are not numbers, or outside what the option can mean. Before
- * these were checked, atoi answered 0 and a typo quietly weakened the policy. */
+ * these were checked, atoi answered 0 and a typo quietly weakened the policy.
+ *
+ * An empty port value is reported as empty and only that. Without the abort behind
+ * that message the value would fall through to the conversion, which reports the same
+ * input a second time and as something else. */
 static void test_number_parsing(void) {
     printf("\nValues that are not usable numbers\n");
     char *not_a_number[] = {"phobos-landlock", "--connect-tcp", "https", "--rights=r",
@@ -609,9 +645,6 @@ static void test_number_parsing(void) {
     char *empty[] = {"phobos-landlock", "--connect-tcp", "", "--rights=r",
                      "/usr", "--", "/bin/true", NULL};
     expect_exit("an empty port value", EXIT_CODE_POLICY_ERROR, empty);
-    /* Only that message. Without the abort behind it the value would fall
-     * through to the conversion, which reports the same input a second time
-     * and as something else. */
     check("an empty value is named as empty, and only that",
           stderr_says("not a TCP port: empty value") && !stderr_says("not a TCP port: ''"));
 
@@ -653,12 +686,12 @@ static int rights_refusal_exit(const char *letters) {
     pid_t pid = fork();
     if (pid == 0) {
         if (freopen("/dev/null", "w", stderr) == NULL) {
-            _exit(98);
+            _exit(CAPTURE_FAILED_EXIT_STATUS);
         }
         static struct options options;
         memset(&options, 0, sizeof(options));
         remember_path_rule(&options, letters, "/usr");
-        _exit(99);
+        _exit(RETURNED_WITHOUT_EXIT_STATUS);
     }
     int status = 0;
     waitpid(pid, &status, 0);
@@ -671,20 +704,36 @@ static int rights_refusal_exit(const char *letters) {
  * would agree with the implementation even when both are wrong, and a mutation
  * in the table would survive. These say what a letter must mean, and what may
  * never appear no matter what was asked for. */
+/* The bit of a combination that asks for each letter, and how many combinations there are. */
+static constexpr int COMBINATION_BIT_READ = 1;
+static constexpr int COMBINATION_BIT_WRITE = 2;
+static constexpr int COMBINATION_BIT_EXECUTE = 4;
+static constexpr int COMBINATION_BIT_MAKE = 8;
+static constexpr int COMBINATION_BIT_DELETE = 16;
+static constexpr int COMBINATION_BIT_IOCTL = 32;
+static constexpr int RIGHTS_COMBINATION_COUNT = 64;
+
 static void test_rights_contract(void) {
     printf("\nWhat every combination of letters means, at every version\n");
-    int device_or_symlink_ever = 0, read_wrong = 0, execute_wrong = 0, write_wrong = 0;
-    int truncate_wrong = 0, refer_wrong = 0, ioctl_wrong = 0, beyond_version = 0;
-    int change_wrong = 0, nofollow_wrong = 0;
+    int device_or_symlink_ever = 0;
+    int read_wrong = 0;
+    int execute_wrong = 0;
+    int write_wrong = 0;
+    int truncate_wrong = 0;
+    int refer_wrong = 0;
+    int ioctl_wrong = 0;
+    int beyond_version = 0;
+    int change_wrong = 0;
+    int nofollow_wrong = 0;
 
-    for (int combination = 0; combination < 64; combination++) {
+    for (int combination = 0; combination < RIGHTS_COMBINATION_COUNT; combination++) {
         struct path_rule rule = {.path = "/x",
-                                 .readable = (combination & 1) != 0,
-                                 .writable = (combination & 2) != 0,
-                                 .executable = (combination & 4) != 0,
-                                 .makeable = (combination & 8) != 0,
-                                 .removable = (combination & 16) != 0,
-                                 .ioctl_device = (combination & 32) != 0};
+                                 .readable = (combination & COMBINATION_BIT_READ) != 0,
+                                 .writable = (combination & COMBINATION_BIT_WRITE) != 0,
+                                 .executable = (combination & COMBINATION_BIT_EXECUTE) != 0,
+                                 .makeable = (combination & COMBINATION_BIT_MAKE) != 0,
+                                 .removable = (combination & COMBINATION_BIT_DELETE) != 0,
+                                 .ioctl_device = (combination & COMBINATION_BIT_IOCTL) != 0};
         bool can_change =
             rule.writable || rule.makeable || rule.removable || rule.ioctl_device;
         if (rule_can_change_anything(&rule) != can_change) {
@@ -742,11 +791,16 @@ static void test_rights_contract(void) {
           !nofollow_wrong);
 }
 
+/* The letters a --rights= option may carry.
+ *
+ * Every letter sets its own field and nothing else. Those are read in process: they
+ * are accepted, so there is no exit to observe.
+ *
+ * Each letter has its own arm in the duplicate check, and a repetition is far more
+ * likely a typo in a policy than an intention, so every letter is repeated once. */
 static void test_rights_letters(void) {
     printf("\nThe letters a --rights= option may carry\n");
 
-    /* Every letter sets its own field and nothing else. Read in process: these
-     * are accepted, so there is no exit to observe. */
     static struct options options;
     memset(&options, 0, sizeof(options));
     remember_path_rule(&options, "r", "/a");
@@ -779,8 +833,6 @@ static void test_rights_letters(void) {
           rights_refusal_exit("--r") == EXIT_CODE_POLICY_ERROR);
     check("naming no rights at all is refused",
           rights_refusal_exit("") == EXIT_CODE_POLICY_ERROR);
-    /* Each letter has its own arm in the duplicate check, and a repetition is
-     * far more likely a typo in a policy than an intention. */
     check("a repeated r is refused", rights_refusal_exit("rr") == EXIT_CODE_POLICY_ERROR);
     check("a repeated w is refused", rights_refusal_exit("ww") == EXIT_CODE_POLICY_ERROR);
     check("a repeated x is refused", rights_refusal_exit("xx") == EXIT_CODE_POLICY_ERROR);
@@ -796,20 +848,21 @@ static void test_rights_letters(void) {
  * only be reported, and the report is the whole of the protection. */
 /* The report goes to stderr, and the suite collects stderr from a child, the
  * same way every other case does. Running it in process would write past the
- * capture and judge an empty buffer. */
+ * capture and judge an empty buffer.
+ *
+ * The child ends with exit, not _exit: a coverage build writes its counters from an
+ * atexit handler, and _exit walks past it, so the reported lines would look unexecuted
+ * although they ran. The fflush(NULL) before the fork keeps this from duplicating any
+ * buffered output. */
 static void capture_unenforceable_report(int landlock_version) {
     reset_captured_stderr();
     fflush(NULL);
     pid_t pid = fork();
     if (pid == 0) {
         if (dup2(fileno(captured_stderr), STDERR_FILENO) < 0) {
-            _exit(98);
+            _exit(CAPTURE_FAILED_EXIT_STATUS);
         }
         report_unenforceable_rights(landlock_version);
-        /* exit, not _exit: a coverage build writes its counters from an atexit
-         * handler, and _exit walks past it, so the reported lines would look
-         * unexecuted although they ran. fflush(NULL) above keeps this from
-         * duplicating any buffered output. */
         exit(0);
     }
     int status = 0;
@@ -905,17 +958,31 @@ static void test_syscall_failures(void) {
           stderr_says("landlock_restrict_self: Operation not permitted"));
 
     fail_exec = 1;
-    expect_exit("the command cannot be executed", 127, plain);
+    expect_exit("the command cannot be executed", EXIT_CODE_COMMAND_NOT_EXECUTABLE, plain);
     check("the command that could not be run is named",
           stderr_says("exec /bin/true: No such file or directory"));
 }
 
+/* Calls that go all the way through.
+ *
+ * A read-only run says nothing at all, which is also how a kernel exactly at the
+ * highest known version proves it triggers no warning about unrestricted rights.
+ *
+ * A bind rule on its own must switch the network handling on for that alone, not just
+ * when a connect rule is present.
+ *
+ * A rule that may write but not read is unusual but legal, and it is the only way the
+ * reading half of the verbose line is ever absent.
+ *
+ * The ioctl letter is the one a reader is least likely to expect on a rule, so it has
+ * to appear in the line rather than being granted in silence.
+ *
+ * A rule on a file must drop the rights that only exist for directories, or the kernel
+ * rejects it. */
 static void test_success_paths(void) {
     printf("\nCalls that go all the way through\n");
     char *ro[] = {"phobos-landlock", "--rights=r", "/usr", "--", "/bin/true", NULL};
     expect_exit("a read-only rule", 0, ro);
-    /* Nothing at all, which is also how a kernel exactly at the highest known
-     * version proves it triggers no warning about unrestricted rights. */
     check("a run that goes through says nothing", captured_stderr_text[0] == '\0');
 
     char *rox[] = {"phobos-landlock", "--rights=rx", "/usr", "--", "/bin/true", NULL};
@@ -939,8 +1006,6 @@ static void test_success_paths(void) {
                      NULL};
     expect_exit("both kinds of port rule", 0, ports);
 
-    /* Only a bind rule: the network handling must switch on for that alone,
-     * not just when a connect rule is present. */
     char *bind_only[] = {"phobos-landlock", "--bind-tcp", "8080", "--rights=r", "/usr", "--",
                          "/bin/true",       NULL};
     expect_exit("a bind rule on its own", 0, bind_only);
@@ -969,16 +1034,12 @@ static void test_success_paths(void) {
     check("--verbose names each port rule with its direction",
           stderr_says("allow connect tcp/443") && stderr_says("allow bind tcp/8080"));
 
-    /* A rule that may write but not read is unusual but legal, and it is the
-     * only way the reading half of the verbose line is ever absent. */
     char *write_only[] = {"phobos-landlock", "--verbose", "--rights=w", "/tmp", "--",
                           "/bin/true",       NULL};
     expect_exit("a rule that grants writing but not reading runs", 0, write_only);
     check("--verbose leaves out the rights that were not granted",
           stderr_says("allow /tmp +w") && !stderr_says("allow /tmp +r"));
 
-    /* The ioctl letter is the one a reader is least likely to expect on a rule,
-     * so it has to appear in the line rather than being granted in silence. */
     char *with_ioctl_flag[] = {"phobos-landlock", "--verbose", "--rights=ri", "/dev/null", "--",
                                "/bin/true",       NULL};
     expect_exit("a rule that grants ioctl on a device runs", 0, with_ioctl_flag);
@@ -987,11 +1048,32 @@ static void test_success_paths(void) {
     char *bare[] = {"phobos-landlock", "--", "/bin/true", NULL};
     expect_exit("no rules at all, only a command", 0, bare);
 
-    /* A rule on a file must drop the rights that only exist for directories,
-     * or the kernel rejects it. */
     force_regular_file = 1;
     char *on_file[] = {"phobos-landlock", "--rights=r", "/etc/hostname", "--", "/bin/true", NULL};
     expect_exit("a rule on a file rather than a directory", 0, on_file);
+}
+
+/* Whether a direction no rule names is left alone rather than handled. A direction the
+ * kernel handles but no rule grants is denied outright. So a policy that only says
+ * where the build may connect must not also stop it from listening: that would be a
+ * prohibition nobody wrote down, and it would break any exercise whose tests start a
+ * local server. */
+static void check_an_unnamed_direction_is_left_alone(void) {
+    char *connect_only[] = {"phobos-landlock", "--rights=r", "/usr", "--connect-tcp", "443",
+                            "--",              "/bin/true",  NULL};
+    expect_exit("a policy that only names connect ports runs", 0, connect_only);
+    check("connecting is handled", (record->handled_access_network &
+                                    LANDLOCK_ACCESS_NETWORK_CONNECT_TCP) != 0);
+    check("listening is left alone when the policy never mentioned it",
+          (record->handled_access_network & LANDLOCK_ACCESS_NETWORK_BIND_TCP) == 0);
+
+    char *bind_only[] = {"phobos-landlock", "--rights=r", "/usr", "--bind-tcp", "8080",
+                         "--",              "/bin/true",  NULL};
+    expect_exit("a policy that only names bind ports runs", 0, bind_only);
+    check("listening is handled", (record->handled_access_network &
+                                   LANDLOCK_ACCESS_NETWORK_BIND_TCP) != 0);
+    check("connecting is left alone when the policy never mentioned it",
+          (record->handled_access_network & LANDLOCK_ACCESS_NETWORK_CONNECT_TCP) == 0);
 }
 
 /* Whether the calls happen was already covered. What they carry was not, and
@@ -1005,20 +1087,21 @@ static void test_what_reaches_the_kernel(void) {
 
     expect_exit("a read-only rule runs", 0, read_only);
     check("the ruleset handles everything version 8 knows",
-          record->handled_access_filesystem == filesystem_rights_for_version(8));
+          record->handled_access_filesystem == filesystem_rights_for_version(MOCK_KERNEL_LANDLOCK_VERSION));
     check("the ruleset is sent at the size version 8 expects",
-          record->ruleset_attributes_size == ruleset_attributes_size_for_version(8));
+          record->ruleset_attributes_size == ruleset_attributes_size_for_version(MOCK_KERNEL_LANDLOCK_VERSION));
     check("without a port rule the ruleset handles no network access",
           record->handled_access_network == 0);
     check("version 8 scopes signals and abstract UNIX sockets to the sandbox",
           record->scoped == (LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | LANDLOCK_SCOPE_SIGNAL));
     check("exactly one rule reaches the kernel", record->path_rule_count == 1);
     check("the rule carries the read-only rights and nothing besides",
-          record->path_rule_allowed_access[0] == rights_granted_for(&read_only_rule, 8));
+          record->path_rule_allowed_access[0] == rights_granted_for(&read_only_rule, MOCK_KERNEL_LANDLOCK_VERSION));
     check("the rule is opened on the path that was asked for",
           strcmp(record->opened_path[0], "/usr") == 0);
     check("rule and restriction use the ruleset the kernel handed out",
-          record->rule_ruleset_descriptor == 42 && record->restricted_ruleset_descriptor == 42);
+          record->rule_ruleset_descriptor == FAKE_RULESET_DESCRIPTOR &&
+              record->restricted_ruleset_descriptor == FAKE_RULESET_DESCRIPTOR);
 
     char *three[] = {"phobos-landlock", "--rights=r", "/usr",       "--rights=rwmd", "/tmp", "--rights=rx",
                      "/bin",            "--",   "/bin/true",  NULL};
@@ -1028,9 +1111,9 @@ static void test_what_reaches_the_kernel(void) {
     expect_exit("three rules of three kinds run", 0, three);
     check("every rule reaches the kernel", record->path_rule_count == 3);
     check("each rule carries its own rights, in the order they were given",
-          record->path_rule_allowed_access[0] == rights_granted_for(&read_only_rule, 8) &&
-              record->path_rule_allowed_access[1] == rights_granted_for(&writable_rule, 8) &&
-              record->path_rule_allowed_access[2] == rights_granted_for(&executable_rule, 8));
+          record->path_rule_allowed_access[0] == rights_granted_for(&read_only_rule, MOCK_KERNEL_LANDLOCK_VERSION) &&
+              record->path_rule_allowed_access[1] == rights_granted_for(&writable_rule, MOCK_KERNEL_LANDLOCK_VERSION) &&
+              record->path_rule_allowed_access[2] == rights_granted_for(&executable_rule, MOCK_KERNEL_LANDLOCK_VERSION));
 
     force_regular_file = 1;
     char *on_file[] = {"phobos-landlock", "--rights=rwmdx", "/etc/hostname", "--", "/bin/true", NULL};
@@ -1041,7 +1124,7 @@ static void test_what_reaches_the_kernel(void) {
           (record->path_rule_allowed_access[0] & DIRECTORY_ONLY_ACCESS_RIGHTS) == 0);
     check("a file is granted every other right the rule asked for",
           record->path_rule_allowed_access[0] ==
-              (rights_granted_for(&file_rule, 8) & ~DIRECTORY_ONLY_ACCESS_RIGHTS));
+              (rights_granted_for(&file_rule, MOCK_KERNEL_LANDLOCK_VERSION) & ~DIRECTORY_ONLY_ACCESS_RIGHTS));
     check("a file still keeps the rights it can use",
           (record->path_rule_allowed_access[0] & LANDLOCK_ACCESS_FILESYSTEM_READ_FILE) != 0);
 
@@ -1059,25 +1142,7 @@ static void test_what_reaches_the_kernel(void) {
           record->handled_access_network ==
               (LANDLOCK_ACCESS_NETWORK_BIND_TCP | LANDLOCK_ACCESS_NETWORK_CONNECT_TCP));
 
-    /* A direction the kernel handles but no rule grants is denied outright. So a
-     * policy that only says where the build may connect must not also stop it
-     * from listening: that would be a prohibition nobody wrote down, and it
-     * would break any exercise whose tests start a local server. */
-    char *connect_only[] = {"phobos-landlock", "--rights=r", "/usr", "--connect-tcp", "443",
-                            "--",              "/bin/true",  NULL};
-    expect_exit("a policy that only names connect ports runs", 0, connect_only);
-    check("connecting is handled", (record->handled_access_network &
-                                    LANDLOCK_ACCESS_NETWORK_CONNECT_TCP) != 0);
-    check("listening is left alone when the policy never mentioned it",
-          (record->handled_access_network & LANDLOCK_ACCESS_NETWORK_BIND_TCP) == 0);
-
-    char *bind_only[] = {"phobos-landlock", "--rights=r", "/usr", "--bind-tcp", "8080",
-                         "--",              "/bin/true",  NULL};
-    expect_exit("a policy that only names bind ports runs", 0, bind_only);
-    check("listening is handled", (record->handled_access_network &
-                                   LANDLOCK_ACCESS_NETWORK_BIND_TCP) != 0);
-    check("connecting is left alone when the policy never mentioned it",
-          (record->handled_access_network & LANDLOCK_ACCESS_NETWORK_CONNECT_TCP) == 0);
+    check_an_unnamed_direction_is_left_alone();
 
     char *two_connects[] = {"phobos-landlock", "--connect-tcp", "443", "--connect-tcp",
                             "8443",            "--rights=r",          "/usr", "--",
@@ -1113,9 +1178,33 @@ static void test_what_reaches_the_kernel(void) {
           strcmp(record->entered_directory, "/tmp") == 0);
 }
 
+/* Room for a Landlock version written out as decimal text. */
+static constexpr size_t VERSION_TEXT_LENGTH = 16;
+
+/* Whether a table filled to the brim is still accepted whole. Handing out descriptor 0
+ * keeps this from opening four thousand real files. */
+static void check_a_full_path_table_is_accepted(void) {
+    static char *full[MAXIMUM_PATH_RULES * WORDS_PER_RULE + FULL_TABLE_HEADROOM];
+    size_t word_count = 0;
+    full[word_count++] = "phobos-landlock";
+    for (size_t rule_index = 0; rule_index < MAXIMUM_PATH_RULES; rule_index++) {
+        full[word_count++] = "--rights=r";
+        full[word_count++] = "/usr";
+    }
+    full[word_count++] = "--";
+    full[word_count++] = "/bin/true";
+    full[word_count] = NULL;
+    force_path_descriptor_zero = 1;
+    expect_exit("exactly as many path rules as the table holds", 0, full);
+    check("every rule of a full table reaches the kernel",
+          record->path_rule_count == MAXIMUM_PATH_RULES);
+}
+
 /* Each of these sits exactly on a limit. A comparison moved by one is invisible
  * everywhere else, and descriptor 0 is the value most easily mistaken for a
- * failure. */
+ * failure. The demanded version is written out from the header rather than as a
+ * literal, so that raising the highest known version keeps testing the boundary
+ * rather than a number that has fallen below it. */
 static void test_boundaries(void) {
     printf("\nValues that sit exactly on a limit\n");
     char *read_only[] = {"phobos-landlock", "--rights=r", "/usr", "--", "/bin/true", NULL};
@@ -1126,10 +1215,7 @@ static void test_boundaries(void) {
     check("the highest port reaches the kernel unchanged",
           record->port_rule_count == 1 && record->port_rule_port[0] == 65535);
 
-    /* Written out from the header rather than as a literal, so that raising the
-     * highest known version keeps testing the boundary rather than a number
-     * that has fallen below it. */
-    static char highest_version_text[16];
+    static char highest_version_text[VERSION_TEXT_LENGTH];
     snprintf(highest_version_text, sizeof(highest_version_text), "%d",
              HIGHEST_KNOWN_LANDLOCK_VERSION);
     char *highest_version[] = {"phobos-landlock",     "--minimum-landlock-version",
@@ -1154,24 +1240,9 @@ static void test_boundaries(void) {
     check("the rule points at the descriptor the path was opened with",
           record->path_rule_parent_fd[0] == 0);
     check("the path descriptor is closed again", descriptor_was_closed(0));
-    check("the ruleset descriptor is closed again", descriptor_was_closed(42));
+    check("the ruleset descriptor is closed again", descriptor_was_closed(FAKE_RULESET_DESCRIPTOR));
 
-    /* A table filled to the brim must still be accepted whole. Handing out
-     * descriptor 0 keeps this from opening four thousand real files. */
-    static char *full[MAXIMUM_PATH_RULES * 2 + 4];
-    size_t word_count = 0;
-    full[word_count++] = "phobos-landlock";
-    for (size_t rule_index = 0; rule_index < MAXIMUM_PATH_RULES; rule_index++) {
-        full[word_count++] = "--rights=r";
-        full[word_count++] = "/usr";
-    }
-    full[word_count++] = "--";
-    full[word_count++] = "/bin/true";
-    full[word_count] = NULL;
-    force_path_descriptor_zero = 1;
-    expect_exit("exactly as many path rules as the table holds", 0, full);
-    check("every rule of a full table reaches the kernel",
-          record->path_rule_count == MAXIMUM_PATH_RULES);
+    check_a_full_path_table_is_accepted();
 }
 
 /* A non-directory has to lose the rights that only apply to directories, or

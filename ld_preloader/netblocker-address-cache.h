@@ -1,7 +1,7 @@
 /*
  * The addresses name lookups authorised, with the ports the policy grants them.
  *
- * This becomes a class: a bounded list of authorisations behind a lock, and the three
+ * It holds a bounded list of authorisations behind a lock, with the three
  * things done with it: asking whether an address may be reached on a port, recording
  * an authorisation, and forgetting them all.
  *

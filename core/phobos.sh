@@ -5,8 +5,9 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=phobos-common.sh
 source "${HERE}/phobos-common.sh"
 
+# Prints how to call phobos.sh and ends with PHB_EXIT_USAGE.
 usage() {
-  cat <<USAGE
+  cat >&2 <<USAGE
 Usage:
   phobos.sh [layer options] [--config <file>]... -- <build_command> [args...]
   phobos.sh [layer options] [--config <file>]... <build_command> [args...]
@@ -15,8 +16,8 @@ Restriction options (every restriction is applied by default):
   --no-runtime-restriction, -ntr     Disable the timeout (phobos-timeout.sh).
   --no-networksystem-restriction, -nnr
                                      Disable the whole network restriction: the
-                                     libnetblocker preload filter and the Landlock
-                                     TCP-port rules.
+                                     connect guard, the libnetblocker preload filter
+                                     and the Landlock TCP-port rules.
   --no-resources-restriction, -nrr   Disable the resource limits (rlimits /
                                      phobos-resources.sh).
   --no-filesystem-restriction, -nfr  Disable the filesystem sandbox (Landlock). This
@@ -25,7 +26,10 @@ Restriction options (every restriction is applied by default):
   --allow-unsandboxed                Debug switch: run the command raw, with every
                                      layer disabled, EVEN when a base policy is
                                      present. For deliberate unconfined runs only.
-  --debug                            Print the exact command each layer runs.
+  --debug                            Print on stderr what each layer does and runs, and
+                                     have phobos-landlock and the connect guard report
+                                     verbosely too. It prints the whole effective policy,
+                                     so it is for diagnosis, not for grading logs.
 
 Override options (taken only from the command line, never from the environment):
   --landlock-bin <path>              The phobos-landlock binary (default: beside this script).
@@ -51,7 +55,7 @@ Notes:
   waits for the command removes it: the timeout layer when a timeout bounds the run, since the
   filesystem layer is then group-killed with the command, and the filesystem layer otherwise.
 USAGE
-  exit 2
+  exit "${PHB_EXIT_USAGE}"
 }
 
 [[ $# -lt 1 ]] && usage
@@ -95,7 +99,7 @@ while (( "$#" )); do
     --allow-unsandboxed)
       allow_unsandboxed=1; shift;;
     --debug)
-      enable_debug=1; shift;;
+      enable_debug=1; enable_debug_log; shift;;
     --landlock-bin)
       shift; [[ $# -gt 0 ]] || usage; opt_landlock_bin="$1"; shift;;
     --timeout-bin)
@@ -132,7 +136,7 @@ done
 if (( allow_unsandboxed )); then
   _log "WARNING: --allow-unsandboxed given; running the command RAW, with NO sandbox."
   _log "runtime restriction (timeout) DISABLED"
-  _log "network-system restriction (libnetblocker) DISABLED"
+  _log "network-system restriction (connect guard, libnetblocker) DISABLED"
   _log "resources restriction (rlimits) DISABLED"
   _log "filesystem restriction (Landlock) DISABLED"
   (( ${#cfgs[@]} )) && _log "--allow-unsandboxed ignores the ${#cfgs[@]} --config file(s) given: there is no sandbox to apply them to."
@@ -142,7 +146,7 @@ fi
 # Loudly record every restriction the caller switched off, so a run with a layer
 # disabled cannot look like an ordinary one in a log.
 (( enable_timeout ))    || _log "runtime restriction (timeout) DISABLED by --no-runtime-restriction"
-(( enable_network ))    || _log "network-system restriction (libnetblocker) DISABLED by --no-networksystem-restriction"
+(( enable_network ))    || _log "network-system restriction (connect guard, libnetblocker) DISABLED by --no-networksystem-restriction"
 (( enable_resources ))  || _log "resources restriction (rlimits) DISABLED by --no-resources-restriction"
 (( enable_filesystem )) || _log "filesystem restriction (Landlock) DISABLED by --no-filesystem-restriction"
 
@@ -176,6 +180,7 @@ trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 # Build the run's specification: base discovery, parse, merge and every spec file, all in
 # the one policy program, over the directory this script owns and the chain below reads.
 policy_flags=( --spec-dir "$SPEC_DIR" --tail-flags-file "$tail_flags_file" )
+if (( enable_debug )); then policy_flags+=( --debug ); fi
 for c in "${cfgs[@]}"; do policy_flags+=( --config "$c" ); done
 "${HERE}/phobos-policy.sh" "${policy_flags[@]}"
 
@@ -183,13 +188,15 @@ for c in "${cfgs[@]}"; do policy_flags+=( --config "$c" ); done
 # than entered and skipped, so no PHB_ENABLE_* has to travel with the run. Each wrapper does
 # its work and hands on the rest of the chain; the timeout layer, when a timeout is set, runs
 # the rest under GNU timeout and waits on it, and the filesystem layer is always last and runs
-# the command, applying Landlock unless --no-landlock tells it not to.
+# the command, applying Landlock unless --no-landlock tells it not to. The resource layer is
+# not a link of this chain: the filesystem layer starts it as the last step before
+# phobos-landlock, so the command's limits bind the command and none of the helpers around it.
 dbg=(); (( enable_debug )) && dbg=(--debug)
 chain=()
 if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeout.sh"   "${dbg[@]}" --timeout-bin "$timeout_bin" "$SPEC_DIR" -- ); fi
 if (( enable_network ));   then chain+=( "${HERE}/phobos-network.sh"   "${dbg[@]}" --netblocker-so "$netblocker_so" --connect-guard-bin "$connect_guard_bin" "$SPEC_DIR" -- ); fi
-if (( enable_resources )); then chain+=( "${HERE}/phobos-resources.sh" "${dbg[@]}" "$SPEC_DIR" -- ); fi
 fs_flags=( "${dbg[@]}" --landlock-bin "$landlock_bin" )
+if (( enable_resources )); then fs_flags+=( --resources-layer "${HERE}/phobos-resources.sh" ); fi
 if (( ! enable_filesystem )); then fs_flags+=( --no-landlock ); fi
 # The network restriction spans two layers: the preload filter in phobos-network.sh, left
 # out of the chain above, and the kernel-enforced Landlock TCP-port rules built in the
@@ -197,4 +204,5 @@ if (( ! enable_filesystem )); then fs_flags+=( --no-landlock ); fi
 # filesystem layer to skip the port rules too.
 if (( ! enable_network )); then fs_flags+=( --no-network-ports ); fi
 chain+=( "${HERE}/phobos-filesystem.sh" "${fs_flags[@]}" "$SPEC_DIR" -- )
+debug_log phobos "run the layer chain" "${chain[@]}" "${cmd[@]}"
 exec "${chain[@]}" "${cmd[@]}"

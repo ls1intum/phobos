@@ -93,8 +93,8 @@ for ex_dir in "${exercises[@]}"; do
   IN_SB_TESTS="$IN_SB_ROOT"
 
   pushd "$host_workdir" >/dev/null
-  # --target is no longer optional, and defaults here to the whole filesystem because
-  # that is what a production prune inspects. A test points PRUNE_TARGET at a fixture
+  # --target is required by the pruner, and is the whole filesystem here because that is
+  # what a production prune inspects. A test points PRUNE_TARGET at a fixture
   # tree instead, so it never asks what the machine it runs on happens to need.
   PRUNE_ARGS=( --script "$IN_SB_SCRIPT" --lang "$lang" --target "${PRUNE_TARGET:-/}"
                --assignment-dir "$IN_SB_ASSIGN" --test-dir "$IN_SB_TESTS" )

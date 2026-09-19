@@ -30,14 +30,15 @@ core/                      the sandbox itself
   phobos.sh                entry point: parses the configuration, applies the layers
   phobos-filesystem.sh     the filesystem layer, reads the path sets and applies Landlock
   phobos-network.sh        the network layer, runs the connect guard and drives the preload library
-  phobos-resources.sh      the resource layer, sets the rlimits the policy names
+  phobos-resources.sh      the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
   phobos-timeout.sh        the timeout layer
   phobos-common.sh         shared helpers, sourced by the others
+  phobos-constants.sh      the numbers the scripts share, named once, the exit statuses among them
   phobos-landlock*.c/.h    the C program that applies the Landlock policy, then exec's the command
-  phobos-connect-guard.c   the connect guard: supervises connect() and enforces [connect] by host and port
+  phobos-connect-guard*.c/.h  the connect guard: supervises connect() and enforces [connect] by host and port;
+                           phobos-connect-guard.c is the sequence of stages, the modules beside it do the work
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
-ld_preloader/              netblocker sources, its own allow-list, and the library built from them
-squid/                     an egress-proxy image and its configuration
+ld_preloader/              the netblocker sources (the library is built from them in the image)
 docker/prune_phase/        one image per language, plus the orchestrator
 docker/run_phase/          the image an exercise actually runs in
 tests/                     the acceptance and probe suites
@@ -62,6 +63,21 @@ Landlock enforces **TCP ports**, so a policy that names a concrete port has that
 - `libnetblocker`, preloaded through `LD_PRELOAD`, filters by host name and address as **defence in depth** beside the guard. It is bypassable (a raw system call, or a re-exec without `LD_PRELOAD`, steps around it), so it is never the boundary on its own.
 - The boundary for external egress, and for UDP and DNS, is the container started with `--network none`. Under it, only loopback exists, and a loopback-only policy needs no port rules; an external host, if one is ever allowed, should name a concrete port so that Landlock can enforce it rather than leaving it to `libnetblocker` alone.
 
+## How a run is put together
+
+`phobos.sh` builds the run's specification with `phobos-policy.sh`, then hands the command down a chain of layers, each of which does its part and starts the rest of the chain: most with `exec`, while the timeout layer runs it under GNU timeout and waits, the connect guard forks it as the child it supervises, and the filesystem layer runs it as a child so it can report the denials afterwards:
+
+```
+phobos.sh -> phobos-timeout.sh -> phobos-network.sh (connect guard) -> phobos-filesystem.sh
+          -> phobos-resources.sh -> phobos-landlock -> the command
+```
+
+A layer switched off is left out of the chain rather than entered and skipped. Three properties of the chain are relied on and easy to break:
+
+- The resource limits bind the command and nothing beside it. `phobos-resources.sh` is started by the filesystem layer as the last step before `phobos-landlock`, so the helpers around the command (the filesystem layer's shell, the stderr pass-through and denial counter, the connect guard's supervisor) never run under the command's rlimits. A helper that met the command's file-size, memory or CPU limit would otherwise take the command's output with it.
+- The timeout layer waits on the rest of the chain, and the layers below it ignore SIGTERM while their command keeps the default disposition, so the `--kill-after` escalation reaches a command that ignores SIGTERM. The filesystem layer's bounded wait for the denial counts stays below that escalation.
+- A run is reported as `PHB-ETIMEOUT` only when GNU timeout's status says so and the run lasted at least its timeout; a command's own 124 or 137, the OOM killer's SIGKILL among them, passes through unchanged.
+
 ## Running the pruning phase
 
 The pruning environments are built and run with Compose, one container per language, each writing its result into a shared `var/tmp` mount:
@@ -70,7 +86,9 @@ The pruning environments are built and run with Compose, one container per langu
 docker compose -f docker-compose.yaml up --build
 ```
 
-Each prune container runs the reference exercise for its language under the discovery algorithm and drops a `<lang>` path set into the shared `path_sets` directory. The orchestrator (`docker/prune_phase/orchestrate/orchestrate.py`) then merges the per-exercise results into the shipped `core/config/BaseLanguage-<lang>.cfg` and `TailPhobos.cfg`. Review the result before trusting it: the allow-list is only as tight as the reference exercises that produced it.
+Each prune container runs the reference exercise for its language under the discovery algorithm and drops a `<lang>` path set into the shared `path_sets` directory. The orchestrator (`docker/prune_phase/orchestrate/orchestrate.py`) then merges the per-exercise results into `BaseLanguage-<lang>.cfg` and `TailPhobos.cfg` under `var/tmp/opt/core/config` of the shared mount. Copying them over the shipped `core/config/` is a deliberate step of its own: review the result before trusting it, since the allow-list is only as tight as the reference exercises that produced it.
+
+Pruning and grading do not deny in the same way. While pruning, a hidden directory is an empty, writable tmpfs, because Landlock cannot make a path look empty; while grading, a path the policy does not name is refused with `EACCES`. A tool that only needs some writable scratch directory can therefore pass its prune with that directory hidden and still be refused when graded, which is worth checking first when a freshly pruned policy fails a run that passed its prune.
 
 ## Running an exercise under Phobos
 
@@ -89,11 +107,15 @@ core/phobos.sh --config core/config/BaseLanguage-java.cfg -- ./gradlew test
 
 Run the grading container with **`--network none`** and with cgroup limits (`--memory`, `--pids-limit`, `--cpus`, and a size-bounded `--tmpfs` for scratch). Those are the outer wall Phobos relies on and cannot set for itself.
 
+stdout carries the command's own output and nothing else. Every message of Phobos itself, the `PHB-EPOLICY`, `PHB-ETIMEOUT`, `PHB-ERUNTIME` and `PHB-EDENY` reports among them, is written to stderr, and the exit status (11, 14 or 15 for a run Phobos stopped) is the contract a grader should read.
+
 To isolate which layer a failure belongs to, each layer can be turned off on its own:
 
 ```
 core/phobos.sh --no-runtime-restriction --config core/config/BaseLanguage-java.cfg -- <command>
 ```
+
+`--debug` makes every layer say on stderr what it does and what it runs, and has `phobos-landlock` and the connect guard report verbosely too; stdout stays the command's own. It prints the whole effective policy, so it is meant for diagnosing a run, not for grading logs. It can only be switched on by the flag, never through the environment.
 
 ## Configuration format
 
@@ -110,15 +132,15 @@ than ignored, so a typo cannot silently drop a restriction.
 - `[delete]`: one path per line, granted the deletion of files and directories.
 - `[connect]`: `allow <host>[:<port>]` lines, the outbound TCP destinations a submission may reach. A loopback host may omit the port; an external host should name a concrete port so that Landlock can enforce it. An IPv6 address has colons of its own, so a port is written in brackets, `allow [::1]:443`, and a bare `allow ::1` is the host with no port.
 - `[bind]`: `allow <addr>:<port>` or `allow <port>` lines, the local TCP endpoints a submission may listen on. The port is enforced by Landlock (`--bind-tcp`) and must be concrete; the local address is enforced by the libnetblocker bind hook as defence in depth, so a service can be pinned to loopback rather than every interface. A bare port means any local address. An IPv6 address is bracketed, `allow [::1]:8080`.
-- `[limits]`: `timeout=<seconds>`, the wall-clock bound on the run, and optionally `mem_mb`, `nproc`, `nofile`, `fsize_mb` and `cpu`, applied as rlimits to bound the memory, processes, open files, file size and CPU time the run may use. A value written as `0` switches that limit off. Each key must be named; a bare value is refused.
+- `[limits]`: `timeout=<seconds>`, the wall-clock bound on the run, and optionally `mem_mb`, `nproc`, `nofile`, `fsize_mb` and `cpu`, applied as rlimits to bound the memory, processes, open files, file size and CPU time the run may use. They are set as the last step before Landlock, so they bind the command and everything it starts, and none of the helpers Phobos runs beside it: the command's output is never cut short because a helper met the command's limit. A value written as `0` switches that limit off. Each key must be named; a bare value is refused.
 
-Every text file is stored with LF line endings: the path sets are read line by line, and a carriage return would become part of a bind path. `.gitattributes` enforces this.
+Every text file is stored with LF line endings: the path sets are read line by line, and a carriage return would become part of a path, so the run would silently lose access the policy granted. `.gitattributes` enforces this.
 
 ## Testing
 
 There is no build system; the shell runs as it is and the C is compiled inside the image. The suites under `tests/` are the checks:
 
-- `tests/unit/`: the Landlock program and the network filter, with full line and branch coverage.
+- `tests/unit/`: the Landlock program, the connect guard and the network filter. CI holds the network filter to every line and branch and the connect guard to every line; the Landlock program's suite is measured by weekly mutation testing instead, since coverage instrumentation disturbs the calls it interposes.
 - `tests/landlock-acceptance/`: the sandbox applied to real commands in an ordinary container (no `--privileged`, `--cap-add` or `--security-opt`), proving both that a permitted action works and that a forbidden one is denied, and that the shipped policy runs.
 - the shell suites under `tests/`: the address cache's port restrictions, the timeout contract, and the prune phase.
 

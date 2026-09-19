@@ -17,7 +17,7 @@ one disagree, the full one is right.
 - Never add a bind, a capability or an allowed host to make a test pass. That turns a
   containment failure into a widened boundary, and the suite goes green either way.
 - `*.cfg` and `*.paths` are read with `while IFS= read -r`, so a carriage return ends up
-  inside a bind path and the sandbox does not start. Every text file is stored with LF, and
+  inside a path and the run silently loses access the policy granted. Every text file is stored with LF, and
   `.gitattributes` keeps it that way.
 - `gh pr create --body` bypasses `.github/PULL_REQUEST_TEMPLATE.md` silently, so read that
   file before writing a body, and check it with
@@ -35,11 +35,18 @@ breaks the run is restored, read-only first and writable only if that is not eno
 is top-down, so an unused subtree is dropped in one step rather than file by file. The result
 is a path set: every path the run needs, with the access mode it needs.
 
-**Sandbox application, at grading time.** The submission runs with only those paths mounted,
-everything else replaced by empty tmpfs. Network access goes through a preload library that
-intercepts name resolution and connection calls and permits only the hosts the discovery
-phase recorded, with a Squid proxy available for the cases that need one. A timeout layer
-bounds the run.
+**Sandbox application, at grading time.** The submission runs under a Landlock ruleset that
+grants exactly the rights the policy names on those paths; every other path is denied, though
+it stays visible by name. Outbound connections are supervised by the connect guard, which
+enforces the `[connect]` allow-list by host and port from outside the process, with a preload
+library (libnetblocker) filtering host names as defence in depth. A timeout and resource limits
+bound the run, and the container around it supplies `--network none` and the cgroup caps.
+
+The two phases do not deny in the same way. While pruning, a hidden directory is an empty,
+writable tmpfs; while grading, a path the policy does not name is refused with EACCES. A tool
+that only needs some writable scratch directory can therefore pass the prune with that
+directory hidden and still be refused at grading time, which is worth checking when a pruned
+policy fails a run that passed its prune.
 
 The point of the split is that the expensive, fragile part happens once per language
 environment, offline, and grading itself only applies a fixed configuration.
@@ -47,7 +54,7 @@ environment, offline, and grading itself only applies a fixed configuration.
 ## Tech Stack
 
 - POSIX shell for the wrapper and the layers, which is the bulk of the repository
-- C for the preload library and for `phobos-landlock`, both compiled inside the run-phase image
+- C for the preload library, `phobos-landlock` and the connect guard, all compiled inside the run-phase image
 - Python for the prune orchestrator and the artefact helpers
 - Docker for both phases, one image per language environment
 - Java for exactly one file, `.github/scripts/CheckPullRequestTemplate.java`
@@ -86,12 +93,9 @@ yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 ```
 
-Two of those are narrower than they look. `bandit` runs over exactly two directories, not the
+One of those is narrower than it looks: `bandit` runs over exactly two directories, not the
 whole tree, because everything else Python here is fixture. `hadolint` matches `Dockerfile*` at
-any depth, but `-name` anchors at the start of the base name, so it reaches the five under
-`docker/` and not `squid/HTTP_PROXY_SQUID_Dockerfile`. That exclusion is deliberate: that file
-fails hadolint and cannot build either, because it copies directories this repository does not
-have. Repairing or deleting it is a decision about the file rather than about linting. CI runs
+any depth, which reaches the four under `docker/`. CI runs
 shellcheck, cppcheck and hadolint inside pinned container images; the commands above assume the
 tools are installed locally and will differ in version, which is the usual reason a local run
 and CI disagree.
@@ -124,13 +128,15 @@ core/                      the sandbox itself
   phobos.sh                entry point: parses the configuration, applies the layers
   phobos-filesystem.sh     the filesystem layer, reads the path sets and applies Landlock
   phobos-landlock*.c/.h    the C program that applies the Landlock policy, then exec's
+  phobos-connect-guard*.c/.h  the connect guard: supervises connect() and enforces [connect] by host and port
+  phobos-policy.sh         turns the base and exercise configuration into a run's specification
   phobos-network.sh        the network layer, drives the preload library
-  phobos-resources.sh      the resource layer, sets the rlimits the policy names
+  phobos-resources.sh      the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
   phobos-timeout.sh        the timeout layer
   phobos-common.sh         shared helpers, sourced by the others
+  phobos-constants.sh      the numbers the scripts share, named once, the exit statuses among them
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
-ld_preloader/              netblocker sources, its own allow-list, and the library built from them
-squid/                     the egress proxy image and its configuration
+ld_preloader/              the netblocker sources (the library is built from them in the image)
 docker/prune_phase/        one image per language, plus the orchestrator
 docker/run_phase/          the image an exercise actually runs in
 tests/                     the acceptance and probe suites

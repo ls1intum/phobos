@@ -18,6 +18,8 @@
 #   netblocker-build.sh compare REFERENCE COPY...
 set -euo pipefail
 
+# The status this script ends with when it was called the wrong way.
+readonly EXIT_USAGE=2
 readonly SNAPSHOT="20260912T000000Z"
 readonly GCC_VERSION="14.3.0-14ubuntu1"
 readonly BINUTILS_VERSION="2.46-3ubuntu2"
@@ -25,8 +27,8 @@ readonly LIBC_DEV_VERSION="2.43-2ubuntu2.4"
 # The C library of the run-phase image. A library needing a newer one would not load there.
 readonly HIGHEST_GLIBC="2.39"
 # The ELF machines Phobos supports, as readelf's --wide file header prints them, the two
-# architectures the images are built for. No library is committed any more: it is built
-# inside each architecture's image and verified there, so verify accepts either rather
+# architectures the images are built for. No library is committed: it is built inside each
+# architecture's image and verified there, so verify accepts either rather
 # than holding every build to x86-64.
 readonly SUPPORTED_MACHINES="Advanced Micro Devices X86-64|AArch64"
 # The only functions the library may export: its six hooks, in the order the C locale sorts them.
@@ -40,7 +42,7 @@ usage() {
     printf '       netblocker-build.sh build SOURCE_DIRECTORY OUTPUT\n' >&2
     printf '       netblocker-build.sh verify LIBRARY\n' >&2
     printf '       netblocker-build.sh compare REFERENCE COPY...\n' >&2
-    exit 2
+    exit "${EXIT_USAGE}"
 }
 
 # Reports why the script stops and stops.

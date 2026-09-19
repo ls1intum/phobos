@@ -11,8 +11,8 @@
 #                                      there, so a report can be made from it
 #
 # Without a directory the build happens in a temporary one that is removed on the
-# way out, which is why asking for coverage and then looking for the .gcda files
-# used to find nothing.
+# way out, so its .gcda files are gone once the run ends; name a directory to keep
+# them.
 set -euo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds and runs the phobos-connect-guard unit tests. With --coverage the build is
-# instrumented, and the run fails unless every line of core/phobos-connect-guard.c ran.
+# instrumented, and the run fails unless every line of every guard source ran.
 # Needs gcc-14, and gcov-14 for --coverage. Every syscall the guard makes is interposed
 # through the linker, and fork is wrapped so the parent and child halves are each driven,
 # so neither a kernel nor a real fork is involved.
@@ -9,7 +9,7 @@
 #   tests/unit/connect_guard_run.sh --coverage    build instrumented, run, hold lines to 100 %
 #
 # Lines are gated, by counting gcov's uncovered markers rather than trusting its summary
-# percentage, which mis-counts the denominator for this file. Branches are reported but not
+# percentage, which mis-counts the denominator for these files. Branches are reported but not
 # gated: a few of the guard's branches are inside libc macros it cannot steer both ways
 # (CMSG_FIRSTHDR's empty-buffer arm, the words of IN6_IS_ADDR_LOOPBACK), so a branch gate
 # would fail on unreachable arms, the same reason the Landlock wrapper suite is not
@@ -29,7 +29,20 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# The guard is one source, included by the test file, so nothing beside it is linked.
+# The file holding main is included by the test file; the modules beside it are linked,
+# built with the define that gives them their per-case reset functions.
+CORE="${HERE}/../../core"
+MODULES=(
+  "${CORE}/phobos-connect-guard-child.c"
+  "${CORE}/phobos-connect-guard-destination.c"
+  "${CORE}/phobos-connect-guard-diagnostics.c"
+  "${CORE}/phobos-connect-guard-options.c"
+  "${CORE}/phobos-connect-guard-rules.c"
+  "${CORE}/phobos-connect-guard-socket-types.c"
+  "${CORE}/phobos-connect-guard-supervisor.c"
+)
+UNIT_TEST_DEFINE=-DPHOBOS_CONNECT_GUARD_UNIT_TEST
+
 # The commas belong to the -Wl, linker flags, not to the array syntax.
 # shellcheck disable=SC2054
 WRAPS=(
@@ -55,35 +68,41 @@ WRAPS=(
 )
 
 if [[ "${1:-}" == "--coverage" ]]; then
-  "$COMPILER" -std=gnu23 -O0 -g --coverage -o "$WORK/unit" "${HERE}/connect_guard_unit.c" "${WRAPS[@]}"
+  "$COMPILER" -std=gnu23 -O0 -g --coverage "$UNIT_TEST_DEFINE" -o "$WORK/unit" \
+    "${HERE}/connect_guard_unit.c" "${MODULES[@]}" "${WRAPS[@]}"
   ( cd "$WORK" && ./unit )
-  ( cd "$WORK" && "$COVERAGE_TOOL" -b unit-connect_guard_unit.gcno >/dev/null 2>&1 )
-  gcov_file="$WORK/phobos-connect-guard.c.gcov"
-  if [[ ! -f "$gcov_file" ]]; then
-    echo "no coverage was produced for core/phobos-connect-guard.c" >&2
-    exit 1
-  fi
-  # A gcov that cannot open the source still writes a .gcov, but one with no counted
-  # executable lines, and no ##### markers either. Without this guard that empty file
-  # would pass the line gate below having measured nothing, so require real line data.
-  counted="$(grep -cE '^[[:space:]]*[0-9]+:' "$gcov_file" || true)"
-  if [[ "$counted" -eq 0 ]]; then
-    echo "coverage for core/phobos-connect-guard.c holds no executed lines; gcov likely could not read the source" >&2
-    exit 1
-  fi
-  printf '\nConnect guard coverage:\n'
-  ( cd "$WORK" && "$COVERAGE_TOOL" -b unit-connect_guard_unit.gcno 2>/dev/null ) \
-    | awk '/phobos-connect-guard\.c/ { show = 1 }
-           show && /(executed|Taken at least once):/ { print }
-           /^File/ && !/phobos-connect-guard/ { show = 0 }'
-  uncovered="$(grep -c '#####' "$gcov_file" || true)"
-  if [[ "$uncovered" -ne 0 ]]; then
-    echo "not every line of the connect guard ran; ${uncovered} line(s) uncovered:" >&2
-    grep -nE '#####' "$gcov_file" >&2
+  ( cd "$WORK" && for notes in unit-*.gcno; do
+      "$COVERAGE_TOOL" -b -o "$notes" "${notes%.gcno}" >/dev/null 2>&1
+    done )
+  uncovered_total=0
+  for source in phobos-connect-guard.c "${MODULES[@]##*/}"; do
+    gcov_file="$WORK/${source}.gcov"
+    if [[ ! -f "$gcov_file" ]]; then
+      echo "no coverage was produced for core/${source}" >&2
+      exit 1
+    fi
+    # A gcov that cannot open the source still writes a .gcov, but one with no counted
+    # executable lines, and no ##### markers either. Without this guard that empty file
+    # would pass the line gate below having measured nothing, so require real line data.
+    counted="$(grep -cE '^[[:space:]]*[0-9]+:' "$gcov_file" || true)"
+    if [[ "$counted" -eq 0 ]]; then
+      echo "coverage for core/${source} holds no executed lines; gcov likely could not read the source" >&2
+      exit 1
+    fi
+    uncovered="$(grep -c '#####' "$gcov_file" || true)"
+    printf '%-44s %s executed lines, %s uncovered\n' "core/${source}" "$counted" "$uncovered"
+    if [[ "$uncovered" -ne 0 ]]; then
+      grep -nE '#####' "$gcov_file" >&2
+    fi
+    uncovered_total=$(( uncovered_total + uncovered ))
+  done
+  if [[ "$uncovered_total" -ne 0 ]]; then
+    echo "not every line of the connect guard ran; ${uncovered_total} line(s) uncovered" >&2
     exit 1
   fi
   printf 'every line of the connect guard ran\n'
 else
-  "$COMPILER" -std=gnu23 -O0 -g -Wall -Wextra -Werror -o "$WORK/unit" "${HERE}/connect_guard_unit.c" "${WRAPS[@]}"
+  "$COMPILER" -std=gnu23 -O0 -g -Wall -Wextra -Werror "$UNIT_TEST_DEFINE" -o "$WORK/unit" \
+    "${HERE}/connect_guard_unit.c" "${MODULES[@]}" "${WRAPS[@]}"
   "$WORK/unit"
 fi

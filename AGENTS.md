@@ -7,13 +7,15 @@ parts live.
 
 ## Read the open pull requests before you start
 
-Phobos is under active, stacked change. At the time of writing, one branch replaces the
-filesystem enforcement mechanism, another builds the run-phase image in CI and is stacked
-on the first, and a third widens the analysis and pins what a build resolves. A change
-written against `main` alone can be correct and still conflict with all three.
+Phobos often changes through stacked pull requests, each based on the branch of the one
+before rather than on `main`. A change written against `main` alone can be correct and still
+conflict with an open stack.
 
 **Rule:** run `gh pr list` and read the bases before branching. A pull request whose base is
 another branch rather than `main` is part of a stack; do not rebase it onto `main` yourself.
+Every workflow filters its `pull_request` trigger on `main`, so a stacked pull request gets no
+checks of its own: start `build.yml`, `lint.yml`, `test.yml` and `codeql.yml` on its branch with
+`workflow_dispatch`, link the runs in the pull request, and run the template checker locally.
 
 ## The sandbox is the product, so never widen it quietly
 
@@ -45,9 +47,10 @@ that would break the intended platform/language/exercise layering, not tighten i
 
 ## Allow-list files are read line by line, so line endings are load-bearing
 
-`core/phobos-filesystem.sh` reads the path sets with `while IFS= read -r p` and binds each
-line as a path. A carriage return at the end of a line becomes part of the path, the bind
-fails, and the sandbox does not start.
+`core/phobos-filesystem.sh` reads the path sets with `while IFS= read -r p` and turns each
+line into a Landlock rule. A carriage return at the end of a line becomes part of the path:
+a read or execute path then names nothing that exists and is dropped, and a write path is
+created under the wrong name, so the run silently loses access the policy granted.
 
 **Rule:**
 
@@ -56,10 +59,7 @@ fails, and the sandbox does not start.
   are where a carriage return breaks the sandbox rather than a tool.
 - Changing the line endings of a file something reads at run time is a behaviour change, so
   the pull request says how the result was verified, by a Docker build where the file is a
-  Dockerfile. One exception was made when ls1intum/phobos#15 normalised the last CRLF files:
-  `squid/HTTP_PROXY_SQUID_Dockerfile` stops at a parse error and cannot be built, so it was
-  held to the same parse error and lint warning before and after instead. The exception
-  covers that file and nothing else.
+  Dockerfile.
 - To see whether anything is stored with CRLF rather than trusting this file:
   `git ls-files --eol | grep crlf`.
 

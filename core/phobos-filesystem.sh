@@ -5,20 +5,21 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=phobos-common.sh
 source "${HERE}/phobos-common.sh"
 
-DEBUG=0
 NO_LANDLOCK=0
 NO_NETWORK_PORTS=0
 LANDLOCK_BIN_OPT=""
+RESOURCES_LAYER_OPT=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
-    --debug) DEBUG=1; shift ;;
+    --debug) enable_debug_log; shift ;;
     --no-landlock) NO_LANDLOCK=1; shift ;;
     --no-network-ports) NO_NETWORK_PORTS=1; shift ;;
     --landlock-bin) shift; LANDLOCK_BIN_OPT="${1:-}"; shift ;;
+    --resources-layer) shift; RESOURCES_LAYER_OPT="${1:-}"; shift ;;
     *) break ;;
   esac
 done
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-filesystem.sh [--debug] [--no-landlock] [--no-network-ports] [--landlock-bin <path>] <SPEC_DIR> -- <cmd...>"; exit 2; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-filesystem.sh [--debug] [--no-landlock] [--no-network-ports] [--landlock-bin <path>] [--resources-layer <path>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
 SPEC_DIR="$1"; shift 2
 CMD=("$@")
 
@@ -27,35 +28,56 @@ CMD=("$@")
 # group-kills this layer, where the timeout layer removes the specification instead.
 trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 
-# This layer runs the command as a child and waits on it, so its output can be watched for
+# This layer runs the command as a child and waits on it, so its stderr can be watched for
 # denials. An outer timeout (phobos-timeout.sh) group-kills on expiry and escalates to SIGKILL
 # only while GNU timeout's own child is still alive, so this layer ignores SIGTERM and stays
 # until the command it waits on is gone. The command is put back to the default disposition
 # just before it runs, so the graceful SIGTERM still reaches the command itself.
 trap '' TERM
 
-READ="${SPEC_DIR}/read.paths"; EXECUTE="${SPEC_DIR}/execute.paths"; WRITE="${SPEC_DIR}/write.paths"; CREATE="${SPEC_DIR}/create.paths"; DELETE="${SPEC_DIR}/delete.paths"; TAIL="${SPEC_DIR}/tail.flags"
+READ="${SPEC_DIR}/read.paths"
+EXECUTE="${SPEC_DIR}/execute.paths"
+WRITE="${SPEC_DIR}/write.paths"
+CREATE="${SPEC_DIR}/create.paths"
+DELETE="${SPEC_DIR}/delete.paths"
+TAIL="${SPEC_DIR}/tail.flags"
 LANDLOCK="${LANDLOCK_BIN_OPT:-${HERE}/phobos-landlock}"
+
+# With --resources-layer the command's resource limits are set by that layer, started as the
+# very last step before phobos-landlock (or the command), so they reach phobos-landlock and the
+# command and nothing else: this layer's shell, the stderr pass-through and the denial counter
+# below run without them. A limit set any earlier would also bind those helpers, and a helper
+# that dies of the command's file-size, memory or CPU limit takes the command's output with it.
+# The limits are validated here, before any write path is materialised, so a malformed one is
+# refused before this layer changes anything; the resource layer checks them again.
+limit_prefix=()
+if [[ -n "$RESOURCES_LAYER_OPT" ]]; then
+  # read_limits_conf fills the array by name; this layer only needs its refusal, the resource
+  # layer reads the values again when it applies them.
+  # shellcheck disable=SC2034
+  declare -A validated_limits
+  read_limits_conf "${SPEC_DIR}/limits.conf" validated_limits
+  limit_prefix=( "$RESOURCES_LAYER_OPT" )
+  if (( PHB_DEBUG_ENABLED )); then limit_prefix+=( --debug ); fi
+  limit_prefix+=( "$SPEC_DIR" -- )
+fi
 
 # With --no-landlock the filesystem restriction is off, so run the command without Landlock.
 # Run it in a subshell that restores the default SIGTERM disposition and exec's it, so the
 # command stands in as this layer's child: an outer timeout's kill escalation reaches it, while
 # this layer keeps ignoring SIGTERM and stays to remove the specification directory.
 if (( NO_LANDLOCK )); then
-  if (( DEBUG )); then
-    >&2 printf '[phobos] filesystem layer disabled; run '
-    >&2 printf '%q ' "${CMD[@]}"
-    echo >&2
-  fi
+  debug_log filesystem "filesystem layer disabled; run" "${limit_prefix[@]}" "${CMD[@]}"
 
   set +e
-  ( trap - TERM; exec "${CMD[@]}" )
+  ( trap - TERM; exec "${limit_prefix[@]}" "${CMD[@]}" )
   rc=$?
   set -e
   exit "$rc"
 fi
 
 args=()
+if (( PHB_DEBUG_ENABLED )); then args+=( --verbose ); fi
 
 # The paths a submission can change: the union of the write, create and delete sections. The
 # preload library and its rules file must stay out of this set, or a submission could rewrite
@@ -95,36 +117,43 @@ if [[ -s "${TAIL}" ]]; then
   done < "${TAIL}"
 fi
 
-if (( DEBUG )); then
-  >&2 printf '[phobos] %s ' "${LANDLOCK}"
-  >&2 printf '%q ' "${args[@]}"
-  >&2 printf ' -- '
-  >&2 printf '%q ' "${CMD[@]}"
-  echo >&2
-fi
+debug_log filesystem "run" "${limit_prefix[@]}" "${LANDLOCK}" "${args[@]}" -- "${CMD[@]}"
 
-OUTLOG="$(mktemp -t phobos-out.XXXXXX)"; ERRLOG="$(mktemp -t phobos-err.XXXXXX)"
-trap 'finish_owned_spec_dir "$?" "$SPEC_DIR" "$OUTLOG" "$ERRLOG"' EXIT
+# The command's stderr passes through tee to this layer's stderr unchanged, and a copy goes to
+# count_denials, whose counts come back over an anonymous pipe. Nothing is written to a file, so
+# the counts cannot be tampered with from inside the sandbox and no helper fills a disk. The
+# command inherits neither descriptor, so it sees only its standard three and can neither feed
+# the counter directly nor keep it alive through a hidden descriptor. tee -p keeps passing the
+# output through should the counter die at its own limits, which only means no counts.
+exec {denial_counts}<> <(:)
+exec {filtered_stderr}> >(tee -p >(count_denials >&"$denial_counts") >&2)
 
-# The command runs in a subshell that restores the default SIGTERM disposition and exec's
-# phobos-landlock, so phobos-landlock and the command it runs are one process an outer
-# timeout's kill escalation reaches directly, while this layer ignores SIGTERM and waits so it
-# can watch the output for denials. The timeout itself, when set, is phobos-timeout.sh's.
+# The command runs in a subshell that restores the default SIGTERM disposition and exec's the
+# resource layer, when there is one, and phobos-landlock, so phobos-landlock and the command it
+# runs are one process an outer timeout's kill escalation reaches directly, while this layer
+# ignores SIGTERM and waits so it can report the denials. The timeout itself, when set, is
+# phobos-timeout.sh's.
 set +e
 (
   trap - TERM
-  exec "${LANDLOCK}" "${args[@]}" -- "${CMD[@]}"
-) > >(tee "$OUTLOG") 2> >(tee "$ERRLOG" >&2)
+  exec "${limit_prefix[@]}" "${LANDLOCK}" "${args[@]}" -- "${CMD[@]}"
+) 2>&"$filtered_stderr" {filtered_stderr}>&- {denial_counts}>&-
 rc=$?
 set -e
+exec {filtered_stderr}>&-
 
-net_denials=0; fs_denials=0
-if [[ -s "$ERRLOG" ]]; then
-  net_denials=$(grep -E -c 'EAI_AGAIN|EAI_FAIL|EAI_NONAME|Network is unreachable|Connection timed out' "$ERRLOG" || true)
-  fs_denials=$(grep -E -c 'Permission denied|EACCES|EROFS' "$ERRLOG" || true)
+# The counts arrive once every writer of the command's stderr has gone. A process the command
+# left behind can hold it open indefinitely, so the wait is bounded, and a run whose counts do
+# not arrive in time, or whose counter died, reports none. Neither ever changes the exit status.
+net_denials=0
+fs_denials=0
+if read -r -t "$PHB_DENIAL_COUNT_GRACE_SECONDS" -u "$denial_counts" net_denials fs_denials; then
+  if (( net_denials > 0 || fs_denials > 0 )); then
+    report "Sandbox denials: network=${net_denials}, filesystem=${fs_denials}. (PHB-EDENY)"
+  fi
+else
+  debug_log filesystem "no denial counts within ${PHB_DENIAL_COUNT_GRACE_SECONDS}s; a process the command left behind may still hold its stderr"
 fi
-if (( net_denials > 0 || fs_denials > 0 )); then
-  report "Sandbox denials: network=${net_denials}, filesystem=${fs_denials}. (PHB-EDENY)"
-fi
+exec {denial_counts}<&-
 
 exit "$rc"

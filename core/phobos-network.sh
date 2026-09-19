@@ -7,18 +7,17 @@ source "${HERE}/phobos-common.sh"
 
 # A generic layer: it does its work and execs the rest of the chain. phobos.sh includes this
 # layer only when the network filter is enabled, so there is no enable flag to read.
-DEBUG=0
 NETBLOCKER_SO_OPT=""
 GUARD_BIN_OPT=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
-    --debug) DEBUG=1; shift ;;
+    --debug) enable_debug_log; shift ;;
     --netblocker-so) shift; NETBLOCKER_SO_OPT="${1:-}"; shift ;;
     --connect-guard-bin) shift; GUARD_BIN_OPT="${1:-}"; shift ;;
     *) break ;;
   esac
 done
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] [--netblocker-so <path>] [--connect-guard-bin <path>] <SPEC_DIR> -- <cmd...>"; exit 2; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] [--netblocker-so <path>] [--connect-guard-bin <path>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created if this layer ends before it hands over,
@@ -33,7 +32,7 @@ NETBLOCKER_SO="$(realpath --canonicalize-missing -- "${NETBLOCKER_SO}")"
 # command would run with no network filtering. Refuse instead.
 refuse_unusable_netblocker "${NETBLOCKER_SO}"
 
-# Remember the path so the filesystem layer can bind it into the sandbox.
+# Remember the path so the filesystem layer can grant it read and execute under Landlock.
 export PHB_NETBLOCKER_SO="${NETBLOCKER_SO}"
 
 case ":${LD_PRELOAD:-}:" in
@@ -72,6 +71,8 @@ if [[ ! -x "$GUARD_BIN" ]]; then
   exit "${PHB_ERUNTIME}"
 fi
 guard_command=( "$GUARD_BIN" )
-(( DEBUG )) && guard_command+=( --verbose )
+if (( PHB_DEBUG_ENABLED )); then guard_command+=( --verbose ); fi
 guard_command+=( --rules "$RULES" -- )
+debug_log network "preload ${LD_PRELOAD} with NETBLOCKER_CONF=${NETBLOCKER_CONF} NETBLOCKER_BIND_CONF=${NETBLOCKER_BIND_CONF}"
+debug_log network "run" "${guard_command[@]}" "$@"
 exec "${guard_command[@]}" "$@"

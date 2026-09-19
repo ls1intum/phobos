@@ -1,16 +1,32 @@
-┌─────────────── your program ──────────────┐
-│ 1. getaddrinfo("services.gradle.org", …)  │
-│    │                                      │
-│    ▼ (intercept)                          │
-│ 2. netblocker: hostname in whitelist?     │
-│       ├─ no  →  fail (EAI_FAIL)           │
-│       └─ yes →  call real getaddrinfo     │
-│                cache every numeric IP     │
-│                                             (approved_ips)
-│ 3. connect(fd, "104.16.73.101:443")       │
-│    │                                      │
-│    ▼ (intercept)                          │
-│ 4. netblocker: IP cached or CIDR-match?   │
-│       ├─ yes →  call real connect         │
-│       └─ no  →  errno=EACCES, block       │
-└────────────────────────────────────────────┘
+How an outbound connection of a graded command is decided. Two filters look at it: the
+connect guard, outside the process, which is the boundary, and libnetblocker, inside it,
+which is defence in depth and filters host names the guard cannot see.
+
+┌─────────────── the graded command ─────────────────┐
+│ 1. getaddrinfo("services.gradle.org", …)           │
+│    │                                               │
+│    ▼ (libnetblocker's hook)                        │
+│ 2. host covered by a [connect] rule?               │
+│       ├─ no  →  fail (EAI_FAIL)                    │
+│       └─ yes →  call the real getaddrinfo and      │
+│                 record every address it returned   │
+│                 under the ports the rules grant    │
+│ 3. connect(fd, "104.16.73.101:443")                │
+│    │                                               │
+│    ▼ (libnetblocker's hook)                        │
+│ 4. address recorded, named, or in a range?         │
+│       ├─ no  →  errno=EACCES, refused              │
+│       └─ yes →  call the real connect              │
+│                    │                               │
+└────────────────────┼───────────────────────────────┘
+                     ▼ (seccomp user notification)
+┌─────────────── the connect guard, outside ─────────┐
+│ 5. destination allowed by the rules, by address    │
+│    (an IP or range rule) or by port (a host rule)? │
+│       ├─ no  →  EACCES                             │
+│       └─ yes →  the guard connects a socket itself │
+│                 and hands it to the command        │
+└────────────────────────────────────────────────────┘
+
+A raw system call steps around libnetblocker but not around the guard. Outside all of it,
+the container started with --network none is the boundary for external egress, UDP and DNS.

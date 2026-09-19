@@ -82,7 +82,7 @@ static void enter_working_directory(const struct options *options) {
 [[noreturn]] static void exec_command(const struct options *options) {
     execvp(options->command[0], options->command);
     fprintf(stderr, "[phobos-landlock] exec %s: %s\n", options->command[0], strerror(errno));
-    exit(127);
+    exit(EXIT_CODE_COMMAND_NOT_EXECUTABLE);
 }
 
 /* ------------------------------------------------------------------ the call */

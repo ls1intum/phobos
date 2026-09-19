@@ -13,6 +13,8 @@ import java.nio.file.Path;
 public final class PhobosProbe {
 
     private static final int CONNECT_TIMEOUT_MS = 3000;
+    /** How long the spinning probe keeps its threads alive, far past any timeout it runs under. */
+    private static final long HOLD_MILLISECONDS = 60_000L;
 
     public static void main(String[] args) throws Exception {
         String check = args[0];
@@ -86,7 +88,8 @@ public final class PhobosProbe {
 
     /**
      * Actively tries to survive the timeout: a shutdown hook that never returns
-     * makes the JVM ignore SIGTERM, so only SIGKILL can end this process.
+     * makes the JVM ignore SIGTERM, so only SIGKILL can end this process. An interrupt of the
+     * hook is swallowed so that it deliberately keeps blocking.
      */
     private static void spin() throws InterruptedException {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -94,17 +97,16 @@ public final class PhobosProbe {
             System.out.flush();
             while (true) {
                 try {
-                    Thread.sleep(60_000L);
+                    Thread.sleep(HOLD_MILLISECONDS);
                 }
                 catch (InterruptedException ignored) {
-                    // deliberately keep blocking
                 }
             }
         }));
         System.out.println("RESULT OK spin - spinning-and-ignoring-sigterm");
         System.out.flush();
         while (true) {
-            Thread.sleep(60_000L);
+            Thread.sleep(HOLD_MILLISECONDS);
         }
     }
 }
