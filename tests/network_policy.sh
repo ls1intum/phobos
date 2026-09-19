@@ -10,6 +10,8 @@ set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE="${HERE}/../core"
+# shellcheck source=../core/phobos-constants.sh
+source "${CORE}/phobos-constants.sh"
 WORK="$(mktemp -d)"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -58,10 +60,10 @@ echo
 echo "== a non-loopback host with no port is refused =="
 # report() writes the refusal to stderr, which run_rules captures in field 3.
 r="$(run_rules "example.com *")"
-if [[ "$(field "$r" 1)" == "${PHB_EPOLICY:-11}" && "$(field "$r" 3)" == *"names a host with no port"* ]]; then
+if [[ "$(field "$r" 1)" == "${PHB_EPOLICY}" && "$(field "$r" 3)" == *"names a host with no port"* ]]; then
   ok "an external wildcard is refused with PHB-EPOLICY"
 else
-  bad "an external wildcard is refused with PHB-EPOLICY" "exit 11 naming the unenforceable host" "exit $(field "$r" 1): $(field "$r" 3)"
+  bad "an external wildcard is refused with PHB-EPOLICY" "exit ${PHB_EPOLICY} naming the unenforceable host" "exit $(field "$r" 1): $(field "$r" 3)"
 fi
 if [[ -z "$(field "$r" 2)" ]]; then
   ok "the refusal leaves stdout empty"

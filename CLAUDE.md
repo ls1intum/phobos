@@ -127,6 +127,7 @@ core/                      the sandbox itself
   phobos-resources.sh      the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
   phobos-timeout.sh        the timeout layer
   phobos-common.sh         shared helpers, sourced by the others
+  phobos-constants.sh      the numbers the scripts share, named once, the exit statuses among them
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
 ld_preloader/              the netblocker sources (the library is built from them in the image)
 docker/prune_phase/        one image per language, plus the orchestrator

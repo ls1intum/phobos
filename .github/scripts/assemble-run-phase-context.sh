@@ -14,7 +14,10 @@
 #   assemble-run-phase-context.sh <destination>
 set -euo pipefail
 
-[[ $# -eq 1 ]] || { printf 'usage: assemble-run-phase-context.sh <destination>\n' >&2; exit 2; }
+# The status this script ends with when it was called the wrong way.
+readonly EXIT_USAGE=2
+
+[[ $# -eq 1 ]] || { printf 'usage: assemble-run-phase-context.sh <destination>\n' >&2; exit "${EXIT_USAGE}"; }
 
 DESTINATION="$1"
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

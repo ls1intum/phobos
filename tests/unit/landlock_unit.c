@@ -88,8 +88,16 @@ static void remember_string(char *destination, const char *value) {
 
 /* ------------------------------------------------------------------- mocks */
 
-static long mock_landlock_version = 8; /* what the kernel reports */
-static int mock_ruleset_descriptor = 42;
+/* The Landlock version the mock kernel reports unless a case says otherwise: the highest
+ * this build knows, written out rather than taken from HIGHEST_KNOWN_LANDLOCK_VERSION so
+ * that lowering that constant makes the default kernel look newer and warn. */
+static constexpr long MOCK_KERNEL_LANDLOCK_VERSION = 8;
+
+/* The ruleset descriptor the mock kernel hands out unless a case says otherwise. */
+static constexpr int FAKE_RULESET_DESCRIPTOR = 42;
+
+static long mock_landlock_version = MOCK_KERNEL_LANDLOCK_VERSION; /* what the kernel reports */
+static int mock_ruleset_descriptor = FAKE_RULESET_DESCRIPTOR;
 static int fail_create = 0;
 static int fail_add_path = 0;
 static int fail_add_port = 0;
@@ -287,8 +295,18 @@ static void reset_record(void) {
  * a warning that appears one version too early, a refusal that names the wrong
  * reason. The message is what a person reads when a policy is turned down, so
  * it is worth as much as the exit code. */
+/* Room for everything one case writes to stderr. */
+static constexpr size_t CAPTURED_STDERR_LENGTH = 8192;
+
+/* A forked case exits with this when it cannot redirect its stderr, so its run is not
+ * judged. */
+static constexpr int CAPTURE_FAILED_EXIT_STATUS = 98;
+
+/* A forked case exits with this when the code under test returned rather than exiting. */
+static constexpr int RETURNED_WITHOUT_EXIT_STATUS = 99;
+
 static FILE *captured_stderr;
-static char captured_stderr_text[8192];
+static char captured_stderr_text[CAPTURED_STDERR_LENGTH];
 
 static void reset_captured_stderr(void) {
     captured_stderr_text[0] = '\0';
@@ -328,8 +346,8 @@ static int descriptor_was_closed(int descriptor) {
 }
 
 static void reset_mocks(void) {
-    mock_landlock_version = 8;
-    mock_ruleset_descriptor = 42;
+    mock_landlock_version = MOCK_KERNEL_LANDLOCK_VERSION;
+    mock_ruleset_descriptor = FAKE_RULESET_DESCRIPTOR;
     fail_create = 0;
     fail_add_path = 0;
     fail_add_port = 0;
@@ -361,10 +379,10 @@ static void expect_exit(const char *what, int want, char **argv) {
     pid_t pid = fork();
     if (pid == 0) {
         if (dup2(fileno(captured_stderr), STDERR_FILENO) < 0) {
-            _exit(98); /* cannot collect the child's output, so do not judge it */
+            _exit(CAPTURE_FAILED_EXIT_STATUS);
         }
         sut_main(argc, argv);
-        _exit(99);
+        _exit(RETURNED_WITHOUT_EXIT_STATUS);
     }
     int status = 0;
     waitpid(pid, &status, 0);
@@ -470,30 +488,41 @@ static void test_rights_tables(void) {
 static void test_usage_errors(void) {
     printf("\nCalls that are refused before anything is applied\n");
     char *no_args[] = {"phobos-landlock", NULL};
-    expect_exit("no arguments at all", 2, no_args);
+    expect_exit("no arguments at all", EXIT_CODE_USAGE, no_args);
     check("a call with no arguments says how to call it", stderr_says("Usage: phobos-landlock"));
 
     char *unknown[] = {"phobos-landlock", "--nonsense", "x", "--", "/bin/true", NULL};
-    expect_exit("an unknown option", 2, unknown);
+    expect_exit("an unknown option", EXIT_CODE_USAGE, unknown);
 
     char *dangling[] = {"phobos-landlock", "--rights=r", NULL};
-    expect_exit("an option whose value is missing", 2, dangling);
+    expect_exit("an option whose value is missing", EXIT_CODE_USAGE, dangling);
 
     /* The bounds check on the arguments is what keeps an option that reads its
      * value from reading past the end of them. */
     char *dangling_port[] = {"phobos-landlock", "--rights=r", "/usr", "--connect-tcp", NULL};
-    expect_exit("an option that reads a value, with nothing after it", 2, dangling_port);
+    expect_exit("an option that reads a value, with nothing after it", EXIT_CODE_USAGE, dangling_port);
 
     char *no_cmd[] = {"phobos-landlock", "--rights=r", "/usr", "--", NULL};
-    expect_exit("nothing to run after --", 2, no_cmd);
+    expect_exit("nothing to run after --", EXIT_CODE_USAGE, no_cmd);
 
     char *only_verbose[] = {"phobos-landlock", "--verbose", NULL};
-    expect_exit("--verbose but no command", 2, only_verbose);
+    expect_exit("--verbose but no command", EXIT_CODE_USAGE, only_verbose);
 }
+
+/* Each rule on the command line is two words, the option and its value. */
+static constexpr size_t WORDS_PER_RULE = 2;
+
+/* Room beside the rules for the program name, "--", the command and the terminating null,
+ * with some to spare. */
+static constexpr size_t ARGUMENT_HEADROOM = 8;
+
+/* Exactly the room beside the rules for the program name, "--", the command and the
+ * terminating null. */
+static constexpr size_t FULL_TABLE_HEADROOM = 4;
 
 static void test_limits(void) {
     printf("\nLimits of the fixed-size tables\n");
-    static char *many[MAXIMUM_PATH_RULES * 2 + 8];
+    static char *many[MAXIMUM_PATH_RULES * WORDS_PER_RULE + ARGUMENT_HEADROOM];
     size_t n = 0;
     many[n++] = "phobos-landlock";
     for (size_t r = 0; r <= MAXIMUM_PATH_RULES; r++) {
@@ -509,7 +538,7 @@ static void test_limits(void) {
      * the case stayed green. */
     check("a refused table hands no rule to the kernel", record->path_rule_count == 0);
 
-    static char *ports[MAXIMUM_PORT_RULES * 2 + 8];
+    static char *ports[MAXIMUM_PORT_RULES * WORDS_PER_RULE + ARGUMENT_HEADROOM];
     n = 0;
     ports[n++] = "phobos-landlock";
     for (size_t p = 0; p <= MAXIMUM_PORT_RULES; p++) {
@@ -521,7 +550,7 @@ static void test_limits(void) {
     ports[n] = NULL;
     expect_exit("one connect port more than the table holds", EXIT_CODE_POLICY_ERROR, ports);
 
-    static char *binds[MAXIMUM_PORT_RULES * 2 + 8];
+    static char *binds[MAXIMUM_PORT_RULES * WORDS_PER_RULE + ARGUMENT_HEADROOM];
     n = 0;
     binds[n++] = "phobos-landlock";
     for (size_t p = 0; p <= MAXIMUM_PORT_RULES; p++) {
@@ -650,12 +679,12 @@ static int rights_refusal_exit(const char *letters) {
     pid_t pid = fork();
     if (pid == 0) {
         if (freopen("/dev/null", "w", stderr) == NULL) {
-            _exit(98);
+            _exit(CAPTURE_FAILED_EXIT_STATUS);
         }
         static struct options options;
         memset(&options, 0, sizeof(options));
         remember_path_rule(&options, letters, "/usr");
-        _exit(99);
+        _exit(RETURNED_WITHOUT_EXIT_STATUS);
     }
     int status = 0;
     waitpid(pid, &status, 0);
@@ -668,20 +697,29 @@ static int rights_refusal_exit(const char *letters) {
  * would agree with the implementation even when both are wrong, and a mutation
  * in the table would survive. These say what a letter must mean, and what may
  * never appear no matter what was asked for. */
+/* The bit of a combination that asks for each letter, and how many combinations there are. */
+static constexpr int COMBINATION_BIT_READ = 1;
+static constexpr int COMBINATION_BIT_WRITE = 2;
+static constexpr int COMBINATION_BIT_EXECUTE = 4;
+static constexpr int COMBINATION_BIT_MAKE = 8;
+static constexpr int COMBINATION_BIT_DELETE = 16;
+static constexpr int COMBINATION_BIT_IOCTL = 32;
+static constexpr int RIGHTS_COMBINATION_COUNT = 64;
+
 static void test_rights_contract(void) {
     printf("\nWhat every combination of letters means, at every version\n");
     int device_or_symlink_ever = 0, read_wrong = 0, execute_wrong = 0, write_wrong = 0;
     int truncate_wrong = 0, refer_wrong = 0, ioctl_wrong = 0, beyond_version = 0;
     int change_wrong = 0, nofollow_wrong = 0;
 
-    for (int combination = 0; combination < 64; combination++) {
+    for (int combination = 0; combination < RIGHTS_COMBINATION_COUNT; combination++) {
         struct path_rule rule = {.path = "/x",
-                                 .readable = (combination & 1) != 0,
-                                 .writable = (combination & 2) != 0,
-                                 .executable = (combination & 4) != 0,
-                                 .makeable = (combination & 8) != 0,
-                                 .removable = (combination & 16) != 0,
-                                 .ioctl_device = (combination & 32) != 0};
+                                 .readable = (combination & COMBINATION_BIT_READ) != 0,
+                                 .writable = (combination & COMBINATION_BIT_WRITE) != 0,
+                                 .executable = (combination & COMBINATION_BIT_EXECUTE) != 0,
+                                 .makeable = (combination & COMBINATION_BIT_MAKE) != 0,
+                                 .removable = (combination & COMBINATION_BIT_DELETE) != 0,
+                                 .ioctl_device = (combination & COMBINATION_BIT_IOCTL) != 0};
         bool can_change =
             rule.writable || rule.makeable || rule.removable || rule.ioctl_device;
         if (rule_can_change_anything(&rule) != can_change) {
@@ -800,7 +838,7 @@ static void capture_unenforceable_report(int landlock_version) {
     pid_t pid = fork();
     if (pid == 0) {
         if (dup2(fileno(captured_stderr), STDERR_FILENO) < 0) {
-            _exit(98);
+            _exit(CAPTURE_FAILED_EXIT_STATUS);
         }
         report_unenforceable_rights(landlock_version);
         /* exit, not _exit: a coverage build writes its counters from an atexit
@@ -902,7 +940,7 @@ static void test_syscall_failures(void) {
           stderr_says("landlock_restrict_self: Operation not permitted"));
 
     fail_exec = 1;
-    expect_exit("the command cannot be executed", 127, plain);
+    expect_exit("the command cannot be executed", EXIT_CODE_COMMAND_NOT_EXECUTABLE, plain);
     check("the command that could not be run is named",
           stderr_says("exec /bin/true: No such file or directory"));
 }
@@ -1002,20 +1040,21 @@ static void test_what_reaches_the_kernel(void) {
 
     expect_exit("a read-only rule runs", 0, read_only);
     check("the ruleset handles everything version 8 knows",
-          record->handled_access_filesystem == filesystem_rights_for_version(8));
+          record->handled_access_filesystem == filesystem_rights_for_version(MOCK_KERNEL_LANDLOCK_VERSION));
     check("the ruleset is sent at the size version 8 expects",
-          record->ruleset_attributes_size == ruleset_attributes_size_for_version(8));
+          record->ruleset_attributes_size == ruleset_attributes_size_for_version(MOCK_KERNEL_LANDLOCK_VERSION));
     check("without a port rule the ruleset handles no network access",
           record->handled_access_network == 0);
     check("version 8 scopes signals and abstract UNIX sockets to the sandbox",
           record->scoped == (LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | LANDLOCK_SCOPE_SIGNAL));
     check("exactly one rule reaches the kernel", record->path_rule_count == 1);
     check("the rule carries the read-only rights and nothing besides",
-          record->path_rule_allowed_access[0] == rights_granted_for(&read_only_rule, 8));
+          record->path_rule_allowed_access[0] == rights_granted_for(&read_only_rule, MOCK_KERNEL_LANDLOCK_VERSION));
     check("the rule is opened on the path that was asked for",
           strcmp(record->opened_path[0], "/usr") == 0);
     check("rule and restriction use the ruleset the kernel handed out",
-          record->rule_ruleset_descriptor == 42 && record->restricted_ruleset_descriptor == 42);
+          record->rule_ruleset_descriptor == FAKE_RULESET_DESCRIPTOR &&
+              record->restricted_ruleset_descriptor == FAKE_RULESET_DESCRIPTOR);
 
     char *three[] = {"phobos-landlock", "--rights=r", "/usr",       "--rights=rwmd", "/tmp", "--rights=rx",
                      "/bin",            "--",   "/bin/true",  NULL};
@@ -1025,9 +1064,9 @@ static void test_what_reaches_the_kernel(void) {
     expect_exit("three rules of three kinds run", 0, three);
     check("every rule reaches the kernel", record->path_rule_count == 3);
     check("each rule carries its own rights, in the order they were given",
-          record->path_rule_allowed_access[0] == rights_granted_for(&read_only_rule, 8) &&
-              record->path_rule_allowed_access[1] == rights_granted_for(&writable_rule, 8) &&
-              record->path_rule_allowed_access[2] == rights_granted_for(&executable_rule, 8));
+          record->path_rule_allowed_access[0] == rights_granted_for(&read_only_rule, MOCK_KERNEL_LANDLOCK_VERSION) &&
+              record->path_rule_allowed_access[1] == rights_granted_for(&writable_rule, MOCK_KERNEL_LANDLOCK_VERSION) &&
+              record->path_rule_allowed_access[2] == rights_granted_for(&executable_rule, MOCK_KERNEL_LANDLOCK_VERSION));
 
     force_regular_file = 1;
     char *on_file[] = {"phobos-landlock", "--rights=rwmdx", "/etc/hostname", "--", "/bin/true", NULL};
@@ -1038,7 +1077,7 @@ static void test_what_reaches_the_kernel(void) {
           (record->path_rule_allowed_access[0] & DIRECTORY_ONLY_ACCESS_RIGHTS) == 0);
     check("a file is granted every other right the rule asked for",
           record->path_rule_allowed_access[0] ==
-              (rights_granted_for(&file_rule, 8) & ~DIRECTORY_ONLY_ACCESS_RIGHTS));
+              (rights_granted_for(&file_rule, MOCK_KERNEL_LANDLOCK_VERSION) & ~DIRECTORY_ONLY_ACCESS_RIGHTS));
     check("a file still keeps the rights it can use",
           (record->path_rule_allowed_access[0] & LANDLOCK_ACCESS_FILESYSTEM_READ_FILE) != 0);
 
@@ -1113,6 +1152,9 @@ static void test_what_reaches_the_kernel(void) {
 /* Each of these sits exactly on a limit. A comparison moved by one is invisible
  * everywhere else, and descriptor 0 is the value most easily mistaken for a
  * failure. */
+/* Room for a Landlock version written out as decimal text. */
+static constexpr size_t VERSION_TEXT_LENGTH = 16;
+
 static void test_boundaries(void) {
     printf("\nValues that sit exactly on a limit\n");
     char *read_only[] = {"phobos-landlock", "--rights=r", "/usr", "--", "/bin/true", NULL};
@@ -1126,7 +1168,7 @@ static void test_boundaries(void) {
     /* Written out from the header rather than as a literal, so that raising the
      * highest known version keeps testing the boundary rather than a number
      * that has fallen below it. */
-    static char highest_version_text[16];
+    static char highest_version_text[VERSION_TEXT_LENGTH];
     snprintf(highest_version_text, sizeof(highest_version_text), "%d",
              HIGHEST_KNOWN_LANDLOCK_VERSION);
     char *highest_version[] = {"phobos-landlock",     "--minimum-landlock-version",
@@ -1151,11 +1193,11 @@ static void test_boundaries(void) {
     check("the rule points at the descriptor the path was opened with",
           record->path_rule_parent_fd[0] == 0);
     check("the path descriptor is closed again", descriptor_was_closed(0));
-    check("the ruleset descriptor is closed again", descriptor_was_closed(42));
+    check("the ruleset descriptor is closed again", descriptor_was_closed(FAKE_RULESET_DESCRIPTOR));
 
     /* A table filled to the brim must still be accepted whole. Handing out
      * descriptor 0 keeps this from opening four thousand real files. */
-    static char *full[MAXIMUM_PATH_RULES * 2 + 4];
+    static char *full[MAXIMUM_PATH_RULES * WORDS_PER_RULE + FULL_TABLE_HEADROOM];
     size_t word_count = 0;
     full[word_count++] = "phobos-landlock";
     for (size_t rule_index = 0; rule_index < MAXIMUM_PATH_RULES; rule_index++) {

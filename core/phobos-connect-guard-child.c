@@ -137,5 +137,5 @@ static bool send_descriptor(int socket_descriptor, int descriptor_to_send) {
 
     execvp(command[0], command);
     fprintf(stderr, "[phobos-connect-guard] exec %s: %s\n", command[0], strerror(errno));
-    _exit(127);
+    _exit(EXIT_COMMAND_NOT_EXECUTABLE);
 }

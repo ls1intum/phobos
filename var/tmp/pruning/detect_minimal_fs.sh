@@ -3,7 +3,10 @@
 set -euo pipefail
 
 # ── logging ──────────────────────────────────────────────────────────────────
-err()   { echo -e "\e[31m[error]\e[0m $*" >&2; exit 1; }
+# The terminal escape sequences that colour an error red and reset the colour after it.
+readonly COLOUR_ERROR='\e[31m'
+readonly COLOUR_RESET='\e[0m'
+err()   { echo -e "${COLOUR_ERROR}[error]${COLOUR_RESET} $*" >&2; exit 1; }
 # return 0, because without it the && returns 1 whenever logging is off and set -e
 # ends the run at the first call. run_minimal_fs_all.sh carried the same defect: a
 # prune without --verbose could never get past its first log line.
@@ -34,6 +37,9 @@ UNIGNORABLE_SUCCESS_PATTERNS=${UNIGNORABLE_SUCCESS_PATTERNS:-"> Task :(compileJa
 INFRA_FAILURE_PATTERNS=${INFRA_FAILURE_PATTERNS:-'^(Could not import runpy module|Traceback \(most recent call last\):|Fatal [[:alpha:]].*error:|ModuleNotFoundError: No module named )'}
 
 readonly PSEUDO_FS=( /proc /dev /sys /run )
+# The order in which mounts of one depth are given to Bubblewrap: hidden first, then read-only,
+# then writable, so that at the same depth the wider mount is the one that ends up on top.
+declare -A -r STATE_MOUNT_ORDER=( [n]=0 [r]=1 [w]=2 )
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -194,7 +200,7 @@ build_bwrap_command() {
     [[ -z "$path" ]] && continue
     depth=$(grep -o "/" <<<"$path" | wc -l || true)
     state="${CONFIG[$path]}"
-    case "$state" in n) weight=0;; r) weight=1;; w) weight=2;; esac
+    weight="${STATE_MOUNT_ORDER[$state]}"
     list+=("$depth:$weight:$path")
   done
 

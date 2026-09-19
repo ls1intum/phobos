@@ -297,6 +297,9 @@ hidden="${root}/logs/hidden"
 exercise="/var/tmp/testing-dir"
 host=""
 directory=""
+# The status this stand-in ends with when it is handed something the pruner would never pass;
+# chosen outside what a build or bwrap itself returns, so the suite can tell the two apart.
+STUB_REFUSED_EXIT=97
 : >"${hidden}"
 while [[ "${1:-}" == --* ]]; do
     case "$1" in
@@ -323,11 +326,11 @@ while [[ "${1:-}" == --* ]]; do
             ;;
         *)
             printf 'pass-through bwrap: unknown option %s\n' "$1" >&2
-            exit 97
+            exit "${STUB_REFUSED_EXIT}"
             ;;
     esac
 done
-[[ -n "${host}" ]] || { printf 'pass-through bwrap: no binding for %s\n' "${exercise}" >&2; exit 97; }
+[[ -n "${host}" ]] || { printf 'pass-through bwrap: no binding for %s\n' "${exercise}" >&2; exit "${STUB_REFUSED_EXIT}"; }
 cd -- "${host}${directory#"${exercise}"}"
 exec "$1" "${host}${2#"${exercise}"}"
 STUB

@@ -21,7 +21,7 @@ source "${HERE}/phobos-common.sh"
 
 usage() {
   echo "Usage: phobos-policy.sh [--debug] --spec-dir <dir> [--tail-flags-file <file>] [--config <file>]..." >&2
-  exit 2
+  exit "${PHB_EXIT_USAGE}"
 }
 
 SPEC_DIR=""
@@ -36,7 +36,7 @@ while (( "$#" )); do
     *) usage;;
   esac
 done
-[[ -n "$SPEC_DIR" && -d "$SPEC_DIR" ]] || { echo "phobos-policy.sh: --spec-dir must name an existing directory" >&2; exit 2; }
+[[ -n "$SPEC_DIR" && -d "$SPEC_DIR" ]] || { echo "phobos-policy.sh: --spec-dir must name an existing directory" >&2; exit "${PHB_EXIT_USAGE}"; }
 
 # Scratch for the temporary files parse_cfg_policy and the merge make: a subdirectory of the
 # specification directory, so they are removed with it rather than left in /tmp. Passed to

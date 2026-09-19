@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 CORE=/var/tmp/opt/core
+# How many lines of a failing build's log a failure shows.
+LOG_EXCERPT_LINES=5
 LL=$CORE/phobos-landlock
 P=/var/tmp/project
 PASS=0; FAIL=0
@@ -47,7 +49,7 @@ probe_read() {
 # 3.14.0 liegt. Ein Netzzugriff an dieser Stelle koennte den Lauf scheitern
 # lassen, ohne dass es etwas mit Landlock zu tun haette.
 hdr "Phase 0: Vorbereitung unbeschraenkt (Baseline, ohne Beschraenkung)"
-(cd $P && mvn -o -q compile > /tmp/prep.log 2>&1) && ok "Baseline uebersetzt" || { bad "Vorbereitung fehlgeschlagen"; tail -5 /tmp/prep.log; }
+(cd $P && mvn -o -q compile > /tmp/prep.log 2>&1) && ok "Baseline uebersetzt" || { bad "Vorbereitung fehlgeschlagen"; tail -n "$LOG_EXCERPT_LINES" /tmp/prep.log; }
 
 hdr "Phase 1: mvn clean, unbeschraenkt"
 (cd $P && mvn -o -q clean) && ok "mvn clean lief durch" || bad "mvn clean fehlgeschlagen"

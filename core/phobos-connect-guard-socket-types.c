@@ -5,6 +5,9 @@
 #include <string.h>
 #include <unistd.h>
 
+/* Long enough for "/proc/<pid>/fd/<descriptor>" and for the "socket:[<inode>]" it points to. */
+static constexpr size_t PROC_FD_LINK_LENGTH = 64;
+
 /* One remembered socket: its inode and its type. */
 struct socket_type_entry {
     uint64_t inode;
@@ -47,8 +50,8 @@ uint8_t lookup_socket_type(uint64_t inode) {
 }
 
 uint64_t fd_socket_inode(pid_t owner_pid, int descriptor) {
-    char link_path[64];
-    char target[64];
+    char link_path[PROC_FD_LINK_LENGTH];
+    char target[PROC_FD_LINK_LENGTH];
     snprintf(link_path, sizeof(link_path), "/proc/%d/fd/%d", (int)owner_pid, descriptor);
     ssize_t length = readlink(link_path, target, sizeof(target) - 1);
     if (length < 0) {

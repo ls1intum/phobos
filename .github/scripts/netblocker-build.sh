@@ -18,6 +18,8 @@
 #   netblocker-build.sh compare REFERENCE COPY...
 set -euo pipefail
 
+# The status this script ends with when it was called the wrong way.
+readonly EXIT_USAGE=2
 readonly SNAPSHOT="20260912T000000Z"
 readonly GCC_VERSION="14.3.0-14ubuntu1"
 readonly BINUTILS_VERSION="2.46-3ubuntu2"
@@ -40,7 +42,7 @@ usage() {
     printf '       netblocker-build.sh build SOURCE_DIRECTORY OUTPUT\n' >&2
     printf '       netblocker-build.sh verify LIBRARY\n' >&2
     printf '       netblocker-build.sh compare REFERENCE COPY...\n' >&2
-    exit 2
+    exit "${EXIT_USAGE}"
 }
 
 # Reports why the script stops and stops.

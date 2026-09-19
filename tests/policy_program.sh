@@ -8,6 +8,8 @@ set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE="${HERE}/../core"
+# shellcheck source=../core/phobos-constants.sh
+source "${CORE}/phobos-constants.sh"
 WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
 cleanup() { rm -rf "$WORK"; }
@@ -73,10 +75,10 @@ chmod +x "$NOBASE"/*.sh
 SPEC2="$(fresh_spec)"
 out="$(bash "$NOBASE/phobos-policy.sh" --spec-dir "$SPEC2" 2>&1)"
 rc=$?
-if [[ "$rc" -eq 11 && "$out" == *"PHB-EPOLICY"* ]]; then
+if [[ "$rc" -eq "$PHB_EPOLICY" && "$out" == *"PHB-EPOLICY"* ]]; then
   ok "no Base*.cfg beside the policy program is refused (PHB-EPOLICY)"
 else
-  bad "no Base*.cfg beside the policy program is refused (PHB-EPOLICY)" "exit 11 reporting PHB-EPOLICY" "exit $rc: $out"
+  bad "no Base*.cfg beside the policy program is refused (PHB-EPOLICY)" "exit ${PHB_EPOLICY} reporting PHB-EPOLICY" "exit $rc: $out"
 fi
 
 echo

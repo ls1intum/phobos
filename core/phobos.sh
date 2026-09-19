@@ -54,7 +54,7 @@ Notes:
   waits for the command removes it: the timeout layer when a timeout bounds the run, since the
   filesystem layer is then group-killed with the command, and the filesystem layer otherwise.
 USAGE
-  exit 2
+  exit "${PHB_EXIT_USAGE}"
 }
 
 [[ $# -lt 1 ]] && usage
