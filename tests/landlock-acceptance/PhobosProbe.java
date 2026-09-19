@@ -88,7 +88,8 @@ public final class PhobosProbe {
 
     /**
      * Actively tries to survive the timeout: a shutdown hook that never returns
-     * makes the JVM ignore SIGTERM, so only SIGKILL can end this process.
+     * makes the JVM ignore SIGTERM, so only SIGKILL can end this process. An interrupt of the
+     * hook is swallowed so that it deliberately keeps blocking.
      */
     private static void spin() throws InterruptedException {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -99,7 +100,6 @@ public final class PhobosProbe {
                     Thread.sleep(HOLD_MILLISECONDS);
                 }
                 catch (InterruptedException ignored) {
-                    // deliberately keep blocking
                 }
             }
         }));

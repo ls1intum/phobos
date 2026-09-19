@@ -189,13 +189,20 @@ init_config() {
 # happens to be holding, a token or a path to a runner control file, is visible to code
 # the sandbox is meant to contain. PRUNE_ENV_PASSTHROUGH names what survives; --env adds
 # to it.
+#
+# The host exercise is bound last, after every parent mount, into a sandbox path made to exist
+# first, so that no parent mount can hide it.
 build_bwrap_command() {
   local options=("${BASE_OPTIONS[@]}")
   if [[ "$TARGET" != "/" ]]; then
     options+=( --ro-bind "$TARGET" "$TARGET" )
   fi
 
-  local list=() path depth weight state
+  local list=()
+  local path
+  local depth
+  local weight
+  local state
   for path in "${!CONFIG[@]}"; do
     [[ -z "$path" ]] && continue
     depth=$(grep -o "/" <<<"$path" | wc -l || true)
@@ -221,12 +228,12 @@ build_bwrap_command() {
 
   for p in "${EXTRA_RO[@]}"; do [[ -z "$p" ]] || options+=( --ro-bind "$p" "$p" ); done
   for p in "${EXTRA_RW[@]}"; do [[ -z "$p" ]] || options+=( --bind    "$p" "$p" ); done
-  # Ensure sandbox path exists, then bind the host exercise *after* parent mounts
   options+=( --dir /var --dir /var/tmp --dir "$SANDBOX_WORKDIR" )
   options+=( --bind "$HOST_WORKDIR" "$SANDBOX_WORKDIR" )
   options+=("${TAIL_OPTIONS[@]}")
 
-  local name value
+  local name
+  local value
   for name in ${PRUNE_ENV_PASSTHROUGH}; do
     [[ -n "${!name:-}" ]] && options+=( --setenv "$name" "${!name}" )
   done
@@ -240,8 +247,37 @@ build_bwrap_command() {
 }
 
 # ── run one attempt ──────────────────────────────────────────────────────────
+
+# Prints what a build's exit status means for pruning, 0 for a build that did what the
+# exercise needs and non-zero for one that did not, given the status and the build's log. The
+# status alone is not trusted: a non-zero status whose log matches IGNORABLE_FAILURE_PATTERNS
+# (failing tests) still counts as a success, and a zero status whose log matches
+# INFRA_FAILURE_PATTERNS (the toolchain itself broke) or UNIGNORABLE_SUCCESS_PATTERNS (Gradle's
+# NO-SOURCE, a build that compiled nothing) counts as a failure.
+build_outcome() {
+  local exit_code="$1"
+  local log_file="$2"
+  if (( exit_code != 0 )) && [[ -n ${IGNORABLE_FAILURE_PATTERNS:-} ]] \
+     && grep -Eq "${IGNORABLE_FAILURE_PATTERNS}" "$log_file"; then
+    exit_code=0
+  fi
+  if (( exit_code == 0 )) && [[ -n ${INFRA_FAILURE_PATTERNS:-} ]] \
+     && grep -Eq "${INFRA_FAILURE_PATTERNS}" "$log_file"; then
+    exit_code=1
+  fi
+  if (( exit_code == 0 )) && [[ -n ${UNIGNORABLE_SUCCESS_PATTERNS:-} ]] \
+     && grep -Eq "${UNIGNORABLE_SUCCESS_PATTERNS}" "$log_file"; then
+    exit_code=1
+  fi
+  printf '%s' "$exit_code"
+}
+
+# Runs the build once under the current CONFIG, keeps its log under PRUNE_LOG_DIR named after
+# the outcome, and returns 0 when build_outcome counts it a success.
 test_build_script() {
-  local tmpfile exit_code status
+  local tmpfile
+  local exit_code
+  local status
   build_bwrap_command
   ((BWRAP_COMMAND_COUNT++))
   log "Testing command number: $BWRAP_COMMAND_COUNT"
@@ -259,21 +295,7 @@ test_build_script() {
   exit_code=$?
   set -e
 
-  # non-zero but ignorable → success
-  if (( exit_code != 0 )) && [[ -n ${IGNORABLE_FAILURE_PATTERNS:-} ]] \
-     && grep -Eq "${IGNORABLE_FAILURE_PATTERNS}" "$tmpfile"; then
-    exit_code=0
-  fi
-  # zero but infra-fatal lines present → failure
-  if (( exit_code == 0 )) && [[ -n ${INFRA_FAILURE_PATTERNS:-} ]] \
-     && grep -Eq "${INFRA_FAILURE_PATTERNS}" "$tmpfile"; then
-    exit_code=1
-  fi
-  # zero but “unignorable success” → failure
-  if (( exit_code == 0 )) && [[ -n ${UNIGNORABLE_SUCCESS_PATTERNS:-} ]] \
-     && grep -Eq "${UNIGNORABLE_SUCCESS_PATTERNS}" "$tmpfile"; then
-    exit_code=1
-  fi
+  exit_code="$(build_outcome "$exit_code" "$tmpfile")"
 
   [[ $exit_code -eq 0 ]] && status="success" || status="fail"
   mv "$tmpfile" "${PRUNE_LOG_DIR}/build-${BWRAP_COMMAND_COUNT}-${status}.log"
@@ -316,18 +338,24 @@ prune_tree() {
 
 # ── compaction (best-effort) ─────────────────────────────────────────────────
 collapse_readonly_parents() {
-  local parent child all_r any_child
-  local _oldnullglob _olddotglob
+  local parent
+  local child
+  local all_r
+  local any_child
+  local _oldnullglob
+  local _olddotglob
   shopt -q nullglob; _oldnullglob=$?
   shopt -q dotglob;  _olddotglob=$?
   shopt -s nullglob dotglob
 
-  local -a parents=(); local k
+  local -a parents=()
+  local k
   for k in "${!CONFIG[@]}"; do parents+=("$k"); done
 
   for parent in "${parents[@]}"; do
     [[ "${CONFIG[$parent]:-}" = r ]] || continue
-    all_r=true; any_child=false
+    all_r=true
+    any_child=false
     for child in "$parent"/*; do
       [[ -d "$child" ]] || continue
       if [[ -v CONFIG["$child"] ]]; then
@@ -348,13 +376,16 @@ collapse_readonly_parents() {
 }
 
 demote_writable_parents() {
-  local -a keys=(); local k
+  local -a keys=()
+  local k
   for k in "${!CONFIG[@]}"; do keys+=("$k"); done
   ((${#keys[@]})) && mapfile -t keys < <(
     printf '%s\n' "${keys[@]}" | awk -F/ '{print (NF-1) "\t" $0}' | sort -rn | cut -f2-
   )
 
-  local parent maybe any_w
+  local parent
+  local maybe
+  local any_w
   for parent in "${keys[@]}"; do
     [[ "${CONFIG[$parent]:-}" == "w" ]] || continue
     any_w=false

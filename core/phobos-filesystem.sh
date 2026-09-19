@@ -35,7 +35,12 @@ trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 # just before it runs, so the graceful SIGTERM still reaches the command itself.
 trap '' TERM
 
-READ="${SPEC_DIR}/read.paths"; EXECUTE="${SPEC_DIR}/execute.paths"; WRITE="${SPEC_DIR}/write.paths"; CREATE="${SPEC_DIR}/create.paths"; DELETE="${SPEC_DIR}/delete.paths"; TAIL="${SPEC_DIR}/tail.flags"
+READ="${SPEC_DIR}/read.paths"
+EXECUTE="${SPEC_DIR}/execute.paths"
+WRITE="${SPEC_DIR}/write.paths"
+CREATE="${SPEC_DIR}/create.paths"
+DELETE="${SPEC_DIR}/delete.paths"
+TAIL="${SPEC_DIR}/tail.flags"
 LANDLOCK="${LANDLOCK_BIN_OPT:-${HERE}/phobos-landlock}"
 
 # With --resources-layer the command's resource limits are set by that layer, started as the

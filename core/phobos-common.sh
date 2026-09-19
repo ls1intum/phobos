@@ -11,8 +11,12 @@ PHB_FS_RIGHTS="read execute write create delete"
 # What the denial report counts in the command's stderr, one extended regular expression each.
 PHB_NETWORK_DENIAL_PATTERN='EAI_AGAIN|EAI_FAIL|EAI_NONAME|Network is unreachable|Connection timed out'
 PHB_FILESYSTEM_DENIAL_PATTERN='Permission denied|EACCES|EROFS'
+# Prints one line on stderr, prefixed with the UTC time, for the operator reading the run's log.
 _log()   { printf '%s\n' "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*" >&2; }
+# Logs the message and ends the shell with the given status, 1 when none is given.
 die()    { _log "$1"; exit "${2:-1}"; }
+# Prints a refusal or a finding for the person reading the run, on stderr, so it never mixes
+# with the command's own output.
 report() { printf '%s\n' "$1" >&2; }
 # Whether --debug was given to the script that sourced this file. Reset on every source,
 # because bash imports each environment variable as a shell variable of the same name, and
@@ -34,8 +38,14 @@ debug_log() {
   if (( $# > 0 )); then quoted=" $(printf '%q ' "$@")"; fi
   printf '[phobos] %s: %s%s\n' "$layer" "$message" "${quoted% }" >&2
 }
+# Drops repeated lines from standard input, keeping the first of each in its place.
 uniq_keep_order() { awk '!seen[$0]++'; }
+# Sorts paths on standard input by their depth, then by name, so a parent comes before its
+# children.
 depth_sort()      { awk '{print gsub(/\//,"/")+1 " " $0}' | sort -k1,1n -k2,2 | cut -d" " -f2-; }
+# Prints each path on standard input in canonical form, without resolving symbolic links, so the
+# merge compares what the policy wrote. Assumes realpath from GNU coreutils; without it the
+# input passes through unchanged.
 canon_paths() {
   if command -v realpath >/dev/null 2>&1; then
     while IFS= read -r p; do [[ -z "$p" ]] && continue; realpath --canonicalize-missing --no-symlinks "$p" || echo "$p"; done
@@ -53,7 +63,9 @@ PHB_TIMEOUT_PATTERN='^[0-9]+(\.[0-9]{3})?$'
 # than as text. The pattern guarantees a digit before the point and exactly three after it,
 # so both parts are read in base ten, never as octal, and never with an empty field.
 timeout_to_ms() {
-  local value="$1" integer fraction="0"
+  local value="$1"
+  local integer
+  local fraction="0"
   if [[ "$value" == *.* ]]; then integer="${value%%.*}"; fraction="${value#*.}"; else integer="$value"; fi
   printf '%s' "$(( 10#$integer * PHB_MILLISECONDS_PER_SECOND + 10#$fraction ))"
 }
@@ -61,8 +73,11 @@ timeout_to_ms() {
 # The inverse, canonical: whole seconds print without a fraction, so 2 and 2.000 come back as
 # the one spelling and the written specification does not depend on which cfg named it.
 ms_to_timeout() {
-  local ms="$1" seconds fraction
-  seconds=$(( ms / PHB_MILLISECONDS_PER_SECOND )); fraction=$(( ms % PHB_MILLISECONDS_PER_SECOND ))
+  local ms="$1"
+  local seconds
+  local fraction
+  seconds=$(( ms / PHB_MILLISECONDS_PER_SECOND ))
+  fraction=$(( ms % PHB_MILLISECONDS_PER_SECOND ))
   if (( fraction == 0 )); then printf '%s' "$seconds"; else printf '%d.%03d' "$seconds" "$fraction"; fi
 }
 
@@ -93,7 +108,7 @@ run_reached_timeout() {
 
 # Merges one configured timeout value into PARSED_TIMEOUT and PARSED_TIMEOUT_DISABLED, which
 # parse_cfg_policy resets per call. The rule is the same within a file and across files:
-# every spelling of zero disables the timeout and wins over any finite value, and otherwise
+# every spelling of zero (0, 0.000, ...) disables the timeout and wins over any finite value, and otherwise
 # the largest finite value is kept. An unusable value is a policy error rather than an
 # ignored line, because silently dropping it would run the command without a limit the
 # policy asked for. PARSED_TIMEOUT keeps the raw spelling of the largest finite value so a
@@ -104,7 +119,6 @@ set_parsed_timeout() {
     report "Policy invalid: timeout '${value}' must be seconds, either whole or with exactly three decimals. (PHB-EPOLICY)"
     exit "${PHB_EPOLICY}"
   fi
-  # Every accepted spelling of zero (0, 0.000, ...) disables the timeout and wins.
   if [[ -z "${value//[0.]/}" ]]; then
     PARSED_TIMEOUT_DISABLED=1
     return
@@ -141,16 +155,16 @@ set_parsed_limit() {
 # Applies the configured resource limits to this shell, so the command tree it exec's into
 # inherits them. Each is optional. rlimits are self-imposed and need no privilege, exactly as
 # Landlock is, which is why this works inside the unprivileged container an exercise runs in.
-# A configured limit that cannot be set ends the run rather than running without it. Assumes
-# it is called plainly, not in a subshell, so the ulimit takes effect for the later exec.
+# A configured limit that cannot be set ends the run rather than running without it. Zero means
+# the limit is switched off, so it is not applied. Every value is read in base ten, so a leading
+# zero is not taken for octal. Assumes it is called plainly, not in a subshell, so the ulimit
+# takes effect for the later exec.
 apply_resource_limits() {
   local mem_mb="$1"
   local nproc="$2"
   local nofile="$3"
   local fsize_mb="$4"
   local cpu="$5"
-  # Zero means the limit is switched off, so it is not applied. Every value is read in base
-  # ten, so a leading zero is not taken for octal.
   if [[ -n "$mem_mb" ]] && (( 10#$mem_mb != 0 )); then
     (( 10#$mem_mb <= PHB_LARGEST_MEGABYTES )) || die "the memory limit of ${mem_mb} MB is too large to set safely" "${PHB_EPOLICY}"
     ulimit -v "$(( 10#$mem_mb * PHB_KILOBYTES_PER_MEGABYTE ))" || die "cannot set the memory limit of ${mem_mb} MB" "${PHB_ERUNTIME}"
@@ -220,56 +234,169 @@ parse_network_target() {
   local -n host_ref="$2"
   local -n port_ref="$3"
   if [[ "$target" == \[*\]:* ]]; then
-    host_ref="${target%]:*}"; host_ref="${host_ref#[}"; port_ref="${target##*:}"
+    host_ref="${target%]:*}"
+    host_ref="${host_ref#[}"
+    port_ref="${target##*:}"
   elif [[ "$target" == \[*\] ]]; then
-    host_ref="${target#[}"; host_ref="${host_ref%]}"; port_ref="*"
+    host_ref="${target#[}"
+    host_ref="${host_ref%]}"
+    port_ref="*"
   elif [[ "$target" == \[* ]]; then
     report "Policy invalid: '${target}' in [connect] opens a bracket it does not close. (PHB-EPOLICY)"
     exit "${PHB_EPOLICY}"
   else
     local colons="${target//[^:]/}"
     if (( ${#colons} >= PHB_IPV6_MINIMUM_COLONS )); then
-      host_ref="$target"; port_ref="*"
+      host_ref="$target"
+      port_ref="*"
     elif [[ "$target" == *:* ]]; then
-      host_ref="${target%:*}"; port_ref="${target##*:}"
+      host_ref="${target%:*}"
+      port_ref="${target##*:}"
     else
-      host_ref="$target"; port_ref="*"
+      host_ref="$target"
+      port_ref="*"
     fi
   fi
 }
 
+# Makes the directory one parse_cfg_policy call writes its files into, and prints it. Under
+# phobos.sh's scratch directory when it set one, so this scratch is removed with the
+# specification directory rather than left in /tmp; otherwise a plain temporary directory.
+new_parse_directory() {
+  if [[ -n "${PHOBOS_SCRATCH:-}" ]]; then
+    mktemp -d -p "$PHOBOS_SCRATCH" phobos-cfg.XXXXXX
+  else
+    mktemp -d -t phobos-cfg.XXXXXX
+  fi
+}
+
+# Resets the timeout and the resource limits parse_cfg_policy reads, so each is read from the
+# cfg that sets it and not carried over from an earlier one; the caller merges each across cfgs
+# by the same rule the setters use within a cfg (zero disables and wins, else the largest value).
+reset_parsed_limits() {
+  PARSED_TIMEOUT=""
+  PARSED_TIMEOUT_DISABLED=0
+  PARSED_LIMIT_MEM_MB=""
+  PARSED_LIMIT_NPROC=""
+  PARSED_LIMIT_NOFILE=""
+  PARSED_LIMIT_FSIZE_MB=""
+  PARSED_LIMIT_CPU=""
+  PARSED_LIMIT_MEM_MB_DISABLED=0
+  PARSED_LIMIT_NPROC_DISABLED=0
+  PARSED_LIMIT_NOFILE_DISABLED=0
+  PARSED_LIMIT_FSIZE_MB_DISABLED=0
+  PARSED_LIMIT_CPU_DISABLED=0
+}
+
+# Refuses a section the policy format does not have. Asked at the section's header, so an
+# unknown section is refused whether or not it holds any line, rather than silently ignored.
+# Assumes it is called plainly, not in a subshell, so that the refusal ends the run.
+refuse_unknown_section() {
+  local section="$1"
+  local cfg="$2"
+  case "$section" in
+    read|execute|write|create|delete|connect|bind|limits) ;;
+    *) report "Policy invalid: unknown section '[${section}]' in ${cfg}. (PHB-EPOLICY)"; exit "${PHB_EPOLICY}" ;;
+  esac
+}
+
+# Appends one [connect] line, "allow <host>[:<port>]", to the rules file as "host port". A line
+# of any other shape is refused. Assumes it is called plainly, so that the refusal ends the run.
+append_connect_rule() {
+  local line="$1"
+  local rules="$2"
+  local host=""
+  local port="*"
+  if [[ ! "$line" =~ ^allow[[:space:]]+(.+)$ ]]; then
+    report "Policy invalid: '${line}' in [connect] is not an 'allow <host>[:<port>]' line. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  parse_network_target "${BASH_REMATCH[1]}" host port
+  printf '%s %s\n' "$host" "$port" >>"$rules"
+}
+
+# Appends one [bind] line to the rules file as "addr port". [bind] names a local TCP listening
+# endpoint, one 'allow <addr>:<port>' or 'allow <port>' per line. A bare port means any local
+# address. The port is enforced by Landlock (--bind-tcp) and must be concrete, because
+# Landlock's bind right is per-port and cannot express a wildcard; the local address is enforced
+# by libnetblocker's bind hook as defence in depth. IPv6 is bracketed, [::1]:8080. Assumes it is
+# called plainly, so that a refusal ends the run.
+append_bind_rule() {
+  local line="$1"
+  local rules="$2"
+  local bind_target
+  local bind_host=""
+  local bind_port=""
+  if [[ ! "$line" =~ ^allow[[:space:]]+(.+)$ ]]; then
+    report "Policy invalid: '${line}' in [bind] is not an 'allow <addr>:<port>' line. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  bind_target="${BASH_REMATCH[1]}"
+  if [[ "$bind_target" =~ ^[0-9]+$ ]]; then
+    bind_host="*"
+    bind_port="$bind_target"
+  else
+    parse_network_target "$bind_target" bind_host bind_port
+  fi
+  if [[ "$bind_port" == "*" || -z "$bind_port" ]]; then
+    report "Policy invalid: '${bind_target}' in [bind] names no concrete port. Landlock enforces a bind by port, so name one. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  printf '%s %s\n' "$bind_host" "$bind_port" >>"$rules"
+}
+
+# Reads one [limits] line into the PARSED_* values. Only the six known keys are accepted; a bare
+# value and an unknown key are refused rather than ignored, so a typo in a limit does not leave
+# the run unrestricted. Assumes it is called plainly, so that a refusal ends the run.
+read_limits_line() {
+  local line="$1"
+  local section="$2"
+  if [[ "$line" =~ ^timeout[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+    set_parsed_timeout "${BASH_REMATCH[1]}"
+  elif [[ "$line" =~ ^mem_mb[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+    set_parsed_limit PARSED_LIMIT_MEM_MB mem_mb "${BASH_REMATCH[1]}"
+  elif [[ "$line" =~ ^nproc[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+    set_parsed_limit PARSED_LIMIT_NPROC nproc "${BASH_REMATCH[1]}"
+  elif [[ "$line" =~ ^nofile[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+    set_parsed_limit PARSED_LIMIT_NOFILE nofile "${BASH_REMATCH[1]}"
+  elif [[ "$line" =~ ^fsize_mb[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+    set_parsed_limit PARSED_LIMIT_FSIZE_MB fsize_mb "${BASH_REMATCH[1]}"
+  elif [[ "$line" =~ ^cpu[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+    set_parsed_limit PARSED_LIMIT_CPU cpu "${BASH_REMATCH[1]}"
+  else
+    report "Policy invalid: '${line}' in [${section}] is not a known limit; use timeout=, mem_mb=, nproc=, nofile=, fsize_mb= or cpu=. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+}
+
+# Reads one policy cfg. Each filesystem section's paths go into its own "<right>.paths" file,
+# the [connect] and [bind] rules into net.rules and bind.rules, all in a fresh directory, and
+# the [limits] section into the PARSED_* values. Sets PARSED_FS_DIR, PARSED_NET_FILE and
+# PARSED_BIND_FILE to what it wrote. Everything from a "#" is a comment. An unknown section, a
+# malformed line and any content before the first section are refused (PHB-EPOLICY). Assumes
+# it is called plainly, not in a subshell, so that a refusal ends the run.
 parse_cfg_policy() {
   local cfg="$1"
   local tdir
-  # Under phobos.sh's scratch directory when it set one, so this scratch is removed with
-  # the specification directory rather than left in /tmp; otherwise a plain temporary dir.
-  if [[ -n "${PHOBOS_SCRATCH:-}" ]]; then
-    tdir="$(mktemp -d -p "$PHOBOS_SCRATCH" phobos-cfg.XXXXXX)"
-  else
-    tdir="$(mktemp -d -t phobos-cfg.XXXXXX)"
-  fi
-  local rd="${tdir}/read.paths" ex="${tdir}/execute.paths" wr="${tdir}/write.paths" cr="${tdir}/create.paths" de="${tdir}/delete.paths" net="${tdir}/net.rules" bind="${tdir}/bind.rules"
-  : >"$rd"; : >"$ex"; : >"$wr"; : >"$cr"; : >"$de"; : >"$net"; : >"$bind"
+  local line
   local sec=""
-  # Reset per call, so a timeout or a resource limit is read from the cfg that sets it and
-  # not carried over from an earlier one; the caller merges each across cfgs by the same rule
-  # the setters use within a cfg (zero disables and wins, else the largest value).
-  PARSED_TIMEOUT=""; PARSED_TIMEOUT_DISABLED=0
-  PARSED_LIMIT_MEM_MB=""; PARSED_LIMIT_NPROC=""; PARSED_LIMIT_NOFILE=""
-  PARSED_LIMIT_FSIZE_MB=""; PARSED_LIMIT_CPU=""
-  PARSED_LIMIT_MEM_MB_DISABLED=0; PARSED_LIMIT_NPROC_DISABLED=0; PARSED_LIMIT_NOFILE_DISABLED=0
-  PARSED_LIMIT_FSIZE_MB_DISABLED=0; PARSED_LIMIT_CPU_DISABLED=0
+  tdir="$(new_parse_directory)"
+  local rd="${tdir}/read.paths"
+  local ex="${tdir}/execute.paths"
+  local wr="${tdir}/write.paths"
+  local cr="${tdir}/create.paths"
+  local de="${tdir}/delete.paths"
+  local net="${tdir}/net.rules"
+  local bind="${tdir}/bind.rules"
+  : >"$rd"; : >"$ex"; : >"$wr"; : >"$cr"; : >"$de"; : >"$net"; : >"$bind"
+  reset_parsed_limits
   while IFS= read -r line || [[ -n "$line" ]]; do
-    line="${line%%#*}"; line="$(echo "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+    line="${line%%#*}"
+    line="$(echo "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
     [[ -z "$line" ]] && continue
     if [[ "$line" =~ ^\[(.+)\]$ ]]; then
       sec="${BASH_REMATCH[1]}"
-      # Validate the section at its header, so an unknown section is refused whether or not it
-      # holds any line, rather than being silently ignored.
-      case "$sec" in
-        read|execute|write|create|delete|connect|bind|limits) ;;
-        *) report "Policy invalid: unknown section '[${sec}]' in ${cfg}. (PHB-EPOLICY)"; exit "${PHB_EPOLICY}" ;;
-      esac
+      refuse_unknown_section "$sec" "$cfg"
       continue
     fi
     case "$sec" in
@@ -278,61 +405,21 @@ parse_cfg_policy() {
       write)   printf '%s\n' "$line" >>"$wr" ;;
       create)  printf '%s\n' "$line" >>"$cr" ;;
       delete)  printf '%s\n' "$line" >>"$de" ;;
-      connect)
-        if [[ ! "$line" =~ ^allow[[:space:]]+(.+)$ ]]; then
-          report "Policy invalid: '${line}' in [connect] is not an 'allow <host>[:<port>]' line. (PHB-EPOLICY)"
-          exit "${PHB_EPOLICY}"
-        fi
-        local target="${BASH_REMATCH[1]}" host="" port="*"
-        parse_network_target "$target" host port
-        printf '%s %s\n' "$host" "$port" >>"$net" ;;
-      bind)
-        # [bind] names a local TCP listening endpoint, one 'allow <addr>:<port>' or
-        # 'allow <port>' per line. A bare port means any local address. The port is
-        # enforced by Landlock (--bind-tcp) and must be concrete, because Landlock's bind
-        # right is per-port and cannot express a wildcard; the local address is enforced by
-        # libnetblocker's bind hook as defence in depth. IPv6 is bracketed, [::1]:8080.
-        if [[ ! "$line" =~ ^allow[[:space:]]+(.+)$ ]]; then
-          report "Policy invalid: '${line}' in [bind] is not an 'allow <addr>:<port>' line. (PHB-EPOLICY)"
-          exit "${PHB_EPOLICY}"
-        fi
-        local bind_target="${BASH_REMATCH[1]}" bind_host="" bind_port=""
-        if [[ "$bind_target" =~ ^[0-9]+$ ]]; then
-          bind_host="*"; bind_port="$bind_target"
-        else
-          parse_network_target "$bind_target" bind_host bind_port
-        fi
-        if [[ "$bind_port" == "*" || -z "$bind_port" ]]; then
-          report "Policy invalid: '${bind_target}' in [bind] names no concrete port. Landlock enforces a bind by port, so name one. (PHB-EPOLICY)"
-          exit "${PHB_EPOLICY}"
-        fi
-        printf '%s %s\n' "$bind_host" "$bind_port" >>"$bind" ;;
-      limits)
-        # Only the six known keys are accepted; a bare value and an unknown key are refused
-        # rather than ignored, so a typo in a limit does not leave the run unrestricted.
-        if [[ "$line" =~ ^timeout[[:space:]]*=[[:space:]]*(.*)$ ]]; then
-          set_parsed_timeout "${BASH_REMATCH[1]}"
-        elif [[ "$line" =~ ^mem_mb[[:space:]]*=[[:space:]]*(.*)$ ]]; then
-          set_parsed_limit PARSED_LIMIT_MEM_MB mem_mb "${BASH_REMATCH[1]}"
-        elif [[ "$line" =~ ^nproc[[:space:]]*=[[:space:]]*(.*)$ ]]; then
-          set_parsed_limit PARSED_LIMIT_NPROC nproc "${BASH_REMATCH[1]}"
-        elif [[ "$line" =~ ^nofile[[:space:]]*=[[:space:]]*(.*)$ ]]; then
-          set_parsed_limit PARSED_LIMIT_NOFILE nofile "${BASH_REMATCH[1]}"
-        elif [[ "$line" =~ ^fsize_mb[[:space:]]*=[[:space:]]*(.*)$ ]]; then
-          set_parsed_limit PARSED_LIMIT_FSIZE_MB fsize_mb "${BASH_REMATCH[1]}"
-        elif [[ "$line" =~ ^cpu[[:space:]]*=[[:space:]]*(.*)$ ]]; then
-          set_parsed_limit PARSED_LIMIT_CPU cpu "${BASH_REMATCH[1]}"
-        else
-          report "Policy invalid: '${line}' in [${sec}] is not a known limit; use timeout=, mem_mb=, nproc=, nofile=, fsize_mb= or cpu=. (PHB-EPOLICY)"
-          exit "${PHB_EPOLICY}"
-        fi ;;
+      connect) append_connect_rule "$line" "$net" ;;
+      bind)    append_bind_rule "$line" "$bind" ;;
+      limits)  read_limits_line "$line" "$sec" ;;
       "")
         report "Policy invalid: '${line}' appears before any [section] in ${cfg}. (PHB-EPOLICY)"
         exit "${PHB_EPOLICY}" ;;
     esac
   done <"$cfg"
-  PARSED_FS_DIR="$tdir"; PARSED_NET_FILE="$net"; PARSED_BIND_FILE="$bind"; : "${PARSED_TIMEOUT:=}"
+  PARSED_FS_DIR="$tdir"
+  PARSED_NET_FILE="$net"
+  PARSED_BIND_FILE="$bind"
 }
+
+# Writes into the first file every distinct line of the remaining files, in the order first
+# seen, dropping comments and blank lines. Missing or empty files are skipped.
 net_union() {
   local out="$1"; shift
   : > "$out"
@@ -349,8 +436,16 @@ net_union() {
 }
 
 
+# Writes the run's specification into spec_dir: one "<right>.paths" file per filesystem right
+# from fs_dir, net.rules and bind.rules, timeout.sec, and tail.flags without comments or blank
+# lines. A part that is empty or absent still gets its file, empty, so every layer can read it.
 write_spec() {
-  local spec_dir="$1" fs_dir="$2" net="$3" timeout="$4" tail="$5" bind="$6"
+  local spec_dir="$1"
+  local fs_dir="$2"
+  local net="$3"
+  local timeout="$4"
+  local tail="$5"
+  local bind="$6"
   mkdir -p "$spec_dir"
 
   local right
@@ -368,8 +463,10 @@ write_spec() {
 # base cfgs, and phobos-policy.sh then folds each exercise cfg in the same way, so the policy
 # only ever widens from a deny-all baseline.
 fs_union_dir() {
-  local out_dir="$1" in_dir="$2"
-  local right tmp
+  local out_dir="$1"
+  local in_dir="$2"
+  local right
+  local tmp
   for right in ${PHB_FS_RIGHTS}; do
     tmp="$(mktemp)"
     [[ -s "${out_dir}/${right}.paths" ]] && cat "${out_dir}/${right}.paths" >> "$tmp"
@@ -659,7 +756,10 @@ is_loopback_host() {
 }
 
 # Reads a "host port" allow-list, writing the concrete ports it names into the
-# second file and the first rule that names none into the third.
+# second file and the first rule that names none into the third. An external host with no port
+# is refused, because it cannot be enforced: Landlock knows ports, not hosts, so leaving the
+# layer off for it would confine external egress to the preload library, which a submission can
+# step around. Loopback with no port is the one tolerated case.
 #
 # Both results go to files rather than to stdout, so that the function is called
 # plainly and never in a command substitution, whose subshell a refusal's exit would
@@ -680,9 +780,6 @@ collect_network_ports() {
   while read -r host port; do
     [[ -z "$host" ]] && continue
     if [[ "$port" == "*" || -z "$port" ]]; then
-      # An external host with no port cannot be enforced: Landlock knows ports, not hosts,
-      # so leaving the layer off for it would confine external egress to the preload library,
-      # which a submission can step around. Loopback with no port is the one tolerated case.
       if ! is_loopback_host "$host"; then
         report "Policy unenforceable: '${host}' names a host with no port. Landlock enforces TCP ports, not hosts, so an external host with no port cannot be enforced. Name a concrete port, and rely on a no-network container as the outer boundary. (PHB-EPOLICY)"
         exit "${PHB_EPOLICY}"
@@ -737,7 +834,9 @@ build_network_args() {
 
 # Fills the named array with the TCP bind-port rules Landlock enforces.
 #
-# The [bind] section names local TCP ports a submission may listen on. Landlock's bind right
+# The [bind] section names local TCP ports a submission may listen on. Each rule is "addr port";
+# Landlock enforces the port, so several rules that share a port (different local addresses)
+# collapse to one --bind-tcp, and the address is left to libnetblocker. Landlock's bind right
 # is per-port and knows no local address, so this emits one --bind-tcp per port. Which local
 # address a service may bind to is a separate, stacked change (the libnetblocker bind hook);
 # the parser already refuses a [bind] line that names more than a bare port, so every line
@@ -752,8 +851,6 @@ build_bind_args() {
   local emitted
   [[ -n "$rules" && -s "$rules" ]] || return 0
   ports_file="$(mktemp -t phobos-bindports.XXXXXX)"
-  # Each rule is "addr port"; Landlock enforces the port, so several rules that share a
-  # port (different local addresses) collapse to one --bind-tcp. The address is libnetblocker's.
   while read -r host port; do
     [[ -z "$host" ]] && continue
     refuse_unusable_port "$host" "$port"
@@ -860,7 +957,9 @@ refuse_unusable_netblocker() {
 # read rule on a file beneath a write path would still leave it writable, and a
 # submission could rewrite its network policy or replace the library that enforces
 # it before starting another process. Symbolic links are resolved on both sides,
-# because Landlock anchors a rule on the inode it opens.
+# because Landlock anchors a rule on the inode it opens. The bind rules are added with an
+# if rather than a "&&", so that an empty bind_rules leaves the function returning zero
+# rather than the 1 of a false test, which under the caller's set -e would end the run.
 append_netblocker_rules() {
   local -n netblocker_ref="$1"
   local write_file="$2"
@@ -884,8 +983,6 @@ append_netblocker_rules() {
     done < <(cat "$write_file" 2>/dev/null)
   done
   netblocker_ref+=( --rights=rx "$library" --rights=r "$rules" )
-  # An if, not a "&&", so an empty bind_rules leaves the function returning zero rather than
-  # the 1 of a false test, which under the caller's set -e would abort the run silently.
   if [[ -n "$bind_rules" ]]; then
     netblocker_ref+=( --rights=r "$bind_rules" )
   fi

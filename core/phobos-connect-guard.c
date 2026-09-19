@@ -81,6 +81,11 @@
 
 /* ------------------------------------------------------------------ the call */
 
+/* Loads the rules, forks the sandboxed child and supervises it until it is gone, then ends
+ * with its status. The supervisor ignores SIGTERM so that, as an outer timeout's direct child,
+ * it stays alive until the command it waits on is gone. The kill escalation then reaches the
+ * command, which was forked before and so keeps the default disposition; SIGTERM is ignored
+ * only after the fork for that reason. */
 int main(int argument_count, char *arguments[]) {
     struct guard_options options;
     parse_arguments(argument_count, arguments, &options);
@@ -108,10 +113,6 @@ int main(int argument_count, char *arguments[]) {
         run_child(pair[1], options.command);
     }
 
-    /* The supervisor ignores SIGTERM so that, as an outer timeout's direct child, it
-     * stays alive until the command it waits on is gone. The kill escalation then
-     * reaches the command, which was forked before this and so keeps the default
-     * disposition. SIGTERM is set here, after the fork, for that reason. */
     signal(SIGTERM, SIG_IGN);
 
     close(pair[1]);

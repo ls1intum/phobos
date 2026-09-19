@@ -58,6 +58,15 @@ bwrap_works() {
 # it would create is relative, so it lands wherever that shell happened to be.
 AWKWARD_NAME='awkward $(touch INJECTED) ;semicolon '"'"'single'"'"' "double"'
 
+# The sibling just outside the target that nothing in the run may reach: same prefix as the
+# target, one level up. A prune that matched the target's name rather than descending into
+# it would take this with it.
+build_prefix_sibling() {
+    local root="$1"
+    mkdir -p "${root}/target-secret/private"
+    printf 'not for the sandbox\n' >"${root}/target-secret/private/secret.txt"
+}
+
 # A tree to prune, an exercise whose build script needs one part of it, and a sibling
 # just outside the target that nothing in the run may reach.
 build_fixture() {
@@ -66,12 +75,9 @@ build_fixture() {
     mkdir -p "${root}/logs" "${root}/scratch" "${root}/out"
     mkdir -p "${root}/testing-dir/java/exercise1/assignment"
     mkdir -p "${root}/target/${AWKWARD_NAME}"
-    # Same prefix as the target, one level up. A prune that matched the target's name
-    # rather than descending into it would take this with it.
-    mkdir -p "${root}/target-secret/private"
+    build_prefix_sibling "${root}"
     printf 'the build reads this\n' >"${root}/target/needed/input.txt"
     printf 'nothing reads this\n' >"${root}/target/unneeded/spare.txt"
-    printf 'not for the sandbox\n' >"${root}/target-secret/private/secret.txt"
 
     write_build_script "${root}" ''
     cat >"${root}/helpers/emit_artifacts.py" <<'STUB'
@@ -96,7 +102,8 @@ STUB
 # The exercise's build script: reads the one directory it needs, plus whatever line a
 # particular check wants to put in front of that.
 write_build_script() {
-    local root="$1" extra="$2"
+    local root="$1"
+    local extra="$2"
     cat >"${root}/testing-dir/java/exercise1/build_script.sh" <<STUB
 #!/usr/bin/env bash
 set -eu
@@ -111,7 +118,8 @@ STUB
 # real one. Reading that file is how a check sees what reached the kernel, rather than
 # what a diagnostic said about it afterwards.
 install_bwrap_recorder() {
-    local root="$1" real
+    local root="$1"
+    local real
     real="$(command -v bwrap)"
     mkdir -p "${root}/bin"
     cat >"${root}/bin/bwrap" <<STUB
@@ -154,8 +162,35 @@ sys.exit(0 if os.environ["PHOBOS_WANTED"].encode() in fields else 1)
 '
 }
 
+# Whether the recorded artefact marks the read directory readable and the untouched one
+# not required. r means readable, n means the build never touched it. Both directions
+# matter: a pruner that keeps everything is useless, and one that drops what a build needs
+# produces a policy that denies a correct submission.
+check_the_artefact_marks_both_directions() {
+    local recorded="$1"
+    if grep -qE "^r .*/target/needed$" <<<"${recorded}"; then
+        ok "the directory the build reads is kept readable"
+    else
+        bad "the directory the build reads is kept readable" "r on target/needed" "${recorded}"
+    fi
+
+    if grep -qE "^n .*/target/unneeded$" <<<"${recorded}"; then
+        ok "the directory nothing reads is marked not required"
+    else
+        bad "the directory nothing reads is marked not required" "n on target/unneeded" "${recorded}"
+    fi
+}
+
+# There is deliberately no check for a file the payload would have created. The old code
+# would have evaluated it inside the per-exercise workroot, which the producer removes as
+# soon as the exercise is done, so such a marker is gone before anything could look for
+# it. The recorded vector is the evidence: a name that arrives as one argument was never
+# handed to a shell to interpret.
 check_a_fixture_tree_is_pruned() {
-    local root output status recorded
+    local root
+    local output
+    local status
+    local recorded
     root="$(mktemp -d)"
     build_fixture "${root}"
     install_bwrap_recorder "${root}"
@@ -178,12 +213,6 @@ check_a_fixture_tree_is_pruned() {
             "the name as one recorded argument" "it was split, or never reached bwrap"
     fi
 
-    # There is deliberately no check for a file the payload would have created. The old
-    # code would have evaluated it inside the per-exercise workroot, which the producer
-    # removes as soon as the exercise is done, so such a marker is gone before anything
-    # could look for it. The recorded vector above is the evidence: a name that arrives
-    # as one argument was never handed to a shell to interpret.
-
     recorded="$(cat "${root}/out/java_exercise1.paths" 2>/dev/null)"
     if [[ -n "${recorded}" ]]; then
         ok "the run produced an artefact"
@@ -191,20 +220,7 @@ check_a_fixture_tree_is_pruned() {
         bad "the run produced an artefact" "java_exercise1.paths with content" "missing or empty"
     fi
 
-    # r means readable, n means the build never touched it. Both directions matter: a
-    # pruner that keeps everything is useless, and one that drops what a build needs
-    # produces a policy that denies a correct submission.
-    if grep -qE "^r .*/target/needed$" <<<"${recorded}"; then
-        ok "the directory the build reads is kept readable"
-    else
-        bad "the directory the build reads is kept readable" "r on target/needed" "${recorded}"
-    fi
-
-    if grep -qE "^n .*/target/unneeded$" <<<"${recorded}"; then
-        ok "the directory nothing reads is marked not required"
-    else
-        bad "the directory nothing reads is marked not required" "n on target/unneeded" "${recorded}"
-    fi
+    check_the_artefact_marks_both_directions "${recorded}"
 
     if grep -qs "target-secret" "${root}/logs/argv" "${root}/out/java_exercise1.paths"; then
         bad "a sibling sharing the target's name is never reached" \
@@ -216,7 +232,8 @@ check_a_fixture_tree_is_pruned() {
 }
 
 check_the_target_must_be_named() {
-    local output status
+    local output
+    local status
     output="$("${PRUNER}" --script /bin/true --lang java 2>&1)"
     status="$?"
     if (( status != 0 )) && [[ "${output}" == *"--target is required"* ]]; then
@@ -227,7 +244,8 @@ check_the_target_must_be_named() {
 }
 
 check_a_missing_target_is_refused() {
-    local output status
+    local output
+    local status
     output="$("${PRUNER}" --script /bin/true --lang java --target /nonexistent-"$$" 2>&1)"
     status="$?"
     if (( status != 0 )) && [[ "${output}" == *"--target is not a path that exists"* ]]; then
@@ -238,7 +256,10 @@ check_a_missing_target_is_refused() {
 }
 
 check_the_host_tmp_is_not_in_the_sandbox() {
-    local root marker output status
+    local root
+    local marker
+    local output
+    local status
     root="$(mktemp -d)"
     marker="/tmp/phobos-host-tmp-$$"
     printf 'host\n' >"${marker}"
@@ -261,7 +282,9 @@ check_the_host_tmp_is_not_in_the_sandbox() {
 }
 
 check_the_environment_is_not_inherited() {
-    local root output status
+    local root
+    local output
+    local status
     root="$(mktemp -d)"
     build_fixture "${root}"
     install_bwrap_recorder "${root}"

@@ -681,51 +681,10 @@ static void test_policy(void) {
 /* How many messages the sendmmsg cases put in a batch. */
 static constexpr int BATCH_LENGTH = 2;
 
-static void test_hooks(void) {
-    int resolver_calls_before = 0;
-    struct sockaddr unix_destination;
-    printf("\nThe hooks\n");
-    check("no service is no port", service_port(nullptr) == 0);
-    check("a numeric service is its port", service_port("443") == 443);
-    check("a service name is no port", service_port("http") == 0);
-    check("a service above 65535 is no port", service_port("70000") == 0);
-
-    load_rules(POLICY_RULES);
-    real_getaddrinfo = nullptr;
-    resolver_calls_before = resolver_calls;
-    check("a lookup of a host no rule covers fails with EAI_FAIL",
-          lookup("blocked.test", nullptr) == EAI_FAIL && resolver_calls == resolver_calls_before);
-    check("the hook finds the resolver on first use", real_getaddrinfo == fake_getaddrinfo);
-    check("a lookup without a node goes to the resolver", lookup(nullptr, "80") == 0);
-    check("a permitted lookup the resolver fails keeps the resolver's answer",
-          lookup("unknown.example.test", nullptr) == EAI_NONAME);
-    check("a permitted lookup succeeds", lookup("service.test", "443") == 0);
-    check("its IPv6 address may then be reached on the port",
-          connection_outcome("2001:db8::10", 443) == CONNECTION_ALLOWED);
-    check("but not on another port", connection_outcome("2001:db8::10", 22) == CONNECTION_DENIED);
-    check("a lookup with an unprintable answer succeeds", lookup("mixed.test", nullptr) == 0);
-    check("its printable address may then be reached", connection_outcome("192.0.2.20", 9) == CONNECTION_ALLOWED);
-
-    reload_during_lookup = true;
-    check("a lookup whose rules are replaced while it resolves succeeds", lookup("service.test", "443") == 0);
-    check("but records nothing under rules that no longer exist",
-          connection_outcome("192.0.2.10", 443) == CONNECTION_DENIED);
-    load_rules(POLICY_RULES);
-
-    real_connect = nullptr;
-    check("a connection an address rule covers goes through", connection_outcome("192.0.2.1", 80) == CONNECTION_ALLOWED);
-    check("the hook finds connect on first use", real_connect == fake_connect);
-    check("a connection no rule covers is refused", connection_outcome("192.0.2.1", 81) == CONNECTION_DENIED);
-
-    memset(&unix_destination, 0, sizeof(unix_destination));
-    unix_destination.sa_family = AF_UNIX;
-    errno = 0;
-    check("a connection of another family is refused with EACCES",
-          connect(FAKE_SOCKET_DESCRIPTOR, &unix_destination, sizeof(sa_family_t)) == -1 && errno == EACCES);
-
-    /* The UDP hooks. sendto and sendmsg filter a datagram named for an unconnected
-     * socket, which connect never sees. They share destination_permitted with connect,
-     * so the family branches are exercised through them here. */
+/* The UDP hooks. sendto and sendmsg filter a datagram named for an unconnected
+ * socket, which connect never sees. They share destination_permitted with connect,
+ * so the family branches are exercised through them here. */
+static void test_datagram_hooks(const struct sockaddr *unix_destination) {
     int sendto_before = 0;
     int sendmsg_before = 0;
     struct msghdr connected_message;
@@ -740,7 +699,7 @@ static void test_hooks(void) {
           sendto(FAKE_SOCKET_DESCRIPTOR, "x", 1, 0, nullptr, 0) == 1 && sendto_calls == sendto_before + 1);
     sendto_before = sendto_calls;
     check("a datagram to a non-INET family is left to other layers and passes",
-          sendto(FAKE_SOCKET_DESCRIPTOR, "x", 1, 0, &unix_destination, sizeof(sa_family_t)) == 1
+          sendto(FAKE_SOCKET_DESCRIPTOR, "x", 1, 0, unix_destination, sizeof(sa_family_t)) == 1
               && sendto_calls == sendto_before + 1);
 
     real_sendmsg = nullptr;
@@ -752,9 +711,11 @@ static void test_hooks(void) {
     sendmsg_before = sendmsg_calls;
     check("a message with no destination is on a connected socket and passes",
           sendmsg(FAKE_SOCKET_DESCRIPTOR, &connected_message, 0) == 0 && sendmsg_calls == sendmsg_before + 1);
+}
 
-    /* sendmmsg carries a batch, each message with its own destination; it stops at the first
-     * one a rule does not cover. */
+/* sendmmsg carries a batch, each message with its own destination; it stops at the first
+ * one a rule does not cover. */
+static void test_batch_hook(void) {
     struct mmsghdr batch[BATCH_LENGTH];
     struct sockaddr_storage first;
     struct sockaddr_storage second;
@@ -802,6 +763,52 @@ static void test_hooks(void) {
           sendmmsg(FAKE_SOCKET_DESCRIPTOR, batch, 1, 0) == 1 && sendmmsg_calls == sendmmsg_before + 1);
 }
 
+static void test_hooks(void) {
+    int resolver_calls_before = 0;
+    struct sockaddr unix_destination;
+    printf("\nThe hooks\n");
+    check("no service is no port", service_port(nullptr) == 0);
+    check("a numeric service is its port", service_port("443") == 443);
+    check("a service name is no port", service_port("http") == 0);
+    check("a service above 65535 is no port", service_port("70000") == 0);
+
+    load_rules(POLICY_RULES);
+    real_getaddrinfo = nullptr;
+    resolver_calls_before = resolver_calls;
+    check("a lookup of a host no rule covers fails with EAI_FAIL",
+          lookup("blocked.test", nullptr) == EAI_FAIL && resolver_calls == resolver_calls_before);
+    check("the hook finds the resolver on first use", real_getaddrinfo == fake_getaddrinfo);
+    check("a lookup without a node goes to the resolver", lookup(nullptr, "80") == 0);
+    check("a permitted lookup the resolver fails keeps the resolver's answer",
+          lookup("unknown.example.test", nullptr) == EAI_NONAME);
+    check("a permitted lookup succeeds", lookup("service.test", "443") == 0);
+    check("its IPv6 address may then be reached on the port",
+          connection_outcome("2001:db8::10", 443) == CONNECTION_ALLOWED);
+    check("but not on another port", connection_outcome("2001:db8::10", 22) == CONNECTION_DENIED);
+    check("a lookup with an unprintable answer succeeds", lookup("mixed.test", nullptr) == 0);
+    check("its printable address may then be reached", connection_outcome("192.0.2.20", 9) == CONNECTION_ALLOWED);
+
+    reload_during_lookup = true;
+    check("a lookup whose rules are replaced while it resolves succeeds", lookup("service.test", "443") == 0);
+    check("but records nothing under rules that no longer exist",
+          connection_outcome("192.0.2.10", 443) == CONNECTION_DENIED);
+    load_rules(POLICY_RULES);
+
+    real_connect = nullptr;
+    check("a connection an address rule covers goes through", connection_outcome("192.0.2.1", 80) == CONNECTION_ALLOWED);
+    check("the hook finds connect on first use", real_connect == fake_connect);
+    check("a connection no rule covers is refused", connection_outcome("192.0.2.1", 81) == CONNECTION_DENIED);
+
+    memset(&unix_destination, 0, sizeof(unix_destination));
+    unix_destination.sa_family = AF_UNIX;
+    errno = 0;
+    check("a connection of another family is refused with EACCES",
+          connect(FAKE_SOCKET_DESCRIPTOR, &unix_destination, sizeof(sa_family_t)) == -1 && errno == EACCES);
+
+    test_datagram_hooks(&unix_destination);
+    test_batch_hook();
+}
+
 /* What a bind through the hook did. */
 enum bind_result { BIND_BOUND, BIND_DENIED, BIND_UNEXPECTED };
 
@@ -828,6 +835,15 @@ static enum bind_result bind_outcome(int socket_type, const char *address, uint1
     return result;
 }
 
+/* The bind hook.
+ *
+ * With no [bind] rule the hook passes every bind, matching Landlock leaving bind
+ * unrestricted when no bind port is named. With a bind rule, a TCP bind to an allowed
+ * local address passes, and to a disallowed address or port is refused. Only TCP is
+ * filtered, matching Landlock's TCP-only bind right: a datagram bind passes even where
+ * the address is not listed. A non-INET family is left to other layers. A descriptor
+ * whose type cannot be read passes, since the hook cannot tell it is TCP; a closed
+ * descriptor makes getsockopt fail. */
 static void test_bind(void) {
     struct sockaddr_storage local;
     struct sockaddr unix_local;
@@ -836,34 +852,25 @@ static void test_bind(void) {
     int calls_before;
     printf("\nThe bind hook\n");
 
-    /* With no [bind] rule the hook passes every bind, matching Landlock leaving bind
-     * unrestricted when no bind port is named. */
     policy_load(&bind_policy, nullptr);
     real_bind = nullptr;
     check("with no bind rule a bind passes", bind_outcome(SOCK_STREAM, "127.0.0.1", 8080) == BIND_BOUND);
     check("the hook finds bind on first use", real_bind == fake_bind);
 
-    /* With a bind rule, a TCP bind to an allowed local address passes, and to a disallowed
-     * address or port is refused. */
     load_bind_rules("127.0.0.1 8080\n");
     check("a TCP bind to an allowed local address passes", bind_outcome(SOCK_STREAM, "127.0.0.1", 8080) == BIND_BOUND);
     check("a TCP bind to a disallowed local address is refused", bind_outcome(SOCK_STREAM, "0.0.0.0", 8080) == BIND_DENIED);
     check("a TCP bind to a disallowed port is refused", bind_outcome(SOCK_STREAM, "127.0.0.1", 9090) == BIND_DENIED);
     check("an IPv6 TCP bind is filtered too", bind_outcome(SOCK_STREAM, "::1", 8080) == BIND_DENIED);
 
-    /* Only TCP is filtered, matching Landlock's TCP-only bind right: a datagram bind passes
-     * even where the address is not listed. */
     check("a UDP bind is not filtered and passes", bind_outcome(SOCK_DGRAM, "0.0.0.0", 8080) == BIND_BOUND);
 
-    /* A non-INET family is left to other layers. */
     memset(&unix_local, 0, sizeof(unix_local));
     unix_local.sa_family = AF_UNIX;
     calls_before = bind_calls;
     check("a bind of another family passes to other layers",
           bind(FAKE_SOCKET_DESCRIPTOR, &unix_local, sizeof(sa_family_t)) == 0 && bind_calls == calls_before + 1);
 
-    /* A descriptor whose type cannot be read passes, since the hook cannot tell it is TCP;
-     * a closed descriptor makes getsockopt fail. */
     closed_descriptor = socket(AF_INET, SOCK_STREAM, 0);
     close(closed_descriptor);
     length = fill_destination(&local, "0.0.0.0", 8080);

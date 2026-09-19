@@ -349,6 +349,12 @@ ssize_t __wrap_recvmsg(int fd, struct msghdr *message, int flags) {
     return 1;
 }
 
+/* Stands in for reading the command's memory. A result of 0 arranged by a case is a
+ * short read: fewer bytes than asked. Otherwise it fills the destination the guard is
+ * reading into with a socket address of the requested family, so the read looks like
+ * the command's real connect target. The real call reads the whole requested length
+ * from the command's memory; this reports that, so read_peer_address sees the full
+ * read it asked for. */
 ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned long liovcnt,
                                 const struct iovec *remote, unsigned long riovcnt,
                                 unsigned long flags) {
@@ -360,7 +366,7 @@ ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned l
         return -1;
     }
     if (bx->process_vm_readv_result == 0) {
-        return 0; /* a short read: fewer bytes than asked */
+        return 0;
     }
     if (bx->mmsg_mode && local->iov_len == sizeof(struct mmsghdr)) {
         struct mmsghdr batch_entry;
@@ -375,8 +381,6 @@ ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned l
     if (bx->mmsg_mode && bx->mmsg_addr_short) {
         return 0;
     }
-    /* Fill the destination the guard is reading into with a socket address of the
-     * requested family, so the read looks like the command's real connect target. */
     struct sockaddr_storage storage;
     memset(&storage, 0, sizeof(storage));
     socklen_t length;
@@ -406,8 +410,6 @@ ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned l
     memcpy(local->iov_base, &storage, copy);
     (void)liovcnt;
     (void)remote;
-    /* The real call reads the whole requested length from the command's memory; report
-     * that, so read_peer_address sees the full read it asked for. */
     return (ssize_t)local->iov_len;
 }
 
@@ -464,32 +466,31 @@ int __wrap_connect(int fd, const struct sockaddr *address, socklen_t length) {
     return -1;
 }
 
-int __wrap_poll(struct pollfd *fds, nfds_t count, int timeout) {
-    (void)timeout;
-    (void)count;
-    if (fds[0].events & POLLIN) {
-        /* The supervise loop waits for POLLIN: hand out a readable turn for each
-         * arranged service, an EINTR to exercise the retry, or a poll error, then a
-         * hangup that ends the loop. */
-        if (bx->supervise_poll_eintr_once) {
-            bx->supervise_poll_eintr_once = 0;
-            errno = EINTR;
-            return -1;
-        }
-        if (bx->supervise_services > 0) {
-            bx->supervise_services--;
-            fds[0].revents = POLLIN;
-            return 1;
-        }
-        if (bx->supervise_poll_error) {
-            bx->supervise_poll_error = 0;
-            errno = EBADF;
-            return -1;
-        }
-        fds[0].revents = POLLHUP;
+/* The supervise loop waits for POLLIN: hand out a readable turn for each arranged
+ * service, an EINTR to exercise the retry, or a poll error, then a hangup that ends
+ * the loop. */
+static int supervise_loop_poll(struct pollfd *fds) {
+    if (bx->supervise_poll_eintr_once) {
+        bx->supervise_poll_eintr_once = 0;
+        errno = EINTR;
+        return -1;
+    }
+    if (bx->supervise_services > 0) {
+        bx->supervise_services--;
+        fds[0].revents = POLLIN;
         return 1;
     }
-    /* connect_within_deadline waits for POLLOUT. */
+    if (bx->supervise_poll_error) {
+        bx->supervise_poll_error = 0;
+        errno = EBADF;
+        return -1;
+    }
+    fds[0].revents = POLLHUP;
+    return 1;
+}
+
+/* connect_within_deadline waits for POLLOUT. */
+static int connect_deadline_poll(struct pollfd *fds) {
     if (bx->poll_eintr_once) {
         bx->poll_eintr_once = 0;
         errno = EINTR;
@@ -503,6 +504,15 @@ int __wrap_poll(struct pollfd *fds, nfds_t count, int timeout) {
     }
     fds[0].revents = bx->poll_revents;
     return bx->poll_result;
+}
+
+int __wrap_poll(struct pollfd *fds, nfds_t count, int timeout) {
+    (void)timeout;
+    (void)count;
+    if (fds[0].events & POLLIN) {
+        return supervise_loop_poll(fds);
+    }
+    return connect_deadline_poll(fds);
 }
 
 int __wrap_getsockopt(int fd, int level, int name, void *value, socklen_t *length) {
@@ -519,6 +529,8 @@ int __wrap_getsockopt(int fd, int level, int name, void *value, socklen_t *lengt
     return 0;
 }
 
+/* Stands in for the seccomp notification ioctls. For a connect notification the address
+ * argument is FAKE_ADDRESS_POINTER, which is never dereferenced here. */
 int __wrap_ioctl(int fd, unsigned long request, ...) {
     (void)fd;
     va_list arguments;
@@ -550,7 +562,7 @@ int __wrap_ioctl(int fd, unsigned long request, ...) {
             req->data.args[3] = bx->notif_send_flags;
         } else {
             req->data.args[0] = bx->notif_recv_target_fd;
-            req->data.args[1] = FAKE_ADDRESS_POINTER; /* never dereferenced here */
+            req->data.args[1] = FAKE_ADDRESS_POINTER;
             req->data.args[2] = address_length;
         }
         return 0;
@@ -835,12 +847,14 @@ static void test_exit_code_mapping(void) {
     check("an unusual status maps to the setup error", exit_code_from_status(WAIT_STATUS_STOPPED) == EXIT_SETUP_ERROR);
 }
 
+/* Logs once quiet, which returns without writing, and once verbose, which writes and so
+ * exercises the va_list block. */
 static void test_verbose_logging(void) {
     reset_behaviour();
     set_verbose(false);
-    log_verbose("quiet %d", 1); /* returns without writing */
+    log_verbose("quiet %d", 1);
     set_verbose(true);
-    log_verbose("loud %d", 2); /* writes, exercising the va_list block */
+    log_verbose("loud %d", 2);
     set_verbose(false);
     check("verbose logging runs both ways", true);
 }
@@ -1284,6 +1298,10 @@ static void test_socket_tracking(void) {
               && lookup_socket_type(SOCKET_TYPE_TABLE_SIZE + 2) == FD_TYPE_UNKNOWN);
 }
 
+/* Every way a connect made on the command's behalf can end. A poll result of 0 is a
+ * timeout, and one of -1 is a poll error that is not EINTR. FAKE_FAILS_TARGET_GONE
+ * stands for ENOENT: on addfd the command is gone, not our failure, and on send it is
+ * ignored. Any other send error is logged under verbose. */
 static void test_connect_on_behalf_paths(void) {
     struct sockaddr_in address;
     memset(&address, 0, sizeof(address));
@@ -1314,14 +1332,14 @@ static void test_connect_on_behalf_paths(void) {
     reset_behaviour();
     bx->connect_result = -1;
     bx->connect_errno = EINPROGRESS;
-    bx->poll_result = 0; /* timeout */
+    bx->poll_result = 0;
     connect_on_behalf(FAKE_NOTIFY_DESCRIPTOR, &response, 1, FAKE_TARGET_DESCRIPTOR, AF_INET, (struct sockaddr *)&address, sizeof(address));
     check("a connection that times out is reported", bx->last_answer_error == -ETIMEDOUT);
 
     reset_behaviour();
     bx->connect_result = -1;
     bx->connect_errno = EINPROGRESS;
-    bx->poll_result = -1; /* a poll error that is not EINTR */
+    bx->poll_result = -1;
     connect_on_behalf(FAKE_NOTIFY_DESCRIPTOR, &response, 1, FAKE_TARGET_DESCRIPTOR, AF_INET, (struct sockaddr *)&address, sizeof(address));
     check("a poll error while connecting is reported", bx->last_answer_error == -ECONNREFUSED);
 
@@ -1358,18 +1376,18 @@ static void test_connect_on_behalf_paths(void) {
     check("an addfd failure is reported", bx->last_answer_error == -EINVAL);
 
     reset_behaviour();
-    bx->notif_addfd_result = FAKE_FAILS_TARGET_GONE; /* ENOENT: the command is gone, not our failure */
+    bx->notif_addfd_result = FAKE_FAILS_TARGET_GONE;
     connect_on_behalf(FAKE_NOTIFY_DESCRIPTOR, &response, 1, FAKE_TARGET_DESCRIPTOR, AF_INET, (struct sockaddr *)&address, sizeof(address));
     check("an addfd on a vanished command is not answered", bx->answers == 0);
 
     reset_behaviour();
-    bx->notif_send_result = FAKE_FAILS_TARGET_GONE; /* ENOENT on send: ignored */
+    bx->notif_send_result = FAKE_FAILS_TARGET_GONE;
     answer(FAKE_NOTIFY_DESCRIPTOR, &response, 1, 0, -EACCES);
     check("a send to a vanished command is not an error", bx->answers == 1);
 
     reset_behaviour();
     set_verbose(true);
-    bx->notif_send_result = -1; /* other error: logged under verbose */
+    bx->notif_send_result = -1;
     answer(FAKE_NOTIFY_DESCRIPTOR, &response, 1, 0, -EACCES);
     set_verbose(false);
     check("a send error is logged", bx->answers == 1);
@@ -1406,9 +1424,11 @@ static void test_receive_descriptor(void) {
     check("a message of the wrong control length is refused", receive_descriptor(FAKE_HANDOFF_SOCKET_DESCRIPTOR) == -1);
 }
 
+/* The supervise loop. A failing size query falls back to the compiled sizes, and the
+ * case with small sizes has the kernel report sizes smaller than this build's structs. */
 static void test_supervise_loop(void) {
     reset_behaviour();
-    bx->notif_sizes_result = -1; /* falls back to the compiled sizes */
+    bx->notif_sizes_result = -1;
     bx->supervise_services = 1;
     bx->notif_recv_family = AF_INET;
     bx->notif_recv_port = 443;
@@ -1427,7 +1447,7 @@ static void test_supervise_loop(void) {
     check("the supervise loop retries on EINTR then ends on hangup", bx->answers == 0);
 
     reset_behaviour();
-    bx->notif_sizes_small = 1; /* the kernel reports sizes smaller than this build's structs */
+    bx->notif_sizes_small = 1;
     bx->supervise_services = 1;
     bx->notif_recv_family = AF_INET;
     bx->notif_recv_port = 443;
@@ -1458,6 +1478,7 @@ static void test_argument_errors(void) {
     check("an unreadable rules file refuses the run", run_main(unreadable) == EXIT_SETUP_ERROR);
 }
 
+/* Setup failures before the command runs. A fork result of 0 takes the child path. */
 static void test_child_setup_failures(void) {
     char *argv[] = { "guard", "--", "cmd", NULL };
 
@@ -1475,7 +1496,7 @@ static void test_child_setup_failures(void) {
     check("a fork failure refuses the run", run_main(argv) == EXIT_SETUP_ERROR);
 
     reset_behaviour();
-    bx->fork_result = 0; /* the child path */
+    bx->fork_result = 0;
     bx->prctl_result = -1;
     check("a no_new_privs failure fails the child closed", run_main(argv) == EXIT_SETUP_ERROR);
 
@@ -1498,20 +1519,24 @@ static void test_child_setup_failures(void) {
     check("the child that hands over and cannot exec exits 127", run_main(argv) == EXIT_COMMAND_NOT_EXECUTABLE);
 }
 
+/* The parent path, taken with a fork result of FAKE_CHILD_PID. When the parent is never
+ * handed the descriptor, the reap on the refusal path retries once; in the next case
+ * the child died with a code of its own. On the normal path the recv retries, then the
+ * first poll hangs up, and the reap retries once. */
 static void test_parent_paths(void) {
     char *argv[] = { "guard", "--", "cmd", NULL };
 
     reset_behaviour();
-    bx->fork_result = FAKE_CHILD_PID; /* the parent path */
+    bx->fork_result = FAKE_CHILD_PID;
     bx->recvmsg_result = -1;
-    bx->waitpid_eintr_once = 1; /* the reap on the refusal path retries once */
+    bx->waitpid_eintr_once = 1;
     check("a parent that is never handed the descriptor refuses the run",
           run_main(argv) == EXIT_SETUP_ERROR);
 
     reset_behaviour();
     bx->fork_result = FAKE_CHILD_PID;
     bx->recvmsg_result = -1;
-    bx->recorded_child_status = (3 << WAIT_STATUS_EXIT_CODE_SHIFT); /* the child died with a code of its own */
+    bx->recorded_child_status = (3 << WAIT_STATUS_EXIT_CODE_SHIFT);
     check("a refusal keeps the child's own non-zero exit code", run_main(argv) == 3);
 
     reset_behaviour();
@@ -1522,16 +1547,16 @@ static void test_parent_paths(void) {
 
     reset_behaviour();
     bx->fork_result = FAKE_CHILD_PID;
-    bx->recvmsg_eintr_once = 1; /* the recv retries, then the first poll hangs up */
-    bx->waitpid_eintr_once = 1; /* the reap on the normal path retries once */
+    bx->recvmsg_eintr_once = 1;
+    bx->waitpid_eintr_once = 1;
     check("a parent supervises and then reaps the child, mapping its status",
           run_main(argv) == 0);
 }
 
+/* Runs every case. stdout is line-buffered so a forked test-child never inherits a
+ * partial buffer and re-emits it on exit, which would otherwise print every line several
+ * times when stdout is a pipe rather than a terminal, as it is under CI. */
 int main(void) {
-    /* Line-buffer stdout so a forked test-child never inherits a partial buffer and
-     * re-emits it on exit, which would otherwise print every line several times when
-     * stdout is a pipe rather than a terminal, as it is under CI. */
     setvbuf(stdout, NULL, _IOLBF, 0);
     bx = mmap(NULL, sizeof(*bx), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (bx == MAP_FAILED) {

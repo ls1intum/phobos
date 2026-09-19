@@ -97,7 +97,9 @@ run_scenario() {
 }
 
 field() {
-  local out=$1 key=$2 value
+  local out=$1
+  local key=$2
+  local value
   value="$(sed -n "s/^${key}=//p" <<<"$out")"
   if [[ -z "$value" ]]; then value="<missing>
 ${out}"; fi
