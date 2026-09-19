@@ -30,7 +30,7 @@ core/                      the sandbox itself
   phobos.sh                entry point: parses the configuration, applies the layers
   phobos-filesystem.sh     the filesystem layer, reads the path sets and applies Landlock
   phobos-network.sh        the network layer, runs the connect guard and drives the preload library
-  phobos-resources.sh      the resource layer, sets the rlimits the policy names
+  phobos-resources.sh      the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
   phobos-timeout.sh        the timeout layer
   phobos-common.sh         shared helpers, sourced by the others
   phobos-landlock*.c/.h    the C program that applies the Landlock policy, then exec's the command
@@ -110,7 +110,7 @@ than ignored, so a typo cannot silently drop a restriction.
 - `[delete]`: one path per line, granted the deletion of files and directories.
 - `[connect]`: `allow <host>[:<port>]` lines, the outbound TCP destinations a submission may reach. A loopback host may omit the port; an external host should name a concrete port so that Landlock can enforce it. An IPv6 address has colons of its own, so a port is written in brackets, `allow [::1]:443`, and a bare `allow ::1` is the host with no port.
 - `[bind]`: `allow <addr>:<port>` or `allow <port>` lines, the local TCP endpoints a submission may listen on. The port is enforced by Landlock (`--bind-tcp`) and must be concrete; the local address is enforced by the libnetblocker bind hook as defence in depth, so a service can be pinned to loopback rather than every interface. A bare port means any local address. An IPv6 address is bracketed, `allow [::1]:8080`.
-- `[limits]`: `timeout=<seconds>`, the wall-clock bound on the run, and optionally `mem_mb`, `nproc`, `nofile`, `fsize_mb` and `cpu`, applied as rlimits to bound the memory, processes, open files, file size and CPU time the run may use. A value written as `0` switches that limit off. Each key must be named; a bare value is refused.
+- `[limits]`: `timeout=<seconds>`, the wall-clock bound on the run, and optionally `mem_mb`, `nproc`, `nofile`, `fsize_mb` and `cpu`, applied as rlimits to bound the memory, processes, open files, file size and CPU time the run may use. They are set as the last step before Landlock, so they bind the command and everything it starts, and none of the helpers Phobos runs beside it: the command's output is never cut short because a helper met the command's limit. A value written as `0` switches that limit off. Each key must be named; a bare value is refused.
 
 Every text file is stored with LF line endings: the path sets are read line by line, and a carriage return would become part of a bind path. `.gitattributes` enforces this.
 

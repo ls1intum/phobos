@@ -163,6 +163,51 @@ else
   bad "--no-resources-restriction skips the resource layer end to end" "a memory limit other than 262144" "$e2e_off"
 fi
 
+e2e_nfr="$(bash "$CORE_X/phobos.sh" --spec-parent "$parent" --no-networksystem-restriction \
+  --no-filesystem-restriction -- bash -c 'ulimit -v; ulimit -n' 2>/dev/null | paste -sd, -)"
+check "with the filesystem restriction off the limits still reach the command" "262144,256" "$e2e_nfr"
+
+echo
+echo "== the limits bind the command and none of the helpers around it =="
+# A policy with a one-megabyte file-size limit and a small memory limit. The command's output
+# passes through the filesystem layer's helpers; were they bound by the command's limits, the
+# stderr pass-through would die at the first megabyte and take the command with it (SIGPIPE,
+# exit 141). Both streams go to pipes, so only a helper's own writes could meet the limit.
+FSIZE_MB=1
+OUTPUT_BYTES=3000000
+FSIZE_BLOCKS=1024
+SIGPIPE_EXIT=141
+LONG_LINE_BYTES=400000000
+CORE_F="$WORK/core-f"
+cp -R "$CORE" "$CORE_F"
+chmod +x "$CORE_F"/*.sh
+printf '[read]\n/usr\n[limits]\nfsize_mb=%s\nmem_mb=256\n' "$FSIZE_MB" > "$CORE_F/BaseTest.cfg"
+{
+  bash "$CORE_F/phobos.sh" --spec-parent "$parent" --landlock-bin "$WORK/passthrough-landlock" \
+    --no-networksystem-restriction --no-runtime-restriction -- \
+    bash -c "head -c ${OUTPUT_BYTES} /dev/zero; head -c ${OUTPUT_BYTES} /dev/zero >&2" \
+    2>&1 1>&3 3>&- | tr -cd '\0' | wc -c > "$WORK/stderr-bytes"
+  printf '%s' "${PIPESTATUS[0]}" > "$WORK/fsize-rc"
+} 3>&1 | tr -cd '\0' | wc -c > "$WORK/stdout-bytes"
+fsize_rc="$(cat "$WORK/fsize-rc")"
+check "output beyond fsize_mb on stdout arrives whole" "$OUTPUT_BYTES" "$(tr -d ' ' < "$WORK/stdout-bytes")"
+check "output beyond fsize_mb on stderr arrives whole" "$OUTPUT_BYTES" "$(tr -d ' ' < "$WORK/stderr-bytes")"
+check "a run with output beyond fsize_mb exits normally" "0" "$fsize_rc"
+
+command_fsize="$(bash "$CORE_F/phobos.sh" --spec-parent "$parent" --landlock-bin "$WORK/passthrough-landlock" \
+  --no-networksystem-restriction --no-runtime-restriction -- bash -c 'ulimit -f' 2>/dev/null)"
+check "the command itself still runs under the file-size limit" "$FSIZE_BLOCKS" "$command_fsize"
+
+bash "$CORE_F/phobos.sh" --spec-parent "$parent" --landlock-bin "$WORK/passthrough-landlock" \
+  --no-networksystem-restriction --no-runtime-restriction -- \
+  bash -c "head -c ${LONG_LINE_BYTES} /dev/zero | tr '\\0' q >&2" > /dev/null 2> >(cat > /dev/null)
+long_line_rc=$?
+if [[ "$long_line_rc" -ne "$SIGPIPE_EXIT" && "$long_line_rc" -eq 0 ]]; then
+  ok "a single endless stderr line under a memory limit does not end the run with SIGPIPE"
+else
+  bad "a single endless stderr line under a memory limit does not end the run with SIGPIPE" "exit 0" "exit ${long_line_rc}"
+fi
+
 echo
 printf '%d passed, %d failed\n' "$passed" "$failed"
 (( failed == 0 ))

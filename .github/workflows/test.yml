@@ -81,6 +81,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/resource_limits.sh
 
+      # The filesystem layer's denial report, both directions, and that neither the report nor
+      # the helpers behind it ever cost the command its output or its exit status.
+      - name: The denial report
+        if: ${{ !cancelled() }}
+        run: bash tests/denial_report.sh
+
       - name: The timeout and resource-limit merge
         if: ${{ !cancelled() }}
         run: bash tests/limit_merge.sh

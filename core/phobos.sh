@@ -183,13 +183,15 @@ for c in "${cfgs[@]}"; do policy_flags+=( --config "$c" ); done
 # than entered and skipped, so no PHB_ENABLE_* has to travel with the run. Each wrapper does
 # its work and hands on the rest of the chain; the timeout layer, when a timeout is set, runs
 # the rest under GNU timeout and waits on it, and the filesystem layer is always last and runs
-# the command, applying Landlock unless --no-landlock tells it not to.
+# the command, applying Landlock unless --no-landlock tells it not to. The resource layer is
+# not a link of this chain: the filesystem layer starts it as the last step before
+# phobos-landlock, so the command's limits bind the command and none of the helpers around it.
 dbg=(); (( enable_debug )) && dbg=(--debug)
 chain=()
 if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeout.sh"   "${dbg[@]}" --timeout-bin "$timeout_bin" "$SPEC_DIR" -- ); fi
 if (( enable_network ));   then chain+=( "${HERE}/phobos-network.sh"   "${dbg[@]}" --netblocker-so "$netblocker_so" --connect-guard-bin "$connect_guard_bin" "$SPEC_DIR" -- ); fi
-if (( enable_resources )); then chain+=( "${HERE}/phobos-resources.sh" "${dbg[@]}" "$SPEC_DIR" -- ); fi
 fs_flags=( "${dbg[@]}" --landlock-bin "$landlock_bin" )
+if (( enable_resources )); then fs_flags+=( --resources-layer "${HERE}/phobos-resources.sh" ); fi
 if (( ! enable_filesystem )); then fs_flags+=( --no-landlock ); fi
 # The network restriction spans two layers: the preload filter in phobos-network.sh, left
 # out of the chain above, and the kernel-enforced Landlock TCP-port rules built in the

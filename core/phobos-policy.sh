@@ -145,9 +145,9 @@ eff_limit_cpu="$(effective_limit cpu)"
 write_spec "$SPEC_DIR" "$eff_dir" "$eff_net" "$timeout_eff" "$tail_flags_file" "$eff_bind"
 
 # The resource limits go into the specification, one "key=value" per line for each limit a
-# [limits] section named. phobos-resources.sh reads them and sets them with rlimits, so the
-# filesystem layer, phobos-landlock and the command inherit them, rather than this shell
-# setting them and the whole layer chain running under them.
+# [limits] section named. phobos-resources.sh reads them and sets them with rlimits right
+# before phobos-landlock, so phobos-landlock and the command inherit them, rather than this
+# shell setting them and the whole layer chain, with its helpers, running under them.
 {
   [[ -n "$eff_limit_mem_mb"   ]] && printf 'mem_mb=%s\n'   "$eff_limit_mem_mb"
   [[ -n "$eff_limit_nproc"    ]] && printf 'nproc=%s\n'    "$eff_limit_nproc"

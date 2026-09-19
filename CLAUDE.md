@@ -125,7 +125,7 @@ core/                      the sandbox itself
   phobos-filesystem.sh     the filesystem layer, reads the path sets and applies Landlock
   phobos-landlock*.c/.h    the C program that applies the Landlock policy, then exec's
   phobos-network.sh        the network layer, drives the preload library
-  phobos-resources.sh      the resource layer, sets the rlimits the policy names
+  phobos-resources.sh      the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
   phobos-timeout.sh        the timeout layer
   phobos-common.sh         shared helpers, sourced by the others
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy

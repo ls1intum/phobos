@@ -11,6 +11,19 @@ PHB_ETIMEOUT=14
 PHB_ERUNTIME=15
 # The filesystem sections, each granting exactly its own phobos-landlock right.
 PHB_FS_RIGHTS="read execute write create delete"
+# How long the filesystem layer waits, after the command has ended, for the denial counts. A
+# process the command left behind can keep its stderr, and so the counter, alive; the layer
+# then reports no counts rather than wait for it. Kept below the timeout layer's --kill-after,
+# so GNU timeout never escalates to SIGKILL while the layer is still waiting here.
+PHB_DENIAL_COUNT_GRACE_SECONDS=2
+# The counter's own limits. It runs outside the command's rlimits, so without these a single
+# endless stderr line could grow it without bound. A counter that hits them dies, and the run
+# then reports no counts; the command's output is never affected.
+PHB_DENIAL_COUNTER_MEMORY_KB=65536
+PHB_DENIAL_COUNTER_CPU_SECONDS=60
+# What the denial report counts in the command's stderr, one extended regular expression each.
+PHB_NETWORK_DENIAL_PATTERN='EAI_AGAIN|EAI_FAIL|EAI_NONAME|Network is unreachable|Connection timed out'
+PHB_FILESYSTEM_DENIAL_PATTERN='Permission denied|EACCES|EROFS'
 _log()   { printf '%s\n' "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*" >&2; }
 die()    { _log "$1"; exit "${2:-1}"; }
 report() { printf '%s\n' "$1"; }
@@ -127,6 +140,46 @@ apply_resource_limits() {
   if [[ -n "$cpu" ]] && (( 10#$cpu != 0 )); then
     ulimit -t "$(( 10#$cpu ))" || die "cannot set the CPU-time limit of ${cpu} s" "${PHB_ERUNTIME}"
   fi
+}
+
+# Reads the "key=value" lines of a specification's limits.conf into the named associative
+# array, one entry per known key, empty for a key the file does not set. Every value that is
+# set must be a whole number; anything else ends the run with PHB-EPOLICY rather than being
+# dropped, so a malformed value fails closed and no unchecked text reaches the arithmetic in
+# apply_resource_limits. Assumes it is called plainly, not in a command substitution, so that
+# the refusal ends the run. An absent file sets no limit.
+read_limits_conf() {
+  local file="$1"
+  local -n limits_ref="$2"
+  local key
+  local value
+  limits_ref=( [mem_mb]="" [nproc]="" [nofile]="" [fsize_mb]="" [cpu]="" )
+  [[ -f "$file" ]] || return 0
+  while IFS='=' read -r key value || [[ -n "$key" ]]; do
+    [[ -v "limits_ref[$key]" ]] || continue
+    limits_ref[$key]="$value"
+  done < "$file"
+  for key in mem_mb nproc nofile fsize_mb cpu; do
+    value="${limits_ref[$key]}"
+    if [[ -n "$value" && ! "$value" =~ ^[0-9]+$ ]]; then
+      report "Policy invalid: resource limit '${key}=${value}' is not a whole number. (PHB-EPOLICY)"
+      exit "${PHB_EPOLICY}"
+    fi
+  done
+}
+
+# Reads a command's stderr on standard input and prints one line, "<network> <filesystem>",
+# the number of lines matching each denial pattern, counted as grep -c would, a last line
+# without a newline included. Assumes it runs in a process of its own, a process substitution,
+# since it sets that process's rlimits to the counter's own bounds and then becomes awk. The
+# counter's own errors, its out-of-memory message when one endless line exceeds its bound
+# among them, go nowhere: they are not the command's output, and a counter that fails only
+# means the run reports no counts.
+count_denials() {
+  ulimit -v "$PHB_DENIAL_COUNTER_MEMORY_KB"
+  ulimit -t "$PHB_DENIAL_COUNTER_CPU_SECONDS"
+  LC_ALL=C exec awk -v network="$PHB_NETWORK_DENIAL_PATTERN" -v filesystem="$PHB_FILESYSTEM_DENIAL_PATTERN" \
+    '$0 ~ network { n++ } $0 ~ filesystem { f++ } END { printf "%d %d\n", n, f }' 2>/dev/null
 }
 # Splits one [connect] target into a host and a port, writing them through the two named
 # variables. IPv4 and a host name take an optional single-colon ":port". An IPv6 address has
