@@ -14,13 +14,6 @@ services:
         source: ./var/tmp
         target: /var/tmp
     command: ["--verbose", "--cache-dir", "/home/sandboxuser/.gradle", "java" ]
-  prune_c:
-    build: docker/prune_phase/c
-    volumes:
-      - type: bind
-        source: ./var/tmp
-        target: /var/tmp
-    command: ["c"]
 
   orchestrate:
     build: docker/prune_phase/orchestrate
@@ -32,8 +25,6 @@ services:
       prune_python:
         condition: service_completed_successfully
       prune_java:
-        condition: service_completed_successfully
-      prune_c:
         condition: service_completed_successfully
     command:
       [

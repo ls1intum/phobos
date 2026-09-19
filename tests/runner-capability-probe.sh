@@ -301,9 +301,15 @@ announce() {
     exit "$1"
 }
 
+# The lines of this file's header comment that are its usage text, and the status a call made
+# the wrong way ends with.
+USAGE_FIRST_LINE=2
+USAGE_LAST_LINE=21
+EXIT_USAGE=2
+
 usage() {
-    sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
-    exit 2
+    sed -n "${USAGE_FIRST_LINE},${USAGE_LAST_LINE}p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    exit "${EXIT_USAGE}"
 }
 
 case "${1:-}" in

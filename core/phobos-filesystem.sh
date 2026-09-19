@@ -5,14 +5,13 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=phobos-common.sh
 source "${HERE}/phobos-common.sh"
 
-DEBUG=0
 NO_LANDLOCK=0
 NO_NETWORK_PORTS=0
 LANDLOCK_BIN_OPT=""
 RESOURCES_LAYER_OPT=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
-    --debug) DEBUG=1; shift ;;
+    --debug) enable_debug_log; shift ;;
     --no-landlock) NO_LANDLOCK=1; shift ;;
     --no-network-ports) NO_NETWORK_PORTS=1; shift ;;
     --landlock-bin) shift; LANDLOCK_BIN_OPT="${1:-}"; shift ;;
@@ -20,7 +19,7 @@ while [[ "${1:-}" == --* ]]; do
     *) break ;;
   esac
 done
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-filesystem.sh [--debug] [--no-landlock] [--no-network-ports] [--landlock-bin <path>] [--resources-layer <path>] <SPEC_DIR> -- <cmd...>"; exit 2; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-filesystem.sh [--debug] [--no-landlock] [--no-network-ports] [--landlock-bin <path>] [--resources-layer <path>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
 SPEC_DIR="$1"; shift 2
 CMD=("$@")
 
@@ -36,7 +35,12 @@ trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 # just before it runs, so the graceful SIGTERM still reaches the command itself.
 trap '' TERM
 
-READ="${SPEC_DIR}/read.paths"; EXECUTE="${SPEC_DIR}/execute.paths"; WRITE="${SPEC_DIR}/write.paths"; CREATE="${SPEC_DIR}/create.paths"; DELETE="${SPEC_DIR}/delete.paths"; TAIL="${SPEC_DIR}/tail.flags"
+READ="${SPEC_DIR}/read.paths"
+EXECUTE="${SPEC_DIR}/execute.paths"
+WRITE="${SPEC_DIR}/write.paths"
+CREATE="${SPEC_DIR}/create.paths"
+DELETE="${SPEC_DIR}/delete.paths"
+TAIL="${SPEC_DIR}/tail.flags"
 LANDLOCK="${LANDLOCK_BIN_OPT:-${HERE}/phobos-landlock}"
 
 # With --resources-layer the command's resource limits are set by that layer, started as the
@@ -54,7 +58,7 @@ if [[ -n "$RESOURCES_LAYER_OPT" ]]; then
   declare -A validated_limits
   read_limits_conf "${SPEC_DIR}/limits.conf" validated_limits
   limit_prefix=( "$RESOURCES_LAYER_OPT" )
-  if (( DEBUG )); then limit_prefix+=( --debug ); fi
+  if (( PHB_DEBUG_ENABLED )); then limit_prefix+=( --debug ); fi
   limit_prefix+=( "$SPEC_DIR" -- )
 fi
 
@@ -63,11 +67,7 @@ fi
 # command stands in as this layer's child: an outer timeout's kill escalation reaches it, while
 # this layer keeps ignoring SIGTERM and stays to remove the specification directory.
 if (( NO_LANDLOCK )); then
-  if (( DEBUG )); then
-    >&2 printf '[phobos] filesystem layer disabled; run '
-    >&2 printf '%q ' "${limit_prefix[@]}" "${CMD[@]}"
-    echo >&2
-  fi
+  debug_log filesystem "filesystem layer disabled; run" "${limit_prefix[@]}" "${CMD[@]}"
 
   set +e
   ( trap - TERM; exec "${limit_prefix[@]}" "${CMD[@]}" )
@@ -77,6 +77,7 @@ if (( NO_LANDLOCK )); then
 fi
 
 args=()
+if (( PHB_DEBUG_ENABLED )); then args+=( --verbose ); fi
 
 # The paths a submission can change: the union of the write, create and delete sections. The
 # preload library and its rules file must stay out of this set, or a submission could rewrite
@@ -116,13 +117,7 @@ if [[ -s "${TAIL}" ]]; then
   done < "${TAIL}"
 fi
 
-if (( DEBUG )); then
-  >&2 printf '[phobos] '
-  >&2 printf '%q ' "${limit_prefix[@]}" "${LANDLOCK}" "${args[@]}"
-  >&2 printf ' -- '
-  >&2 printf '%q ' "${CMD[@]}"
-  echo >&2
-fi
+debug_log filesystem "run" "${limit_prefix[@]}" "${LANDLOCK}" "${args[@]}" -- "${CMD[@]}"
 
 # The command's stderr passes through tee to this layer's stderr unchanged, and a copy goes to
 # count_denials, whose counts come back over an anonymous pipe. Nothing is written to a file, so
@@ -156,8 +151,8 @@ if read -r -t "$PHB_DENIAL_COUNT_GRACE_SECONDS" -u "$denial_counts" net_denials 
   if (( net_denials > 0 || fs_denials > 0 )); then
     report "Sandbox denials: network=${net_denials}, filesystem=${fs_denials}. (PHB-EDENY)"
   fi
-elif (( DEBUG )); then
-  >&2 printf '[phobos] no denial counts within %ss; a process the command left behind may still hold its stderr\n' "$PHB_DENIAL_COUNT_GRACE_SECONDS"
+else
+  debug_log filesystem "no denial counts within ${PHB_DENIAL_COUNT_GRACE_SECONDS}s; a process the command left behind may still hold its stderr"
 fi
 exec {denial_counts}<&-
 

@@ -10,7 +10,14 @@
 #   record-capability.sh <name> <probe mode>
 set -uo pipefail
 
-[[ $# -eq 2 ]] || { printf 'usage: record-capability.sh <name> <probe mode>\n' >&2; exit 2; }
+# The status this script ends with when it was called the wrong way.
+readonly EXIT_USAGE=2
+# The probe's statuses for a capability that is there and for one that is not; anything else
+# means the probe could not tell.
+readonly PROBE_AVAILABLE=0
+readonly PROBE_UNAVAILABLE=1
+
+[[ $# -eq 2 ]] || { printf 'usage: record-capability.sh <name> <probe mode>\n' >&2; exit "${EXIT_USAGE}"; }
 name="$1"
 mode="$2"
 
@@ -19,8 +26,8 @@ bash "${HERE}/../../tests/runner-capability-probe.sh" "${mode}"
 status="$?"
 
 case "${status}" in
-    0) verdict="available" ;;
-    1) verdict="unavailable" ;;
+    "${PROBE_AVAILABLE}") verdict="available" ;;
+    "${PROBE_UNAVAILABLE}") verdict="unavailable" ;;
     *) verdict="indeterminate" ;;
 esac
 

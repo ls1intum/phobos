@@ -71,7 +71,9 @@ int detect_landlock_version(int minimum_landlock_version, bool network_rules_wan
         exit(EXIT_CODE_POLICY_ERROR);
     }
     if (network_rules_wanted && landlock_version < FIRST_VERSION_WITH_NETWORK) {
-        exit_with_message("network rules require Landlock version 4 (kernel 6.7)");
+        fprintf(stderr, "[phobos-landlock] network rules require Landlock version %d (kernel 6.7)\n",
+                FIRST_VERSION_WITH_NETWORK);
+        exit(EXIT_CODE_POLICY_ERROR);
     }
     return (int)landlock_version;
 }
@@ -81,7 +83,12 @@ int detect_landlock_version(int minimum_landlock_version, bool network_rules_wan
  * including the ones this policy calls read-only. There is no hook to enforce
  * it in its place, so the only honest thing left is to say so. Always, not
  * only under --verbose: nobody reads detail they did not ask for, and this is
- * the difference between a guarantee and the appearance of one. */
+ * the difference between a guarantee and the appearance of one.
+ *
+ * The missing REFER is named too, although it is the other direction and not a
+ * gap: without REFER the kernel denies every rename across directories rather
+ * than leaving it free. That breaks builds loudly instead of weakening the
+ * sandbox quietly, so it is worth naming but it is not a hole. */
 void report_unenforceable_rights(int landlock_version) {
     if (landlock_version < FIRST_VERSION_WITH_TRUNCATE) {
         warn_always("warning: Landlock version %d does not handle TRUNCATE; a file on a "
@@ -103,10 +110,6 @@ void report_unenforceable_rights(int landlock_version) {
                     "such a kernel instead.",
                     landlock_version, FIRST_VERSION_WITH_SCOPED);
     }
-    /* The other direction, and not a gap: without REFER the kernel denies every
-     * rename across directories rather than leaving it free. That breaks builds
-     * loudly instead of weakening the sandbox quietly, so it is worth naming but
-     * it is not a hole. */
     if (landlock_version < FIRST_VERSION_WITH_REFER) {
         warn_always("note: Landlock version %d has no REFER; moving a file between two "
                     "allowed directories is refused with EXDEV even where the policy permits "
@@ -138,6 +141,11 @@ int create_ruleset(int landlock_version, uint64_t handled_network) {
     return ruleset_descriptor;
 }
 
+/* A changeable path that is a symbolic link is refused: O_PATH|O_NOFOLLOW opens
+ * the link itself instead of failing, so it has to be rejected here, and a rule
+ * anchored on a link is at best useless and at worst points somewhere the policy
+ * never named. A path that is not a directory is not granted the rights that only
+ * make sense on one. */
 void add_path_rule(int ruleset_descriptor, int landlock_version, const struct path_rule *rule) {
     int path_descriptor = open(rule->path, open_flags_for_rule(rule));
     if (path_descriptor < 0) {
@@ -149,9 +157,6 @@ void add_path_rule(int ruleset_descriptor, int landlock_version, const struct pa
     if (fstat(path_descriptor, &file_status) != 0) {
         exit_with_system_error("fstat");
     }
-    /* O_PATH|O_NOFOLLOW opens the link itself instead of failing, so the
-     * symlink has to be rejected here. A rule anchored on a link is at best
-     * useless and at worst points somewhere the policy never named. */
     if (rule_can_change_anything(rule) && S_ISLNK(file_status.st_mode)) {
         fprintf(stderr,
                 "[phobos-landlock] refusing changeable path %s: it is a symbolic link and could "
@@ -194,9 +199,9 @@ void add_port_rule(int ruleset_descriptor, uint64_t port, uint64_t allowed_acces
     log_verbose("allow %s tcp/%llu", what, (unsigned long long)port);
 }
 
+/* Sets no_new_privs first, because Landlock requires it and it also closes the
+ * setuid route out of the sandbox. */
 void apply_restriction(int ruleset_descriptor) {
-    /* no_new_privs first, because Landlock requires it and it also closes the
-     * setuid route out of the sandbox. */
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
         exit_with_system_error("prctl(PR_SET_NO_NEW_PRIVS)");
     }

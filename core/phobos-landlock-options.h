@@ -35,7 +35,8 @@ struct options {
     char **command;
 };
 
-/* Reads the command line into options, or refuses the call. */
+/* Reads the command line into options, or refuses the call. Every option but
+ * --verbose takes a value, so it must not be the last word before the command. */
 void parse_arguments(int argument_count, char *arguments[], struct options *options);
 
 /* True when any network rule was asked for, which decides whether the run needs
