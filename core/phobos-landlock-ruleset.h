@@ -129,12 +129,19 @@ struct landlock_network_port_attributes {
 };
 
 /* The kernel reads these by offset, so a compiler that padded them would send
- * it something else entirely. Checked here rather than trusted. */
-static_assert(sizeof(struct landlock_path_beneath_attributes) == 12,
+ * it something else entirely. Checked here rather than trusted: the kernel's
+ * struct landlock_path_beneath_attr is packed to 12 bytes, and the network and
+ * scope members of struct landlock_ruleset_attr follow the one before at 8 and
+ * 16 bytes. */
+static constexpr size_t KERNEL_PATH_BENEATH_ATTRIBUTES_SIZE = 12;
+static constexpr size_t KERNEL_RULESET_NETWORK_OFFSET = 8;
+static constexpr size_t KERNEL_RULESET_SCOPED_OFFSET = 16;
+static_assert(sizeof(struct landlock_path_beneath_attributes) == KERNEL_PATH_BENEATH_ATTRIBUTES_SIZE,
               "landlock_path_beneath_attributes must be packed to 12 bytes");
-static_assert(offsetof(struct landlock_ruleset_attributes, handled_access_network) == 8,
+static_assert(offsetof(struct landlock_ruleset_attributes, handled_access_network)
+                  == KERNEL_RULESET_NETWORK_OFFSET,
               "the kernel expects handled_access_network as the second member");
-static_assert(offsetof(struct landlock_ruleset_attributes, scoped) == 16,
+static_assert(offsetof(struct landlock_ruleset_attributes, scoped) == KERNEL_RULESET_SCOPED_OFFSET,
               "the kernel expects scoped as the third member");
 
 /* Rights available at the given Landlock version. */

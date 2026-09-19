@@ -11,11 +11,7 @@ name: Build
 
 on:
   pull_request:
-    # feat/landlock-instead-of-bubblewrap is here because this change is stacked on
-    # that branch, and a base-branch filter is matched against the pull request's base.
-    # Without the entry this workflow would not run on the pull request introducing it.
-    # Remove it once that branch has landed.
-    branches: [ "main", "feat/landlock-instead-of-bubblewrap" ]
+    branches: [ "main" ]
   push:
     branches: [ "main" ]
   schedule:
@@ -122,9 +118,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: prune c
-            slug: prune-c
-            context: docker/prune_phase/c
           - name: prune java
             slug: prune-java
             context: docker/prune_phase/java
@@ -146,10 +139,6 @@ jobs:
       #
       # The run-phase image is deliberately absent: the job below builds it and then
       # tests that exact image, and building it here as well would prove nothing twice.
-      #
-      # squid/HTTP_PROXY_SQUID_Dockerfile is absent too, and for a worse reason: it
-      # cannot build. It copies test-repos, student-exercises, pruning and helpers from a
-      # repository root that holds none of them. A green run here says nothing about it.
       - name: Build
         env:
           # The weekly run is the one that has to notice a moved base image or a changed

@@ -84,6 +84,17 @@ Anything that changes how a failure is recognised therefore changes the allow-li
 while having compiled nothing has to be treated as a failure, or the pruner concludes that
 the source directory was unnecessary.
 
+Prune with a cold cache. A build that finds its dependencies, its wrapper distribution or
+its JCE policy files already cached never touches the paths that fetch or unpack them, so
+the pruner hides those paths and the first run on a fresh machine fails.
+
+Re-prune a layer when what it rests on changes, and not otherwise:
+
+- the base policy when the operating system of the image changes;
+- a language policy when its toolchain changes, or when an exercise starts using a feature
+  of that toolchain the reference exercises never exercised;
+- an exercise policy when the exercise itself changes.
+
 ## Pull requests
 
 Fill in every section of the pull request template. The template checker runs on every pull

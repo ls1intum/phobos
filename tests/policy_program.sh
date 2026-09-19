@@ -8,6 +8,8 @@ set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE="${HERE}/../core"
+# shellcheck source=../core/phobos-constants.sh
+source "${CORE}/phobos-constants.sh"
 WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
 cleanup() { rm -rf "$WORK"; }
@@ -59,7 +61,8 @@ check "the base execute right is not removed"       "/usr" "$(cat "$NSPEC/execut
 # An exercise may grant a right, and name a path, the base did not: the model is additive.
 WSPEC="$(fresh_spec)"
 printf '[write]\n/usr\n[read]\n/opt/extra\n' > "$WORK/widen.cfg"
-out="$(bash "$CORE_X/phobos-policy.sh" --spec-dir "$WSPEC" --config "$WORK/widen.cfg" 2>&1)"; rc=$?
+out="$(bash "$CORE_X/phobos-policy.sh" --spec-dir "$WSPEC" --config "$WORK/widen.cfg" 2>&1)"
+rc=$?
 if [[ "$rc" -eq 0 ]]; then ok "an exercise widening the sandbox is accepted (additive model)"; else bad "an exercise widening the sandbox is accepted (additive model)" "exit 0" "exit $rc: $out"; fi
 check "the exercise adds write on a base path"      "/usr"       "$(grep -Fx /usr "$WSPEC/write.paths")"
 check "the base write path is still present"         "/tmp"       "$(grep -Fx /tmp "$WSPEC/write.paths")"
@@ -73,10 +76,10 @@ chmod +x "$NOBASE"/*.sh
 SPEC2="$(fresh_spec)"
 out="$(bash "$NOBASE/phobos-policy.sh" --spec-dir "$SPEC2" 2>&1)"
 rc=$?
-if [[ "$rc" -eq 11 && "$out" == *"PHB-EPOLICY"* ]]; then
+if [[ "$rc" -eq "$PHB_EPOLICY" && "$out" == *"PHB-EPOLICY"* ]]; then
   ok "no Base*.cfg beside the policy program is refused (PHB-EPOLICY)"
 else
-  bad "no Base*.cfg beside the policy program is refused (PHB-EPOLICY)" "exit 11 reporting PHB-EPOLICY" "exit $rc: $out"
+  bad "no Base*.cfg beside the policy program is refused (PHB-EPOLICY)" "exit ${PHB_EPOLICY} reporting PHB-EPOLICY" "exit $rc: $out"
 fi
 
 echo

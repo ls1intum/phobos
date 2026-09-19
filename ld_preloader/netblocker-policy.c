@@ -1,13 +1,9 @@
-/* O_NOFOLLOW, fdopen and getnameinfo need this first. */
+/* O_NOFOLLOW and fdopen need this first. */
 #define _GNU_SOURCE
 #include "netblocker-policy.h"
 
 #include <fcntl.h>
-#include <netdb.h>
 #include <stdio.h>
-#include <string.h>
-#include <strings.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -81,33 +77,6 @@ static bool rule_permits_connection(const struct rule *rule, const struct canoni
     return rule_is_any_host(rule) || rule_names_address(rule, address);
 }
 
-/* True when the rule is a domain wildcard that grants the port. */
-static bool wildcard_applies(const struct rule *rule, uint16_t port) {
-    return !rule_is_address_range(rule) && rule_is_domain_wildcard(rule) && rule_permits_port(rule, port);
-}
-
-/* Looks up the suffix of a domain wildcard, records every address the lookup yields
- * under the rule's port, and answers whether one of them is the address. The suffix
- * keeps its leading dot, as it always has, and the lookup goes through this library's
- * own getaddrinfo. Assumes the read lock is held. */
-static bool wildcard_resolves_to(struct policy *policy, const struct rule *rule,
-                                 const struct canonical_address *address) {
-    struct addrinfo *results = nullptr;
-    bool found = false;
-    if (getaddrinfo(rule_domain_suffix(rule), nullptr, nullptr, &results) != 0) {
-        return false;
-    }
-    for (struct addrinfo *result = results; result != nullptr && !found; result = result->ai_next) {
-        char text[INET6_ADDRSTRLEN] = "";
-        getnameinfo(result->ai_addr, result->ai_addrlen, text, sizeof(text), nullptr, 0,
-                    NI_NUMERICHOST);
-        address_cache_record(&policy->cache, text, rule->port, rule->port == 0);
-        found = strcasecmp(text, address->text) == 0;
-    }
-    freeaddrinfo(results);
-    return found;
-}
-
 void policy_load(struct policy *policy, const char *path) {
     pthread_rwlock_wrlock(&policy->lock);
     free_rules(policy);
@@ -149,9 +118,6 @@ bool policy_permits_connection(struct policy *policy, const char *address, uint1
     pthread_rwlock_rdlock(&policy->lock);
     for (struct rule *rule = policy->first_rule; rule != nullptr && !permitted; rule = rule->next) {
         permitted = rule_permits_connection(rule, &canonical, port);
-    }
-    for (struct rule *rule = policy->first_rule; rule != nullptr && !permitted; rule = rule->next) {
-        permitted = wildcard_applies(rule, port) && wildcard_resolves_to(policy, rule, &canonical);
     }
     pthread_rwlock_unlock(&policy->lock);
     return permitted;

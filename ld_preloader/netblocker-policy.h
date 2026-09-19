@@ -41,10 +41,10 @@ bool policy_permits_lookup(struct policy *policy, const char *host, uint16_t por
 void policy_record_resolution(struct policy *policy, const char *host, const char *address);
 
 /* True when the address may be connected to on the port: through an authorisation a
- * lookup recorded, "*", a rule naming the address, a range holding it, or a domain
- * wildcard whose suffix resolves to it. Text that is not an address literal, the empty
- * text a socket of another family yields included, is refused unless a lookup recorded
- * it. */
+ * lookup recorded, "*", a rule naming the address, or a range holding it. A domain wildcard
+ * permits an address only through a lookup of a name below it, which records what that name
+ * resolved to. Text that is not an address literal, the empty text a socket of another
+ * family yields included, is refused unless a lookup recorded it. */
 bool policy_permits_connection(struct policy *policy, const char *address, uint16_t port);
 
 #endif

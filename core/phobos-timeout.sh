@@ -9,16 +9,15 @@ source "${HERE}/phobos-common.sh"
 # runs the rest of the chain under GNU timeout itself, rather than passing a value down for a
 # deeper layer to apply. So phobos-timeout.sh -- CMD is a usable timeout on its own. phobos.sh
 # includes this layer only when the timeout is enabled, so there is no enable flag to read.
-DEBUG=0
 TIMEOUT_BIN_OPT=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
-    --debug) DEBUG=1; shift ;;
+    --debug) enable_debug_log; shift ;;
     --timeout-bin) shift; TIMEOUT_BIN_OPT="${1:-}"; shift ;;
     *) break ;;
   esac
 done
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-timeout.sh [--debug] [--timeout-bin <path>] <SPEC_DIR> -- <cmd...>"; exit 2; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-timeout.sh [--debug] [--timeout-bin <path>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created. When a timeout is set this layer waits, so this
@@ -31,28 +30,28 @@ TIMEOUT_BIN="${TIMEOUT_BIN_OPT:-timeout}"
 
 # An empty timeout.sec, or none, means no timeout: hand the chain straight on.
 if [[ ! -s "${SPEC_DIR}/timeout.sec" ]]; then
+  debug_log timeout "no timeout is set; hand on" "$@"
   exec "$@"
 fi
 timeout_sec="$(<"${SPEC_DIR}/timeout.sec")"
 
-if (( DEBUG )); then
-  >&2 printf '[phobos] %s --kill-after=5s %ss ' "${TIMEOUT_BIN}" "${timeout_sec}"
-  >&2 printf '%q ' "$@"
-  echo >&2
-fi
+debug_log timeout "run" "${TIMEOUT_BIN}" "--kill-after=${PHB_KILL_AFTER_SECONDS}s" "${timeout_sec}s" "$@"
 
 # No --foreground: GNU timeout puts the command in a new process group and signals the whole
 # group, so the kill reaches the command's children too. --kill-after escalates to SIGKILL for
 # a command that ignores SIGTERM. That escalation only fires while GNU timeout's own child is
 # still alive, so the layers below keep themselves alive across SIGTERM (they set the command
 # itself back to the default disposition), and it is the SIGKILL that stops such a command.
+start_microseconds="$(epoch_realtime_microseconds "$EPOCHREALTIME")"
 set +e
-"${TIMEOUT_BIN}" "--kill-after=5s" "${timeout_sec}s" "$@"
+"${TIMEOUT_BIN}" "--kill-after=${PHB_KILL_AFTER_SECONDS}s" "${timeout_sec}s" "$@"
 rc=$?
 set -e
+elapsed_microseconds=$(( $(epoch_realtime_microseconds "$EPOCHREALTIME") - start_microseconds ))
 
-# 124 is GNU timeout's own "timed out" code; 137 is 128+SIGKILL, the escalation having fired.
-if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+# A timeout only when GNU timeout's status says so and the run lasted at least the timeout;
+# any other status, a 124 or 137 of the command's own included, passes through unchanged.
+if run_reached_timeout "$rc" "$elapsed_microseconds" "$timeout_sec"; then
   report "Timed out after ${timeout_sec}s. (PHB-ETIMEOUT)"
   exit "${PHB_ETIMEOUT}"
 fi

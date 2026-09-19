@@ -10,6 +10,8 @@ set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE="${HERE}/../core"
+# shellcheck source=../core/phobos-constants.sh
+source "${CORE}/phobos-constants.sh"
 WORK="$(mktemp -d)"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -26,7 +28,7 @@ run_rules() {
   printf '%s\n' "$body" > "$WORK/net.rules"
   local out
   out="$(
-    # shellcheck source=/dev/null
+    # shellcheck source=../core/phobos-common.sh
     source "${CORE}/phobos-common.sh"
     args=()
     build_network_args args "$WORK/net.rules" 2>"$WORK/log"
@@ -40,7 +42,8 @@ field() { cut -d'|' -f"$2" <<<"$1"; }
 
 echo "== a concrete port is enforced by the kernel =="
 r="$(run_rules "example.com 443")"
-check_rc="$(field "$r" 1)"; check_args="$(field "$r" 2)"
+check_rc="$(field "$r" 1)"
+check_args="$(field "$r" 2)"
 [[ "$check_rc" == 0 ]] && ok "an external concrete port is accepted" || bad "an external concrete port is accepted" "exit 0" "exit $check_rc"
 [[ "$check_args" == "--connect-tcp 443" ]] && ok "it emits --connect-tcp for the port" || bad "it emits --connect-tcp for the port" "--connect-tcp 443" "$check_args"
 
@@ -56,22 +59,27 @@ r="$(run_rules "127.0.0.1 *
 
 echo
 echo "== a non-loopback host with no port is refused =="
-# report() writes the refusal to stdout, which run_rules captures in field 2.
+# report() writes the refusal to stderr, which run_rules captures in field 3.
 r="$(run_rules "example.com *")"
-if [[ "$(field "$r" 1)" == "${PHB_EPOLICY:-11}" && "$(field "$r" 2)" == *"names a host with no port"* ]]; then
+if [[ "$(field "$r" 1)" == "${PHB_EPOLICY}" && "$(field "$r" 3)" == *"names a host with no port"* ]]; then
   ok "an external wildcard is refused with PHB-EPOLICY"
 else
-  bad "an external wildcard is refused with PHB-EPOLICY" "exit 11 naming the unenforceable host" "exit $(field "$r" 1): $(field "$r" 2)"
+  bad "an external wildcard is refused with PHB-EPOLICY" "exit ${PHB_EPOLICY} naming the unenforceable host" "exit $(field "$r" 1): $(field "$r" 3)"
+fi
+if [[ -z "$(field "$r" 2)" ]]; then
+  ok "the refusal leaves stdout empty"
+else
+  bad "the refusal leaves stdout empty" "no output on stdout" "$(field "$r" 2)"
 fi
 
 echo
 echo "== a loopback wildcard mixed with a concrete port is refused =="
 r="$(run_rules "127.0.0.1 *
 example.com 443")"
-if [[ "$(field "$r" 1)" != 0 && "$(field "$r" 2)" == *"half-enforced"* ]]; then
+if [[ "$(field "$r" 1)" != 0 && "$(field "$r" 3)" == *"half-enforced"* ]]; then
   ok "the mixed case is refused"
 else
-  bad "the mixed case is refused" "a non-zero exit naming the half-enforced policy" "exit $(field "$r" 1): $(field "$r" 2)"
+  bad "the mixed case is refused" "a non-zero exit naming the half-enforced policy" "exit $(field "$r" 1): $(field "$r" 3)"
 fi
 
 echo
@@ -86,7 +94,7 @@ run_bind() {
   printf '%s\n' "$body" > "$WORK/bind.rules"
   local out
   out="$(
-    # shellcheck source=/dev/null
+    # shellcheck source=../core/phobos-common.sh
     source "${CORE}/phobos-common.sh"
     args=()
     build_bind_args args "$WORK/bind.rules" 2>"$WORK/blog"
