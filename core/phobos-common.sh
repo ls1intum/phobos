@@ -734,12 +734,15 @@ build_path_args() {
   rm -f "$table" "$folded_table" "$effective_table"
 }
 
-# Refuses a port that is not a number the protocol has. Assumes the caller has
-# already decided this rule names a port at all rather than a wildcard.
+# Refuses a port that is not a number the protocol has: a decimal number of at most five
+# digits, with no leading zero, from 1 to the highest port. Assumes the caller has already
+# decided this rule names a port at all rather than a wildcard. The shape is checked before
+# the value, because the shell's arithmetic is 64 bits wide and wraps without a word: a
+# twenty-digit port would otherwise come out as a small number and pass.
 refuse_unusable_port() {
   local host="$1"
   local port="$2"
-  [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= PHB_HIGHEST_PORT )) && return 0
+  [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] && (( port <= PHB_HIGHEST_PORT )) && return 0
   report "Policy invalid: '${host}:${port}' names no usable TCP port. (PHB-EPOLICY)"
   exit "${PHB_EPOLICY}"
 }
@@ -792,20 +795,57 @@ collect_network_ports() {
   done < "$rules"
 }
 
+# Refuses a section that mixes a loopback wildcard with a concrete port: the concrete rule
+# would read as enforced by the kernel while the wildcard one would not be. Takes the two
+# files collect_network_ports wrote. Assumes it is called plainly, so that a refusal ends
+# the run.
+refuse_mixed_network_wildcard() {
+  local ports_file="$1"
+  local wildcard_file="$2"
+  [[ -s "$wildcard_file" && -s "$ports_file" ]] || return 0
+  report "Policy unenforceable: '$(cat "$wildcard_file")' names no port, so Landlock cannot express it, while other rules do name one. A half-enforced network policy would look stricter than it is. (PHB-EPOLICY)"
+  exit "${PHB_EPOLICY}"
+}
+
+# Refuses every [connect] and [bind] rule that cannot be enforced as written: a port that is
+# not one the protocol has, an external host with no port, and a loopback wildcard beside a
+# concrete port. phobos-policy.sh asks this once, where the specification is written, so that
+# a rule is judged whether or not the layer that would otherwise have judged it is in the
+# chain: with --no-filesystem-restriction the Landlock port rules are never built, and the
+# spec would otherwise carry a rule the guard silently drops and the preload library reads
+# differently. Assumes it is called plainly, so that a refusal ends the run.
+refuse_unenforceable_network_rules() {
+  local net_rules="$1"
+  local bind_rules="$2"
+  local ports_file
+  local wildcard_file
+  local host
+  local port
+  if [[ -n "$net_rules" && -s "$net_rules" ]]; then
+    ports_file="$(mktemp -t phobos-check-ports.XXXXXX)"
+    wildcard_file="$(mktemp -t phobos-check-wildcard.XXXXXX)"
+    collect_network_ports "$net_rules" "$ports_file" "$wildcard_file"
+    refuse_mixed_network_wildcard "$ports_file" "$wildcard_file"
+    rm -f "$ports_file" "$wildcard_file"
+  fi
+  if [[ -n "$bind_rules" && -s "$bind_rules" ]]; then
+    while read -r host port; do
+      [[ -z "$host" ]] && continue
+      refuse_unusable_port "$host" "$port"
+    done < "$bind_rules"
+  fi
+}
+
 # Fills the named array with the TCP port rules Landlock can actually enforce.
 #
-# The policy language names a host and a port, Landlock knows only ports. A rule
-# naming no port therefore cannot be expressed. Only a LOOPBACK host may name no
-# port: a section made only of those leaves the network layer off and says so,
-# which is what the shipped policies do, and the no-network container is that
-# rule's boundary. A non-loopback host with no port is refused in
-# collect_network_ports, because leaving the layer off for it would confine
-# external egress to the preload library, which a submission can step around. A
-# section mixing a loopback wildcard with a concrete port is refused here, because
-# the concrete rule would read as enforced while the wildcard would not be.
-#
-# Only an explicit star or an omitted port is that wildcard. "host:0" names no
-# port that exists and is a policy mistake, not a licence to switch the layer off.
+# The policy language names a host and a port, Landlock knows only ports. A rule naming no
+# port therefore cannot be expressed. Only a LOOPBACK host may name no port: a section made
+# only of those leaves the network layer off and says so, which is what the shipped policies
+# do, and the no-network container is that rule's boundary. Only an explicit star or an
+# omitted port is that wildcard; "host:0" names no port that exists and is a policy mistake,
+# not a licence to switch the layer off. Every refusal this can reach has already been made
+# by refuse_unenforceable_network_rules where the policy was built; it is repeated here so
+# that a layer run standalone over a specification is judged too.
 build_network_args() {
   local arguments_name="$1"
   local rules="$2"
@@ -817,10 +857,7 @@ build_network_args() {
   ports_file="$(mktemp -t phobos-ports.XXXXXX)"
   wildcard_file="$(mktemp -t phobos-wildcard.XXXXXX)"
   collect_network_ports "$rules" "$ports_file" "$wildcard_file"
-  if [[ -s "$wildcard_file" ]] && [[ -s "$ports_file" ]]; then
-    report "Policy unenforceable: '$(cat "$wildcard_file")' names no port, so Landlock cannot express it, while other rules do name one. A half-enforced network policy would look stricter than it is. (PHB-EPOLICY)"
-    exit "${PHB_EPOLICY}"
-  fi
+  refuse_mixed_network_wildcard "$ports_file" "$wildcard_file"
   if [[ -s "$wildcard_file" ]]; then
     _log "network: '$(cat "$wildcard_file")' names no port; the Landlock network layer stays off and only libnetblocker filters this run"
     rm -f "$ports_file" "$wildcard_file"

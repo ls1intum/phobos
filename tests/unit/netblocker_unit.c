@@ -474,6 +474,9 @@ static void test_addresses(void) {
           !canonical_address_within(&first, &network.bytes, 124));
 }
 
+/* Reading one line of an allow-list. Zero is the internal spelling of "every port", so a
+ * literal 0 has to drop the rule rather than widen it to every port, which is also what the
+ * connect guard does with such a line. */
 static void test_rule_parsing(void) {
     struct rule *rule = nullptr;
     printf("\nReading a rule\n");
@@ -492,6 +495,8 @@ static void test_rule_parsing(void) {
     check("a comment line is no rule", parse("# only a comment\n") == nullptr);
     check("a port with trailing text drops the rule", parse("service.test 8x") == nullptr);
     check("a port above 65535 drops the rule", parse("service.test 70000") == nullptr);
+    check("a port of 0 drops the rule rather than granting every port",
+          parse("service.test 0") == nullptr);
 
     rule = parse("192.0.2.0/24 80");
     check("an IPv4 range counts its prefix from bit 96",
@@ -838,7 +843,10 @@ static enum bind_result bind_outcome(int socket_type, const char *address, uint1
 /* The bind hook.
  *
  * With no [bind] rule the hook passes every bind, matching Landlock leaving bind
- * unrestricted when no bind port is named. With a bind rule, a TCP bind to an allowed
+ * unrestricted when no bind port is named, which is the one case that means the list says
+ * nothing: a list whose lines were all refused, and a file that was named and could not be
+ * read, both keep binding filtered, because turning a restriction into no restriction is
+ * the one direction a sandbox must never take. With a bind rule, a TCP bind to an allowed
  * local address passes, and to a disallowed address or port is refused. Only TCP is
  * filtered, matching Landlock's TCP-only bind right: a datagram bind passes even where
  * the address is not listed. A non-INET family is left to other layers. A descriptor
@@ -877,6 +885,18 @@ static void test_bind(void) {
     calls_before = bind_calls;
     check("a bind whose socket type cannot be read passes",
           bind(closed_descriptor, (struct sockaddr *)&local, length) == 0 && bind_calls == calls_before + 1);
+
+    load_bind_rules("127.0.0.1 0\n");
+    check("a bind list whose every line was refused keeps binding filtered",
+          bind_outcome(SOCK_STREAM, "0.0.0.0", 8080) == BIND_DENIED);
+    check("and refuses the address the refused line named too",
+          bind_outcome(SOCK_STREAM, "127.0.0.1", 8080) == BIND_DENIED);
+    load_bind_rules("# only a comment\n\n");
+    check("a list of comments and blank lines says nothing, so a bind passes",
+          bind_outcome(SOCK_STREAM, "0.0.0.0", 8080) == BIND_BOUND);
+    policy_load(&bind_policy, link_path);
+    check("a bind list that was named and could not be read keeps binding filtered",
+          bind_outcome(SOCK_STREAM, "0.0.0.0", 8080) == BIND_DENIED);
 
     policy_load(&bind_policy, nullptr);
 }

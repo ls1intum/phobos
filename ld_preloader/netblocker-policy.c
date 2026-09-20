@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #include "netblocker-policy.h"
 
+#include <ctype.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -43,8 +44,25 @@ static void free_rules(struct policy *policy) {
     }
 }
 
-/* Reads every rule of the file, each put in front of the ones before it. Assumes the
- * write lock is held and the policy holds no rules. */
+/* Whether the line held anything but a comment and whitespace, so that a line the parser
+ * refused can be told from a blank one. */
+static bool line_names_something(const char *line) {
+    for (const char *character = line; *character != '\0'; character++) {
+        if (*character == '#') {
+            return false;
+        }
+        if (!isspace((unsigned char)*character)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Reads every rule of the file, each put in front of the ones before it, and remembers
+ * whether anything was refused: a line that named something the parser would not take, or
+ * the whole file, when one was named and could not be opened. Only an unnamed file leaves
+ * the policy silent, which is the one case that means "this list says nothing". Assumes
+ * the write lock is held and the policy holds no rules. */
 static void read_rules(struct policy *policy, const char *path) {
     char line[RULE_LINE_LENGTH];
     if (path == nullptr) {
@@ -52,13 +70,17 @@ static void read_rules(struct policy *policy, const char *path) {
     }
     FILE *file = open_rules_file(path);
     if (file == nullptr) {
+        policy->refused_a_line = true;
         return;
     }
     while (fgets(line, sizeof(line), file) != nullptr) {
+        bool names_something = line_names_something(line);
         struct rule *rule = rule_parse(line);
         if (rule != nullptr) {
             rule->next = policy->first_rule;
             policy->first_rule = rule;
+        } else if (names_something) {
+            policy->refused_a_line = true;
         }
     }
     fclose(file);
@@ -77,9 +99,14 @@ static bool rule_permits_connection(const struct rule *rule, const struct canoni
     return rule_is_any_host(rule) || rule_names_address(rule, address);
 }
 
+bool policy_is_silent(const struct policy *policy) {
+    return policy->first_rule == nullptr && !policy->refused_a_line;
+}
+
 void policy_load(struct policy *policy, const char *path) {
     pthread_rwlock_wrlock(&policy->lock);
     free_rules(policy);
+    policy->refused_a_line = false;
     read_rules(policy, path);
     address_cache_clear(&policy->cache);
     pthread_rwlock_unlock(&policy->lock);

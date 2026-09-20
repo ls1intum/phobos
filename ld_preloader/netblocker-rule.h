@@ -7,9 +7,10 @@
  *
  * A line names one of four things. "*" is any host, "*.example.org" any name ending in
  * ".example.org", an address literal that address, and any other word that host name.
- * An address followed by "/length" is a range. The second word is the port: a number,
- * with 0 or "*" or no second word meaning every port. Further words are ignored, and
- * so is everything from a "#".
+ * An address followed by "/length" is a range. The second word is the port: a number from
+ * 1 to 65535, with "*" or no second word meaning every port. A literal 0 names no port the
+ * protocol has and drops the rule, as the connect guard drops it. Further words are
+ * ignored, and so is everything from a "#".
  */
 #ifndef NETBLOCKER_RULE_H
 #define NETBLOCKER_RULE_H

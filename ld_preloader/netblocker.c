@@ -167,8 +167,10 @@ int connect(int descriptor, const struct sockaddr *destination, socklen_t length
 }
 
 /* Whether the local-bind list speaks about this bind at all. Without a [bind] rule binding is
- * unrestricted, matching the absence of a Landlock bind-port rule; bind_policy is loaded once at
- * start-up and never replaced, so reading first_rule without the lock is safe. Only an IPv4 or
+ * unrestricted, matching the absence of a Landlock bind-port rule; a list whose every line was
+ * refused is not such a case, and keeps binding filtered, so that a malformed rule narrows to
+ * nothing rather than opening everything. bind_policy is loaded once at start-up and never
+ * replaced, so reading it without the lock is safe. Only an IPv4 or
  * IPv6 local bind is filtered: any other family, an AF_UNIX socket among them, names no local
  * address this list governs and is left to the filesystem layer. And Landlock enforces a bind
  * only for TCP, so the filter keeps that scope: a datagram or any other socket type, or one whose
@@ -176,7 +178,7 @@ int connect(int descriptor, const struct sockaddr *destination, socklen_t length
 static bool bind_is_filtered(int descriptor, const struct sockaddr *address) {
     int socket_type = 0;
     socklen_t type_length = sizeof(socket_type);
-    if (bind_policy.first_rule == nullptr) {
+    if (policy_is_silent(&bind_policy)) {
         return false;
     }
     if (address->sa_family != AF_INET && address->sa_family != AF_INET6) {
