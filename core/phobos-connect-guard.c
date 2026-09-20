@@ -1,7 +1,15 @@
 /*
- * phobos-connect-guard -- supervise every connect() a sandboxed command makes,
- * so egress can be allowed or refused by host address, which Landlock, enforcing
- * by port alone, cannot do.
+ * phobos-connect-guard -- supervise the egress a sandboxed command makes, so it can be
+ * allowed or refused by host address, which Landlock, enforcing by port alone, cannot do.
+ *
+ * The name is narrower than the program. connect() is what it decides against the
+ * allow-list and connects on behalf of, and around that it closes the ways a command
+ * could reach the network without one: socket(), so a raw, packet or ICMP socket is
+ * refused before it exists; sendto() and sendmmsg(), so a datagram carrying its own
+ * destination is judged like a connect and TCP Fast Open cannot open a connection past
+ * one; io_uring, a second syscall interface that would reach connect unseen; and
+ * setsid/setpgid, which would take the command out of the group an outer timeout kills.
+ * phobos-connect-guard-child.h holds the filter and says why sendmsg is not among them.
  *
  * Usage:
  *   phobos-connect-guard [--verbose] [--rules FILE] -- COMMAND [ARGUMENTS...]
@@ -72,7 +80,6 @@
 
 #include <errno.h>
 #include <signal.h>
-#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -91,22 +98,22 @@ int main(int argument_count, char *arguments[]) {
     parse_arguments(argument_count, arguments, &options);
     set_verbose(options.verbose);
     if (!load_rules(options.rules_path)) {
-        fprintf(stderr, "[phobos-connect-guard] cannot read the rules file '%s': %s; refusing "
-                        "to run rather than fall open to allow-all\n",
-                options.rules_path, strerror(errno));
-        return EXIT_SETUP_ERROR;
+        report_failure("cannot read the rules file '%s': %s; refusing to run rather than "
+                       "fall open to allow-all",
+                       options.rules_path, strerror(errno));
+        return EXIT_CODE_SETUP_ERROR;
     }
 
     int pair[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) {
-        fprintf(stderr, "[phobos-connect-guard] socketpair: %s\n", strerror(errno));
-        return EXIT_SETUP_ERROR;
+        report_failure("socketpair: %s", strerror(errno));
+        return EXIT_CODE_SETUP_ERROR;
     }
 
     pid_t child = fork();
     if (child < 0) {
-        fprintf(stderr, "[phobos-connect-guard] fork: %s\n", strerror(errno));
-        return EXIT_SETUP_ERROR;
+        report_failure("fork: %s", strerror(errno));
+        return EXIT_CODE_SETUP_ERROR;
     }
     if (child == 0) {
         close(pair[0]);
@@ -122,10 +129,9 @@ int main(int argument_count, char *arguments[]) {
         int status = 0;
         while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
         }
-        fprintf(stderr, "[phobos-connect-guard] the sandboxed command could not be supervised; "
-                        "refusing to run it\n");
+        report_failure("the sandboxed command could not be supervised; refusing to run it");
         int code = exit_code_from_status(status);
-        return code == 0 ? EXIT_SETUP_ERROR : code;
+        return code == 0 ? EXIT_CODE_SETUP_ERROR : code;
     }
 
     supervise(notify_descriptor);

@@ -37,5 +37,5 @@ RUN mkdir -p /home/sandboxuser/.cache/pip && \
 
 USER sandboxuser
 
-# docker-compose will append the language argument ("python") at run time.
+# The compose file appends the language argument ("python") at run time.
 ENTRYPOINT ["/var/tmp/pruning/run_minimal_fs_all.sh"]

@@ -471,5 +471,5 @@ int exit_code_from_status(int status) {
     if (WIFSIGNALED(status)) {
         return SIGNALLED_EXIT_BASE + WTERMSIG(status);
     }
-    return EXIT_SETUP_ERROR;
+    return EXIT_CODE_SETUP_ERROR;
 }

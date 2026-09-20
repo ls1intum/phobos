@@ -80,10 +80,10 @@ hdr "2. File access the policy allows (Landlock must not interfere)"
 probe OK "read   $TD/allowed-ro/data.txt"           read  "$TD/allowed-ro/data.txt"
 probe OK "write  $TD/allowed-rw/out.txt"             write "$TD/allowed-rw/out.txt"
 
-hdr "3. Network endpoint the policy does NOT allow (libnetblocker must block it)"
+hdr "3. Network endpoint the policy does NOT allow (the connect guard must block it)"
 probe DENIED "connect 127.0.0.1:${DENIED_PORT}"       connect 127.0.0.1 "$DENIED_PORT"
 
-hdr "4. Network endpoint the policy allows (libnetblocker must not interfere)"
+hdr "4. Network endpoint the policy allows (neither filter may interfere)"
 probe OK "connect 127.0.0.1:${ALLOWED_PORT}"           connect 127.0.0.1 "$ALLOWED_PORT"
 
 hdr "5. Timeout (the JVM actively tries to block it with a shutdown hook)"

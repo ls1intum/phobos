@@ -10,7 +10,7 @@
 [[noreturn]] void print_usage_and_exit(void) {
     fprintf(stderr,
             "Usage: phobos-connect-guard [--verbose] [--rules FILE] -- COMMAND [ARGUMENTS...]\n");
-    exit(EXIT_USAGE);
+    exit(EXIT_CODE_USAGE);
 }
 
 void parse_arguments(int argument_count, char *arguments[], struct guard_options *options) {

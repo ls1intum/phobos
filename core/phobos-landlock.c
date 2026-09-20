@@ -71,9 +71,7 @@ static void enter_working_directory(const struct options *options) {
         return;
     }
     if (chdir(options->working_directory) != 0) {
-        fprintf(stderr, "[phobos-landlock] chdir %s: %s\n", options->working_directory,
-                strerror(errno));
-        exit(EXIT_CODE_POLICY_ERROR);
+        exit_with_format("chdir %s: %s", options->working_directory, strerror(errno));
     }
 }
 

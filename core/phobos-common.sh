@@ -44,14 +44,11 @@ uniq_keep_order() { awk '!seen[$0]++'; }
 # children.
 depth_sort()      { awk '{print gsub(/\//,"/")+1 " " $0}' | sort -k1,1n -k2,2 | cut -d" " -f2-; }
 # Prints each path on standard input in canonical form, without resolving symbolic links, so the
-# merge compares what the policy wrote. Assumes realpath from GNU coreutils; without it the
-# input passes through unchanged.
+# merge compares what the policy wrote. Assumes realpath from GNU coreutils, which
+# refuse_missing_realpath has established; a path it cannot canonicalise passes through as
+# written.
 canon_paths() {
-  if command -v realpath >/dev/null 2>&1; then
-    while IFS= read -r p; do [[ -z "$p" ]] && continue; realpath --canonicalize-missing --no-symlinks "$p" || echo "$p"; done
-  else
-    cat
-  fi
+  while IFS= read -r p; do [[ -z "$p" ]] && continue; realpath --canonicalize-missing --no-symlinks "$p" || printf '%s\n' "$p"; done
 }
 # Timeout values are seconds: either a whole number, or seconds with
 # millisecond precision written as exactly three decimal places.
@@ -270,6 +267,19 @@ new_parse_directory() {
   fi
 }
 
+# Makes one temporary file for a layer's own use and prints it. Under the scratch directory
+# when the caller set PHOBOS_SCRATCH, so it is removed with the specification directory even
+# when the run ends at a refusal, which exits without reaching the rm that follows the use;
+# otherwise a plain temporary file. Takes a name template ending in XXXXXX.
+new_scratch_file() {
+  local template="$1"
+  if [[ -n "${PHOBOS_SCRATCH:-}" ]]; then
+    mktemp -p "$PHOBOS_SCRATCH" "$template"
+  else
+    mktemp -t "$template"
+  fi
+}
+
 # Resets the timeout and the resource limits parse_cfg_policy reads, so each is read from the
 # cfg that sets it and not carried over from an earlier one; the caller merges each across cfgs
 # by the same rule the setters use within a cfg (zero disables and wins, else the largest value).
@@ -392,7 +402,8 @@ parse_cfg_policy() {
   reset_parsed_limits
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%%#*}"
-    line="$(echo "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
     [[ -z "$line" ]] && continue
     if [[ "$line" =~ ^\[(.+)\]$ ]]; then
       sec="${BASH_REMATCH[1]}"
@@ -421,17 +432,21 @@ parse_cfg_policy() {
 # Writes into the first file every distinct line of the remaining files, in the order first
 # seen, dropping comments and blank lines. Missing or empty files are skipped.
 net_union() {
-  local out="$1"; shift
+  local out="$1"
+  shift
+  local file
+  local line
+  local -A seen=()
   : > "$out"
-  declare -A SEEN=()
-  for f in "$@"; do
-    [[ -n "$f" && -s "$f" ]] || continue
-    while IFS= read -r ln; do
-      [[ -z "$ln" ]] && continue
-      if [[ -z "${SEEN["$ln"]:-}" ]]; then
-        echo "$ln" >> "$out"; SEEN["$ln"]=1
+  for file in "$@"; do
+    [[ -n "$file" && -s "$file" ]] || continue
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      if [[ -z "${seen["$line"]:-}" ]]; then
+        printf '%s\n' "$line" >> "$out"
+        seen["$line"]=1
       fi
-    done < <(sed -E 's/#.*$//' "$f" | sed '/^[[:space:]]*$/d')
+    done < <(sed -E 's/#.*$//' "$file" | sed '/^[[:space:]]*$/d')
   done
 }
 
@@ -468,7 +483,7 @@ fs_union_dir() {
   local right
   local tmp
   for right in ${PHB_FS_RIGHTS}; do
-    tmp="$(mktemp)"
+    tmp="$(new_scratch_file phobos-union.XXXXXX)"
     [[ -s "${out_dir}/${right}.paths" ]] && cat "${out_dir}/${right}.paths" >> "$tmp"
     [[ -s "${in_dir}/${right}.paths"  ]] && cat "${in_dir}/${right}.paths"  >> "$tmp"
     canon_paths < "$tmp" | uniq_keep_order | depth_sort > "${out_dir}/${right}.paths" || : > "${out_dir}/${right}.paths"
@@ -479,30 +494,27 @@ fs_union_dir() {
 # --------------------------------------------------------------------------
 # Translating a parsed policy into phobos-landlock arguments.
 #
-# Both entry points use these, so the two cannot drift apart. That has already
-# happened once in this repository, which is why it lives here and not twice.
+# The filesystem layer builds these arguments, and the tests read them back. They live
+# here rather than in the layer so that the translation is stated once: it drifted apart
+# when two entry points each carried their own copy.
 # --------------------------------------------------------------------------
 
 # The order the usage text lists the letters in, used to normalise a set.
 PHB_RIGHTS_ORDER="rwxmdi"
 
 # Resolves each path on standard input through its symbolic links and prints it.
-# Assumes realpath exists; without it the input is passed through unchanged, which
-# makes the hierarchy check compare spellings rather than targets.
+# Assumes realpath from GNU coreutils, which refuse_missing_realpath has
+# established; a path it cannot resolve passes through as written.
 #
 # canon_paths deliberately passes --no-symlinks, because the merge logic compares
 # what the policy wrote. This needs the opposite: Landlock anchors a rule on the
 # inode it opens, so /bin and /usr/bin are one tree on a merged-usr system even
 # though they are two lines in the policy.
 resolve_symlinks() {
-  if command -v realpath >/dev/null 2>&1; then
-    while IFS= read -r p; do
-      [[ -z "$p" ]] && continue
-      realpath --canonicalize-missing "$p" 2>/dev/null || printf '%s\n' "$p"
-    done
-  else
-    cat
-  fi
+  while IFS= read -r p; do
+    [[ -z "$p" ]] && continue
+    realpath --canonicalize-missing "$p" 2>/dev/null || printf '%s\n' "$p"
+  done
 }
 
 # Answers whether every letter of the first set appears in the second.
@@ -723,9 +735,9 @@ build_path_args() {
   local table
   local folded_table
   local effective_table
-  table="$(mktemp -t phobos-rights.XXXXXX)"
-  folded_table="$(mktemp -t phobos-rights-f.XXXXXX)"
-  effective_table="$(mktemp -t phobos-rights-e.XXXXXX)"
+  table="$(new_scratch_file phobos-rights.XXXXXX)"
+  folded_table="$(new_scratch_file phobos-rights-f.XXXXXX)"
+  effective_table="$(new_scratch_file phobos-rights-e.XXXXXX)"
   collect_rights_table "$table" "$read_file" "$execute_file" "$write_file" "$create_file" "$delete_file"
   fold_table_by_target "$table" "$folded_table"
   report_folded_widenings "$table" "$folded_table"
@@ -822,8 +834,8 @@ refuse_unenforceable_network_rules() {
   local host
   local port
   if [[ -n "$net_rules" && -s "$net_rules" ]]; then
-    ports_file="$(mktemp -t phobos-check-ports.XXXXXX)"
-    wildcard_file="$(mktemp -t phobos-check-wildcard.XXXXXX)"
+    ports_file="$(new_scratch_file phobos-check-ports.XXXXXX)"
+    wildcard_file="$(new_scratch_file phobos-check-wildcard.XXXXXX)"
     collect_network_ports "$net_rules" "$ports_file" "$wildcard_file"
     refuse_mixed_network_wildcard "$ports_file" "$wildcard_file"
     rm -f "$ports_file" "$wildcard_file"
@@ -854,12 +866,12 @@ build_network_args() {
   local wildcard_file
   local port
   [[ -n "$rules" && -s "$rules" ]] || return 0
-  ports_file="$(mktemp -t phobos-ports.XXXXXX)"
-  wildcard_file="$(mktemp -t phobos-wildcard.XXXXXX)"
+  ports_file="$(new_scratch_file phobos-ports.XXXXXX)"
+  wildcard_file="$(new_scratch_file phobos-wildcard.XXXXXX)"
   collect_network_ports "$rules" "$ports_file" "$wildcard_file"
   refuse_mixed_network_wildcard "$ports_file" "$wildcard_file"
   if [[ -s "$wildcard_file" ]]; then
-    _log "network: '$(cat "$wildcard_file")' names no port; the Landlock network layer stays off and only libnetblocker filters this run"
+    _log "network: '$(cat "$wildcard_file")' names no port; the Landlock network layer stays off, and the connect guard and libnetblocker filter this run"
     rm -f "$ports_file" "$wildcard_file"
     return 0
   fi
@@ -886,7 +898,7 @@ build_bind_args() {
   local ports_file
   local emitted
   [[ -n "$rules" && -s "$rules" ]] || return 0
-  ports_file="$(mktemp -t phobos-bindports.XXXXXX)"
+  ports_file="$(new_scratch_file phobos-bindports.XXXXXX)"
   while read -r host port; do
     [[ -z "$host" ]] && continue
     refuse_unusable_port "$host" "$port"
@@ -902,8 +914,9 @@ build_bind_args() {
 # Refusing a preload library that would not filter anything.
 #
 # The loader skips a preload library it cannot use and prints only a warning, and
-# the command then runs with no network filtering at all. Both entry points ask
-# these functions first, so that such a run ends instead.
+# the command then runs with the preload half of the network filtering missing. The
+# network layer asks these functions before it hands over, so that such a run ends
+# instead.
 # --------------------------------------------------------------------------
 
 # The functions the network layer relies on the preload library defining.
@@ -1044,6 +1057,22 @@ PHB_SPEC_FILES="read.paths execute.paths write.paths create.paths delete.paths t
 # with exec, so its own EXIT trap never runs; this is how the scratch is cleaned regardless.
 PHB_SPEC_SCRATCH="scratch"
 
+# Ends the run unless realpath takes the options this file calls it with. The check runs the
+# tool rather than looking for its name, because a realpath that refuses those options, as
+# the BSD and BusyBox ones do, would otherwise pass here and then leave every path to the
+# fallback below, which is the quieter sandbox this refusal exists to prevent. Both canonical
+# forms this file prints depend on it: the merge compares what a policy wrote, and the hierarchy check compares the targets
+# Landlock anchors a rule on. Passing a path through unchanged instead would compare
+# spellings, so /bin and /usr/bin would look like two trees on a merged-usr system and a
+# narrowing rule beneath a wider one would go unnoticed. That is a weaker sandbox that still
+# looks like one, so the tool is required rather than worked around. Assumes it is called
+# plainly, so that the refusal ends the run.
+refuse_missing_realpath() {
+  realpath --canonicalize-missing --no-symlinks / >/dev/null 2>&1 && return 0
+  report "Runtime unusable: realpath does not take --canonicalize-missing --no-symlinks, so a policy's paths cannot be canonicalised. GNU coreutils is what provides it. (PHB-ERUNTIME)"
+  exit "${PHB_ERUNTIME}"
+}
+
 # Refuses a parent for the specification directory that is not an absolute path
 # to an existing directory. Assumes it is called plainly, not in a command
 # substitution, so that the refusal ends the run.
@@ -1078,21 +1107,15 @@ remove_owned_spec_dir() {
   rmdir -- "$directory"
 }
 
-# Ends the shell with the given status after removing any scratch paths named after
-# the directory and then the owned specification directory. A directory that cannot
-# be removed is reported, and turns a run that had otherwise succeeded into a
-# PHB-ERUNTIME failure rather than leaving a policy behind unnoticed; a run that had
-# already failed keeps its own status. Meant for an EXIT trap, which passes $? as the
-# first argument, so that it is read before anything else runs. Assumes the scratch
-# paths are the shell's own temporary files: one that cannot be removed is reported
-# and does not stop the specification directory from being removed.
+# Ends the shell with the given status after removing the owned specification directory,
+# which carries the scratch subdirectory every layer makes its temporary files in. A
+# directory that cannot be removed is reported, and turns a run that had otherwise
+# succeeded into a PHB-ERUNTIME failure rather than leaving a policy behind unnoticed; a
+# run that had already failed keeps its own status. Meant for an EXIT trap, which passes $?
+# as the first argument, so that it is read before anything else runs.
 finish_owned_spec_dir() {
   local status="$1"
   local directory="$2"
-  shift 2
-  if (( $# > 0 )) && ! rm -rf -- "$@"; then
-    _log "cleanup: could not remove the scratch files '$*'"
-  fi
   if ! remove_owned_spec_dir "$directory"; then
     _log "cleanup: could not remove the specification directory '${directory}'"
     if (( status == 0 )); then status="${PHB_ERUNTIME}"; fi

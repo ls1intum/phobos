@@ -1,8 +1,8 @@
 # Builds the images this repository can build, and tests the one it ships.
 #
-# The run-phase image is the artefact: it is where both C products are compiled and it
-# is what an exercise actually runs in. Nothing was building it, so the acceptance
-# suites had only ever run by hand.
+# The run-phase image is the artefact: it is where both C products are compiled, in a
+# stage of their own, and it is what an exercise actually runs in. It is built here so
+# that the acceptance suites run against it on every change rather than by hand.
 #
 # The image is built and exercised in ONE job on purpose. Loading an image populates
 # the Docker daemon of that runner and no other, so a separate acceptance job would
@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   unit:
-    name: Unit tests for the Landlock wrapper and the network filter
+    name: Unit tests for phobos-landlock, the connect guard and the network filter
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -107,6 +107,22 @@ jobs:
       # x86-64 here, no newer glibc than the run-phase image, the six hooks defined and loadable.
       - name: Check what was built
         run: .github/scripts/netblocker-build.sh verify "${RUNNER_TEMP}/libnetblocker.so"
+
+      # AGENTS.md says the amd64 build is byte-reproducible, which is why its toolchain is
+      # pinned to a snapshot at all. That claim was never measured, so a change that made
+      # the bytes depend on the build directory or on the order the sources are read in
+      # would have gone unnoticed until someone compared two images by hand. A second build
+      # from a copy of the source in another directory has to produce the same bytes. Two
+      # builds of one run share a date, so this says nothing about a date stamped into the
+      # library; the pinned toolchain is what holds that side.
+      - name: The build is reproducible on the pinned toolchain
+        run: |
+          mkdir -p "${RUNNER_TEMP}/second-build"
+          cp ld_preloader/*.c ld_preloader/*.h "${RUNNER_TEMP}/second-build/"
+          .github/scripts/netblocker-build.sh build \
+            "${RUNNER_TEMP}/second-build" "${RUNNER_TEMP}/libnetblocker-again.so"
+          .github/scripts/netblocker-build.sh compare \
+            "${RUNNER_TEMP}/libnetblocker.so" "${RUNNER_TEMP}/libnetblocker-again.so"
 
   images:
     name: Build the ${{ matrix.name }} image
@@ -213,8 +229,9 @@ jobs:
           docker rm "${container}" > /dev/null
           .github/scripts/netblocker-build.sh verify "${RUNNER_TEMP}/image-libnetblocker.so"
 
-      # No --privileged, no --cap-add, no --security-opt, in any of the three. That is
-      # the claim these suites exist to make, and CI is where it stops being a claim.
+      # No --privileged, no --cap-add, no --security-opt, in any of the acceptance steps
+      # below. That is the claim these suites exist to make, and CI is where it stops
+      # being a claim.
       #
       # --network none for the same reason. Every Maven call in the suites is offline
       # and the checks are meant to hold without a network, so the gate says so instead

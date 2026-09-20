@@ -86,7 +86,9 @@ struct listener {
 
 static int listen_ephemeral(int family, struct listener *out) {
     int fd = socket(family, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
+    if (fd < 0) {
+        return -1;
+    }
 
     struct sockaddr_storage addr;
     socklen_t len;
@@ -125,7 +127,9 @@ static int listen_ephemeral(int family, struct listener *out) {
 static const char *connect_result(int family, const char *ip, unsigned short port) {
     static char buf[RESULT_TEXT_LENGTH];
     int fd = socket(family, SOCK_STREAM, 0);
-    if (fd < 0) return "socket-failed";
+    if (fd < 0) {
+        return "socket-failed";
+    }
 
     struct sockaddr_storage addr;
     socklen_t len;
@@ -150,8 +154,12 @@ static const char *connect_result(int family, const char *ip, unsigned short por
     int err = errno;
     close(fd);
 
-    if (rc == 0) return "allowed";
-    if (err == EACCES) return "denied";
+    if (rc == 0) {
+        return "allowed";
+    }
+    if (err == EACCES) {
+        return "denied";
+    }
     snprintf(buf, sizeof buf, "errno:%d", err);
     return buf;
 }
@@ -179,8 +187,12 @@ static socklen_t loopback_address(struct sockaddr_storage *addr, int family, con
       the socket buffer, so a send that is not refused returns at once. */
 static const char *send_words(ssize_t rc, int err) {
     static char buf[RESULT_TEXT_LENGTH];
-    if (rc >= 0) return "allowed";
-    if (err == EACCES) return "denied";
+    if (rc >= 0) {
+        return "allowed";
+    }
+    if (err == EACCES) {
+        return "denied";
+    }
     snprintf(buf, sizeof buf, "errno:%d", err);
     return buf;
 }
@@ -189,9 +201,13 @@ static const char *send_words(ssize_t rc, int err) {
 static const char *sendto_result(int family, const char *ip, unsigned short port) {
     struct sockaddr_storage addr;
     socklen_t len = loopback_address(&addr, family, ip, port);
-    if (len == 0) return "bad-address";
+    if (len == 0) {
+        return "bad-address";
+    }
     int fd = socket(family, SOCK_DGRAM, 0);
-    if (fd < 0) return "socket-failed";
+    if (fd < 0) {
+        return "socket-failed";
+    }
     errno = 0;
     ssize_t rc = sendto(fd, "x", 1, 0, (struct sockaddr *) &addr, len);
     int err = errno;
@@ -203,9 +219,13 @@ static const char *sendto_result(int family, const char *ip, unsigned short port
 static const char *sendmsg_result(int family, const char *ip, unsigned short port) {
     struct sockaddr_storage addr;
     socklen_t len = loopback_address(&addr, family, ip, port);
-    if (len == 0) return "bad-address";
+    if (len == 0) {
+        return "bad-address";
+    }
     int fd = socket(family, SOCK_DGRAM, 0);
-    if (fd < 0) return "socket-failed";
+    if (fd < 0) {
+        return "socket-failed";
+    }
     struct iovec item;
     item.iov_base = (void *) "x";
     item.iov_len = 1;
@@ -231,7 +251,9 @@ static int resolve_without_service(const char *host, int family) {
     hints.ai_family = family;
     hints.ai_socktype = SOCK_STREAM;
     int rc = getaddrinfo(host, NULL, &hints, &res);
-    if (rc == 0) freeaddrinfo(res);
+    if (rc == 0) {
+        freeaddrinfo(res);
+    }
     return rc;
 }
 
@@ -246,7 +268,9 @@ static const char *resolve_with_service(const char *host, const char *service) {
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
     int rc = getaddrinfo(host, service, &hints, &res);
-    if (rc == 0) freeaddrinfo(res);
+    if (rc == 0) {
+        freeaddrinfo(res);
+    }
     return rc == EAI_FAIL ? "refused" : "passed-to-resolver";
 }
 
@@ -256,7 +280,9 @@ static const char *resolve_with_service(const char *host, const char *service) {
 static const char *unix_connect_result(void) {
     static char buf[RESULT_TEXT_LENGTH];
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) return "socket-failed";
+    if (fd < 0) {
+        return "socket-failed";
+    }
     struct sockaddr_storage addr;
     memset(&addr, 0, sizeof addr);
     addr.ss_family = AF_UNIX;
@@ -264,8 +290,12 @@ static const char *unix_connect_result(void) {
     int rc = connect(fd, (struct sockaddr *) &addr, sizeof(sa_family_t));
     int err = errno;
     close(fd);
-    if (rc == 0) return "allowed";
-    if (err == EACCES) return "denied";
+    if (rc == 0) {
+        return "allowed";
+    }
+    if (err == EACCES) {
+        return "denied";
+    }
     snprintf(buf, sizeof buf, "errno:%d", err);
     return buf;
 }
@@ -274,9 +304,15 @@ static const char *unix_connect_result(void) {
       or caught by a handler somebody installed. */
 static const char *hangup_disposition(void) {
     struct sigaction current;
-    if (sigaction(SIGHUP, NULL, &current) != 0) return "unknown";
-    if (current.sa_handler == SIG_DFL) return "default";
-    if (current.sa_handler == SIG_IGN) return "ignored";
+    if (sigaction(SIGHUP, NULL, &current) != 0) {
+        return "unknown";
+    }
+    if (current.sa_handler == SIG_DFL) {
+        return "default";
+    }
+    if (current.sa_handler == SIG_IGN) {
+        return "ignored";
+    }
     return "handled";
 }
 
@@ -309,9 +345,15 @@ static int write_rules(const char *directory, const char *body, int keep_writabl
 static int create_entry(const char *directory, const char *entry) {
     char path[PATH_MAX];
     snprintf(path, sizeof path, "%s/%s", directory, entry);
-    if (!strcmp(entry, LINK_NAME)) return symlink(RULES_NAME, path);
-    if (!strcmp(entry, DIRECTORY_NAME)) return mkdir(path, OWNER_ONLY_DIRECTORY_MODE);
-    if (!strcmp(entry, FIFO_NAME)) return mkfifo(path, OWNER_ONLY_FILE_MODE);
+    if (!strcmp(entry, LINK_NAME)) {
+        return symlink(RULES_NAME, path);
+    }
+    if (!strcmp(entry, DIRECTORY_NAME)) {
+        return mkdir(path, OWNER_ONLY_DIRECTORY_MODE);
+    }
+    if (!strcmp(entry, FIFO_NAME)) {
+        return mkfifo(path, OWNER_ONLY_FILE_MODE);
+    }
     return 0;
 }
 
@@ -333,9 +375,15 @@ static void remove_rules_directory(const char *directory) {
 /* Replaces the rules through a descriptor the first phase left open. */
 static const char *rewrite_rules(int fd, const char *body) {
     size_t length = strlen(body);
-    if (fd < 0) return "no-descriptor";
-    if (ftruncate(fd, 0) != 0) return "failed";
-    if (pwrite(fd, body, length, 0) != (ssize_t) length) return "failed";
+    if (fd < 0) {
+        return "no-descriptor";
+    }
+    if (ftruncate(fd, 0) != 0) {
+        return "failed";
+    }
+    if (pwrite(fd, body, length, 0) != (ssize_t) length) {
+        return "failed";
+    }
     return "ok";
 }
 
@@ -442,7 +490,9 @@ static int phase_one(const char *self, const char *scenario) {
     int write_fd = -1;
     if (write_rules(directory, body, keep_writable, &write_fd) != 0 || create_entry(directory, entry) != 0) {
         perror("rules directory");
-        if (write_fd >= 0) close(write_fd);
+        if (write_fd >= 0) {
+            close(write_fd);
+        }
         remove_rules_directory(directory);
         return PROBE_EXIT_CANNOT_RUN;
     }
@@ -470,7 +520,9 @@ static int phase_one(const char *self, const char *scenario) {
     }
     argv[n] = NULL;
 
-    if (ignore_hangup) signal(SIGHUP, SIG_IGN);
+    if (ignore_hangup) {
+        signal(SIGHUP, SIG_IGN);
+    }
     setenv("NETBLOCKER_CONF", conf, 1);
     setenv("LD_PRELOAD", lib, 1);
     execv(self, argv);
@@ -594,6 +646,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s <scenario>\n", argv[0]);
         return PROBE_EXIT_CANNOT_RUN;
     }
-    if (!strcmp(argv[1], "child")) return phase_two(argc, argv);
+    if (!strcmp(argv[1], "child")) {
+        return phase_two(argc, argv);
+    }
     return phase_one(argv[0], argv[1]);
 }

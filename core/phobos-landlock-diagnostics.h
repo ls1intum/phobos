@@ -38,4 +38,8 @@ void warn_always(const char *format, ...);
 /* Reports the message and gives up. */
 [[noreturn]] void exit_with_message(const char *message);
 
+/* Reports a message built from its arguments and gives up, for a refusal that has to
+ * name the path, the letter or the version it is about. */
+[[noreturn]] void exit_with_format(const char *format, ...) __attribute__((format(printf, 1, 2)));
+
 #endif

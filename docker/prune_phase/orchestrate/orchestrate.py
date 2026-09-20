@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-orchestrate.py – prune, merge & build the Base*.cfg policy files that
+orchestrate.py - prune, merge & build the Base*.cfg policy files that
 `core/phobos-policy.sh` applies at run time. Only the discovery (pruning) phase
 uses Bubblewrap; the run phase is enforced by Landlock, not Bubblewrap.
 
@@ -9,10 +9,10 @@ It consumes the per-exercise artefacts (.paths and .json) that
 .json written beside it in the same run before it merges anything.
 
 ### Outputs (all in /var/tmp/opt/core/config)
-* **BasePhobos.cfg**            – **UNION** of bindings from *all* languages →
+* **BasePhobos.cfg**            - **UNION** of bindings from *all* languages →
   used when the runtime cannot tell which language is running.
-* **BaseLanguage-<lang>.cfg**   – full binding set for that language (duplicates ok).
-* **TailPhobos.cfg**            – the runtime chdir, the only tail option the
+* **BaseLanguage-<lang>.cfg**   - full binding set for that language (duplicates ok).
+* **TailPhobos.cfg**            - the runtime chdir, the only tail option the
   phobos-landlock runtime accepts. (The pruning run's Bubblewrap mount and
   namespace flags and its per-exercise `--chdir` are dropped; the runtime chdir
   is injected via the `--runtime-chdir` CLI argument.)
@@ -21,10 +21,10 @@ It consumes the per-exercise artefacts (.paths and .json) that
 These are never applied. They are the two comparisons that say something
 BaseLanguage-<lang>.cfg does not, so that a policy can be judged rather than only
 inspected.
-* **BasePhobosIntersect.cfg**   – what every language needed.
-* **Base<Lang>Only.cfg**        – what no other language needed, which is where a
+* **BasePhobosIntersect.cfg**   - what every language needed.
+* **Base<Lang>Only.cfg**        - what no other language needed, which is where a
   policy grows when one language's prune goes wrong.
-* **Base<Lang>Common.cfg**      – what every exercise of that language needed with the
+* **Base<Lang>Common.cfg**      - what every exercise of that language needed with the
   same right, from the intersection make_lang_sets.py writes. A path two exercises
   needed with different rights is absent from it: the intersection is taken over whole
   "mode path" lines.
@@ -66,9 +66,9 @@ ap = argparse.ArgumentParser(
     description=textwrap.dedent(__doc__))
 
 ap.add_argument('--langs', required=True,
-                help='comma‑separated: java,python')
+                help='comma-separated: java,python')
 ap.add_argument('--tests-dir', default='/var/tmp/testing-dir',
-                help='Root that contains <lang>/ sub‑dirs with exercises (passed to prune script).')
+                help='Root that contains <lang>/ sub-dirs with exercises (passed to prune script).')
 ap.add_argument('--path-dir', default='/var/tmp/path_sets',
                 help='Where <lang>_*.paths and *.json live (input).')
 ap.add_argument('--helpers-dir', default='/var/tmp/helpers',
@@ -78,16 +78,18 @@ ap.add_argument('--skip-prune', action='store_true',
                 help='Skip running prune scripts; use existing artifacts in --path-dir.')
 ap.add_argument('--verbose', action='store_true')
 ap.add_argument('--runtime-chdir', default='/var/tmp/testing-dir',
-                help='Directory the *runtime* sandbox should chdir into (overrides any per‑exercise chdir seen during pruning).')
+                help='Directory the *runtime* sandbox should chdir into (overrides any per-exercise chdir seen during pruning).')
 ap.add_argument('--prune-script', default='/var/tmp/pruning/run_minimal_fs_all.sh',
                 help='Pruning entry point to run per language (the path the compose file mounts it at).')
 ap.add_argument('--core-dir', default='/var/tmp/opt/core/config',
                 help='Where the generated policy files are written.')
 args = ap.parse_args()
 
-langs: list[str] = [l.strip() for l in args.langs.split(',') if l.strip()]
-PATH_DIR = Path(args.path_dir);            PATH_DIR.mkdir(parents=True, exist_ok=True)
-CORE_DIR = Path(args.core_dir);            CORE_DIR.mkdir(parents=True, exist_ok=True)
+langs: list[str] = [name.strip() for name in args.langs.split(',') if name.strip()]
+PATH_DIR = Path(args.path_dir)
+PATH_DIR.mkdir(parents=True, exist_ok=True)
+CORE_DIR = Path(args.core_dir)
+CORE_DIR.mkdir(parents=True, exist_ok=True)
 INTERSECT_DIR = CORE_DIR / 'debug'
 INTERSECT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -99,7 +101,7 @@ MAKE_LANG_SETS = HELPERS_DIR / 'make_lang_sets.py'
 
 def run(cmd: Sequence[str], tag: str = '',
         extra_environment: dict[str, str] | None = None) -> None:
-    """Run *cmd* streaming output; raise if exit‑status != 0.
+    """Run *cmd* streaming output; raise if exit-status != 0.
 
     Always executed without a shell: every caller passes an argument list, so a
     string form was dead code and only widened the injection surface.
@@ -117,7 +119,7 @@ def run(cmd: Sequence[str], tag: str = '',
     print(f'{GREEN}✓ {tag} ({dt:.1f}s){RESET}')
 
 
-# ────────────────────────────────────────── step 1 – prune
+# ────────────────────────────────────────── step 1 - prune
 
 def prune_language(lang: str) -> None:
     """Prune every exercise of one language, unless --skip-prune says the artefacts exist.
@@ -273,7 +275,7 @@ def build_runtime_tail(runtime_chdir: str) -> None:
 # ────────────────────────────────────────── main pipeline
 print(f'\n{BOLD}Orchestrating for:{RESET}', ', '.join(langs), '\n')
 
-# 1) prune in parallel (creates per‑exercise artifacts in PATH_DIR)
+# 1) prune in parallel (creates per-exercise artifacts in PATH_DIR)
 # Artefacts of an earlier run would otherwise be indistinguishable from this run's.
 # That matters because the completeness check further down asks whether a language
 # produced a result: a leftover union file from last week would answer yes for a
@@ -286,7 +288,7 @@ if not args.skip_prune:
 
 failed_languages: list[str] = []
 with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-    fut2lang = {pool.submit(prune_language, l): l for l in langs}
+    fut2lang = {pool.submit(prune_language, name): name for name in langs}
     for fut in as_completed(fut2lang):
         lang = fut2lang[fut]
         try:

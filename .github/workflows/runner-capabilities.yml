@@ -1,10 +1,11 @@
-# Reports what the runner can actually do, for the CI that is not written yet.
+# Reports what the runner can actually do.
 #
-# Two planned jobs depend on the machine rather than on this repository: running the
-# Landlock acceptance suites inside an ordinary container, and running the pruner, which
-# needs Bubblewrap and therefore unprivileged user namespaces. A runner image can withdraw
-# either without notice, so the question is asked here, in one place, and asked the same
-# way every time.
+# Two things the other workflows do depend on the machine rather than on this repository:
+# build.yml runs the Landlock acceptance suites inside an ordinary container, and test.yml
+# runs the pruner, which needs Bubblewrap and therefore unprivileged user namespaces. A
+# runner image can withdraw either without notice, so when one of those jobs starts
+# failing, this is where the question is asked, in one place and the same way every
+# time.
 #
 # Manual on purpose. It is a diagnostic, not a gate: the two assert steps are allowed to
 # fail and the verdict is written to the run summary, so one dispatch answers both

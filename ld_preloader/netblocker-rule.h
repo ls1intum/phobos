@@ -24,7 +24,7 @@
 static constexpr size_t RULE_LINE_LENGTH = 512;
 
 /* The highest port a rule or a lookup can name. */
-static constexpr unsigned long PORT_MAX = 65535;
+static constexpr unsigned long HIGHEST_PORT = 65535;
 
 /* An IPv4 address is compared as the IPv4-mapped IPv6 address ::ffff:a.b.c.d, whose
  * first 96 bits are that fixed prefix, so an IPv4 prefix length counts from there. An

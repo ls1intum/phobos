@@ -2,17 +2,14 @@
 /.idea
 /.vscode
 
-# Local Windows helpers, kept out of a repository whose subject is a Linux sandbox.
-/replace_detect_minimal_fs.ps1
-/rebuild_image.ps1
-
 # Scratch checkouts used while trying the prune phase against a real exercise.
 /test-repos/**
 
 # Build output. The C sources are compiled inside the run-phase image, but a contributor
-# who compiles the preload library by hand leaves the object files behind. The two
-# libnetblocker.so files are deliberately tracked, so only the intermediates are ignored
-# here; see .gitattributes, which marks *.so binary so that Git never rewrites them.
+# who compiles the preload library by hand leaves the object files behind. No
+# libnetblocker.so is committed any more, so *.so is deliberately absent here: see
+# .gitattributes, which marks it binary so that a stray one is never normalised, and
+# AGENTS.md, which says why none may be checked in.
 /build/
 *.o
 *.a
