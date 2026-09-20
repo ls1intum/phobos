@@ -42,6 +42,8 @@ done
 # Scratch for the temporary files parse_cfg_policy and the merge make: a subdirectory of the
 # specification directory, so they are removed with it rather than left in /tmp. Passed to
 # parse_cfg_policy through the environment it reads it from.
+refuse_missing_realpath
+
 PHOBOS_SCRATCH="${SPEC_DIR}/${PHB_SPEC_SCRATCH}"
 mkdir -p "$PHOBOS_SCRATCH"
 export PHOBOS_SCRATCH
