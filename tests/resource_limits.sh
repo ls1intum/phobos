@@ -19,7 +19,13 @@ passed=0
 failed=0
 ok()  { printf 'ok    %s\n' "$1"; passed=$((passed + 1)); }
 bad() { printf 'FAIL  %s\n        expected: %s\n        actual:   %s\n' "$1" "$2" "$3"; failed=$((failed + 1)); }
-check() { local n=$1 w=$2 g=$3; if [[ "$g" == "$w" ]]; then ok "$n"; else bad "$n" "$w" "$g"; fi; }
+# Compares what a case produced with what it should produce, and records the outcome.
+check() {
+  local name="$1"
+  local want="$2"
+  local got="$3"
+  if [[ "$got" == "$want" ]]; then ok "$name"; else bad "$name" "$want" "$got"; fi
+}
 
 # Parses a [limits] body and prints the five PARSED_LIMIT_* values, comma-separated.
 parse_limits() {
