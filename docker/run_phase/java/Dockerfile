@@ -57,6 +57,10 @@ RUN readelf -h ${PHOBOS_HOME}/phobos-landlock > /tmp/wrapper-header.txt \
  && grep -q 'BIND_NOW' /tmp/guard-dynamic.txt \
  && grep -q 'BIND_NOW' /tmp/library-dynamic.txt \
  && rm -f /tmp/wrapper-header.txt /tmp/wrapper-dynamic.txt /tmp/guard-header.txt /tmp/guard-dynamic.txt /tmp/library-dynamic.txt
-RUN chmod +x ${PHOBOS_HOME}/*.sh ${PHOBOS_HOME}/*.cfg \
+# The six entry points, and not the two files that are only ever sourced: a mode on those
+# would say they can be run, which is what the check in test.yml states they cannot.
+RUN chmod +x ${PHOBOS_HOME}/phobos.sh ${PHOBOS_HOME}/phobos-policy.sh \
+      ${PHOBOS_HOME}/phobos-filesystem.sh ${PHOBOS_HOME}/phobos-network.sh \
+      ${PHOBOS_HOME}/phobos-resources.sh ${PHOBOS_HOME}/phobos-timeout.sh \
  && ln -sf phobos.sh ${PHOBOS_HOME}/phobos
 ENV PATH=${PHOBOS_HOME}:$PATH
