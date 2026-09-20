@@ -11,23 +11,18 @@
 # no --privileged, no --cap-add, no --security-opt.
 set -uo pipefail
 
+HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../harness.sh
+source "${HERE}/../harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
+
 CORE="${PHOBOS_HOME:-/var/tmp/opt/core}"
 GUARD="${CORE}/phobos-connect-guard"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-pass=0
-fail=0
-skipped=0
-ok()   { printf 'ok    %s\n' "$1"; pass=$((pass + 1)); }
-bad()  { printf 'FAIL  %s\n        %s\n' "$1" "$2"; fail=$((fail + 1)); }
-skip() { printf 'SKIP  %s\n        %s\n' "$1" "$2"; skipped=$((skipped + 1)); }
-
 if [[ ! -x "$GUARD" ]]; then
   bad "the image ships the connect guard" "no executable at ${GUARD}"
-  echo
-  printf '%d passed, %d failed\n' "$pass" "$fail"
-  exit 1
+  finish
 fi
 
 cat > "$WORK/probe.c" <<'C'
@@ -213,9 +208,9 @@ C
 compiler=gcc-14
 command -v "$compiler" >/dev/null 2>&1 || compiler=gcc
 "$compiler" -O2 -o "$WORK/probe" "$WORK/probe.c" 2>"$WORK/cc.log" \
-    || { bad "compile the probe" "$(cat "$WORK/cc.log")"; echo; printf '%d passed, %d failed\n' "$pass" "$fail"; exit 1; }
+    || { bad "compile the probe" "$(cat "$WORK/cc.log")"; finish; }
 "$compiler" -O2 -o "$WORK/listener" "$WORK/listener.c" 2>"$WORK/cc.log" \
-    || { bad "compile the listener" "$(cat "$WORK/cc.log")"; echo; printf '%d passed, %d failed\n' "$pass" "$fail"; exit 1; }
+    || { bad "compile the listener" "$(cat "$WORK/cc.log")"; finish; }
 
 # The status the probe ends with when its call was refused; the probe's source names it too.
 PROBE_REFUSED=10
@@ -369,6 +364,4 @@ else
   bad "an IP range refuses an address outside it that shares the allowed port" "rc=$rc out=$out"
 fi
 
-echo
-printf '%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skipped"
-(( fail == 0 ))
+finish

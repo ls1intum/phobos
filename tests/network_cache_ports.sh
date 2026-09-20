@@ -12,6 +12,8 @@
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=harness.sh
+source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 # shellcheck source=../core/phobos-constants.sh
 source "${HERE}/../core/phobos-constants.sh"
 SOURCE_DIRECTORY="${HERE}/../ld_preloader"
@@ -21,49 +23,13 @@ WORK="$(mktemp -d)"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
 
-passed=0
-failed=0
-skipped=0
-
-ok() {
-  printf 'ok    %s\n' "$1"
-  passed=$((passed + 1))
-}
-
-bad() {
-  printf 'FAIL  %s\n        expected: %s\n        actual:   %s\n' "$1" "$2" "$3"
-  failed=$((failed + 1))
-}
-
-skip() {
-  printf 'SKIP  %s\n        reason:   %s\n' "$1" "$2"
-  skipped=$((skipped + 1))
-}
-
-check() {
-  local name=$1
-  local want=$2
-  local got=$3
-  if [[ "$got" == "$want" ]]; then ok "$name"; else bad "$name" "$want" "$got"; fi
-}
-
-summary() {
-  echo
-  printf '%d passed, %d failed, %d skipped\n' "$passed" "$failed" "$skipped"
-  if (( skipped > 0 )); then
-    printf 'Skipped checks did not run and are not counted as passing.\n'
-  fi
-  (( failed == 0 )) || exit 1
-  exit 0
-}
-
 # Named rather than inherited: the sources are C23 and Ubuntu 24.04's default
 # gcc 13 knows that standard only under its draft name.
 COMPILER="${COMPILER:-gcc-14}"
 if ! command -v "$COMPILER" >/dev/null 2>&1; then
   skip "network cache port restrictions" \
        "no $COMPILER on this platform; these checks run on Linux"
-  summary
+  finish
 fi
 
 # The same build the run-phase image performs, flags included: -O2 is what turns
@@ -72,7 +38,7 @@ fi
 if ! "$COMPILER" -std=gnu23 -O2 -Wall -Wextra -fPIC -shared -fvisibility=hidden -Wl,-z,now \
      -o "$WORK/libnetblocker.so" "$SOURCE_DIRECTORY"/netblocker*.c 2>"$WORK/lib.log"; then
   bad "build the interposer" "a shared library" "$(cat "$WORK/lib.log")"
-  summary
+  finish
 fi
 ok "build the interposer"
 
@@ -85,7 +51,7 @@ check "the library exports exactly its six hooks" "bind connect getaddrinfo send
 
 if ! "$COMPILER" -std=gnu23 -O0 -g -o "$WORK/probe" "$PROBE_SOURCE" 2>"$WORK/probe.log"; then
   bad "build the probe client" "an executable" "$(cat "$WORK/probe.log")"
-  summary
+  finish
 fi
 ok "build the probe client"
 
@@ -648,4 +614,4 @@ else
       "exit 0, command run" "exit ${rc}: $out"
 fi
 
-summary
+finish

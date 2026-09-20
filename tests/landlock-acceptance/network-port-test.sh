@@ -12,6 +12,10 @@
 # no --security-opt. Landlock network rules need ABI 4 (kernel 6.7) or newer.
 set -uo pipefail
 
+HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../harness.sh
+source "${HERE}/../harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
+
 CORE="${PHOBOS_HOME:-/var/tmp/opt/core}"
 LANDLOCK="${CORE}/phobos-landlock"
 # How long the listeners are given to bind their ports before the probes connect.
@@ -25,11 +29,6 @@ cleanup() {
   rm -rf "$WORK"
 }
 trap cleanup EXIT
-
-pass=0
-fail=0
-ok()  { printf 'ok    %s\n' "$1"; pass=$((pass + 1)); }
-bad() { printf 'FAIL  %s\n        %s\n' "$1" "$2"; fail=$((fail + 1)); }
 
 ALLOWED_PORT=12345
 DENIED_PORT=20000
@@ -66,7 +65,7 @@ C
 compiler=gcc-14
 command -v "$compiler" >/dev/null 2>&1 || compiler=gcc
 "$compiler" -O2 -o "$WORK/bypass" "$WORK/bypass.c" 2>"$WORK/cc.log"
-[[ -x "$WORK/bypass" ]] || { bad "compile the raw-connect probe" "$(cat "$WORK/cc.log")"; echo; printf '%d passed, %d failed\n' "$pass" "$fail"; exit 1; }
+[[ -x "$WORK/bypass" ]] || { bad "compile the raw-connect probe" "$(cat "$WORK/cc.log")"; finish; }
 
 # How many connections may wait to be accepted on each loopback listener.
 LISTEN_BACKLOG=16
@@ -103,6 +102,4 @@ out="$(run "$DENIED_PORT")"
 [[ "$out" == *"RAW-CONNECT-OK"* ]] && ok "no --connect-tcp means the raw bypass is not stopped by Landlock" \
   || bad "no --connect-tcp means the raw bypass is not stopped by Landlock" "$out"
 
-echo
-printf '%d passed, %d failed\n' "$pass" "$fail"
-(( fail == 0 ))
+finish

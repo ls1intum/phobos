@@ -15,8 +15,8 @@ from the one an exercise gets.
 docker build -f docker/run_phase/java/Dockerfile -t phobos-landlock:test /tmp/ctx
 
 # 3. one suite, with no security flags of any kind and no network
-docker run --rm --network none -v "$PWD/tests/landlock-acceptance:/testsuite:ro" \
-  phobos-landlock:test bash /testsuite/run-tests.sh
+docker run --rm --network none -v "$PWD/tests:/tests:ro" \
+  phobos-landlock:test bash /tests/landlock-acceptance/run-tests.sh
 ```
 
 Replace the last word with any of the suites below. Nothing is mounted over `/root/.m2`:

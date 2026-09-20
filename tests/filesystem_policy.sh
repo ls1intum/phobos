@@ -14,17 +14,14 @@
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=harness.sh
+source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
 # shellcheck source=../core/phobos-constants.sh
 source "${CORE}/phobos-constants.sh"
 WORK="$(mktemp -d)"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
-
-passed=0
-failed=0
-ok()  { printf 'ok    %s\n' "$1"; passed=$((passed + 1)); }
-bad() { printf 'FAIL  %s\n        expected: %s\n        actual:   %s\n' "$1" "$2" "$3"; failed=$((failed + 1)); }
 
 # The tree the policies below name. Real directories, because build_path_args drops a read or
 # execute path that does not exist and would otherwise silently prove nothing.
@@ -172,6 +169,4 @@ else
     "exit 0 and an rx rule for each spelling" "exit $(field "$r" 1): $rules"
 fi
 
-echo
-printf '%d passed, %d failed\n' "$passed" "$failed"
-(( failed == 0 ))
+finish

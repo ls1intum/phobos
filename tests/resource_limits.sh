@@ -7,6 +7,8 @@
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=harness.sh
+source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
 # shellcheck source=../core/phobos-constants.sh
 source "${CORE}/phobos-constants.sh"
@@ -14,18 +16,6 @@ WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
-
-passed=0
-failed=0
-ok()  { printf 'ok    %s\n' "$1"; passed=$((passed + 1)); }
-bad() { printf 'FAIL  %s\n        expected: %s\n        actual:   %s\n' "$1" "$2" "$3"; failed=$((failed + 1)); }
-# Compares what a case produced with what it should produce, and records the outcome.
-check() {
-  local name="$1"
-  local want="$2"
-  local got="$3"
-  if [[ "$got" == "$want" ]]; then ok "$name"; else bad "$name" "$want" "$got"; fi
-}
 
 # Parses a [limits] body and prints the five PARSED_LIMIT_* values, comma-separated.
 parse_limits() {
@@ -216,6 +206,4 @@ else
   bad "a single endless stderr line under a memory limit does not end the run with SIGPIPE" "exit 0" "exit ${long_line_rc}"
 fi
 
-echo
-printf '%d passed, %d failed\n' "$passed" "$failed"
-(( failed == 0 ))
+finish

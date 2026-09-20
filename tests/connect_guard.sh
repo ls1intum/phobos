@@ -11,22 +11,11 @@
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=harness.sh
+source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-
-pass=0
-fail=0
-skipped=0
-ok()   { printf 'ok    %s\n' "$1"; pass=$((pass + 1)); }
-bad()  { printf 'FAIL  %s\n        %s\n' "$1" "$2"; fail=$((fail + 1)); }
-skip() { printf 'SKIP  %s\n        reason:   %s\n' "$1" "$2"; skipped=$((skipped + 1)); }
-finish() {
-  echo
-  printf '%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skipped"
-  (( fail == 0 )) || exit 1
-  exit 0
-}
 
 compiler=gcc-14
 command -v "$compiler" >/dev/null 2>&1 || compiler=gcc

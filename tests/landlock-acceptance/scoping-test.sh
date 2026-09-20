@@ -12,15 +12,12 @@
 # suite skips, because there is nothing to enforce in its place.
 set -uo pipefail
 
+HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../harness.sh
+source "${HERE}/../harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
+
 CORE="${PHOBOS_HOME:-/var/tmp/opt/core}"
 LANDLOCK="${CORE}/phobos-landlock"
-
-pass=0
-fail=0
-skipped=0
-ok()   { printf 'ok    %s\n' "$1"; pass=$((pass + 1)); }
-bad()  { printf 'FAIL  %s\n        %s\n' "$1" "$2"; fail=$((fail + 1)); }
-skip() { printf 'SKIP  %s\n        %s\n' "$1" "$2"; skipped=$((skipped + 1)); }
 
 # The Landlock version that brings scoping, and how long the processes the checks signal live:
 # long enough to outlast the checks, and killed when they are done.
@@ -32,9 +29,7 @@ version="$("$LANDLOCK" --verbose --rights=rx /usr -- /bin/true 2>&1 \
 
 if [[ -z "$version" ]] || (( version < FIRST_LANDLOCK_VERSION_WITH_SCOPING )); then
   skip "Landlock scoping" "the kernel offers Landlock version ${version:-<none>}; scoping needs ${FIRST_LANDLOCK_VERSION_WITH_SCOPING}"
-  echo
-  printf '%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skipped"
-  exit 0
+  finish
 fi
 
 # A process outside the sandbox, started before it, that the sandboxed process will try to
@@ -61,6 +56,4 @@ else
   bad "a sandboxed process can still signal a process inside the sandbox" "$out"
 fi
 
-echo
-printf '%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skipped"
-(( fail == 0 ))
+finish

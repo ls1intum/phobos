@@ -66,6 +66,12 @@ jobs:
       # Each suite reports its own passed, failed and skipped counts and exits non-zero on
       # a failure, so they are separate steps: one run then names every suite that broke
       # rather than only the first.
+      # First, because every suite below reports through it. A reporting helper that records
+      # a failure wrongly does not announce itself, it makes a suite green.
+      - name: The suites' own reporting
+        if: ${{ !cancelled() }}
+        run: bash tests/harness_self_test.sh
+
       - name: The timeout contract
         if: ${{ !cancelled() }}
         run: bash tests/timeout_units.sh

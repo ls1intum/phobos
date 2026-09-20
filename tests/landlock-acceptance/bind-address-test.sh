@@ -9,15 +9,14 @@
 # no --security-opt.
 set -uo pipefail
 
+HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../harness.sh
+source "${HERE}/../harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
+
 CORE="${PHOBOS_HOME:-/var/tmp/opt/core}"
 LIB="${CORE}/libnetblocker.so"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-
-pass=0
-fail=0
-ok()  { printf 'ok    %s\n' "$1"; pass=$((pass + 1)); }
-bad() { printf 'FAIL  %s\n        %s\n' "$1" "$2"; fail=$((fail + 1)); }
 
 cat > "$WORK/bind_probe.c" <<'C'
 #define _GNU_SOURCE
@@ -50,7 +49,7 @@ C
 compiler=gcc-14
 command -v "$compiler" >/dev/null 2>&1 || compiler=gcc
 "$compiler" -O2 -o "$WORK/bind_probe" "$WORK/bind_probe.c" 2>"$WORK/cc.log" \
-  || { bad "compile the bind probe" "$(cat "$WORK/cc.log")"; echo; printf '%d passed, %d failed\n' "$pass" "$fail"; exit 1; }
+  || { bad "compile the bind probe" "$(cat "$WORK/cc.log")"; finish; }
 
 printf '127.0.0.1 8080\n' > "$WORK/bind.rules"
 run() { LD_PRELOAD="$LIB" NETBLOCKER_BIND_CONF="$WORK/bind.rules" "$WORK/bind_probe" "$@" 2>&1; }
@@ -69,6 +68,4 @@ out="$(run 0.0.0.0 8080 udp)"
 out="$(LD_PRELOAD="$LIB" "$WORK/bind_probe" 0.0.0.0 8080 2>&1)"
 [[ "$out" == *BIND-OK* ]] && ok "with no bind rules every bind passes" || bad "with no bind rules every bind passes" "$out"
 
-echo
-printf '%d passed, %d failed\n' "$pass" "$fail"
-(( fail == 0 ))
+finish

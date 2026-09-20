@@ -11,27 +11,9 @@
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=harness.sh
+source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 PRODUCER="${HERE}/../var/tmp/pruning/run_minimal_fs_all.sh"
-
-passed=0
-failed=0
-
-ok() {
-  printf 'ok    %s\n' "$1"
-  passed=$((passed + 1))
-}
-
-bad() {
-  printf 'FAIL  %s\n        expected: %s\n        actual:   %s\n' "$1" "$2" "$3"
-  failed=$((failed + 1))
-}
-
-summary() {
-  echo
-  printf '%d passed, %d failed\n' "${passed}" "${failed}"
-  (( failed == 0 )) || exit 1
-  exit 0
-}
 
 # A prune stub leaves behind the one file the producer looks for afterwards.
 write_prune_stub() {
@@ -156,4 +138,5 @@ check_an_emitter_failure_fails_the_run() {
 check_a_quiet_run_completes
 check_this_run_s_artefacts_replace_the_last_one_s
 check_an_emitter_failure_fails_the_run
-summary
+
+finish
