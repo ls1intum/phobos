@@ -41,23 +41,15 @@ case ":${LD_PRELOAD:-}:" in
 esac
 
 # Use the spec's net.rules file as config, whether or not it is empty; ensure it exists.
-if [[ -f "$RULES" ]]; then
-  export NETBLOCKER_CONF="$RULES"
-else
-  : > "$RULES"
-  export NETBLOCKER_CONF="$RULES"
-fi
+[[ -f "$RULES" ]] || : > "$RULES"
+export NETBLOCKER_CONF="$RULES"
 
 # The spec's bind.rules gives libnetblocker the local-bind allow-list, whether or not it is
 # empty; an empty file leaves binding unrestricted, matching the absence of a Landlock
 # bind-port rule.
 BIND_RULES="${SPEC_DIR}/bind.rules"
-if [[ -f "$BIND_RULES" ]]; then
-  export NETBLOCKER_BIND_CONF="$BIND_RULES"
-else
-  : > "$BIND_RULES"
-  export NETBLOCKER_BIND_CONF="$BIND_RULES"
-fi
+[[ -f "$BIND_RULES" ]] || : > "$BIND_RULES"
+export NETBLOCKER_BIND_CONF="$BIND_RULES"
 
 # The connect guard supervises every connect the command makes and enforces the [connect]
 # allow-list by host and port from a place a raw syscall cannot step around, unlike the

@@ -53,7 +53,24 @@ for c in "${cfgs[@]}"; do
   [[ -f "$c" ]] || { echo "Config not found: $c" >&2; exit "${PHB_EPOLICY}"; }
 done
 
-mapfile -t base_cfgs < <(ls -1 "${HERE}"/Base*.cfg 2>/dev/null | sort || true)
+# Every Base*.cfg beside this script, in the order the shell sorts a glob, which is the order
+# the documentation promises. Read with a glob rather than by parsing ls, because a name is
+# what this repository is careful about everywhere else it reads one.
+#
+# nullglob, and then a refusal rather than a skip: an unmatched glob has to become no base
+# policy at all, while a name the glob did match and this program cannot read has to stop the
+# run. Skipping such a name would build a policy from the bases that happened to be readable,
+# which is a narrower sandbox reported as a working one. A directory or a broken symbolic
+# link named Base*.cfg is therefore said out loud here, rather than left to fail somewhere
+# further in with a message about a line that could not be read.
+shopt -s nullglob
+base_cfgs=( "${HERE}"/Base*.cfg )
+shopt -u nullglob
+for candidate in "${base_cfgs[@]}"; do
+  [[ -f "$candidate" ]] && continue
+  report "Policy invalid: '${candidate}' matches Base*.cfg but is not a readable file, so the base policy cannot be built. (PHB-EPOLICY)"
+  exit "${PHB_EPOLICY}"
+done
 if [[ ${#base_cfgs[@]} -eq 0 ]]; then
   report "Policy invalid: no Base*.cfg beside phobos-policy.sh, so there is no sandbox to apply; refusing to build a policy. (PHB-EPOLICY)"
   exit "${PHB_EPOLICY}"
@@ -97,22 +114,42 @@ merge_limits() {
 
 # Resolves the pooled state into one effective value: a disabled limit prints nothing, so it
 # is left out of the specification and not applied, and otherwise the largest value prints.
+# A limit no cfg named prints nothing either. The explicit success matters: this runs in a
+# command substitution under set -e, where a final test that answered false would end the run.
 effective_limit() {
   local key="$1"
-  if (( limit_disabled[$key] )); then printf '%s' ""; return 0; fi
-  if (( limit_max[$key] >= 0 )); then printf '%s' "${limit_max[$key]}"; return 0; fi
-  printf '%s' ""; return 0
+  if (( limit_disabled[$key] == 0 && limit_max[$key] >= 0 )); then
+    printf '%s' "${limit_max[$key]}"
+  fi
+  return 0
 }
 
-# Build base policy (FS union, NET union, limits pooled by merge_limits)
-for b in "${base_cfgs[@]}"; do
-  parse_cfg_policy "$b"
-  # FS: union, the same merge every exercise config goes through below
-  fs_union_dir "$base_dir" "$PARSED_FS_DIR"
-  # NET: union
-  tmpnet="$(mktemp -p "$PHOBOS_SCRATCH")"; net_union "$tmpnet" "$base_net" "$PARSED_NET_FILE"; mv "$tmpnet" "$base_net"
-  tmpbind="$(mktemp -p "$PHOBOS_SCRATCH")"; net_union "$tmpbind" "$base_bind" "$PARSED_BIND_FILE"; mv "$tmpbind" "$base_bind"
+# Folds one cfg into the policy being built: its filesystem sections are unioned into the
+# directory, its [connect] and [bind] rules into the two files, and its [limits] into the
+# pooled state. The base policy and every exercise config go through this same call, which is
+# what makes the model additive in every dimension. Assumes it is called plainly, not in a
+# subshell, because parse_cfg_policy refuses a malformed cfg by ending the run and because
+# merge_limits writes the pooled state this shell holds.
+fold_cfg_into() {
+  local cfg="$1"
+  local fs_dir="$2"
+  local net_file="$3"
+  local bind_file="$4"
+  local merged
+  parse_cfg_policy "$cfg"
+  fs_union_dir "$fs_dir" "$PARSED_FS_DIR"
+  merged="$(mktemp -p "$PHOBOS_SCRATCH")"
+  net_union "$merged" "$net_file" "$PARSED_NET_FILE"
+  mv "$merged" "$net_file"
+  merged="$(mktemp -p "$PHOBOS_SCRATCH")"
+  net_union "$merged" "$bind_file" "$PARSED_BIND_FILE"
+  mv "$merged" "$bind_file"
   merge_limits
+}
+
+# Build the base policy: every Base*.cfg folded in, in sorted order.
+for b in "${base_cfgs[@]}"; do
+  fold_cfg_into "$b" "$base_dir" "$base_net" "$base_bind"
 done
 
 # Effective policy: start from the base, then add each exercise config on top. The model is
@@ -130,24 +167,16 @@ for r in ${PHB_FS_RIGHTS}; do cp "${base_dir}/${r}.paths" "${eff_dir}/${r}.paths
 cp "$base_net" "$eff_net"; cp "$base_bind" "$eff_bind"
 
 for c in "${cfgs[@]}"; do
-  parse_cfg_policy "$c"
-  fs_union_dir "$eff_dir" "$PARSED_FS_DIR"
-  tmpnet="$(mktemp -p "$PHOBOS_SCRATCH")"; net_union "$tmpnet" "$eff_net" "$PARSED_NET_FILE"; mv "$tmpnet" "$eff_net"
-  tmpbind="$(mktemp -p "$PHOBOS_SCRATCH")"; net_union "$tmpbind" "$eff_bind" "$PARSED_BIND_FILE"; mv "$tmpbind" "$eff_bind"
-  merge_limits
+  fold_cfg_into "$c" "$eff_dir" "$eff_net" "$eff_bind"
 done
 
-# Resolve the pooled state into the effective values. A disabled timeout is written as none,
-# and a finite one is canonicalised so 2 and 2.000 produce the same specification.
+# Resolve the pooled timeout. A disabled one is written as none, and a finite one is
+# canonicalised so 2 and 2.000 produce the same specification. The resource limits are
+# resolved where they are written, below.
 timeout_eff=""
 if (( ! timeout_disabled )) && (( timeout_max_ms >= 0 )); then
   timeout_eff="$(ms_to_timeout "$timeout_max_ms")"
 fi
-eff_limit_mem_mb="$(effective_limit mem_mb)"
-eff_limit_nproc="$(effective_limit nproc)"
-eff_limit_nofile="$(effective_limit nofile)"
-eff_limit_fsize_mb="$(effective_limit fsize_mb)"
-eff_limit_cpu="$(effective_limit cpu)"
 
 # Every [connect] and [bind] rule is judged here, once, before anything is written. The
 # layer that builds the Landlock port rules checks the same thing, but it is not always in
@@ -162,13 +191,11 @@ write_spec "$SPEC_DIR" "$eff_dir" "$eff_net" "$timeout_eff" "$tail_flags_file" "
 # [limits] section named. phobos-resources.sh reads them and sets them with rlimits right
 # before phobos-landlock, so phobos-landlock and the command inherit them, rather than this
 # shell setting them and the whole layer chain, with its helpers, running under them.
-{
-  [[ -n "$eff_limit_mem_mb"   ]] && printf 'mem_mb=%s\n'   "$eff_limit_mem_mb"
-  [[ -n "$eff_limit_nproc"    ]] && printf 'nproc=%s\n'    "$eff_limit_nproc"
-  [[ -n "$eff_limit_nofile"   ]] && printf 'nofile=%s\n'   "$eff_limit_nofile"
-  [[ -n "$eff_limit_fsize_mb" ]] && printf 'fsize_mb=%s\n' "$eff_limit_fsize_mb"
-  [[ -n "$eff_limit_cpu"      ]] && printf 'cpu=%s\n'      "$eff_limit_cpu"
-} > "${SPEC_DIR}/limits.conf"
+: > "${SPEC_DIR}/limits.conf"
+for key in mem_mb nproc nofile fsize_mb cpu; do
+  value="$(effective_limit "$key")"
+  [[ -n "$value" ]] && printf '%s=%s\n' "$key" "$value" >> "${SPEC_DIR}/limits.conf"
+done
 
 # Under --debug, the effective specification each layer below reads, one line per file.
 for spec_file in ${PHB_SPEC_FILES}; do
@@ -176,6 +203,7 @@ for spec_file in ${PHB_SPEC_FILES}; do
   debug_log policy "${spec_file}: $(tr '\n' ' ' < "${SPEC_DIR}/${spec_file}")"
 done
 
-# The last conditional above can leave a non-zero status when the final limit is unset, which
-# would otherwise become this script's exit status. The specification is written; report success.
+# A loop whose last pass took the false branch of a test answers non-zero, and that would
+# otherwise become this script's exit status although the specification was written. Say the
+# success rather than leave it to whatever the last command happened to answer.
 exit 0
