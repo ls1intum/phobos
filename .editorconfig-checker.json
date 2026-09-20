@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "What editorconfig-checker holds this repository to. .editorconfig states the rules; this",
+    "file only says which of them the checker enforces, and why one of them it does not.",
+    "",
+    "IndentSize is off. It reads every line's left padding as a multiple of the section's",
+    "indent_size, which an aligned continuation line, a wrapped argument list and an ASCII",
+    "diagram are all not, so it reported 343 findings over code that keeps the indentation",
+    "the file says it keeps. Enforcing it would mean reformatting to suit the checker rather",
+    "than the reader. IndentStyle stays on, so spaces against tabs is still checked.",
+    "",
+    "What is left is what breaks something here rather than a taste: end_of_line, which",
+    "AGENTS.md calls load-bearing because a carriage return ends up inside a path the",
+    "sandbox then fails to grant, charset, trailing whitespace and the final newline."
+  ],
+  "Disable": {
+    "IndentSize": true
+  }
+}

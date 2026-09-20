@@ -158,6 +158,68 @@ jobs:
           done < <(find . -name 'Dockerfile*' -type f)
           exit "$failed"
 
+  editorconfig:
+    name: Whitespace and line endings (editorconfig-checker)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # .editorconfig has been advisory since it was written: it asks editors for LF, and
+      # AGENTS.md calls LF load-bearing, because a carriage return ends up inside a path and
+      # the run silently loses access the policy granted. Nothing checked it. This job does.
+      # .editorconfig-checker.json says which rules it enforces and why one is left off.
+      #
+      # A pinned release binary rather than the project's action: this organisation allows
+      # only actions it owns and actions GitHub publishes, so a third-party one is refused
+      # before the run starts, whether or not it is pinned to a commit.
+      - name: Run editorconfig-checker
+        env:
+          # Update the checksum together with the version; it pins the exact release asset.
+          EDITORCONFIG_CHECKER_VERSION: "3.4.0"
+          EDITORCONFIG_CHECKER_SHA256: "feae0baaf8d55e51fd9b6c9e04497f2fb288b40034110fb9ac83fb1bf0b6011e"
+        run: |
+          curl --fail --silent --show-error --location \
+            --output editorconfig-checker.tar.gz \
+            "https://github.com/editorconfig-checker/editorconfig-checker/releases/download/v${EDITORCONFIG_CHECKER_VERSION}/ec-linux-amd64.tar.gz"
+          echo "${EDITORCONFIG_CHECKER_SHA256}  editorconfig-checker.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file editorconfig-checker.tar.gz bin/ec-linux-amd64
+          ./bin/ec-linux-amd64 --no-color
+
+  conventions:
+    name: Documented shell functions
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # AGENTS.md asks that every function in core/*.sh carry a comment saying what it does
+      # and what it assumes about its environment, and nothing measured it. This checks the
+      # narrow half that a machine can: that a comment line immediately precedes each
+      # function. It says nothing about whether the comment states the assumptions, which
+      # stays a reviewer's job, and it does not find a comment inside a body.
+      - name: Every function in core/*.sh is preceded by a comment
+        run: |
+          awk 'FNR == 1 { previous = "" }
+               /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/ {
+                 if (previous !~ /^[[:space:]]*#/) {
+                   printf "::error file=%s,line=%d::%s has no comment above it\n", FILENAME, FNR, $0
+                   undocumented = 1
+                 }
+               }
+               { previous = $0 }
+               END { exit undocumented }' core/*.sh
+
   workflows:
     name: Workflows (actionlint)
     runs-on: ubuntu-26.04
@@ -183,7 +245,7 @@ jobs:
           tar --extract --gzip --file actionlint.tar.gz actionlint
           ./actionlint -color
 
-  # One check for a branch rule to require, rather than six.
+  # One check for a branch rule to require, rather than eight.
   #
   # A rule naming the jobs themselves breaks quietly in two ways: a renamed job leaves the
   # old name required and forever pending, and a job that never runs, because a path
@@ -192,7 +254,7 @@ jobs:
   # rather than a silent pass.
   required:
     name: Lint / required
-    needs: [ shell, c, python, yaml, docker, workflows ]
+    needs: [ shell, c, python, yaml, docker, editorconfig, conventions, workflows ]
     # always(), not !cancelled(). A job that is skipped counts as success towards a
     # required check, so !cancelled() would let a cancelled run leave the one required
     # lint check skipped and therefore green.
