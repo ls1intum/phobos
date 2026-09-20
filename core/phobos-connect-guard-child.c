@@ -16,16 +16,20 @@
 #include <linux/filter.h>
 #include <linux/seccomp.h>
 
-/* The one native ABI this build's connect number belongs to. The filter denies every other
- * ABI, so a connect made through an alternate one (i386 int 0x80, or x32) cannot slip past the
- * native-number comparison unwatched. */
-#if defined(__x86_64__)
-#define GUARD_NATIVE_AUDIT_ARCH AUDIT_ARCH_X86_64
-#elif defined(__aarch64__)
-#define GUARD_NATIVE_AUDIT_ARCH AUDIT_ARCH_AARCH64
-#else
-#error "phobos-connect-guard supports x86-64 and aarch64 only"
-#endif
+/* The one refusal this filter ever returns: EACCES, as an ordinary denied call would. */
+#define GUARD_REFUSE BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA))
+
+/* One syscall refused outright, and one handed to the supervisor to decide. Each is a
+ * comparison that skips the next instruction when the number does not match, so the
+ * refusal or the trap must be exactly one instruction long and the jump distances must
+ * stay 0 and 1. Writing the pair once is what keeps that true: the distances were
+ * correct nine times over only because every branch happened to be one instruction, and
+ * a two-instruction branch written by hand would have jumped into the middle of itself. */
+#define GUARD_DENY_SYSCALL(number) \
+    BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (number), 0, 1), GUARD_REFUSE
+#define GUARD_TRAP_SYSCALL(number) \
+    BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (number), 0, 1), \
+    BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF)
 
 /* The filter, over every egress path a submission has, not connect alone. On any but the
  * native ABI it refuses outright, so an i386 (int 0x80) socketcall or an x32 call cannot
@@ -49,30 +53,21 @@ static int install_connect_filter(void) {
     struct sock_filter instructions[] = {
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, GUARD_NATIVE_AUDIT_ARCH, 1, 0),
-        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA)),
+        GUARD_REFUSE,
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
 #ifdef __X32_SYSCALL_BIT
         BPF_JUMP(BPF_JMP | BPF_JSET | BPF_K, __X32_SYSCALL_BIT, 0, 1),
-        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA)),
+        GUARD_REFUSE,
 #endif
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_io_uring_setup, 0, 1),
-        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA)),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_io_uring_enter, 0, 1),
-        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA)),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_io_uring_register, 0, 1),
-        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA)),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_setsid, 0, 1),
-        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA)),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_setpgid, 0, 1),
-        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA)),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_connect, 0, 1),
-        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_socket, 0, 1),
-        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_sendto, 0, 1),
-        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_sendmmsg, 0, 1),
-        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF),
+        GUARD_DENY_SYSCALL(__NR_io_uring_setup),
+        GUARD_DENY_SYSCALL(__NR_io_uring_enter),
+        GUARD_DENY_SYSCALL(__NR_io_uring_register),
+        GUARD_DENY_SYSCALL(__NR_setsid),
+        GUARD_DENY_SYSCALL(__NR_setpgid),
+        GUARD_TRAP_SYSCALL(__NR_connect),
+        GUARD_TRAP_SYSCALL(__NR_socket),
+        GUARD_TRAP_SYSCALL(__NR_sendto),
+        GUARD_TRAP_SYSCALL(__NR_sendmmsg),
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
     };
     struct sock_fprog program = {

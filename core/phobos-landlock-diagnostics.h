@@ -26,11 +26,11 @@ static constexpr int EXIT_CODE_COMMAND_NOT_EXECUTABLE = 127;
 extern bool verbose;
 
 /* Prints one line, only when --verbose was given. */
-void log_verbose(const char *format, ...);
+void log_verbose(const char *format, ...) __attribute__((format(printf, 1, 2)));
 
 /* Prints one line whether or not --verbose was given. For the gaps a person
  * has to know about even when nobody asked for detail. */
-void warn_always(const char *format, ...);
+void warn_always(const char *format, ...) __attribute__((format(printf, 1, 2)));
 
 /* Reports the message with the current errno and gives up. */
 [[noreturn]] void exit_with_system_error(const char *message);
