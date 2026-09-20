@@ -226,6 +226,7 @@ jobs:
       # `mvn clean` steps in the phase test then fail for want of a plugin, which looks
       # like a sandbox failure and is not one.
       - name: The five guarantees
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
             phobos-run-phase:ci bash /testsuite/run-tests.sh

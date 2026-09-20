@@ -1,0 +1,12 @@
+# shellcheck's own configuration, read from the root of the repository.
+#
+# Every `source` directive here is written relative to the file that carries it, for
+# example `# shellcheck source=../core/phobos-constants.sh` in a suite under tests/.
+# Without this line shellcheck resolves such a path against its working directory, which
+# in CI is the repository root, finds nothing, and falls back to analysing each file in
+# isolation. It then knows none of the PHB_* constants the sourced files define, so a
+# misspelt one reads as an ordinary unassigned variable and no lint job notices.
+#
+# SCRIPTDIR means "the directory of the script being checked", which is what those
+# directives were written against.
+source-path=SCRIPTDIR

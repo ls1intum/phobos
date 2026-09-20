@@ -228,6 +228,28 @@ for pair in "PHB_EPOLICY=11" "PHB_ETIMEOUT=14" "PHB_ERUNTIME=15" "PHB_EXIT_USAGE
   fi
 done
 
+echo "== every PHB_ name a script reads is one a script defines =="
+# The lint job follows the source directives, but it deliberately says nothing about a
+# variable once a file sources another, so a misspelt PHB_ name is invisible to it. Under
+# set -u such a name ends the run at the line that reads it, which may be the refusal path
+# of a rarely taken branch. The names are cheap to check here instead. It reads the names a
+# script expands, so one used only in an arithmetic context, or set through declare, is
+# outside what this covers.
+# Assigned anywhere, not only in phobos-constants.sh: PHB_NETBLOCKER_SO is the channel one
+# layer exports for the next, and the suites set their own PHB_TEST_ names on a fixture.
+defined_names="$(grep -rhoE '(^|[^A-Za-z0-9_$])PHB_[A-Z0-9_]+=' "$CORE" "$HERE" --include='*.sh' \
+                   | grep -oE 'PHB_[A-Z0-9_]+' | sort -u)"
+undefined_names=""
+while IFS= read -r used_name; do
+  grep -qx -- "$used_name" <<<"$defined_names" || undefined_names+="${used_name} "
+done < <(grep -rhoE '\$\{?PHB_[A-Z0-9_]+' "$CORE" "$HERE" --include='*.sh' \
+           | sed -E 's/^\$\{?//' | sort -u)
+if [[ -z "$undefined_names" ]]; then
+  ok "every PHB_ name read by core and the suites is defined"
+else
+  bad "every PHB_ name read by core and the suites is defined" "no undefined names" "$undefined_names"
+fi
+
 echo "== a refusal is written to stderr and leaves stdout to the command =="
 # A policy error ends the run before the command starts. Its message is for the person
 # reading the log, not part of the output a caller captures from the command.
