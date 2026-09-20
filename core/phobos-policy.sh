@@ -107,7 +107,7 @@ effective_limit() {
 # Build base policy (FS union, NET union, limits pooled by merge_limits)
 for b in "${base_cfgs[@]}"; do
   parse_cfg_policy "$b"
-  # FS: union only (no least-privilege checks while building base)
+  # FS: union, the same merge every exercise config goes through below
   fs_union_dir "$base_dir" "$PARSED_FS_DIR"
   # NET: union
   tmpnet="$(mktemp -p "$PHOBOS_SCRATCH")"; net_union "$tmpnet" "$base_net" "$PARSED_NET_FILE"; mv "$tmpnet" "$base_net"

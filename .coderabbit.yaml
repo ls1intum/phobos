@@ -36,12 +36,14 @@ reviews:
         Apply when a change touches the filesystem sandbox layer, the enforcement helper, or the path
         rules a run is confined by.
     - label: network
-      instructions: Apply when a change touches the LD_PRELOAD network filter, its rule format, or the address cache.
+      instructions: >-
+        Apply when a change touches the connect guard, the LD_PRELOAD network filter, their
+        shared rule format, or the address cache.
     - label: timeout
       instructions: Apply when a change touches the timeout wrapper or the deadline a run is stopped by.
     - label: policy
       instructions: >-
-        Apply when a change touches configuration parsing, the per-path merge, the base or tail
+        Apply when a change touches configuration parsing, the additive merge, the base or tail
         configuration files, or permission modelling.
     - label: prune
       instructions: >-
@@ -64,14 +66,28 @@ reviews:
     - "var/tmp/pruning/**"
     - "assets/**"
     - "docker-compose.yaml"
-    - "README.md"
     - "renovate.json"
+    # The prose that states what this repository promises, and the conventions a
+    # contribution is held to. Left out, a change to any of them went unreviewed while
+    # every file they describe was reviewed.
+    - "README.md"
+    - "SECURITY.md"
+    - "AGENTS.md"
+    - "CLAUDE.md"
+    - "CONTRIBUTING.md"
+    - "CITATION.cff"
+    - ".editorconfig"
+    - ".gitattributes"
+    - ".gitignore"
+    - ".shellcheckrc"
+    - ".hadolint.yaml"
+    - ".yamllint"
+    - ".bandit"
     - "!**/*.so"
     - "!**/*.log"
     - "!**/*.png"
     - "!**/*.jpg"
     - "!var/tmp/path_sets/**"
-    - "!var/tmp/testing-dir/**"
   path_instructions:
     - path: "**/*"
       instructions: >-
@@ -101,8 +117,9 @@ reviews:
         documented meaning, and that every path reaching a command line is quoted.
     - path: "core/*.c"
       instructions: >-
-        This is the enforcement helper: it applies the kernel-side policy and then
-        execs the build command. Check that the restriction is applied before the exec
+        These are phobos-landlock, which applies the kernel-side policy and then
+        execs the build command, and the connect guard, which supervises egress from
+        outside the sandboxed process. Check that the restriction is applied before the exec
         and can no longer be relaxed afterwards, that a kernel unable to enforce the
         requested level aborts rather than degrades, that every path is opened in a way
         an attacker cannot redirect, and that no buffer is written past its bounds.

@@ -145,10 +145,10 @@ done
 # with TIOCSTI and have them run outside. Bubblewrap's own guidance asks for one or the
 # other, and this sandbox has no seccomp filter.
 #
-# --unshare-user is deliberately absent, although the committed core/config/TailPhobos.cfg
-# names it. What is generated here has to be the sandbox the measurement was actually made
-# in; adding an option the prune never ran under would produce a policy nobody has tested.
-# Adding it is a change to the sandbox, and belongs with whoever owns that decision.
+# --unshare-user is deliberately absent. What is generated here has to be the sandbox the
+# measurement was actually made in; adding an option the prune never ran under would
+# produce a policy nobody has tested. Adding it is a change to the sandbox, and belongs
+# with whoever owns that decision.
 TAIL_OPTIONS=( --proc /proc --dev /dev --share-net --new-session --unshare-pid --unshare-uts --unshare-ipc --chdir "$SANDBOX_WORKDIR" )
 
 # ── init candidate config ────────────────────────────────────────────────────

@@ -489,8 +489,9 @@ fs_union_dir() {
 # --------------------------------------------------------------------------
 # Translating a parsed policy into phobos-landlock arguments.
 #
-# Both entry points use these, so the two cannot drift apart. That has already
-# happened once in this repository, which is why it lives here and not twice.
+# The filesystem layer builds these arguments, and the tests read them back. They live
+# here rather than in the layer so that the translation is stated once: it drifted apart
+# when two entry points each carried their own copy.
 # --------------------------------------------------------------------------
 
 # The order the usage text lists the letters in, used to normalise a set.
@@ -865,7 +866,7 @@ build_network_args() {
   collect_network_ports "$rules" "$ports_file" "$wildcard_file"
   refuse_mixed_network_wildcard "$ports_file" "$wildcard_file"
   if [[ -s "$wildcard_file" ]]; then
-    _log "network: '$(cat "$wildcard_file")' names no port; the Landlock network layer stays off and only libnetblocker filters this run"
+    _log "network: '$(cat "$wildcard_file")' names no port; the Landlock network layer stays off, and the connect guard and libnetblocker filter this run"
     rm -f "$ports_file" "$wildcard_file"
     return 0
   fi
@@ -908,8 +909,9 @@ build_bind_args() {
 # Refusing a preload library that would not filter anything.
 #
 # The loader skips a preload library it cannot use and prints only a warning, and
-# the command then runs with no network filtering at all. Both entry points ask
-# these functions first, so that such a run ends instead.
+# the command then runs with the preload half of the network filtering missing. The
+# network layer asks these functions before it hands over, so that such a run ends
+# instead.
 # --------------------------------------------------------------------------
 
 # The functions the network layer relies on the preload library defining.

@@ -17,6 +17,6 @@ RUN mkdir -p /home/sandboxuser/.gradle/wrapper/dists \
 
 USER sandboxuser
 
-# ---------- 4. default entrypoint = pruning script --------------------------
-# The compose file appends the language argument (java / python / c).
+# The entry point is the pruning script; the compose file appends the language
+# argument (java or python).
 ENTRYPOINT ["/var/tmp/pruning/run_minimal_fs_all.sh"]

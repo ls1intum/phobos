@@ -1,5 +1,5 @@
-# Relaxed base: this repository has three YAML files, and enforcing document
-# starts or 80-column lines on compose files buys nothing.
+# Relaxed base: enforcing document starts or 80-column lines on the workflows and the
+# compose files of this repository buys nothing.
 extends: relaxed
 
 rules:
