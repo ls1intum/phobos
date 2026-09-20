@@ -18,7 +18,7 @@ static constexpr size_t RIGHTS_PREFIX_LENGTH = sizeof(RIGHTS_PREFIX) - 1;
 static constexpr int DECIMAL = 10;
 
 /* The highest TCP port; the lowest is 1. */
-static constexpr unsigned long HIGHEST_TCP_PORT = 65535;
+static constexpr unsigned long HIGHEST_PORT = 65535;
 
 /* An option and the one value it takes. */
 static constexpr int OPTION_AND_VALUE_WORDS = 2;
@@ -49,15 +49,13 @@ static constexpr int OPTION_AND_VALUE_WORDS = 2;
 unsigned long parse_number(const char *text, unsigned long lowest, unsigned long highest,
                            const char *what) {
     if (text[0] == '\0') {
-        fprintf(stderr, "[phobos-landlock] %s: empty value\n", what);
-        exit(EXIT_CODE_POLICY_ERROR);
+        exit_with_format("%s: empty value", what);
     }
     errno = 0;
     char *first_unconverted = nullptr;
     unsigned long value = strtoul(text, &first_unconverted, DECIMAL);
     if (errno != 0 || *first_unconverted != '\0' || value < lowest || value > highest) {
-        fprintf(stderr, "[phobos-landlock] %s: '%s'\n", what, text);
-        exit(EXIT_CODE_POLICY_ERROR);
+        exit_with_format("%s: '%s'", what, text);
     }
     return value;
 }
@@ -103,13 +101,10 @@ void remember_path_rule(struct options *options, const char *letters, const char
     rule->path = path;
     for (const char *letter = letters; *letter != '\0'; letter++) {
         if (rights_letter_already_set(rule, *letter)) {
-            fprintf(stderr, "[phobos-landlock] --rights=%s repeats '%c'\n", letters, *letter);
-            exit(EXIT_CODE_POLICY_ERROR);
+            exit_with_format("--rights=%s repeats '%c'", letters, *letter);
         }
         if (!apply_rights_letter(rule, *letter)) {
-            fprintf(stderr, "[phobos-landlock] --rights=%s: '%c' is not a right\n", letters,
-                    *letter);
-            exit(EXIT_CODE_POLICY_ERROR);
+            exit_with_format("--rights=%s: '%c' is not a right", letters, *letter);
         }
     }
     options->path_rule_count++;
@@ -121,7 +116,7 @@ static void remember_port(uint64_t *ports, size_t *count, const char *value, con
     if (*count >= MAXIMUM_PORT_RULES) {
         exit_with_message(what);
     }
-    ports[*count] = (uint64_t)parse_number(value, 1, HIGHEST_TCP_PORT, "not a TCP port");
+    ports[*count] = (uint64_t)parse_number(value, 1, HIGHEST_PORT, "not a TCP port");
     (*count)++;
 }
 
