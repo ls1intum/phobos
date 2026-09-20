@@ -4,28 +4,40 @@ orchestrate.py – prune, merge & build the Base*.cfg policy files that
 `core/phobos-policy.sh` applies at run time. Only the discovery (pruning) phase
 uses Bubblewrap; the run phase is enforced by Landlock, not Bubblewrap.
 
-Refactored to consume *pre‑generated* per‑exercise artifacts (.paths/.json) emitted
-upstream by `run_minimal_fs_all.sh` + `emit_artifacts.py`.
+It consumes the per-exercise artefacts (.paths and .json) that
+`run_minimal_fs_all.sh` and `emit_artifacts.py` write, and holds each .paths to the
+.json written beside it in the same run before it merges anything.
 
 ### Outputs (all in /var/tmp/opt/core/config)
 * **BasePhobos.cfg**            – **UNION** of bindings from *all* languages →
   used when the runtime cannot tell which language is running.
 * **BaseLanguage-<lang>.cfg**   – full binding set for that language (duplicates ok).
-* **BasePhobosIntersect.cfg**   – **INTERSECTION** (common bindings across all
-  languages).
-* **Base<lang>Intersect.cfg**   – intersection of that language with BasePhobos
-  (redundant but useful for auditing).
 * **TailPhobos.cfg**            – the runtime chdir, the only tail option the
   phobos-landlock runtime accepts. (The pruning run's Bubblewrap mount and
-  namespace flags and its per‑exercise `--chdir` are dropped; the runtime chdir
+  namespace flags and its per-exercise `--chdir` are dropped; the runtime chdir
   is injected via the `--runtime-chdir` CLI argument.)
 
-Overlaps are fine; intersection files are for human inspection.
+### For reading, in the debug/ subdirectory
+These are never applied. They are the two comparisons that say something
+BaseLanguage-<lang>.cfg does not, so that a policy can be judged rather than only
+inspected.
+* **BasePhobosIntersect.cfg**   – what every language needed.
+* **Base<Lang>Only.cfg**        – what no other language needed, which is where a
+  policy grows when one language's prune goes wrong.
+* **Base<Lang>Common.cfg**      – what every exercise of that language needed with the
+  same right, from the intersection make_lang_sets.py writes. A path two exercises
+  needed with different rights is absent from it: the intersection is taken over whole
+  "mode path" lines.
+
+Ship exactly one Base*.cfg beside phobos-policy.sh: it applies every Base*.cfg it
+finds there, so a BasePhobos.cfg left next to a BaseLanguage-java.cfg gives a Java
+run the paths of every other language as well.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shlex
 import subprocess
@@ -172,6 +184,46 @@ def _read_union(path: Path) -> dict[str, set[str]]:
     return {'r': readonly, 'w': write}
 
 
+def artefact_disagreements(lang: str) -> list[str]:
+    """Name every per-exercise artefact pair of this language that does not agree.
+
+    emit_artifacts.py writes two files per exercise from one parsed log: the .paths the
+    policy is built from, and the .json that records what that run saw. Nothing read the
+    .json, so a truncated or half-written .paths, which is a smaller policy and still looks
+    like a correct one, had nothing to disagree with. They are compared here instead: the
+    paths_all entries of the record are exactly the lines of the .paths file, in order.
+    """
+    problems: list[str] = []
+    records = {path.stem for path in PATH_DIR.glob(f'{lang}_*.json')}
+    # An exercise whose name ends in union or intersection is left out of the path sets by
+    # the same rule make_lang_sets.py applies, so its record reads as an orphan and stops
+    # the merge. That is the safe direction, and the name is the thing to change.
+    path_sets = {
+        path.stem for path in PATH_DIR.glob(f'{lang}_*.paths')
+        if not path.name.endswith(('_union.paths', '_intersection.paths'))
+    }
+    problems += [f'{orphan}.json has no {orphan}.paths beside it'
+                 for orphan in sorted(records - path_sets)]
+    for exercise in sorted(path_sets):
+        paths_file = PATH_DIR / f'{exercise}.paths'
+        record_file = PATH_DIR / f'{exercise}.json'
+        if not record_file.exists():
+            problems.append(f'{paths_file.name} has no {record_file.name} beside it')
+            continue
+        try:
+            record = json.loads(record_file.read_text())
+        except json.JSONDecodeError as exc:
+            problems.append(f'{record_file.name} is not readable as JSON: {exc}')
+            continue
+        recorded = [f'{entry["mode"]} {entry["path"]}' for entry in record.get('paths_all', [])]
+        written = [line for line in paths_file.read_text().splitlines() if line]
+        if recorded != written:
+            problems.append(
+                f'{paths_file.name} names {len(written)} path(s) while '
+                f'{record_file.name} records {len(recorded)}')
+    return problems
+
+
 def collect_language_data(langs: Iterable[str]) -> dict[str, dict[str, set[str]]]:
     """Read the union of every requested language that has a usable one.
 
@@ -255,7 +307,19 @@ if failed_languages:
     print('        Refusing to merge a policy from only the languages that succeeded.')
     sys.exit(1)
 
-# 2) generate per‑language union/intersection files
+# 2) hold each language's artefacts to their own record, then generate the union and
+# intersection files. A .paths that disagrees with the .json written beside it in the same
+# run is a policy built from part of a measurement, which looks exactly like a correct one.
+artefact_problems: list[str] = []
+for L in langs:
+    artefact_problems += artefact_disagreements(L)
+if artefact_problems:
+    print(f'{RED}[error]{RESET} the per-exercise artefacts do not agree with their records:')
+    for problem in artefact_problems:
+        print(f'        {problem}')
+    print('        Refusing to merge a policy from a measurement that is not whole.')
+    sys.exit(1)
+
 for L in langs:
     gen_lang_sets(L)
 
@@ -318,13 +382,23 @@ for p in inter_all:
         read_inter_all.add(p)
 _write_cfg(read_inter_all, write_inter_all, INTERSECT_DIR / 'BasePhobosIntersect.cfg')
 
-# 6) per‑language files (full & intersection)
+# 6) per-language files, plus the two comparisons that say something the language file
+# does not. Base<Lang>Only names what no other language needed, which is where a policy
+# grows when one language's prune goes wrong; Base<Lang>Common names what every exercise
+# of that language needed, read from the intersection make_lang_sets already writes.
 for L, info in lang_data.items():
     _write_cfg(info['r'], info['w'], CORE_DIR / f'BaseLanguage-{L}.cfg')
     Lcap = L.capitalize()
-    lang_inter_read  = info['r'] & (read_union | write_union)
-    lang_inter_write = info['w'] & (read_union | write_union)
-    _write_cfg(lang_inter_read, lang_inter_write, INTERSECT_DIR / f'Base{Lcap}Intersect.cfg')
+    other_paths: set[str] = set()
+    for other_lang, other_info in lang_data.items():
+        if other_lang != L:
+            other_paths |= other_info['r'] | other_info['w']
+    _write_cfg(info['r'] - other_paths, info['w'] - other_paths,
+               INTERSECT_DIR / f'Base{Lcap}Only.cfg')
+    common_file = PATH_DIR / f'{L}_intersection.paths'
+    if common_file.exists():
+        common = _read_union(common_file)
+        _write_cfg(common['r'], common['w'], INTERSECT_DIR / f'Base{Lcap}Common.cfg')
 # 7) TailPhobos (sanitize & inject runtime chdir)
 build_runtime_tail(args.runtime_chdir)
 
