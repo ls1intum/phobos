@@ -39,11 +39,12 @@
  * a descriptor, and pidfd_getfd is refused in the container), so trapping it would park that
  * handoff before the supervisor holds the descriptor to service it. A sendmsg datagram is left
  * to libnetblocker, which hooks sendmsg for a dynamically linked command, and to the
- * no-network container that is the boundary either way; sendmmsg is trapped here rather than
- * left the same way because libnetblocker does not hook it. The trapped calls are decided in the
- * supervisor rather than here because a classic BPF program cannot follow a pointer to read an
- * address, and deciding the scalar cases there too keeps the one decision in one testable
- * place. */
+ * no-network container that is the boundary either way. libnetblocker hooks sendmmsg as well,
+ * but a hook is stepped around by a raw system call or a re-exec without LD_PRELOAD, so
+ * sendmmsg is trapped here too and sendmsg is the one call that cannot be, whatever the hook
+ * covers. The trapped calls are decided in the supervisor rather than here, because a classic
+ * BPF program cannot follow a pointer to read an address, and deciding the scalar cases there
+ * too keeps the one decision in one testable place. */
 static int install_connect_filter(void) {
     struct sock_filter instructions[] = {
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),

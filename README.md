@@ -28,6 +28,7 @@ Phobos needs **no privileges, no capabilities and no container flags**: Landlock
 ```
 core/                      the sandbox itself
   phobos.sh                entry point: parses the configuration, applies the layers
+  phobos-policy.sh         turns the base and exercise configuration into a run's specification
   phobos-filesystem.sh     the filesystem layer, reads the path sets and applies Landlock
   phobos-network.sh        the network layer, runs the connect guard and drives the preload library
   phobos-resources.sh      the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
@@ -46,6 +47,7 @@ docker/prune_phase/        one image per language, plus the orchestrator
 docker/run_phase/          the image an exercise actually runs in
 tests/                     the acceptance and probe suites; tests/README.md maps each one to its CI step
 var/tmp/                   prune inputs, helpers and example outputs
+  pruning/orchestrate_core_idea.txt  how the prune containers and the orchestrator share one mount
 assets/                    diagrams
 ```
 
@@ -75,7 +77,7 @@ phobos.sh -> phobos-timeout.sh -> phobos-network.sh (connect guard) -> phobos-fi
           -> phobos-resources.sh -> phobos-landlock -> the command
 ```
 
-The base policy is every `Base*.cfg` sitting beside `phobos-policy.sh`, applied in sorted order, and the exercise configurations named with `--config` are applied on top. **Ship exactly one `Base*.cfg` per runtime environment.** They are found by a glob and unioned, so a `BasePhobos.cfg` left beside a `BaseLanguage-java.cfg` gives a Java run the paths of every other language as well, which is a wider sandbox that looks like a working one. The prune phase writes the applied files and the ones meant for reading into separate directories for that reason. With no `Base*.cfg` at all, a run is refused (`PHB-EPOLICY`) rather than run unconfined.
+The base policy is every `Base*.cfg` sitting beside `phobos-policy.sh`, applied in sorted order, and the exercise configurations named with `--config` are applied on top. **Ship exactly one `Base*.cfg` per runtime environment.** They are found by a glob and unioned, so a `BasePhobos.cfg` left beside a `BaseLanguage-java.cfg` gives a Java run the paths of every other language as well, which is a wider sandbox that looks like a working one. The prune phase does not prevent that: it writes every applied policy into one directory, the cross-language `BasePhobos.cfg` beside the per-language files, because they are **alternatives** rather than parts of one policy, and choosing between them is the packaging step. `docker/run_phase/java/Dockerfile` does the choosing by naming `BaseLanguage-java.cfg` explicitly, and an image that copied the directory wholesale would ship the union of every alternative. A `BasePhobos.cfg` a run left behind earlier is the same hazard from the other direction, so check what is in that directory rather than what this run wrote. The files meant only for reading go to `debug/` and are never applied at all. With no `Base*.cfg` at all, a run is refused (`PHB-EPOLICY`) rather than run unconfined.
 
 A layer switched off is left out of the chain rather than entered and skipped. Three properties of the chain are relied on and easy to break:
 
@@ -91,7 +93,7 @@ The pruning environments are built and run with Compose, one container per langu
 docker compose -f docker-compose.yaml up --build
 ```
 
-Each prune container runs the reference exercise for its language under the discovery algorithm and drops a `<lang>` path set into the shared `path_sets` directory. The orchestrator (`docker/prune_phase/orchestrate/orchestrate.py`) then merges the per-exercise results into `BaseLanguage-<lang>.cfg` and `TailPhobos.cfg` under `var/tmp/opt/core/config` of the shared mount. Copying them over the shipped `core/config/` is a deliberate step of its own: review the result before trusting it, since the allow-list is only as tight as the reference exercises that produced it. Ship exactly one `Base*.cfg` per runtime environment, for the reason above.
+Each prune container runs the reference exercise for its language under the discovery algorithm and drops a `<lang>` path set into the shared `path_sets` directory. The orchestrator (`docker/prune_phase/orchestrate/orchestrate.py`) then merges the per-exercise results into `BaseLanguage-<lang>.cfg`, the cross-language `BasePhobos.cfg` and `TailPhobos.cfg` under `var/tmp/opt/core/config` of the shared mount. Copying them over the shipped `core/config/` is a deliberate step of its own: review the result before trusting it, since the allow-list is only as tight as the reference exercises that produced it. Ship exactly one `Base*.cfg` per runtime environment, for the reason above.
 
 Three more files are written into `var/tmp/opt/core/config/debug/` and are never applied. They exist to be read while judging a policy: `BasePhobosIntersect.cfg` names what every language needed, `Base<Lang>Only.cfg` what no other language needed, which is where a policy grows when one language's prune goes wrong, and `Base<Lang>Common.cfg` what every exercise of that language needed with the same right.
 
@@ -106,11 +108,15 @@ Build the run-phase image (it compiles both C products and bakes in the scripts 
 docker compose -f docker/run_phase/java/docker-compose.yaml up --build
 ```
 
-Then wrap the exercise's build command with `phobos.sh`, which applies the shipped base policy plus any per-exercise configuration:
+Then, inside that image, wrap the exercise's build command with `phobos.sh`. The shipped base policy is the `Base*.cfg` the image put beside `phobos-policy.sh`, so it is applied without being named:
 
 ```
-core/phobos.sh --config core/config/BaseLanguage-java.cfg -- ./gradlew test
+${PHOBOS_HOME}/phobos.sh -- ./gradlew test
 ```
+
+`PHOBOS_HOME` is `/var/tmp/opt/core` in the image, and `phobos` on `PATH` is a symbolic link to the same script. `--config` is for an exercise configuration applied **on top of** that base, never for the base itself: naming a base file there applies it a second time.
+
+A bare checkout cannot run this. `phobos-policy.sh` finds the base policy by globbing `Base*.cfg` beside itself, and a checkout keeps those files in `core/config/` rather than in `core/`, so a run from one is refused with `PHB-EPOLICY` instead of running unconfined. The image is the delivery vehicle, as it is for the two C products and the preload library.
 
 Run the grading container with **`--network none`** and with cgroup limits (`--memory`, `--pids-limit`, `--cpus`, and a size-bounded `--tmpfs` for scratch). Those are the outer wall Phobos relies on and cannot set for itself.
 
@@ -119,7 +125,7 @@ stdout carries the command's own output and nothing else. Every message of Phobo
 To isolate which layer a failure belongs to, each layer can be turned off on its own:
 
 ```
-core/phobos.sh --no-runtime-restriction --config core/config/BaseLanguage-java.cfg -- <command>
+${PHOBOS_HOME}/phobos.sh --no-runtime-restriction -- <command>
 ```
 
 `--debug` makes every layer say on stderr what it does and what it runs, and has `phobos-landlock` and the connect guard report verbosely too; stdout stays the command's own. It prints the whole effective policy, so it is meant for diagnosing a run, not for grading logs. It can only be switched on by the flag, never through the environment.

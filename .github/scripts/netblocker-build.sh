@@ -51,10 +51,10 @@ fail() {
   exit 1
 }
 
-# Answers whether this machine is the architecture the committed objects are built
-# for. Only there is the toolchain pinned: the snapshot service covers the archive
-# amd64 installs from and not the ports archive other architectures use, and only the
-# amd64 build is compared byte for byte. Assumes dpkg.
+# Answers whether this machine is the architecture whose build is byte-reproducible. Only
+# there is the toolchain pinned: the snapshot service covers the archive amd64 installs from
+# and not the ports archive other architectures use, and only the amd64 build is held to
+# producing the same bytes twice. Assumes dpkg.
 pinned_architecture() {
   [[ "$(dpkg --print-architecture)" == "amd64" ]]
 }
@@ -92,9 +92,10 @@ install_pinned_toolchain() {
 }
 
 # Installs the same packages from the ordinary archive, at whatever version it holds,
-# and says so. A build made this way is never compared with the committed objects.
+# and says so. A build made this way is never held to the byte-for-byte comparison, because
+# the versions behind it can move between two runs.
 install_archive_toolchain() {
-  printf 'netblocker-build.sh: %s has no snapshot; installing the toolchain unpinned, so this build is not comparable with the committed amd64 objects\n' \
+  printf 'netblocker-build.sh: %s has no snapshot; installing the toolchain unpinned, so this build is functional but not byte-reproducible\n' \
     "$(dpkg --print-architecture)" >&2
   apt-get update -qq
   apt-get install --yes --no-install-recommends gcc-14 binutils libc6-dev "$@"

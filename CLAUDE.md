@@ -68,12 +68,18 @@ directories while it measures; the sandbox an exercise runs in does not.
 
 There is no build system. The shell runs as it is, and the C is compiled inside the image.
 
+Both of these run **inside the run-phase image**, where `PHOBOS_HOME` is `/var/tmp/opt/core`. The
+shipped base policy is the `Base*.cfg` the image put beside `phobos-policy.sh`, so it is applied
+without being named; `--config` is for an exercise configuration on top of it. A bare checkout keeps
+those files in `core/config/` rather than beside `phobos-policy.sh`, so a run from one is refused
+with `PHB-EPOLICY` rather than run unconfined.
+
 ```
-# Apply the sandbox to a command, using a language configuration
-core/phobos.sh --config core/config/BaseLanguage-java.cfg -- ./gradlew test
+# Apply the sandbox to a command
+${PHOBOS_HOME}/phobos.sh -- ./gradlew test
 
 # Layer switches, for isolating which layer a failure belongs to
-core/phobos.sh --no-runtime-restriction --config core/config/BaseLanguage-java.cfg -- <command>
+${PHOBOS_HOME}/phobos.sh --no-runtime-restriction -- <command>
 ```
 
 ### The linters, which are the gate
@@ -84,21 +90,24 @@ acceptance suites inside it, `codeql.yml` scans, and `pullrequest-template.yml` 
 body. The lint jobs are the ones you can run in full by hand before opening a pull request.
 
 ```
-# Same file sets as CI. Each of these is the whole job, not a sample of it.
+# Same file sets and same flags as CI. Together these are all six jobs, and the C job is two
+# steps rather than one: the compiler gate runs before cppcheck and fails on any warning.
 find . -name '*.sh'  -type f -print0 | xargs -0 shellcheck -x -S warning
-find . -name '*.c'   -type f -print0 | xargs -0 cppcheck --enable=warning --quiet --error-exitcode=1
+( failed=0; while IFS= read -r f; do gcc-14 -std=gnu23 -fsyntax-only -Wall -Wextra -Werror -fanalyzer "$f" || failed=1; done < <(find . -name '*.c' -type f); exit "$failed" )
+find . -name '*.c'   -type f -print0 | xargs -0 cppcheck --std=c23 --enable=warning --quiet --error-exitcode=1
 ruff check --no-cache .
 bandit --recursive --ini .bandit --severity-level medium docker/prune_phase/orchestrate var/tmp/helpers
 yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
+actionlint
 ```
 
 One of those is narrower than it looks: `bandit` runs over exactly two directories, not the
 whole tree, because everything else Python here is fixture. `hadolint` matches `Dockerfile*` at
 any depth, which reaches the four under `docker/`. CI runs
-shellcheck, cppcheck and hadolint inside pinned container images; the commands above assume the
-tools are installed locally and will differ in version, which is the usual reason a local run
-and CI disagree.
+shellcheck, cppcheck and hadolint inside pinned container images and downloads `actionlint` at a
+pinned version and checksum; the commands above assume the tools are installed locally and will
+differ in version, which is the usual reason a local run and CI disagree.
 
 `.bandit`, `.yamllint` and `.hadolint.yaml` at the repository root carry the thresholds and
 the exceptions. A finding is fixed rather than suppressed unless the suppression carries a
