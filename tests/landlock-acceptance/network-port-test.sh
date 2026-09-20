@@ -16,9 +16,9 @@ CORE="${PHOBOS_HOME:-/var/tmp/opt/core}"
 LANDLOCK="${CORE}/phobos-landlock"
 WORK="$(mktemp -d)"
 cleanup() {
-    [[ -n "${allowed_pid:-}" ]] && kill "$allowed_pid" 2>/dev/null
-    [[ -n "${denied_pid:-}" ]] && kill "$denied_pid" 2>/dev/null
-    rm -rf "$WORK"
+  [[ -n "${allowed_pid:-}" ]] && kill "$allowed_pid" 2>/dev/null
+  [[ -n "${denied_pid:-}" ]] && kill "$denied_pid" 2>/dev/null
+  rm -rf "$WORK"
 }
 trap cleanup EXIT
 
@@ -69,19 +69,19 @@ LISTEN_BACKLOG=16
 
 # Loopback listeners, so an allowed connect actually completes rather than being refused.
 listener() { perl -e '
-    use IO::Socket::INET;
-    my $s = IO::Socket::INET->new(LocalAddr=>"127.0.0.1", LocalPort=>$ARGV[0],
-        Listen=>$ARGV[1], ReuseAddr=>1, Proto=>"tcp") or exit 1;
-    while (my $c = $s->accept) { close $c }' "$1" "$LISTEN_BACKLOG"; }
+  use IO::Socket::INET;
+  my $s = IO::Socket::INET->new(LocalAddr=>"127.0.0.1", LocalPort=>$ARGV[0],
+    Listen=>$ARGV[1], ReuseAddr=>1, Proto=>"tcp") or exit 1;
+  while (my $c = $s->accept) { close $c }' "$1" "$LISTEN_BACKLOG"; }
 listener "$ALLOWED_PORT" & allowed_pid=$!
 listener "$DENIED_PORT" & denied_pid=$!
 sleep 1
 
 # Runs the raw-connect probe under phobos-landlock. Arguments: port, extra landlock args...
 run() {
-    local port=$1; shift
-    "$LANDLOCK" --rights=rx /opt --rights=rx /usr --rights=rx /lib --rights=rx "$WORK" "$@" \
-        -- "$WORK/bypass" "$port" 2>&1
+  local port=$1; shift
+  "$LANDLOCK" --rights=rx /opt --rights=rx /usr --rights=rx /lib --rights=rx "$WORK" "$@" \
+    -- "$WORK/bypass" "$port" 2>&1
 }
 
 echo "== with the Landlock network layer on (allow only ${ALLOWED_PORT}) =="
@@ -89,13 +89,13 @@ out="$(run "$ALLOWED_PORT" --connect-tcp "$ALLOWED_PORT")"
 [[ "$out" == *"RAW-CONNECT-OK"* ]] && ok "the allowed port connects" || bad "the allowed port connects" "$out"
 out="$(run "$DENIED_PORT" --connect-tcp "$ALLOWED_PORT")"
 [[ "$out" == *"RAW-CONNECT-DENIED errno=13"* ]] && ok "the denied port is refused by the kernel, raw syscall and all" \
-    || bad "the denied port is refused by the kernel, raw syscall and all" "$out"
+  || bad "the denied port is refused by the kernel, raw syscall and all" "$out"
 
 echo
 echo "== control: with the network layer off, the same bypass reaches the denied port =="
 out="$(run "$DENIED_PORT")"
 [[ "$out" == *"RAW-CONNECT-OK"* ]] && ok "no --connect-tcp means the raw bypass is not stopped by Landlock" \
-    || bad "no --connect-tcp means the raw bypass is not stopped by Landlock" "$out"
+  || bad "no --connect-tcp means the raw bypass is not stopped by Landlock" "$out"
 
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"

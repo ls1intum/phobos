@@ -29,13 +29,13 @@ REPOSITORY="$(cd -- "${HERE}/../.." && pwd)"
 # the one that made it: anything else is refused rather than deleted.
 MARKER=".phobos-run-phase-context"
 if [[ -e "${DESTINATION}" ]]; then
-    if [[ -f "${DESTINATION}/${MARKER}" ]]; then
-        rm -rf -- "${DESTINATION:?}"
-    elif [[ -n "$(ls -A -- "${DESTINATION}")" ]]; then
-        printf '%s is not empty and was not assembled by this script; remove it first\n' \
-            "${DESTINATION}" >&2
-        exit 1
-    fi
+  if [[ -f "${DESTINATION}/${MARKER}" ]]; then
+    rm -rf -- "${DESTINATION:?}"
+  elif [[ -n "$(ls -A -- "${DESTINATION}")" ]]; then
+    printf '%s is not empty and was not assembled by this script; remove it first\n' \
+      "${DESTINATION}" >&2
+    exit 1
+  fi
 fi
 
 mkdir -p "${DESTINATION}/config" "${DESTINATION}/build" "${DESTINATION}/netblocker"

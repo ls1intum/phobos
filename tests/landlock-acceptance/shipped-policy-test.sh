@@ -70,18 +70,18 @@ echo
 
 # Permitted direction: a normal exercise works under the shipped policy.
 for want in "read-assignment=inside-data" "wrote-build=ok" "dev-null=ok" "dev-urandom=ok"; do
-    if grep -qF "$want" <<<"$output"; then
-        ok "shipped policy permits ${want%%=*}"
-    else
-        bad "shipped policy permits ${want%%=*}" "$output"
-    fi
+  if grep -qF "$want" <<<"$output"; then
+    ok "shipped policy permits ${want%%=*}"
+  else
+    bad "shipped policy permits ${want%%=*}" "$output"
+  fi
 done
 
 # Containment direction: a path outside the allow-list stays denied.
 if grep -qF "outside=denied" <<<"$output"; then
-    ok "shipped policy denies a path outside the allow-list"
+  ok "shipped policy denies a path outside the allow-list"
 else
-    bad "shipped policy denies a path outside the allow-list" "$output"
+  bad "shipped policy denies a path outside the allow-list" "$output"
 fi
 
 echo

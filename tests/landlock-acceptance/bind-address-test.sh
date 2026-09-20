@@ -50,7 +50,7 @@ C
 compiler=gcc-14
 command -v "$compiler" >/dev/null 2>&1 || compiler=gcc
 "$compiler" -O2 -o "$WORK/bind_probe" "$WORK/bind_probe.c" 2>"$WORK/cc.log" \
-    || { bad "compile the bind probe" "$(cat "$WORK/cc.log")"; echo; printf '%d passed, %d failed\n' "$pass" "$fail"; exit 1; }
+  || { bad "compile the bind probe" "$(cat "$WORK/cc.log")"; echo; printf '%d passed, %d failed\n' "$pass" "$fail"; exit 1; }
 
 printf '127.0.0.1 8080\n' > "$WORK/bind.rules"
 run() { LD_PRELOAD="$LIB" NETBLOCKER_BIND_CONF="$WORK/bind.rules" "$WORK/bind_probe" "$@" 2>&1; }
