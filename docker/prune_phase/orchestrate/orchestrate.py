@@ -47,6 +47,7 @@ import time
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import NamedTuple
 
 # The terminal escape sequences the progress output is coloured with.
 RED = '\033[31m'
@@ -61,41 +62,69 @@ UNION_LINE_FIELDS = 2
 DEFAULT_JOBS = 4
 
 # ────────────────────────────────────────── CLI
-ap = argparse.ArgumentParser(
-    formatter_class=argparse.RawTextHelpFormatter,
-    description=textwrap.dedent(__doc__))
 
-ap.add_argument('--langs', required=True,
-                help='comma-separated: java,python')
-ap.add_argument('--tests-dir', default='/var/tmp/testing-dir',
-                help='Root that contains <lang>/ sub-dirs with exercises (passed to prune script).')
-ap.add_argument('--path-dir', default='/var/tmp/path_sets',
-                help='Where <lang>_*.paths and *.json live (input).')
-ap.add_argument('--helpers-dir', default='/var/tmp/helpers',
-                help='Where helper scripts (make_lang_sets.py) reside.')
-ap.add_argument('--jobs', type=int, default=os.cpu_count() or DEFAULT_JOBS)
-ap.add_argument('--skip-prune', action='store_true',
-                help='Skip running prune scripts; use existing artifacts in --path-dir.')
-ap.add_argument('--verbose', action='store_true')
-ap.add_argument('--runtime-chdir', default='/var/tmp/testing-dir',
-                help='Directory the *runtime* sandbox should chdir into (overrides any per-exercise chdir seen during pruning).')
-ap.add_argument('--prune-script', default='/var/tmp/pruning/run_minimal_fs_all.sh',
-                help='Pruning entry point to run per language (the path the compose file mounts it at).')
-ap.add_argument('--core-dir', default='/var/tmp/opt/core/config',
-                help='Where the generated policy files are written.')
-args = ap.parse_args()
 
-langs: list[str] = [name.strip() for name in args.langs.split(',') if name.strip()]
-PATH_DIR = Path(args.path_dir)
-PATH_DIR.mkdir(parents=True, exist_ok=True)
-CORE_DIR = Path(args.core_dir)
-CORE_DIR.mkdir(parents=True, exist_ok=True)
-INTERSECT_DIR = CORE_DIR / 'debug'
-INTERSECT_DIR.mkdir(parents=True, exist_ok=True)
+class Layout(NamedTuple):
+    """Where one run reads its artefacts and writes its policies.
 
-HELPERS_DIR = Path(args.helpers_dir)
-PRUNE_SCRIPT = Path(args.prune_script)
-MAKE_LANG_SETS = HELPERS_DIR / 'make_lang_sets.py'
+    The directories every step needs, resolved once from the command line and then handed
+    to each step. They used to be module-level names assigned at import, which meant
+    importing this file parsed a command line and created three directories, so nothing
+    here could be exercised except by starting the program.
+    """
+
+    path_dir: Path
+    core_dir: Path
+    debug_dir: Path
+    prune_script: Path
+    make_lang_sets: Path
+
+
+def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Read the command line. Takes *argv* so that a caller can supply one."""
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawTextHelpFormatter,
+        description=textwrap.dedent(__doc__))
+    parser.add_argument('--langs', required=True,
+                        help='comma-separated: java,python')
+    parser.add_argument('--tests-dir', default='/var/tmp/testing-dir',
+                        help='Root that contains <lang>/ sub-dirs with exercises (passed to prune script).')
+    parser.add_argument('--path-dir', default='/var/tmp/path_sets',
+                        help='Where <lang>_*.paths and *.json live (input).')
+    parser.add_argument('--helpers-dir', default='/var/tmp/helpers',
+                        help='Where helper scripts (make_lang_sets.py) reside.')
+    parser.add_argument('--jobs', type=int, default=os.cpu_count() or DEFAULT_JOBS)
+    parser.add_argument('--skip-prune', action='store_true',
+                        help='Skip running prune scripts; use existing artefacts in --path-dir.')
+    parser.add_argument('--verbose', action='store_true')
+    parser.add_argument('--runtime-chdir', default='/var/tmp/testing-dir',
+                        help='Directory the *runtime* sandbox should chdir into (overrides any per-exercise chdir seen during pruning).')
+    parser.add_argument('--prune-script', default='/var/tmp/pruning/run_minimal_fs_all.sh',
+                        help='Pruning entry point to run per language (the path the compose file mounts it at).')
+    parser.add_argument('--core-dir', default='/var/tmp/opt/core/config',
+                        help='Where the generated policy files are written.')
+    return parser.parse_args(argv)
+
+
+def make_layout(arguments: argparse.Namespace) -> Layout:
+    """Resolves the directories of one run and creates the three it writes into."""
+    path_dir = Path(arguments.path_dir)
+    core_dir = Path(arguments.core_dir)
+    debug_dir = core_dir / 'debug'
+    for directory in (path_dir, core_dir, debug_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+    return Layout(
+        path_dir=path_dir,
+        core_dir=core_dir,
+        debug_dir=debug_dir,
+        prune_script=Path(arguments.prune_script),
+        make_lang_sets=Path(arguments.helpers_dir) / 'make_lang_sets.py')
+
+
+def requested_languages(langs_argument: str) -> list[str]:
+    """The languages named on the command line, in the order they were given."""
+    return [name.strip() for name in langs_argument.split(',') if name.strip()]
+
 
 # ────────────────────────────────────────── helpers
 
@@ -121,41 +150,41 @@ def run(cmd: Sequence[str], tag: str = '',
 
 # ────────────────────────────────────────── step 1 - prune
 
-def prune_language(lang: str) -> None:
+def prune_language(lang: str, layout: Layout, arguments: argparse.Namespace) -> None:
     """Prune every exercise of one language, unless --skip-prune says the artefacts exist.
 
-    PRUNE_SCRIPT writes the per-exercise artefacts into PATH_DIR through emit_artifacts.py;
-    see run_minimal_fs_all.sh. It takes the root the exercises live under from TESTING_DIR,
-    which is what --tests-dir names, and writes them where OUTPUT_DIR says, which is what
-    --path-dir names. Both were parsed and then dropped, so a caller who pointed either
-    elsewhere still pruned, and wrote, where the script's own defaults named.
+    The prune script writes the per-exercise artefacts into the path directory through
+    emit_artifacts.py; see run_minimal_fs_all.sh. It takes the root the exercises live under
+    from TESTING_DIR, which is what --tests-dir names, and writes them where OUTPUT_DIR
+    says, which is what --path-dir names. Both were parsed and then dropped, so a caller who
+    pointed either elsewhere still pruned, and wrote, where the script's own defaults named.
     """
-    if args.skip_prune:
+    if arguments.skip_prune:
         print(f'[skip] prune:{lang}')
         return
-    if not PRUNE_SCRIPT.exists():
-        raise FileNotFoundError(f'pruning script not found: {PRUNE_SCRIPT}')
-    cmd: list[str] = [str(PRUNE_SCRIPT)]
-    if args.verbose:
+    if not layout.prune_script.exists():
+        raise FileNotFoundError(f'pruning script not found: {layout.prune_script}')
+    cmd: list[str] = [str(layout.prune_script)]
+    if arguments.verbose:
         cmd.append('--verbose')
     cmd.append(lang)
     run(cmd, f'prune:{lang}',
-        {'TESTING_DIR': args.tests_dir, 'OUTPUT_DIR': str(PATH_DIR)})
+        {'TESTING_DIR': arguments.tests_dir, 'OUTPUT_DIR': str(layout.path_dir)})
 
 
 # ────────────────────────────────────────── language union generation
 
-def gen_lang_sets(lang: str) -> None:
+def gen_lang_sets(lang: str, layout: Layout) -> None:
     """Invoke make_lang_sets.py to produce <lang>_union.paths & _intersection.paths.
 
     A language with no per-exercise .paths, every exercise of it skipped, is skipped here too.
     """
-    if not MAKE_LANG_SETS.exists():
-        raise FileNotFoundError(f'make_lang_sets.py not found: {MAKE_LANG_SETS}')
-    if not any(PATH_DIR.glob(f"{lang}_*.paths")):
-        print(f'{YELLOW}[warn]{RESET} no {lang}_*.paths in {PATH_DIR}; skipping langsets.')
+    if not layout.make_lang_sets.exists():
+        raise FileNotFoundError(f'make_lang_sets.py not found: {layout.make_lang_sets}')
+    if not any(layout.path_dir.glob(f"{lang}_*.paths")):
+        print(f'{YELLOW}[warn]{RESET} no {lang}_*.paths in {layout.path_dir}; skipping langsets.')
         return
-    cmd = ['python3', str(MAKE_LANG_SETS), lang, str(PATH_DIR)]
+    cmd = ['python3', str(layout.make_lang_sets), lang, str(layout.path_dir)]
     run(cmd, f'langsets:{lang}')
 
 
@@ -186,7 +215,7 @@ def _read_union(path: Path) -> dict[str, set[str]]:
     return {'r': readonly, 'w': write}
 
 
-def artefact_disagreements(lang: str) -> list[str]:
+def artefact_disagreements(lang: str, path_dir: Path) -> list[str]:
     """Name every per-exercise artefact pair of this language that does not agree.
 
     emit_artifacts.py writes two files per exercise from one parsed log: the .paths the
@@ -194,21 +223,22 @@ def artefact_disagreements(lang: str) -> list[str]:
     .json, so a truncated or half-written .paths, which is a smaller policy and still looks
     like a correct one, had nothing to disagree with. They are compared here instead: the
     paths_all entries of the record are exactly the lines of the .paths file, in order.
+
+    An exercise whose name ends in union or intersection is left out of the path sets by the
+    same rule make_lang_sets.py applies, so its record reads as an orphan and stops the
+    merge. That is the safe direction, and the name is the thing to change.
     """
     problems: list[str] = []
-    records = {path.stem for path in PATH_DIR.glob(f'{lang}_*.json')}
-    # An exercise whose name ends in union or intersection is left out of the path sets by
-    # the same rule make_lang_sets.py applies, so its record reads as an orphan and stops
-    # the merge. That is the safe direction, and the name is the thing to change.
+    records = {path.stem for path in path_dir.glob(f'{lang}_*.json')}
     path_sets = {
-        path.stem for path in PATH_DIR.glob(f'{lang}_*.paths')
+        path.stem for path in path_dir.glob(f'{lang}_*.paths')
         if not path.name.endswith(('_union.paths', '_intersection.paths'))
     }
     problems += [f'{orphan}.json has no {orphan}.paths beside it'
                  for orphan in sorted(records - path_sets)]
     for exercise in sorted(path_sets):
-        paths_file = PATH_DIR / f'{exercise}.paths'
-        record_file = PATH_DIR / f'{exercise}.json'
+        paths_file = path_dir / f'{exercise}.paths'
+        record_file = path_dir / f'{exercise}.json'
         if not record_file.exists():
             problems.append(f'{paths_file.name} has no {record_file.name} beside it')
             continue
@@ -226,7 +256,7 @@ def artefact_disagreements(lang: str) -> list[str]:
     return problems
 
 
-def collect_language_data(langs: Iterable[str]) -> dict[str, dict[str, set[str]]]:
+def collect_language_data(langs: Iterable[str], path_dir: Path) -> dict[str, dict[str, set[str]]]:
     """Read the union of every requested language that has a usable one.
 
     A union naming nothing is not a language that needs nothing, it is a language whose pruning
@@ -236,7 +266,7 @@ def collect_language_data(langs: Iterable[str]) -> dict[str, dict[str, set[str]]
     """
     data: dict[str, dict[str, set[str]]] = {}
     for lang in langs:
-        union_file = PATH_DIR / f'{lang}_union.paths'
+        union_file = path_dir / f'{lang}_union.paths'
         if not union_file.exists():
             print(f'{YELLOW}[warn]{RESET} missing {union_file.name}')
             continue
@@ -248,105 +278,8 @@ def collect_language_data(langs: Iterable[str]) -> dict[str, dict[str, set[str]]
     return data
 
 
-# ────────────────────────────────────────── tail handling
+# ────────────────────────────────────────── writing one policy
 
-
-def build_runtime_tail(runtime_chdir: str) -> None:
-    """
-    Write CORE_DIR/TailPhobos.cfg holding only the runtime chdir.
-
-    A pruning run measures under Bubblewrap mount and namespace flags (--proc, --dev,
-    --share-net, --unshare-*, --new-session) and a per-exercise --chdir. The runtime is
-    phobos-landlock, and it accepts none of those Bubblewrap flags: they are not Landlock
-    concepts, and it exits on an option it does not know. phobos.sh appends every tail
-    token to phobos-landlock, so a tail carrying a Bubblewrap flag would fail every run.
-
-    Network intent reaches the runtime through the [connect] section rather than the tail,
-    and a namespace is the container's boundary rather than Landlock's. So the runtime
-    tail is the stable runtime chdir and nothing else; the pruning run's per-exercise
-    chdir is ephemeral and is discarded.
-    """
-    dst_tail = CORE_DIR / 'TailPhobos.cfg'
-    dst_tail.write_text(f'--chdir {runtime_chdir}\n')
-    print('  • wrote TailPhobos.cfg (runtime chdir set to', runtime_chdir + ')')
-
-
-
-# ────────────────────────────────────────── main pipeline
-print(f'\n{BOLD}Orchestrating for:{RESET}', ', '.join(langs), '\n')
-
-# 1) prune in parallel (creates per-exercise artifacts in PATH_DIR)
-# Artefacts of an earlier run would otherwise be indistinguishable from this run's.
-# That matters because the completeness check further down asks whether a language
-# produced a result: a leftover union file from last week would answer yes for a
-# language that produced nothing today. Skipped on --skip-prune, whose whole purpose
-# is to consume artefacts that an earlier run left behind on purpose.
-if not args.skip_prune:
-    for lang in langs:
-        for stale in PATH_DIR.glob(f'{lang}_*'):
-            stale.unlink()
-
-failed_languages: list[str] = []
-with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-    fut2lang = {pool.submit(prune_language, name): name for name in langs}
-    for fut in as_completed(fut2lang):
-        lang = fut2lang[fut]
-        try:
-            fut.result()
-        # Deliberately broad: fut.result() re-raises whatever the worker hit, and
-        # one failing language must not abort the runs for the others. Every
-        # failure is collected instead, so one run names all of them.
-        except Exception as exc:  # noqa: BLE001
-            print(f'{RED}{lang} prune failed:{RESET}', exc)
-            failed_languages.append(lang)
-
-# The files below are a security policy: everything not in them is denied. Built
-# from the languages that happened to succeed, they would be a narrower policy
-# than anyone asked for, and nothing downstream could tell that from a correct
-# one. Refuse instead, and leave whatever is already on disk untouched.
-if failed_languages:
-    print(f'{RED}[error]{RESET} pruning failed for:', ', '.join(sorted(failed_languages)))
-    print('        Refusing to merge a policy from only the languages that succeeded.')
-    sys.exit(1)
-
-# 2) hold each language's artefacts to their own record, then generate the union and
-# intersection files. A .paths that disagrees with the .json written beside it in the same
-# run is a policy built from part of a measurement, which looks exactly like a correct one.
-artefact_problems: list[str] = []
-for L in langs:
-    artefact_problems += artefact_disagreements(L)
-if artefact_problems:
-    print(f'{RED}[error]{RESET} the per-exercise artefacts do not agree with their records:')
-    for problem in artefact_problems:
-        print(f'        {problem}')
-    print('        Refusing to merge a policy from a measurement that is not whole.')
-    sys.exit(1)
-
-for L in langs:
-    gen_lang_sets(L)
-
-# 3) gather *_union.paths
-lang_data = collect_language_data(langs)
-
-# Every requested language, not merely one of them. A language whose pruning exited
-# zero without producing anything, because every exercise was skipped or because
-# emit_artifacts.py failed and was only warned about, drops out silently here. The
-# merge below would then write a policy for the languages that happened to work, and
-# nothing downstream could tell that from a policy for all of them.
-missing_languages = sorted(set(langs) - set(lang_data))
-if missing_languages:
-    print(f'{RED}[error]{RESET} no usable pruning result for:', ', '.join(missing_languages))
-    print('        Refusing to merge a policy that is missing a language that was asked for.')
-    sys.exit(1)
-
-# 4) BasePhobos (UNION across langs)
-read_union: set[str] = set()
-write_union: set[str] = set()
-for info in lang_data.values():
-    write_union |= info['w']
-for info in lang_data.values():
-    read_union |= (info['r'] - write_union)
-write_cfg_path = CORE_DIR / 'BasePhobos.cfg'
 
 def _write_cfg(read_set: set[str], write_set: set[str], dest: Path) -> None:
     """Write one policy cfg with a section per right.
@@ -370,38 +303,171 @@ def _write_cfg(read_set: set[str], write_set: set[str], dest: Path) -> None:
     lines += ['[connect]', 'allow 127.0.0.1:*', 'allow [::1]', 'allow localhost', '']
     dest.write_text('\n'.join(lines))
 
-_write_cfg(read_union, write_union, write_cfg_path)
 
-# 5) BasePhobosIntersect (intersection across languages)
-all_sets = [(info['r'] | info['w']) for info in lang_data.values()]
-inter_all = set.intersection(*all_sets)
-read_inter_all: set[str] = set()
-write_inter_all: set[str] = set()
-for p in inter_all:
-    if any(p in info['w'] for info in lang_data.values()):
-        write_inter_all.add(p)
-    else:
-        read_inter_all.add(p)
-_write_cfg(read_inter_all, write_inter_all, INTERSECT_DIR / 'BasePhobosIntersect.cfg')
+# ────────────────────────────────────────── tail handling
 
-# 6) per-language files, plus the two comparisons that say something the language file
-# does not. Base<Lang>Only names what no other language needed, which is where a policy
-# grows when one language's prune goes wrong; Base<Lang>Common names what every exercise
-# of that language needed, read from the intersection make_lang_sets already writes.
-for L, info in lang_data.items():
-    _write_cfg(info['r'], info['w'], CORE_DIR / f'BaseLanguage-{L}.cfg')
-    Lcap = L.capitalize()
-    other_paths: set[str] = set()
-    for other_lang, other_info in lang_data.items():
-        if other_lang != L:
-            other_paths |= other_info['r'] | other_info['w']
-    _write_cfg(info['r'] - other_paths, info['w'] - other_paths,
-               INTERSECT_DIR / f'Base{Lcap}Only.cfg')
-    common_file = PATH_DIR / f'{L}_intersection.paths'
-    if common_file.exists():
-        common = _read_union(common_file)
-        _write_cfg(common['r'], common['w'], INTERSECT_DIR / f'Base{Lcap}Common.cfg')
-# 7) TailPhobos (sanitize & inject runtime chdir)
-build_runtime_tail(args.runtime_chdir)
 
-print(f'\n{BOLD}Done.{RESET}')
+def build_runtime_tail(runtime_chdir: str, core_dir: Path) -> None:
+    """
+    Write TailPhobos.cfg in *core_dir*, holding only the runtime chdir.
+
+    A pruning run measures under Bubblewrap mount and namespace flags (--proc, --dev,
+    --share-net, --unshare-*, --new-session) and a per-exercise --chdir. The runtime is
+    phobos-landlock, and it accepts none of those Bubblewrap flags: they are not Landlock
+    concepts, and it exits on an option it does not know. phobos.sh appends every tail
+    token to phobos-landlock, so a tail carrying a Bubblewrap flag would fail every run.
+
+    Network intent reaches the runtime through the [connect] section rather than the tail,
+    and a namespace is the container's boundary rather than Landlock's. So the runtime
+    tail is the stable runtime chdir and nothing else; the pruning run's per-exercise
+    chdir is ephemeral and is discarded.
+    """
+    dst_tail = core_dir / 'TailPhobos.cfg'
+    dst_tail.write_text(f'--chdir {runtime_chdir}\n')
+    print('  • wrote TailPhobos.cfg (runtime chdir set to', runtime_chdir + ')')
+
+
+
+# ────────────────────────────────────────── the pipeline
+
+
+def prune_every_language(langs: list[str], layout: Layout,
+                         arguments: argparse.Namespace) -> list[str]:
+    """Prunes every language, in parallel, and names the ones whose prune failed.
+
+    One failing language must not abort the runs for the others, so every failure is
+    collected rather than raised, and one run then names all of them. The except below is
+    deliberately broad for that reason: result() re-raises whatever the worker hit, and this
+    collects it rather than letting it end the run.
+    """
+    failed_languages: list[str] = []
+    with ThreadPoolExecutor(max_workers=arguments.jobs) as pool:
+        language_of = {pool.submit(prune_language, name, layout, arguments): name
+                       for name in langs}
+        for finished in as_completed(language_of):
+            lang = language_of[finished]
+            try:
+                finished.result()
+            except Exception as exc:  # noqa: BLE001
+                print(f'{RED}{lang} prune failed:{RESET}', exc)
+                failed_languages.append(lang)
+    return failed_languages
+
+
+def forget_earlier_artefacts(langs: Iterable[str], path_dir: Path) -> None:
+    """Removes what an earlier run left for these languages.
+
+    Artefacts of an earlier run would otherwise be indistinguishable from this run's, and
+    the completeness check further down asks whether a language produced a result: a
+    leftover union file from last week would answer yes for a language that produced
+    nothing today.
+    """
+    for lang in langs:
+        for stale in path_dir.glob(f'{lang}_*'):
+            stale.unlink()
+
+
+def write_cross_language_policy(lang_data: dict[str, dict[str, set[str]]],
+                                layout: Layout) -> None:
+    """Writes BasePhobos.cfg, the union across every language, and its intersection.
+
+    The union is for an image that cannot tell which language is running, so it is an
+    alternative to the per-language files rather than a part of them, and packaging picks
+    one. The intersection is never applied; it is there to be read.
+    """
+    read_union: set[str] = set()
+    write_union: set[str] = set()
+    for info in lang_data.values():
+        write_union |= info['w']
+    for info in lang_data.values():
+        read_union |= (info['r'] - write_union)
+    _write_cfg(read_union, write_union, layout.core_dir / 'BasePhobos.cfg')
+
+    every_path = [(info['r'] | info['w']) for info in lang_data.values()]
+    shared = set.intersection(*every_path)
+    read_shared: set[str] = set()
+    write_shared: set[str] = set()
+    for path in shared:
+        if any(path in info['w'] for info in lang_data.values()):
+            write_shared.add(path)
+        else:
+            read_shared.add(path)
+    _write_cfg(read_shared, write_shared, layout.debug_dir / 'BasePhobosIntersect.cfg')
+
+
+def write_language_policies(lang_data: dict[str, dict[str, set[str]]],
+                            layout: Layout) -> None:
+    """Writes each language's policy, plus the two comparisons that say what it does not.
+
+    Base<Lang>Only names what no other language needed, which is where a policy grows when
+    one language's prune goes wrong; Base<Lang>Common names what every exercise of that
+    language needed, read from the intersection make_lang_sets already writes. Neither is
+    ever applied.
+    """
+    for lang, info in lang_data.items():
+        _write_cfg(info['r'], info['w'], layout.core_dir / f'BaseLanguage-{lang}.cfg')
+        capitalised = lang.capitalize()
+        other_paths: set[str] = set()
+        for other_lang, other_info in lang_data.items():
+            if other_lang != lang:
+                other_paths |= other_info['r'] | other_info['w']
+        _write_cfg(info['r'] - other_paths, info['w'] - other_paths,
+                   layout.debug_dir / f'Base{capitalised}Only.cfg')
+        common_file = layout.path_dir / f'{lang}_intersection.paths'
+        if common_file.exists():
+            common = _read_union(common_file)
+            _write_cfg(common['r'], common['w'],
+                       layout.debug_dir / f'Base{capitalised}Common.cfg')
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Prunes, checks and merges, and answers the status the program ends with.
+
+    Every refusal below answers non-zero and leaves whatever is already on disk untouched.
+    The files this writes are a security policy, where everything not named is denied, so a
+    policy built from only the languages that happened to work would be narrower than anyone
+    asked for and nothing downstream could tell that from a correct one.
+    """
+    arguments = parse_arguments(argv)
+    layout = make_layout(arguments)
+    langs = requested_languages(arguments.langs)
+    print(f'\n{BOLD}Orchestrating for:{RESET}', ', '.join(langs), '\n')
+
+    if not arguments.skip_prune:
+        forget_earlier_artefacts(langs, layout.path_dir)
+    failed_languages = prune_every_language(langs, layout, arguments)
+    if failed_languages:
+        print(f'{RED}[error]{RESET} pruning failed for:', ', '.join(sorted(failed_languages)))
+        print('        Refusing to merge a policy from only the languages that succeeded.')
+        return 1
+
+    artefact_problems: list[str] = []
+    for lang in langs:
+        artefact_problems += artefact_disagreements(lang, layout.path_dir)
+    if artefact_problems:
+        print(f'{RED}[error]{RESET} the per-exercise artefacts do not agree with their records:')
+        for problem in artefact_problems:
+            print(f'        {problem}')
+        print('        Refusing to merge a policy from a measurement that is not whole.')
+        return 1
+
+    for lang in langs:
+        gen_lang_sets(lang, layout)
+    lang_data = collect_language_data(langs, layout.path_dir)
+
+    missing_languages = sorted(set(langs) - set(lang_data))
+    if missing_languages:
+        print(f'{RED}[error]{RESET} no usable pruning result for:', ', '.join(missing_languages))
+        print('        Refusing to merge a policy that is missing a language that was asked for.')
+        return 1
+
+    write_cross_language_policy(lang_data, layout)
+    write_language_policies(lang_data, layout)
+    build_runtime_tail(arguments.runtime_chdir, layout.core_dir)
+
+    print(f'\n{BOLD}Done.{RESET}')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
