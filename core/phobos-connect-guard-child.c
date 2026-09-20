@@ -5,7 +5,6 @@
 
 #include <errno.h>
 #include <stddef.h>
-#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -119,23 +118,22 @@ static bool send_descriptor(int socket_descriptor, int descriptor_to_send) {
 
 [[noreturn]] void run_child(int send_descriptor_to_parent, char *const command[]) {
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
-        fprintf(stderr, "[phobos-connect-guard] prctl(NO_NEW_PRIVS): %s\n", strerror(errno));
-        _exit(EXIT_SETUP_ERROR);
+        report_failure("prctl(NO_NEW_PRIVS): %s", strerror(errno));
+        _exit(EXIT_CODE_SETUP_ERROR);
     }
     int notify_descriptor = install_connect_filter();
     if (notify_descriptor < 0) {
-        fprintf(stderr, "[phobos-connect-guard] seccomp NEW_LISTENER: %s\n", strerror(errno));
-        _exit(EXIT_SETUP_ERROR);
+        report_failure("seccomp NEW_LISTENER: %s", strerror(errno));
+        _exit(EXIT_CODE_SETUP_ERROR);
     }
     if (!send_descriptor(send_descriptor_to_parent, notify_descriptor)) {
-        fprintf(stderr, "[phobos-connect-guard] handing the notification descriptor up: %s\n",
-                strerror(errno));
-        _exit(EXIT_SETUP_ERROR);
+        report_failure("handing the notification descriptor up: %s", strerror(errno));
+        _exit(EXIT_CODE_SETUP_ERROR);
     }
     close(notify_descriptor);
     close(send_descriptor_to_parent);
 
     execvp(command[0], command);
-    fprintf(stderr, "[phobos-connect-guard] exec %s: %s\n", command[0], strerror(errno));
-    _exit(EXIT_COMMAND_NOT_EXECUTABLE);
+    report_failure("exec %s: %s", command[0], strerror(errno));
+    _exit(EXIT_CODE_COMMAND_NOT_EXECUTABLE);
 }

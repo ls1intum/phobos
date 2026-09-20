@@ -52,6 +52,7 @@ static constexpr int DECIMAL = 10;
 typedef int getaddrinfo_function(const char *, const char *, const struct addrinfo *,
                                  struct addrinfo **);
 typedef int connect_function(int, const struct sockaddr *, socklen_t);
+typedef int bind_function(int, const struct sockaddr *, socklen_t);
 typedef ssize_t sendto_function(int, const void *, size_t, int, const struct sockaddr *,
                                 socklen_t);
 typedef ssize_t sendmsg_function(int, const struct msghdr *, int);
@@ -69,7 +70,7 @@ static struct policy bind_policy = POLICY_INITIALISER;
 
 static getaddrinfo_function *real_getaddrinfo = nullptr;
 static connect_function *real_connect = nullptr;
-static connect_function *real_bind = nullptr;
+static bind_function *real_bind = nullptr;
 static sendto_function *real_sendto = nullptr;
 static sendmsg_function *real_sendmsg = nullptr;
 static sendmmsg_function *real_sendmmsg = nullptr;
@@ -82,7 +83,7 @@ static uint16_t service_port(const char *service) {
         return 0;
     }
     unsigned long value = strtoul(service, &first_unconverted, DECIMAL);
-    if (*first_unconverted != '\0' || value > PORT_MAX) {
+    if (*first_unconverted != '\0' || value > HIGHEST_PORT) {
         return 0;
     }
     return (uint16_t)value;
@@ -195,7 +196,7 @@ int bind(int descriptor, const struct sockaddr *address, socklen_t length) {
     char text[INET6_ADDRSTRLEN] = "";
     uint16_t port = 0;
     if (real_bind == nullptr) {
-        real_bind = (connect_function *)dlsym(RTLD_NEXT, "bind");
+        real_bind = (bind_function *)dlsym(RTLD_NEXT, "bind");
     }
     if (!bind_is_filtered(descriptor, address)) {
         return real_bind(descriptor, address, length);
@@ -267,7 +268,7 @@ static void netblocker_initialise(void) {
     policy_load(&bind_policy, getenv(BIND_RULES_VARIABLE));
     real_getaddrinfo = (getaddrinfo_function *)dlsym(RTLD_NEXT, "getaddrinfo");
     real_connect = (connect_function *)dlsym(RTLD_NEXT, "connect");
-    real_bind = (connect_function *)dlsym(RTLD_NEXT, "bind");
+    real_bind = (bind_function *)dlsym(RTLD_NEXT, "bind");
     real_sendto = (sendto_function *)dlsym(RTLD_NEXT, "sendto");
     real_sendmsg = (sendmsg_function *)dlsym(RTLD_NEXT, "sendmsg");
     real_sendmmsg = (sendmmsg_function *)dlsym(RTLD_NEXT, "sendmmsg");

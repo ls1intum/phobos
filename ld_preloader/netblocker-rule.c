@@ -30,7 +30,7 @@ static bool parse_port(const char *word, uint16_t *port) {
         return true;
     }
     unsigned long value = strtoul(word, &first_unconverted, DECIMAL);
-    if (*first_unconverted != '\0' || value == 0 || value > PORT_MAX) {
+    if (*first_unconverted != '\0' || value == 0 || value > HIGHEST_PORT) {
         return false;
     }
     *port = (uint16_t)value;

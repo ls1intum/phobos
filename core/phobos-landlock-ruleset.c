@@ -64,16 +64,13 @@ int detect_landlock_version(int minimum_landlock_version, bool network_rules_wan
                 landlock_version, HIGHEST_KNOWN_LANDLOCK_VERSION);
     }
     if (landlock_version < minimum_landlock_version) {
-        fprintf(stderr,
-                "[phobos-landlock] kernel offers Landlock version %ld but version %d is required "
-                "(refusing to run unprotected)\n",
-                landlock_version, minimum_landlock_version);
-        exit(EXIT_CODE_POLICY_ERROR);
+        exit_with_format("kernel offers Landlock version %ld but version %d is required "
+                         "(refusing to run unprotected)",
+                         landlock_version, minimum_landlock_version);
     }
     if (network_rules_wanted && landlock_version < FIRST_VERSION_WITH_NETWORK) {
-        fprintf(stderr, "[phobos-landlock] network rules require Landlock version %d (kernel 6.7)\n",
-                FIRST_VERSION_WITH_NETWORK);
-        exit(EXIT_CODE_POLICY_ERROR);
+        exit_with_format("network rules require Landlock version %d (kernel 6.7)",
+                         FIRST_VERSION_WITH_NETWORK);
     }
     return (int)landlock_version;
 }
@@ -149,8 +146,7 @@ int create_ruleset(int landlock_version, uint64_t handled_network) {
 void add_path_rule(int ruleset_descriptor, int landlock_version, const struct path_rule *rule) {
     int path_descriptor = open(rule->path, open_flags_for_rule(rule));
     if (path_descriptor < 0) {
-        fprintf(stderr, "[phobos-landlock] cannot open %s: %s\n", rule->path, strerror(errno));
-        exit(EXIT_CODE_POLICY_ERROR);
+        exit_with_format("cannot open %s: %s", rule->path, strerror(errno));
     }
 
     struct stat file_status;
@@ -158,11 +154,9 @@ void add_path_rule(int ruleset_descriptor, int landlock_version, const struct pa
         exit_with_system_error("fstat");
     }
     if (rule_can_change_anything(rule) && S_ISLNK(file_status.st_mode)) {
-        fprintf(stderr,
-                "[phobos-landlock] refusing changeable path %s: it is a symbolic link and could "
-                "redirect the rule\n",
-                rule->path);
-        exit(EXIT_CODE_POLICY_ERROR);
+        exit_with_format("refusing changeable path %s: it is a symbolic link and could "
+                         "redirect the rule",
+                         rule->path);
     }
 
     struct landlock_path_beneath_attributes path_rule_attributes;
@@ -175,9 +169,7 @@ void add_path_rule(int ruleset_descriptor, int landlock_version, const struct pa
 
     if (syscall(SYSCALL_NUMBER_LANDLOCK_ADD_RULE, ruleset_descriptor, LANDLOCK_RULE_PATH_BENEATH,
                 &path_rule_attributes, 0) != 0) {
-        fprintf(stderr, "[phobos-landlock] add_rule failed for %s: %s\n", rule->path,
-                strerror(errno));
-        exit(EXIT_CODE_POLICY_ERROR);
+        exit_with_format("add_rule failed for %s: %s", rule->path, strerror(errno));
     }
     log_verbose("allow %s%s%s%s%s%s%s", rule->path, rule->readable ? " +r" : "",
                 rule->writable ? " +w" : "", rule->executable ? " +x" : "",

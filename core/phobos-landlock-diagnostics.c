@@ -42,3 +42,11 @@ void warn_always(const char *format, ...) {
     fprintf(stderr, "[phobos-landlock] %s\n", message);
     exit(EXIT_CODE_POLICY_ERROR);
 }
+
+[[noreturn]] void exit_with_format(const char *format, ...) {
+    va_list argument_list;
+    va_start(argument_list, format);
+    print_prefixed(format, argument_list);
+    va_end(argument_list);
+    exit(EXIT_CODE_POLICY_ERROR);
+}

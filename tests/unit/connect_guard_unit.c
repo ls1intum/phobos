@@ -844,7 +844,7 @@ static void test_exit_code_mapping(void) {
     check("a clean exit maps to its code", exit_code_from_status((7 << WAIT_STATUS_EXIT_CODE_SHIFT)) == 7);
     status = SIGKILL;
     check("a signal maps to 128 plus the signal", exit_code_from_status(status) == SIGNAL_EXIT_CODE_BASE + SIGKILL);
-    check("an unusual status maps to the setup error", exit_code_from_status(WAIT_STATUS_STOPPED) == EXIT_SETUP_ERROR);
+    check("an unusual status maps to the setup error", exit_code_from_status(WAIT_STATUS_STOPPED) == EXIT_CODE_SETUP_ERROR);
 }
 
 /* Logs once quiet, which returns without writing, and once verbose, which writes and so
@@ -1467,15 +1467,15 @@ static void test_supervise_loop(void) {
 
 static void test_argument_errors(void) {
     char *none[] = { "guard", NULL };
-    check("no command is a usage error", run_main(none) == EXIT_USAGE);
+    check("no command is a usage error", run_main(none) == EXIT_CODE_USAGE);
     char *only_dashes[] = { "guard", "--", NULL };
-    check("nothing after -- is a usage error", run_main(only_dashes) == EXIT_USAGE);
+    check("nothing after -- is a usage error", run_main(only_dashes) == EXIT_CODE_USAGE);
     char *bad_option[] = { "guard", "--nonsense", "--", "cmd", NULL };
-    check("an unknown option is a usage error", run_main(bad_option) == EXIT_USAGE);
+    check("an unknown option is a usage error", run_main(bad_option) == EXIT_CODE_USAGE);
     char *dangling_rules[] = { "guard", "--rules", NULL };
-    check("a --rules with no value is a usage error", run_main(dangling_rules) == EXIT_USAGE);
+    check("a --rules with no value is a usage error", run_main(dangling_rules) == EXIT_CODE_USAGE);
     char *unreadable[] = { "guard", "--rules", "/dev/null/impossible", "--", "cmd", NULL };
-    check("an unreadable rules file refuses the run", run_main(unreadable) == EXIT_SETUP_ERROR);
+    check("an unreadable rules file refuses the run", run_main(unreadable) == EXIT_CODE_SETUP_ERROR);
 }
 
 /* Setup failures before the command runs. A fork result of 0 takes the child path. */
@@ -1484,39 +1484,39 @@ static void test_child_setup_failures(void) {
 
     reset_behaviour();
     bx->socketpair_result = -1;
-    check("a socketpair failure refuses the run", run_main(argv) == EXIT_SETUP_ERROR);
+    check("a socketpair failure refuses the run", run_main(argv) == EXIT_CODE_SETUP_ERROR);
 
     char *verbose_argv[] = { "guard", "--verbose", "--", "cmd", NULL };
     reset_behaviour();
     bx->socketpair_result = -1;
-    check("--verbose is accepted before the command", run_main(verbose_argv) == EXIT_SETUP_ERROR);
+    check("--verbose is accepted before the command", run_main(verbose_argv) == EXIT_CODE_SETUP_ERROR);
 
     reset_behaviour();
     bx->fork_result = -1;
-    check("a fork failure refuses the run", run_main(argv) == EXIT_SETUP_ERROR);
+    check("a fork failure refuses the run", run_main(argv) == EXIT_CODE_SETUP_ERROR);
 
     reset_behaviour();
     bx->fork_result = 0;
     bx->prctl_result = -1;
-    check("a no_new_privs failure fails the child closed", run_main(argv) == EXIT_SETUP_ERROR);
+    check("a no_new_privs failure fails the child closed", run_main(argv) == EXIT_CODE_SETUP_ERROR);
 
     reset_behaviour();
     bx->fork_result = 0;
     bx->seccomp_listener_result = -1;
     check("a filter that will not install fails the child closed",
-          run_main(argv) == EXIT_SETUP_ERROR);
+          run_main(argv) == EXIT_CODE_SETUP_ERROR);
 
     reset_behaviour();
     bx->fork_result = 0;
     bx->sendmsg_result = -1;
     check("a descriptor handoff that fails fails the child closed",
-          run_main(argv) == EXIT_SETUP_ERROR);
+          run_main(argv) == EXIT_CODE_SETUP_ERROR);
 
     reset_behaviour();
     bx->fork_result = 0;
     bx->sendmsg_eintr_once = 1;
     bx->execvp_returns = 1;
-    check("the child that hands over and cannot exec exits 127", run_main(argv) == EXIT_COMMAND_NOT_EXECUTABLE);
+    check("the child that hands over and cannot exec exits 127", run_main(argv) == EXIT_CODE_COMMAND_NOT_EXECUTABLE);
 }
 
 /* The parent path, taken with a fork result of FAKE_CHILD_PID. When the parent is never
@@ -1531,7 +1531,7 @@ static void test_parent_paths(void) {
     bx->recvmsg_result = -1;
     bx->waitpid_eintr_once = 1;
     check("a parent that is never handed the descriptor refuses the run",
-          run_main(argv) == EXIT_SETUP_ERROR);
+          run_main(argv) == EXIT_CODE_SETUP_ERROR);
 
     reset_behaviour();
     bx->fork_result = FAKE_CHILD_PID;
@@ -1543,7 +1543,7 @@ static void test_parent_paths(void) {
     bx->fork_result = FAKE_CHILD_PID;
     bx->recvmsg_bad_cmsg = 1;
     check("a parent handed a malformed message refuses the run",
-          run_main(argv) == EXIT_SETUP_ERROR);
+          run_main(argv) == EXIT_CODE_SETUP_ERROR);
 
     reset_behaviour();
     bx->fork_result = FAKE_CHILD_PID;
