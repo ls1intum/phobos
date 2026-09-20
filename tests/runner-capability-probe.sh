@@ -304,7 +304,7 @@ announce() {
 # The lines of this file's header comment that are its usage text, and the status a call made
 # the wrong way ends with.
 USAGE_FIRST_LINE=2
-USAGE_LAST_LINE=21
+USAGE_LAST_LINE=20
 EXIT_USAGE=2
 
 usage() {

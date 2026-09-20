@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
 }
 C
 if ! "$compiler" -O2 -o "$WORK/ignorer" "$WORK/ignorer.c" 2>"$WORK/cc.log"; then
-  skip "the timeout escalation" "the probe did not compile: $(cat "$WORK/cc.log")"
+  bad "the timeout escalation" "the probe did not compile: $(cat "$WORK/cc.log")"
   finish
 fi
 

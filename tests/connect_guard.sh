@@ -220,8 +220,10 @@ int main(int argc, char **argv) {
     return 0;
 }
 C
-"$compiler" -O2 -o "$WORK/probe" "$WORK/probe.c" || { bad "the probe builds" "$(cat "$WORK/cc.log" 2>/dev/null)"; finish; }
-"$compiler" -O2 -o "$WORK/listener" "$WORK/listener.c" || { bad "the listener builds" ""; finish; }
+"$compiler" -O2 -o "$WORK/probe" "$WORK/probe.c" 2>"$WORK/probe-cc.log" \
+  || { bad "the probe builds" "$(cat "$WORK/probe-cc.log")"; finish; }
+"$compiler" -O2 -o "$WORK/listener" "$WORK/listener.c" 2>"$WORK/listener-cc.log" \
+  || { bad "the listener builds" "$(cat "$WORK/listener-cc.log")"; finish; }
 
 # Where the kernel has no seccomp user-notification the guard cannot install its filter and
 # refuses; skip rather than fail, since that is the environment's limit, not a defect here.
