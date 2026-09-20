@@ -1,8 +1,8 @@
 ################################################################################
 # docker/prune_phase/python/Dockerfile: the pruning-only image for Python exercises
 #
-#   • Installs just what the prune step needs: python3, pip, pytest, ruff,
-#     bubblewrap, tree.
+#   • Installs just what the prune step needs: python3, pip, pytest, ruff and
+#     bubblewrap, which the discovery phase measures with.
 #   • Creates the same unprivileged  user  (sandboxuser) and runtime
 #     directories used by the Java image, so your docker-compose mounts work
 #     unchanged.
@@ -17,7 +17,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         python3 python3-pip python3-venv \
-        bubblewrap tree && \
+        bubblewrap && \
     rm -rf /var/lib/apt/lists/*
 
 # --break-system-packages because Ubuntu 26.04 ships a PEP 668 Python, which
@@ -30,8 +30,6 @@ RUN pip3 install --no-cache-dir --break-system-packages \
         ruff==0.16.8
 
 RUN useradd -m sandboxuser
-
-RUN chown -R sandboxuser:sandboxuser /var/tmp
 
 RUN mkdir -p /home/sandboxuser/.cache/pip && \
     chown -R sandboxuser:sandboxuser /home/sandboxuser

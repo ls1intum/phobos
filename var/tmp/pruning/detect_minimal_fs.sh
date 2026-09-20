@@ -323,11 +323,10 @@ prune_tree() {
           log "$child => must be writable (w)"
         else
           log "$child => fails even with w, keep as w"
-          CONFIG["$child"]="w"
         fi
       fi
     fi
-    if [[ -v CONFIG["$child"] ]] && [[ "${CONFIG[$child]}" != "n" ]]; then
+    if [[ "${CONFIG[$child]}" != "n" ]]; then
       prune_tree "$child"
     fi
   done

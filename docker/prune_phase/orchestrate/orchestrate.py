@@ -85,16 +85,20 @@ MAKE_LANG_SETS = HELPERS_DIR / 'make_lang_sets.py'
 
 # ────────────────────────────────────────── helpers
 
-def run(cmd: Sequence[str], tag: str = '') -> None:
+def run(cmd: Sequence[str], tag: str = '',
+        extra_environment: dict[str, str] | None = None) -> None:
     """Run *cmd* streaming output; raise if exit‑status != 0.
 
     Always executed without a shell: every caller passes an argument list, so a
     string form was dead code and only widened the injection surface.
+
+    *extra_environment* is added to this process's environment for the call. It is how an
+    option of this program reaches a script that takes its setting from the environment.
     """
     pretty = ' '.join(shlex.quote(str(c)) for c in cmd)
     print(f'{BLUE}[{tag or "cmd"}]{RESET}', pretty)
     t0 = time.time()
-    rc = subprocess.call(cmd)
+    rc = subprocess.call(cmd, env={**os.environ, **(extra_environment or {})})
     dt = time.time() - t0
     if rc:
         raise RuntimeError(f'{tag} failed (rc={rc}, {dt:.1f}s)')
@@ -106,8 +110,11 @@ def run(cmd: Sequence[str], tag: str = '') -> None:
 def prune_language(lang: str) -> None:
     """Prune every exercise of one language, unless --skip-prune says the artefacts exist.
 
-    PRUNE_SCRIPT infers the exercise root from /var/tmp/testing-dir/<lang> and writes the
-    per-exercise artefacts into PATH_DIR through emit_artifacts.py; see run_minimal_fs_all.sh.
+    PRUNE_SCRIPT writes the per-exercise artefacts into PATH_DIR through emit_artifacts.py;
+    see run_minimal_fs_all.sh. It takes the root the exercises live under from TESTING_DIR,
+    which is what --tests-dir names, and writes them where OUTPUT_DIR says, which is what
+    --path-dir names. Both were parsed and then dropped, so a caller who pointed either
+    elsewhere still pruned, and wrote, where the script's own defaults named.
     """
     if args.skip_prune:
         print(f'[skip] prune:{lang}')
@@ -118,7 +125,8 @@ def prune_language(lang: str) -> None:
     if args.verbose:
         cmd.append('--verbose')
     cmd.append(lang)
-    run(cmd, f'prune:{lang}')
+    run(cmd, f'prune:{lang}',
+        {'TESTING_DIR': args.tests_dir, 'OUTPUT_DIR': str(PATH_DIR)})
 
 
 # ────────────────────────────────────────── language union generation
