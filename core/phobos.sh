@@ -41,9 +41,10 @@ Override options (taken only from the command line, never from the environment):
 
 Notes:
 - Base config: any "${HERE}/Base*.cfg" (INI-like) is applied first (sorted).
-- Exercise configs: only files passed via --config/-c are applied in order;
-  per-path FS merge, NET union, and for the timeout and each resource limit the
-  largest value any cfg names, where a zero switches that limit off and wins.
+- Exercise configs: only files passed via --config/-c are applied in order. The
+  model is additive: filesystem paths and network rules are unioned with the base,
+  and for the timeout and each resource limit the largest value any cfg names wins,
+  where a zero switches that limit off and wins over every finite value.
 - Tail config: "${HERE}/TailPhobos.cfg" (flags only) is applied last.
 - If no Base*.cfg is present, Phobos refuses to run (PHB-EPOLICY) rather than run
   the command unconfined. --allow-unsandboxed opts into a raw run on purpose.

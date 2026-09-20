@@ -1,9 +1,7 @@
-# Runs the suites this repository already had and nothing was starting.
-#
-# Everything here needs a compiler, a shell and a Python, and no container, no kernel
-# feature and no elevated permission. That is the whole point of this workflow: the checks
-# that cost seconds run on every pull request, so the ones that need a sandbox can be
-# argued about separately.
+# Runs the suites that need only a compiler, a shell, a Python and Bubblewrap, and no
+# container, no kernel feature and no elevated permission. That is the whole point of this
+# workflow: the checks that cost seconds run on every pull request, so the ones that need
+# the run-phase image are built and argued about separately, in build.yml.
 name: Test
 
 on:

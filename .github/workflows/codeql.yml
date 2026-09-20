@@ -72,7 +72,7 @@ jobs:
           # by hand on every edit to the C that reads those files.
           config-file: ./.github/codeql/codeql-config.yml
 
-      - name: Set up JDK 21
+      - name: Set up JDK 25
         if: ${{ matrix.language == 'java-kotlin' }}
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
