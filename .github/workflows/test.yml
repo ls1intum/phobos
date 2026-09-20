@@ -54,6 +54,17 @@ jobs:
             fi
           done
 
+      # What the suites here need beyond the runner's own image. Bubblewrap is what the
+      # discovery phase measures with, so without it tests/prune_sandbox.sh skips exactly
+      # the checks that exercise the pruner; gcc-14 is the compiler the C probes of the
+      # network suites are pinned to, and without it those suites skip themselves whole.
+      # A skip reads as a pass in the workflow's summary, so they are installed rather
+      # than left to the image.
+      - name: Install what the suites need
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends bubblewrap gcc-14
+
       # Each suite reports its own passed, failed and skipped counts and exits non-zero on
       # a failure, so they are separate steps: one run then names every suite that broke
       # rather than only the first.
@@ -114,10 +125,14 @@ jobs:
 
       # The real pruner, against a fixture tree. How it classifies a build's outcome, the
       # NO-SOURCE rule among it, is checked through a bwrap that builds no sandbox, so those
-      # checks run anywhere. The checks that need Bubblewrap itself run too wherever the
-      # runner lets it build a sandbox, and skip, saying so, wherever it does not.
+      # checks run anywhere. The checks that need Bubblewrap itself are the ones that
+      # exercise the discovery phase as it really measures, so PHOBOS_REQUIRE_BWRAP turns
+      # their skip into a failure here: a runner that cannot build a sandbox is a broken
+      # runner, not a reason to report a pass.
       - name: What the pruner concludes from a build
         if: ${{ !cancelled() }}
+        env:
+          PHOBOS_REQUIRE_BWRAP: "1"
         run: bash tests/prune_sandbox.sh
 
   python:

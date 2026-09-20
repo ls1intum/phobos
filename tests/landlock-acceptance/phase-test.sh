@@ -92,7 +92,7 @@ if [[ -f $P/target/left-behind.sh ]]; then
     bad "Expectation not met: the demonstration of the trap no longer works, check the test"
   fi
 else
-  ok "Phase 3 could not leave anything behind"
+  bad "Phase 3 could not leave anything behind, so the trap was never demonstrated"
 fi
 
 hdr "Can a restricted process shed its restriction again?"

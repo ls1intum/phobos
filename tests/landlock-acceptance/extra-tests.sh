@@ -63,10 +63,10 @@ SU=sandboxuser
 id "$SU" >/dev/null 2>&1 || SU=nobody
 su -s /bin/bash "$SU" -c "export PATH=/opt/java/openjdk/bin:\$PATH; cd $TD && $CORE/phobos.sh -- java -cp probe PhobosProbe read /var/tmp/secret/secret.txt" > /tmp/nonroot.log 2>&1
 if grep -q 'RESULT DENIED read ' /tmp/nonroot.log; then ok "As $SU: the forbidden file stays blocked"
-else bad "As $SU: unexpected result"; sed 's/^/       | /' /tmp/nonroot.log | tail -n \"$LOG_EXCERPT_LINES\"; fi
+else bad "As $SU: unexpected result"; sed 's/^/       | /' /tmp/nonroot.log | tail -n "$LOG_EXCERPT_LINES"; fi
 su -s /bin/bash "$SU" -c "export PATH=/opt/java/openjdk/bin:\$PATH; cd $TD && $CORE/phobos.sh -- java -cp probe PhobosProbe read $TD/allowed-ro/data.txt" > /tmp/nonroot2.log 2>&1
 if grep -q 'RESULT OK read ' /tmp/nonroot2.log; then ok "As $SU: the allowed file is still readable"
-else bad "As $SU: the allowed file is not readable"; sed 's/^/       | /' /tmp/nonroot2.log | tail -n \"$LOG_EXCERPT_LINES\"; fi
+else bad "As $SU: the allowed file is not readable"; sed 's/^/       | /' /tmp/nonroot2.log | tail -n "$LOG_EXCERPT_LINES"; fi
 
 hdr "F. Redirectable write paths are rejected"
 # A write path that is a symlink must not redirect the rule.
@@ -121,14 +121,19 @@ javac -d "$NETDIR" "$NETDIR/N.java" 2>/dev/null
 java -cp "$NETDIR" N serve "$ALLOWED_PORT" "$DENIED_PORT" > "$NETDIR/srv.log" 2>&1 &
 NETSRV=$!
 for _ in $(seq 1 "$SERVER_WAIT_ATTEMPTS"); do grep -q ready "$NETDIR/srv.log" 2>/dev/null && break; sleep "$SERVER_WAIT_SECONDS"; done
-NB="--rights=rx /opt/java --rights=rx /usr --rights=r /etc --rights=rwmd /tmp --rights=rwmd /dev/null --rights=rx $NETDIR"
-if $LL $NB --connect-tcp "$ALLOWED_PORT" -- java -cp "$NETDIR" N "$ALLOWED_PORT" 2>/dev/null | grep -q CONNECTED; then
-  ok "--connect-tcp: the allowed port is reachable"
-else bad "--connect-tcp: the allowed port was blocked"; fi
-if $LL $NB --connect-tcp "$ALLOWED_PORT" -- java -cp "$NETDIR" N "$DENIED_PORT" 2>/dev/null | grep -q DENIED; then
-  ok "--connect-tcp: a port that is not allowed stays blocked"
-else bad "--connect-tcp: a port that is not allowed was reachable"; fi
-kill $NETSRV 2>/dev/null; rm -rf "$NETDIR"
+if ! grep -q ready "$NETDIR/srv.log" 2>/dev/null; then
+  bad "The port server started"; sed 's/^/       | /' "$NETDIR/srv.log" | tail -n "$LOG_EXCERPT_LINES"
+  kill $NETSRV 2>/dev/null; rm -rf "$NETDIR"
+else
+  NB="--rights=rx /opt/java --rights=rx /usr --rights=r /etc --rights=rwmd /tmp --rights=rwmd /dev/null --rights=rx $NETDIR"
+  if $LL $NB --connect-tcp "$ALLOWED_PORT" -- java -cp "$NETDIR" N "$ALLOWED_PORT" 2>/dev/null | grep -q CONNECTED; then
+    ok "--connect-tcp: the allowed port is reachable"
+  else bad "--connect-tcp: the allowed port was blocked"; fi
+  if $LL $NB --connect-tcp "$ALLOWED_PORT" -- java -cp "$NETDIR" N "$DENIED_PORT" 2>/dev/null | grep -q DENIED; then
+    ok "--connect-tcp: a port that is not allowed stays blocked"
+  else bad "--connect-tcp: a port that is not allowed was reachable"; fi
+  kill $NETSRV 2>/dev/null; rm -rf "$NETDIR"
+fi
 
 hdr "I. The network policy lies outside the reach of the sandbox"
 # /tmp is a write path in this policy. The specification therefore lies under
