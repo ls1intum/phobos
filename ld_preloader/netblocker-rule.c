@@ -18,8 +18,11 @@ static constexpr char WILDCARD = '*';
 static constexpr char LABEL_SEPARATOR = '.';
 static constexpr int DECIMAL = 10;
 
-/* Reads the port word of a line into port. No word and "*" grant every port. Answers
- * false for anything but a whole number up to 65535, which drops the rule. */
+/* Reads the port word of a line into port. No word and "*" grant every port, which is what
+ * a port of zero stands for inside a rule. Answers false for anything but a whole number
+ * from 1 to 65535, which drops the rule. A literal "0" is dropped rather than read as every
+ * port: it names no port the protocol has, the connect guard drops such a rule, and a rule
+ * that widens here while it disappears there would mean two different things in one run. */
 static bool parse_port(const char *word, uint16_t *port) {
     char *first_unconverted = nullptr;
     *port = 0;
@@ -27,7 +30,7 @@ static bool parse_port(const char *word, uint16_t *port) {
         return true;
     }
     unsigned long value = strtoul(word, &first_unconverted, DECIMAL);
-    if (*first_unconverted != '\0' || value > PORT_MAX) {
+    if (*first_unconverted != '\0' || value == 0 || value > PORT_MAX) {
         return false;
     }
     *port = (uint16_t)value;

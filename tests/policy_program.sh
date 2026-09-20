@@ -83,6 +83,42 @@ else
 fi
 
 echo
+echo "== an unenforceable network rule is refused where the specification is built =="
+# The Landlock port rules are built by the filesystem layer, which a run can leave out.
+# Judging a rule only there would let a specification carry a port that the connect guard
+# drops without a word and that libnetblocker reads as something else, so the policy program
+# judges every rule itself, before it writes anything.
+refuse_case() {
+  local name="$1"
+  local body="$2"
+  local spec
+  local out
+  local rc
+  spec="$(fresh_spec)"
+  printf "%b" "$body" > "$WORK/bad-net.cfg"
+  out="$(bash "$CORE_X/phobos-policy.sh" --spec-dir "$spec" --config "$WORK/bad-net.cfg" 2>&1)"
+  rc=$?
+  if [[ "$rc" -eq "$PHB_EPOLICY" && "$out" == *"PHB-EPOLICY"* && ! -f "$spec/net.rules" ]]; then
+    ok "$name"
+  else
+    bad "$name" "exit ${PHB_EPOLICY} reporting PHB-EPOLICY, no net.rules written" "exit $rc: $out"
+  fi
+}
+refuse_case "a [connect] port of 0 is refused"            '[connect]\nallow example.test:0\n'
+refuse_case "a [connect] port above 65535 is refused"     '[connect]\nallow example.test:99999\n'
+refuse_case "an external host with no port is refused"    '[connect]\nallow example.test\n'
+refuse_case "a [bind] port above 65535 is refused"        '[bind]\nallow 99999\n'
+# The shell's arithmetic is 64 bits wide and wraps, so a port longer than the protocol has
+# digits for must be refused by its shape rather than by its value: 2^64 + 1 evaluates to 1.
+refuse_case "a [connect] port of twenty digits is refused" '[connect]\nallow example.test:18446744073709551617\n'
+refuse_case "a [connect] port with a leading zero is refused" '[connect]\nallow example.test:08\n'
+
+SPEC_OK="$(fresh_spec)"
+printf '[connect]\nallow example.test:443\n' > "$WORK/good-net.cfg"
+bash "$CORE_X/phobos-policy.sh" --spec-dir "$SPEC_OK" --config "$WORK/good-net.cfg" > /dev/null 2>&1
+check "a concrete port still builds a specification" "example.test 443" "$(cat "$SPEC_OK/net.rules")"
+
+echo
 echo "== a single layer runs standalone over a specification phobos-policy.sh built =="
 printf '%s\n' '#!/usr/bin/env bash' \
   'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift; exec "$@"' > "$WORK/passthrough-landlock"

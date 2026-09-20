@@ -157,6 +157,13 @@ eff_limit_nofile="$(effective_limit nofile)"
 eff_limit_fsize_mb="$(effective_limit fsize_mb)"
 eff_limit_cpu="$(effective_limit cpu)"
 
+# Every [connect] and [bind] rule is judged here, once, before anything is written. The
+# layer that builds the Landlock port rules checks the same thing, but it is not always in
+# the chain: with --no-filesystem-restriction nothing would look at these rules at all, and
+# the specification would carry a port the connect guard drops without a word while
+# libnetblocker reads it as something else.
+refuse_unenforceable_network_rules "$eff_net" "$eff_bind"
+
 write_spec "$SPEC_DIR" "$eff_dir" "$eff_net" "$timeout_eff" "$tail_flags_file" "$eff_bind"
 
 # The resource limits go into the specification, one "key=value" per line for each limit a

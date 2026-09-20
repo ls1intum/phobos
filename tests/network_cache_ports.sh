@@ -257,9 +257,12 @@ out="$(run_scenario kept_any_host_with_port)"
 check "'* <port>' fails every name lookup" "failed" "$(field "$out" resolve)"
 check "'* <port>' permits any address on that port" "allowed" "$(field "$out" permitted_port)"
 check "'* <port>' refuses another port" "denied" "$(field "$out" other_port)"
+# Port 0 used to be the internal spelling of "every port", so a rule naming it read as a
+# wildcard here while the connect guard dropped the same rule. The rule is dropped in both
+# now, and a policy naming it never reaches either: phobos-policy.sh refuses it.
 out="$(run_scenario kept_port_zero)"
-check "port 0 in a rule permits one port" "allowed" "$(field "$out" first_port)"
-check "port 0 in a rule permits another port" "allowed" "$(field "$out" second_port)"
+check "port 0 in a rule grants no port" "denied" "$(field "$out" first_port)"
+check "port 0 in a rule grants no other port either" "denied" "$(field "$out" second_port)"
 out="$(run_scenario kept_third_token)"
 check "a third word in a rule is ignored" "allowed" "$(field "$out" permitted_port)"
 out="$(run_scenario kept_invalid_port)"

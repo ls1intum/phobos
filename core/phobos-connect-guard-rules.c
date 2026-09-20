@@ -1,6 +1,8 @@
 #define _GNU_SOURCE
 #include "phobos-connect-guard-rules.h"
 
+#include "phobos-connect-guard-diagnostics.h"
+
 #include <arpa/inet.h>
 #include <errno.h>
 #include <stdio.h>
@@ -40,6 +42,8 @@ static size_t connect_rule_count = 0;
 
 void remember_rule(const char *host, const char *port_text) {
     if (connect_rule_count >= MAXIMUM_RULES || strlen(host) >= MAXIMUM_HOST) {
+        log_verbose("dropping the rule '%s %s': the table is full or the host is too long",
+                    host, port_text);
         return;
     }
     struct connect_rule *rule = &connect_rules[connect_rule_count];
@@ -55,6 +59,8 @@ void remember_rule(const char *host, const char *port_text) {
         unsigned long length = strtoul(length_text, &length_unconverted, DECIMAL);
         unsigned long longest = ipv4 ? IPV4_ADDRESS_BITS : IPV6_ADDRESS_BITS;
         if (*length_unconverted != '\0' || length == 0 || length > longest) {
+            log_verbose("dropping the rule '%s %s': %s is not a prefix length this address "
+                        "can have", host, port_text, length_text);
             return;
         }
         if (ipv4) {
@@ -64,10 +70,14 @@ void remember_rule(const char *host, const char *port_text) {
             rule->prefix_length = IPV4_MAPPED_PREFIX_BITS + (int)length;
         } else if (inet_pton(AF_INET6, rule->host, &rule->network) == 1) {
             if (IN6_IS_ADDR_V4MAPPED(&rule->network) && length < (unsigned long)IPV4_MAPPED_PREFIX_BITS) {
+                log_verbose("dropping the rule '%s %s': an IPv4-mapped range needs a prefix "
+                            "of at least %d bits", host, port_text, IPV4_MAPPED_PREFIX_BITS);
                 return;
             }
             rule->prefix_length = (int)length;
         } else {
+            log_verbose("dropping the rule '%s %s': its host is not an address a range can "
+                        "start from", host, port_text);
             return;
         }
         rule->is_range = true;
@@ -80,6 +90,8 @@ void remember_rule(const char *host, const char *port_text) {
     char *unconverted = nullptr;
     unsigned long value = strtoul(port_text, &unconverted, DECIMAL);
     if (*unconverted != '\0' || value == 0 || value > HIGHEST_PORT) {
+        log_verbose("dropping the rule '%s %s': its port is not one the protocol has",
+                    host, port_text);
         return;
     }
     rule->any_port = false;
