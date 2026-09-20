@@ -43,10 +43,14 @@ case ",${SILENT_LANG}," in
     case ",${EMPTY_LANG}," in
       *",${language},"*)
         : > "${STUB_PATH_DIR}/${language}_exercise1.paths"
+        printf '{"paths_all": []}\\n' > "${STUB_PATH_DIR}/${language}_exercise1.json"
         ;;
       *)
         printf 'r /usr/lib/%s\\nw /home/build/%s\\n' "${language}" "${language}" \
           > "${STUB_PATH_DIR}/${language}_exercise1.paths"
+        printf '{"paths_all": [{"mode": "r", "path": "/usr/lib/%s"}, {"mode": "w", "path": "/home/build/%s"}]}\\n' \
+          "${language}" "${language}" \
+          > "${STUB_PATH_DIR}/${language}_exercise1.json"
         ;;
     esac
     ;;
@@ -63,8 +67,14 @@ def run_orchestrator(
     silent: str = "",
     empty: str = "",
     langs: str = "java,python",
+    skip_prune: bool = False,
 ) -> subprocess.CompletedProcess:
-    """Runs the orchestrator against a stub with the named language misbehaving."""
+    """Runs the orchestrator against a stub with the named language misbehaving.
+
+    With *skip_prune* the artefacts already in the path directory are used as they are,
+    which is how the compose pipeline runs it and the only way to hand it an artefact this
+    run did not write.
+    """
     stub = tmp_path / "prune-stub.sh"
     stub.write_text(PRUNE_STUB)
     stub.chmod(0o755)
@@ -78,6 +88,7 @@ def run_orchestrator(
             "--core-dir", str(tmp_path / "core"),
             "--helpers-dir", str(HELPERS),
             "--prune-script", str(stub),
+            *(["--skip-prune"] if skip_prune else []),
         ],
         env={
             **os.environ,
@@ -221,3 +232,51 @@ def test_the_runtime_tail_is_only_the_runtime_chdir(tmp_path):
     written = runtime_tail(tmp_path).split()
     assert written == ["--chdir", "/var/tmp/testing-dir"], written
     assert "/tmp/exercise-1" not in written
+
+
+def test_a_paths_file_without_its_record_stops_the_merge(tmp_path):
+    """The .paths and the .json come from one parsed log, so a .paths standing alone is
+    half of a measurement. A policy built from it would be narrower than anyone asked for
+    and would look exactly like a correct one."""
+    run_orchestrator(tmp_path)
+    path_dir = tmp_path / "path_sets"
+    (path_dir / "java_exercise1.json").unlink()
+    result = run_orchestrator(tmp_path, skip_prune=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "has no java_exercise1.json" in result.stdout
+
+
+def test_a_record_that_disagrees_with_its_paths_stops_the_merge(tmp_path):
+    """A .paths that lost lines after its record was written is the failure this check
+    exists for: fewer paths is a smaller policy, not a visible error."""
+    run_orchestrator(tmp_path)
+    path_dir = tmp_path / "path_sets"
+    (path_dir / "java_exercise1.paths").write_text("r /usr/lib/java\n")
+    result = run_orchestrator(tmp_path, skip_prune=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "records 2" in result.stdout
+
+
+def test_the_debug_files_say_what_the_language_file_does_not(tmp_path):
+    """Base<Lang>Only names what no other language needed, and Base<Lang>Common what every
+    exercise of that language needed. Both are for reading; neither is applied."""
+    result = run_orchestrator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    debug = tmp_path / "core" / "debug"
+    only_java = (debug / "BaseJavaOnly.cfg").read_text()
+    assert "/usr/lib/java" in only_java
+    assert "/usr/lib/python" not in only_java
+    assert (debug / "BaseJavaCommon.cfg").exists()
+    assert not (debug / "BaseJavaIntersect.cfg").exists()
+
+
+def test_a_record_without_its_paths_stops_the_merge(tmp_path):
+    """The other half of the pair: a record with no path set beside it is a run whose
+    path set was lost, and the language's other exercises would otherwise carry the
+    merge as though nothing were missing."""
+    run_orchestrator(tmp_path)
+    path_dir = tmp_path / "path_sets"
+    (path_dir / "java_exercise1.paths").unlink()
+    result = run_orchestrator(tmp_path, skip_prune=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "java_exercise1.json has no java_exercise1.paths" in result.stdout
