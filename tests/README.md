@@ -23,12 +23,14 @@ and no elevated permission.
 | `resource_limits.sh` | the `[limits]` keys are parsed and applied as rlimits, and a malformed one is refused | never |
 | `policy_program.sh` | `phobos-policy.sh` writes the specification, the model is additive, a run without a base policy is refused, and an unenforceable network rule is refused before anything is written | never |
 | `network_policy.sh` | how a `[connect]` and a `[bind]` section become Landlock port rules, including the cases that are refused | never |
+| `filesystem_policy.sh` | how the filesystem sections become Landlock path rules: a nested entry narrower than its ancestor is refused as unenforceable, a redundant one and a merely different one are allowed, and the redundant one is what lets an exercise config name that path with fewer rights | never |
 | `network_cache_ports.sh` | the address cache of `libnetblocker` and its port restrictions, against the real library | the compiler named by `COMPILER`, `gcc-14` by default, is absent. There is no fallback: the library has to be built the way the image builds it. Three checks skip on their own where the host has no IPv6 loopback |
 | `connect_guard.sh` | the connect guard enforces the allow-list by host and port, and refuses what it cannot carry | the kernel has no seccomp user-notification, or no C compiler is installed at all; `gcc-14` is preferred and plain `gcc` is used when it is absent |
 | `denial_report.sh` | the denial report, both directions, and that neither it nor its helpers cost the command its output or its exit status | never |
 | `prune_producer.sh` | what the prune phase produces: a run that finishes with artefacts missing, and one that leaves an earlier run's artefacts in place, both stop the merge | never |
 | `prune_sandbox.sh` | the real pruner against a fixture tree: how it reads a build's outcome, and that its sandbox hides what it says it hides | Bubblewrap cannot create a user namespace. `PHOBOS_REQUIRE_BWRAP=1`, which CI sets, turns that skip into a failure |
 | `runner-capability-probe.sh` | not a suite: it answers what a machine can do, and is run by `runner-capabilities.yml` on request | it is a diagnostic; the assert modes answer 0, 1 or 3 |
+| `policy-redundancy-probe.sh` | not a suite and not in CI: it names the entries of a policy that grant Landlock nothing an ancestor already grants, for reading a freshly pruned policy. Those entries are not dead, so it reports and never fails; `AGENTS.md` says what they do. Run it where the policy is applied, since it resolves symbolic links | it is a diagnostic; it answers 0 unless it was called wrongly |
 
 ## Python suites, run by the `Python helpers` job of `test.yml`
 
