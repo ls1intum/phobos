@@ -28,13 +28,13 @@ FIRST_LANDLOCK_VERSION_WITH_SCOPING=6
 OUTSIDE_PROCESS_SECONDS=300
 INSIDE_PROCESS_SECONDS=30
 version="$("$LANDLOCK" --verbose --rights=rx /usr -- /bin/true 2>&1 \
-    | sed -n 's/.*Landlock version \([0-9][0-9]*\).*/\1/p' | head -1)"
+  | sed -n 's/.*Landlock version \([0-9][0-9]*\).*/\1/p' | head -1)"
 
 if [[ -z "$version" ]] || (( version < FIRST_LANDLOCK_VERSION_WITH_SCOPING )); then
-    skip "Landlock scoping" "the kernel offers Landlock version ${version:-<none>}; scoping needs 6"
-    echo
-    printf '%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skipped"
-    exit 0
+  skip "Landlock scoping" "the kernel offers Landlock version ${version:-<none>}; scoping needs 6"
+  echo
+  printf '%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skipped"
+  exit 0
 fi
 
 # A process outside the sandbox, started before it, that the sandboxed process will try to
@@ -43,22 +43,22 @@ sleep "$OUTSIDE_PROCESS_SECONDS" &
 outside_pid=$!
 
 out="$("$LANDLOCK" --rights=rx /usr --rights=rx /lib -- \
-    /bin/sh -c "kill -0 ${outside_pid} && echo outside=REACHED || echo outside=denied" 2>&1)"
+  /bin/sh -c "kill -0 ${outside_pid} && echo outside=REACHED || echo outside=denied" 2>&1)"
 kill "$outside_pid" 2>/dev/null || true
 if [[ "$out" == *"outside=denied"* && "$out" != *"outside=REACHED"* ]]; then
-    ok "a sandboxed process cannot signal a process outside the sandbox"
+  ok "a sandboxed process cannot signal a process outside the sandbox"
 else
-    bad "a sandboxed process cannot signal a process outside the sandbox" "$out"
+  bad "a sandboxed process cannot signal a process outside the sandbox" "$out"
 fi
 
 # A process the sandbox starts itself is inside the same Landlock domain, so signalling it
 # must still work: scoping confines signals, it does not forbid them.
 out="$("$LANDLOCK" --rights=rx /usr --rights=rx /lib -- \
-    /bin/sh -c "sleep ${INSIDE_PROCESS_SECONDS}"' & inside=$!; kill -0 "$inside" && echo inside=ok || echo inside=DENIED; kill "$inside" 2>/dev/null' 2>&1)"
+  /bin/sh -c "sleep ${INSIDE_PROCESS_SECONDS}"' & inside=$!; kill -0 "$inside" && echo inside=ok || echo inside=DENIED; kill "$inside" 2>/dev/null' 2>&1)"
 if [[ "$out" == *"inside=ok"* && "$out" != *"inside=DENIED"* ]]; then
-    ok "a sandboxed process can still signal a process inside the sandbox"
+  ok "a sandboxed process can still signal a process inside the sandbox"
 else
-    bad "a sandboxed process can still signal a process inside the sandbox" "$out"
+  bad "a sandboxed process can still signal a process inside the sandbox" "$out"
 fi
 
 echo

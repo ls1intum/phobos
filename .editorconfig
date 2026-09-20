@@ -34,10 +34,11 @@ indent_size = 2
 end_of_line = lf
 indent_size = 4
 
-# The preload library and the wrapper. cppcheck and the compiler warnings gate them.
+# The preload library, phobos-landlock and the connect guard. cppcheck and the compiler
+# warnings gate them. Four spaces, which is what every C file here is written in.
 [{*.c,*.h}]
 end_of_line = lf
-indent_size = 2
+indent_size = 4
 
 # The path sets and the tail flags are read line by line by core/phobos-filesystem.sh with
 # `while IFS= read -r`. A carriage return would end up inside a path: a read or execute path

@@ -26,9 +26,9 @@ bash "${HERE}/../../tests/runner-capability-probe.sh" "${mode}"
 status="$?"
 
 case "${status}" in
-    "${PROBE_AVAILABLE}") verdict="available" ;;
-    "${PROBE_UNAVAILABLE}") verdict="unavailable" ;;
-    *) verdict="indeterminate" ;;
+  "${PROBE_AVAILABLE}") verdict="available" ;;
+  "${PROBE_UNAVAILABLE}") verdict="unavailable" ;;
+  *) verdict="indeterminate" ;;
 esac
 
 printf '%s: %s\n' "${name}" "${verdict}"
