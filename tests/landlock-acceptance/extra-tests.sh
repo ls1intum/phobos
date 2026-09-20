@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
+# What the five guarantees do not cover, in the image an exercise runs in.
+#
+# Four things, each of which could hold in a single-process check and fail in a real run:
+# that a second process started inside the sandbox inherits it and cannot shed it, that a
+# run as an unprivileged user is denied the same paths as one as root, that a denial comes
+# from Landlock and not from the ordinary file permissions (the control probe reads a
+# world-readable secret outside the policy), and that the options no policy file reaches,
+# --minimum-landlock-version and an unknown flag, refuse rather than run unprotected.
+#
+# It needs the run-phase image and an ordinary container: no --privileged, no --cap-add,
+# no --security-opt. PHOBOS_HOME names where Phobos is installed in that image.
 set -uo pipefail
 CORE=/var/tmp/opt/core
 # The image carries the constants beside the scripts under test.

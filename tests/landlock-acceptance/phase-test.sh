@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# The rights of a run, tightened and widened across four phases in one container.
+#
+# A grading run is not one command: it compiles, then tests, then cleans up, and each
+# phase deserves its own rights. This walks a Maven project through four of them and
+# checks, at each, that what the phase needs works and what it does not need is denied.
+#
+# The last part is the trap: what a restricted phase leaves behind is run by a later
+# unrestricted phase with that phase's rights. It is a documented property of Landlock,
+# which binds a process rather than a container, and the check asserts that the risk is
+# real so that nobody plans an unrestricted final phase by accident.
+#
+# Every step is offline, so it needs no network. It needs the run-phase image and an
+# ordinary container: no --privileged, no --cap-add, no --security-opt. PHOBOS_HOME names
+# where Phobos is installed in that image.
 set -uo pipefail
 CORE=/var/tmp/opt/core
 # How many lines of a failing build's log a failure shows.
