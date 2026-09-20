@@ -402,7 +402,8 @@ parse_cfg_policy() {
   reset_parsed_limits
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%%#*}"
-    line="$(echo "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
     [[ -z "$line" ]] && continue
     if [[ "$line" =~ ^\[(.+)\]$ ]]; then
       sec="${BASH_REMATCH[1]}"
@@ -431,17 +432,21 @@ parse_cfg_policy() {
 # Writes into the first file every distinct line of the remaining files, in the order first
 # seen, dropping comments and blank lines. Missing or empty files are skipped.
 net_union() {
-  local out="$1"; shift
+  local out="$1"
+  shift
+  local file
+  local line
+  local -A seen=()
   : > "$out"
-  declare -A SEEN=()
-  for f in "$@"; do
-    [[ -n "$f" && -s "$f" ]] || continue
-    while IFS= read -r ln; do
-      [[ -z "$ln" ]] && continue
-      if [[ -z "${SEEN["$ln"]:-}" ]]; then
-        echo "$ln" >> "$out"; SEEN["$ln"]=1
+  for file in "$@"; do
+    [[ -n "$file" && -s "$file" ]] || continue
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      if [[ -z "${seen["$line"]:-}" ]]; then
+        printf '%s\n' "$line" >> "$out"
+        seen["$line"]=1
       fi
-    done < <(sed -E 's/#.*$//' "$f" | sed '/^[[:space:]]*$/d')
+    done < <(sed -E 's/#.*$//' "$file" | sed '/^[[:space:]]*$/d')
   done
 }
 

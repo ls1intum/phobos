@@ -8,6 +8,10 @@ source "${CORE}/phobos-constants.sh"
 # user the non-root checks run as, the loopback ports of the network checks (the policy allows
 # the first and not the second), and how often and how far apart the server's start is awaited.
 LOG_EXCERPT_LINES=4
+# The modes the secret outside the sandbox is left in: readable by anyone, so that a
+# denial is the sandbox's doing and not the ordinary file permissions'.
+SECRET_DIRECTORY_MODE=755
+SECRET_FILE_MODE=644
 SANDBOX_UID=1042
 ALLOWED_PORT=19001
 DENIED_PORT=19002
@@ -25,8 +29,10 @@ echo "public-data" > "$TD/allowed-ro/data.txt"
 echo "TOP-SECRET-TESTCASE" > /var/tmp/secret/secret.txt
 javac -d "$TD/probe" /testsuite/PhobosProbe.java || exit 1
 cp /testsuite/BaseLanguage-java.cfg "$CORE/BaseLanguage-java.cfg"
-chmod -R a+rX "$TD" /var/tmp/opt /var/tmp/secret; chmod a+w "$TD/allowed-rw"
-chmod 755 /var/tmp/secret; chmod 644 /var/tmp/secret/secret.txt
+chmod -R a+rX "$TD" /var/tmp/opt /var/tmp/secret
+chmod a+w "$TD/allowed-rw"
+chmod "$SECRET_DIRECTORY_MODE" /var/tmp/secret
+chmod "$SECRET_FILE_MODE" /var/tmp/secret/secret.txt
 
 probe() {
   local want="$1"; shift
@@ -82,13 +88,15 @@ fi
 
 # A Landlock version no kernel offers.
 ABOVE_EVERY_LANDLOCK_VERSION=99
+# The first Landlock version there is, which every kernel that has Landlock offers.
+FIRST_LANDLOCK_VERSION=1
 hdr "G. Wrapper options that no policy file reaches"
 LL=$CORE/phobos-landlock
 $LL --minimum-landlock-version "$ABOVE_EVERY_LANDLOCK_VERSION" --rights=rx /usr -- /bin/true >/dev/null 2>&1
 [[ $? -eq "$PHB_ENFORCER_REFUSED_EXIT" ]] && ok "--minimum-landlock-version above the kernel version aborts instead of running unprotected" \
-                 || bad "--minimum-landlock-version 99 ran to completion"
-$LL --minimum-landlock-version 1 --rights=rx /usr -- /bin/true >/dev/null 2>&1
-[[ $? -eq 0 ]] && ok "--minimum-landlock-version below the kernel version runs" || bad "--minimum-landlock-version 1 failed"
+                 || bad "--minimum-landlock-version ${ABOVE_EVERY_LANDLOCK_VERSION} ran to completion"
+$LL --minimum-landlock-version "$FIRST_LANDLOCK_VERSION" --rights=rx /usr -- /bin/true >/dev/null 2>&1
+[[ $? -eq 0 ]] && ok "--minimum-landlock-version below the kernel version runs" || bad "--minimum-landlock-version ${FIRST_LANDLOCK_VERSION} failed"
 $LL --unknown-option x --rights=rx /usr -- /bin/true >/dev/null 2>&1
 [[ $? -eq "$PHB_EXIT_USAGE" ]] && ok "An unknown option is rejected" || bad "An unknown option was accepted"
 # Network rules: the allowed port gets through, any other does not.

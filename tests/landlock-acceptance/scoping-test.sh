@@ -31,7 +31,7 @@ version="$("$LANDLOCK" --verbose --rights=rx /usr -- /bin/true 2>&1 \
   | sed -n 's/.*Landlock version \([0-9][0-9]*\).*/\1/p' | head -1)"
 
 if [[ -z "$version" ]] || (( version < FIRST_LANDLOCK_VERSION_WITH_SCOPING )); then
-  skip "Landlock scoping" "the kernel offers Landlock version ${version:-<none>}; scoping needs 6"
+  skip "Landlock scoping" "the kernel offers Landlock version ${version:-<none>}; scoping needs ${FIRST_LANDLOCK_VERSION_WITH_SCOPING}"
   echo
   printf '%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skipped"
   exit 0

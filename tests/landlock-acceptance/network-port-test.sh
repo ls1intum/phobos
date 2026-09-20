@@ -14,6 +14,10 @@ set -uo pipefail
 
 CORE="${PHOBOS_HOME:-/var/tmp/opt/core}"
 LANDLOCK="${CORE}/phobos-landlock"
+# How long the listeners are given to bind their ports before the probes connect.
+LISTENER_START_SECONDS=1
+# The errno a Landlock denial answers a connect with, as the probe prints it.
+EACCES_ERRNO=13
 WORK="$(mktemp -d)"
 cleanup() {
   [[ -n "${allowed_pid:-}" ]] && kill "$allowed_pid" 2>/dev/null
@@ -73,9 +77,11 @@ listener() { perl -e '
   my $s = IO::Socket::INET->new(LocalAddr=>"127.0.0.1", LocalPort=>$ARGV[0],
     Listen=>$ARGV[1], ReuseAddr=>1, Proto=>"tcp") or exit 1;
   while (my $c = $s->accept) { close $c }' "$1" "$LISTEN_BACKLOG"; }
-listener "$ALLOWED_PORT" & allowed_pid=$!
-listener "$DENIED_PORT" & denied_pid=$!
-sleep 1
+listener "$ALLOWED_PORT" &
+allowed_pid=$!
+listener "$DENIED_PORT" &
+denied_pid=$!
+sleep "$LISTENER_START_SECONDS"
 
 # Runs the raw-connect probe under phobos-landlock. Arguments: port, extra landlock args...
 run() {
@@ -88,7 +94,7 @@ echo "== with the Landlock network layer on (allow only ${ALLOWED_PORT}) =="
 out="$(run "$ALLOWED_PORT" --connect-tcp "$ALLOWED_PORT")"
 [[ "$out" == *"RAW-CONNECT-OK"* ]] && ok "the allowed port connects" || bad "the allowed port connects" "$out"
 out="$(run "$DENIED_PORT" --connect-tcp "$ALLOWED_PORT")"
-[[ "$out" == *"RAW-CONNECT-DENIED errno=13"* ]] && ok "the denied port is refused by the kernel, raw syscall and all" \
+[[ "$out" == *"RAW-CONNECT-DENIED errno=${EACCES_ERRNO}"* ]] && ok "the denied port is refused by the kernel, raw syscall and all" \
   || bad "the denied port is refused by the kernel, raw syscall and all" "$out"
 
 echo

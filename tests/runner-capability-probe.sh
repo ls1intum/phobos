@@ -28,7 +28,7 @@ HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROBE_SOURCE="${HERE}/landlock-capability-probe.c"
 CONTAINER_IMAGE="${PROBE_CONTAINER_IMAGE:-ubuntu:26.04}"
 
-WORK="$(mktemp -d)" || { printf 'cannot create a working directory\n' >&2; exit 3; }
+WORK="$(mktemp -d)" || { printf 'cannot create a working directory\n' >&2; exit "${EXIT_INDETERMINATE}"; }
 cleanup() { rm -rf "${WORK}"; }
 trap cleanup EXIT
 
@@ -178,20 +178,30 @@ report_bwrap() {
   fact "the pruner's own flag list" "$(pruner_flag_verdict)"
 }
 
-# Whether the flags the pruner passes today are flags Bubblewrap knows.
+# The flags the pruner passes today, and whether this Bubblewrap knows them all.
 #
-# The pruner asks for --unshare-utc, which Bubblewrap has never had; the option
-# is --unshare-uts. This reads the help output rather than running a sandbox,
-# so a host that forbids namespaces cannot be mistaken for a rejected flag.
+# Read from the help output rather than by running a sandbox, so that a host which
+# forbids namespaces cannot be mistaken for a rejected flag. The list is the one
+# var/tmp/pruning/detect_minimal_fs.sh builds its invocation from; a flag added there
+# and not here is only missing from this report, not from the prune.
+PRUNER_FLAGS="--tmpfs --clearenv --ro-bind --bind --dir --setenv --proc --dev --share-net --new-session --unshare-pid --unshare-uts --unshare-ipc --chdir"
+
 pruner_flag_verdict() {
   if ! command -v bwrap >/dev/null 2>&1; then
     printf 'not checked, bwrap is absent'
     return
   fi
-  if bwrap --help 2>&1 | grep -q -- '--unshare-utc'; then
-    printf 'accepted'
+  local help
+  local flag
+  local unknown=""
+  help="$(bwrap --help 2>&1)"
+  for flag in ${PRUNER_FLAGS}; do
+    grep -q -- "${flag}" <<<"${help}" || unknown+="${flag} "
+  done
+  if [[ -z "${unknown}" ]]; then
+    printf 'all accepted'
   else
-    printf 'rejected: --unshare-utc is not an option, --unshare-uts is'
+    printf 'rejected: %s' "${unknown% }"
   fi
 }
 
