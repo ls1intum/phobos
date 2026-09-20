@@ -26,8 +26,10 @@ jobs:
         with:
           persist-credentials: false
 
-      # -x follows the "source" directives, otherwise the library file is
-      # analysed in isolation and every caller reports phantom findings.
+      # -x follows the "source" directives, and .shellcheckrc at the root sets
+      # source-path=SCRIPTDIR so that a directive written relative to its own file
+      # resolves from here too. Without both, every file is analysed in isolation and
+      # the constants the sourced files define are unknown, so a misspelt one passes.
       - name: Run shellcheck
         env:
           # Folded to stay inside the line length yamllint enforces; a digest plus a tag
