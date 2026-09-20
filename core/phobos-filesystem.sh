@@ -23,6 +23,16 @@ done
 SPEC_DIR="$1"; shift 2
 CMD=("$@")
 
+# Canonicalising a path is how this layer decides which rules name one tree, so the tool it
+# needs for that is established before any rule is built.
+refuse_missing_realpath
+
+# The temporary files this layer makes go under the specification directory, which the trap
+# below removes whole. A refusal exits before the rm that follows each use, so a policy error
+# would otherwise leave them in /tmp, which the policy itself usually makes writable.
+PHOBOS_SCRATCH="${SPEC_DIR}/${PHB_SPEC_SCRATCH}"
+mkdir -p "$PHOBOS_SCRATCH"
+
 # Removes the specification phobos.sh created. This layer always runs the command as a child
 # and waits on it, then exits, so this trap always runs, except when the command's timeout
 # group-kills this layer, where the timeout layer removes the specification instead.
@@ -82,7 +92,7 @@ if (( PHB_DEBUG_ENABLED )); then args+=( --verbose ); fi
 # The paths a submission can change: the union of the write, create and delete sections. The
 # preload library and its rules file must stay out of this set, or a submission could rewrite
 # its own network policy before starting another process.
-WRITABLE="$(mktemp -t phobos-writable.XXXXXX)"
+WRITABLE="$(new_scratch_file phobos-writable.XXXXXX)"
 cat "${WRITE}" "${CREATE}" "${DELETE}" 2>/dev/null > "${WRITABLE}" || :
 
 # Keep the LD_PRELOAD library and its rules file reachable, and out of reach of
