@@ -22,7 +22,6 @@ trap cleanup EXIT
 
 passed=0
 failed=0
-skipped=0
 
 ok() {
   printf 'ok    %s\n' "$1"
@@ -32,11 +31,6 @@ ok() {
 bad() {
   printf 'FAIL  %s\n        expected: %s\n        actual:   %s\n' "$1" "$2" "$3"
   failed=$((failed + 1))
-}
-
-skip() {
-  printf 'SKIP  %s\n        reason:   %s\n' "$1" "$2"
-  skipped=$((skipped + 1))
 }
 
 check() {
@@ -319,8 +313,5 @@ check "clock: a comma as the decimal separator (de_DE)"        "1789821309904702
 # ---------------------------------------------------------------------
 
 echo
-printf '%d passed, %d failed, %d skipped\n' "$passed" "$failed" "$skipped"
-if (( skipped > 0 )); then
-  printf 'Skipped checks did not run and are not counted as passing.\n'
-fi
+printf '%d passed, %d failed\n' "$passed" "$failed"
 (( failed == 0 )) || exit 1

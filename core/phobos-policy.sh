@@ -62,13 +62,6 @@ base_net="$(mktemp -p "$PHOBOS_SCRATCH")"
 base_bind="$(mktemp -p "$PHOBOS_SCRATCH")"
 for r in ${PHB_FS_RIGHTS}; do : >"${base_dir}/${r}.paths"; done
 : >"$base_net"; : >"$base_bind"
-timeout_eff=""
-eff_limit_mem_mb=""
-eff_limit_nproc=""
-eff_limit_nofile=""
-eff_limit_fsize_mb=""
-eff_limit_cpu=""
-
 # The timeout and each resource limit are pooled across every base and exercise cfg by the
 # same rule the setters use within a cfg: a zero anywhere disables that limit and wins, and
 # otherwise the largest value is kept, so the order of the cfgs does not matter. Timeouts are
@@ -144,12 +137,9 @@ done
 
 # Resolve the pooled state into the effective values. A disabled timeout is written as none,
 # and a finite one is canonicalised so 2 and 2.000 produce the same specification.
-if (( timeout_disabled )); then
-  timeout_eff=""
-elif (( timeout_max_ms >= 0 )); then
+timeout_eff=""
+if (( ! timeout_disabled )) && (( timeout_max_ms >= 0 )); then
   timeout_eff="$(ms_to_timeout "$timeout_max_ms")"
-else
-  timeout_eff=""
 fi
 eff_limit_mem_mb="$(effective_limit mem_mb)"
 eff_limit_nproc="$(effective_limit nproc)"
