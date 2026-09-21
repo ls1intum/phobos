@@ -113,6 +113,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/policy_program.sh
 
+      # The rights hierarchy decides which policies are refused before a command runs, and
+      # nothing measured it until this suite: a nested entry narrower than its ancestor is
+      # unenforceable and refused, while a redundant one and a merely different one are both
+      # allowed, and the redundant one is what lets an exercise config name that path with
+      # fewer rights.
+      - name: The filesystem policy
+        if: ${{ !cancelled() }}
+        run: bash tests/filesystem_policy.sh
+
       # Stubs stand in for the pruner and the emitter, so this needs no bubblewrap and
       # no exercises. It covers the two ways the prune phase can quietly produce less
       # than it should: finishing successfully with artefacts missing, and leaving an

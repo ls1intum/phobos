@@ -48,7 +48,6 @@ docker/run_phase/          the image an exercise actually runs in
 tests/                     the acceptance and probe suites; tests/README.md maps each one to its CI step
 var/tmp/                   prune inputs, helpers and example outputs
   pruning/orchestrate_core_idea.txt  how the prune containers and the orchestrator share one mount
-assets/                    diagrams
 ```
 
 ## The filesystem layer: Landlock

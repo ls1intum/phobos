@@ -150,7 +150,6 @@ docker/prune_phase/        one image per language, plus the orchestrator
 docker/run_phase/          the image an exercise actually runs in
 tests/                     the acceptance and probe suites
 var/tmp/                   prune inputs, helpers and example outputs
-assets/                    diagrams
 ```
 
 ## Coding conventions

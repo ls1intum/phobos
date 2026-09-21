@@ -45,6 +45,35 @@ configuration being trusted input that the graded code cannot write, which SECUR
 as an integration requirement. Do not "fix" the union back to a narrow-only exercise merge:
 that would break the intended platform/language/exercise layering, not tighten it.
 
+### A base entry an ancestor already covers is not dead code
+
+A shipped `Base*.cfg` lists paths that grant Landlock nothing beyond what an ancestor entry
+already grants it: `BaseLanguage-java.cfg` names `/usr/bin` with `rx` under a `/usr` that is
+already `rx`, and Landlock unions the rights of every rule along a path, so the nested rule
+adds nothing to the ruleset. They look like clutter and they are not.
+
+`fold_table_by_target` unions every row naming one target, and `resolve_rights_hierarchy` then
+refuses a nested entry whose rights are a **strict subset** of an ancestor's, because Landlock
+can never take a right away and the narrower entry would not hold. So the base row decides
+whether an exercise config is accepted:
+
+- with `/usr/bin rx` in the base, an exercise config naming `[read] /usr/bin` folds onto that
+  row, the target holds `rx`, and the run starts;
+- without it, the same exercise config is `r` beneath an `rx` ancestor, which is that strict
+  subset, and the run ends at `PHB-EPOLICY` before the command is reached.
+
+**Rule:** do not delete such an entry from a shipped policy as a tidy-up. It changes nothing
+about what Landlock enforces and it changes which exercise configurations Phobos accepts,
+which is a breaking change for whoever wrote them. Deleting one is a deliberate act that says
+so in the pull request body and proves both directions.
+
+What those entries do **not** do is make an arbitrary narrower subpath acceptable. They
+preserve acceptance for exercise configurations that name exactly the paths they name, and
+nothing else; a config naming some other path beneath a wider rule with fewer rights is still
+refused. `tests/filesystem_policy.sh` pins both directions of this, and
+`tests/policy-redundancy-probe.sh` reports which entries of a policy are in this position,
+which is worth reading when judging a freshly pruned one.
+
 ## Allow-list files are read line by line, so line endings are load-bearing
 
 `core/phobos-filesystem.sh` reads the path sets with `while IFS= read -r p` and turns each
