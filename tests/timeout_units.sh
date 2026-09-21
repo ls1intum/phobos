@@ -8,6 +8,8 @@
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=harness.sh
+source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
 # shellcheck source=../core/phobos-constants.sh
 source "${CORE}/phobos-constants.sh"
@@ -19,26 +21,6 @@ cleanup() {
   rm -rf "$WORK"
 }
 trap cleanup EXIT
-
-passed=0
-failed=0
-
-ok() {
-  printf 'ok    %s\n' "$1"
-  passed=$((passed + 1))
-}
-
-bad() {
-  printf 'FAIL  %s\n        expected: %s\n        actual:   %s\n' "$1" "$2" "$3"
-  failed=$((failed + 1))
-}
-
-check() {
-  local name=$1
-  local want=$2
-  local got=$3
-  if [[ "$got" == "$want" ]]; then ok "$name"; else bad "$name" "$want" "$got"; fi
-}
 
 # ---------------------------------------------------------------------
 # Modular runtime: configuration parsing
@@ -282,7 +264,6 @@ foo=1'
 rejects_net "a bare value in a [limits] section is refused" '[limits]
 1.234'
 
-
 # ---------------------------------------------------------------------
 # Deciding whether a run was stopped by its timeout
 # ---------------------------------------------------------------------
@@ -312,6 +293,4 @@ check "clock: a comma as the decimal separator (de_DE)"        "1789821309904702
 
 # ---------------------------------------------------------------------
 
-echo
-printf '%d passed, %d failed\n' "$passed" "$failed"
-(( failed == 0 )) || exit 1
+finish

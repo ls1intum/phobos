@@ -245,14 +245,14 @@ jobs:
       - name: The five guarantees
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
-            phobos-run-phase:ci bash /testsuite/run-tests.sh
+          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+            phobos-run-phase:ci bash /tests/landlock-acceptance/run-tests.sh
 
       - name: Inheritance, non-root and the control probe
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
-            phobos-run-phase:ci bash /testsuite/extra-tests.sh
+          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+            phobos-run-phase:ci bash /tests/landlock-acceptance/extra-tests.sh
 
       # Its own step because it is the one suite that resolves Maven plugins, and a
       # failure here is a dependency problem rather than a Landlock regression. It still
@@ -260,8 +260,8 @@ jobs:
       - name: Tightening and widening rights across phases
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
-            phobos-run-phase:ci bash /testsuite/phase-test.sh
+          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+            phobos-run-phase:ci bash /tests/landlock-acceptance/phase-test.sh
 
       # The one suite that runs the shipped policy an exercise actually gets, rather than a
       # tight test policy, so a regression that breaks an ordinary run under it, or widens it,
@@ -269,8 +269,8 @@ jobs:
       - name: The shipped policy runs an exercise both ways
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
-            phobos-run-phase:ci bash /testsuite/shipped-policy-test.sh
+          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+            phobos-run-phase:ci bash /tests/landlock-acceptance/shipped-policy-test.sh
 
       # The kernel-enforced network boundary holds against a raw connect() syscall that
       # steps around the preload library, which is what makes concrete Landlock ports, not
@@ -278,8 +278,8 @@ jobs:
       - name: The network port rule holds against a raw-syscall bypass
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
-            phobos-run-phase:ci bash /testsuite/network-port-test.sh
+          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+            phobos-run-phase:ci bash /tests/landlock-acceptance/network-port-test.sh
 
       # Scoping keeps a submission from signalling the grading process beside it or reaching
       # an abstract UNIX socket outside the sandbox, which the path and port rules do not
@@ -288,8 +288,8 @@ jobs:
       - name: A sandboxed process cannot reach out of the sandbox with a signal
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
-            phobos-run-phase:ci bash /testsuite/scoping-test.sh
+          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+            phobos-run-phase:ci bash /tests/landlock-acceptance/scoping-test.sh
 
       # The libnetblocker bind hook narrows a local TCP bind to the addresses a [bind] rule
       # names, which Landlock's per-port bind right cannot do. Runs against the library the
@@ -297,8 +297,8 @@ jobs:
       - name: The libnetblocker bind hook narrows a local bind by address
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
-            phobos-run-phase:ci bash /testsuite/bind-address-test.sh
+          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+            phobos-run-phase:ci bash /tests/landlock-acceptance/bind-address-test.sh
 
       # The connect guard the image compiled installs its seccomp user-notification filter under
       # the image's default seccomp profile in an ordinary container, and enforces the [connect]
@@ -307,8 +307,8 @@ jobs:
       - name: The connect guard enforces the allow-list in the run-phase image
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests/landlock-acceptance:/testsuite:ro" \
-            phobos-run-phase:ci bash /testsuite/connect-guard-test.sh
+          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+            phobos-run-phase:ci bash /tests/landlock-acceptance/connect-guard-test.sh
 
   # Mutation testing installs clang and mull into a container and then runs the suite
   # once per mutant, which is minutes rather than seconds. Weekly and on request, so it

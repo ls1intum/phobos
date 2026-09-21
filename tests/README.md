@@ -9,6 +9,12 @@ Each shell suite is run by a step of its own in CI, so one run names every suite
 rather than only the first. The Python suites are the exception: pytest runs them together in
 one step and reports each failure itself.
 
+Every suite reports through `harness.sh`, which it sources and which owns `ok`, `bad`,
+`skip`, `check`, the three counters and `finish`. A suite keeps everything else of its own:
+its shell options, its fixtures and its cleanup trap. The acceptance suites reach it as
+`../harness.sh`, which is why their CI step mounts `tests/` rather than
+`tests/landlock-acceptance/`.
+
 ## Host suites, run by the `Shell suites` job of `test.yml`
 
 These need a shell, a compiler, a Python and Bubblewrap. No container, no kernel feature
@@ -29,7 +35,8 @@ and no elevated permission.
 | `denial_report.sh` | the denial report, both directions, and that neither it nor its helpers cost the command its output or its exit status | never |
 | `prune_producer.sh` | what the prune phase produces: a run that finishes with artefacts missing, and one that leaves an earlier run's artefacts in place, both stop the merge | never |
 | `prune_sandbox.sh` | the real pruner against a fixture tree: how it reads a build's outcome, and that its sandbox hides what it says it hides | Bubblewrap cannot create a user namespace. `PHOBOS_REQUIRE_BWRAP=1`, which CI sets, turns that skip into a failure |
-| `runner-capability-probe.sh` | not a suite: it answers what a machine can do, and is run by `runner-capabilities.yml` on request | it is a diagnostic; the assert modes answer 0, 1 or 3 |
+| `harness_self_test.sh` | the reporting every other suite depends on: a failure is recorded and the suite carries on, `bad` does not end a suite running under `set -e`, the exit status and the printed summary agree, and a skip is counted apart from a pass | never |
+| `runner-capability-probe.sh` | not a suite: it answers what a machine can do, and is run by `runner-capabilities.yml` on request. It reports for itself rather than through the harness, because its statuses are its own | it is a diagnostic; the assert modes answer 0, 1 or 3 |
 | `policy-redundancy-probe.sh` | not a suite and not in CI: it names the entries of a policy that grant Landlock nothing an ancestor already grants, for reading a freshly pruned policy. Those entries are not dead, so it reports and never fails; `AGENTS.md` says what they do. Run it where the policy is applied, since it resolves symbolic links | it is a diagnostic; it answers 0 unless it was called wrongly |
 
 ## Python suites, run by the `Python helpers` job of `test.yml`

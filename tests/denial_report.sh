@@ -10,16 +10,13 @@
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=harness.sh
+source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
 WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
-
-passed=0
-failed=0
-ok()  { printf 'ok    %s\n' "$1"; passed=$((passed + 1)); }
-bad() { printf 'FAIL  %s\n        expected: %s\n        actual:   %s\n' "$1" "$2" "$3"; failed=$((failed + 1)); }
 
 CORE_X="$WORK/core-x"
 cp -R "$CORE" "$CORE_X"
@@ -122,6 +119,4 @@ else
     "exit 0 within ${LEFTOVER_RUN_BOUND_MS} ms" "exit ${RC} after ${elapsed_ms} ms"
 fi
 
-echo
-printf '%d passed, %d failed\n' "$passed" "$failed"
-(( failed == 0 )) || exit 1
+finish

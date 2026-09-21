@@ -22,26 +22,10 @@
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=harness.sh
+source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 PRODUCER="${HERE}/../var/tmp/pruning/run_minimal_fs_all.sh"
 PRUNER="${HERE}/../var/tmp/pruning/detect_minimal_fs.sh"
-
-passed=0
-failed=0
-skipped=0
-
-ok() { printf 'ok    %s\n' "$1"; passed=$((passed + 1)); }
-bad() { printf 'FAIL  %s\n        expected: %s\n        actual:   %s\n' "$1" "$2" "$3"; failed=$((failed + 1)); }
-skip() { printf 'SKIP  %s\n        reason:   %s\n' "$1" "$2"; skipped=$((skipped + 1)); }
-
-summary() {
-  echo
-  printf '%d passed, %d failed, %d skipped\n' "${passed}" "${failed}" "${skipped}"
-  if (( skipped > 0 )); then
-    printf 'Skipped checks did not run and are not counted as passing.\n'
-  fi
-  (( failed == 0 )) || exit 1
-  exit 0
-}
 
 # Whether this machine will let bubblewrap build a sandbox at all.
 #
@@ -475,13 +459,14 @@ check_failing_tests_are_not_a_missing_resource
 if ! bwrap_works; then
   if [[ -n "${PHOBOS_REQUIRE_BWRAP:-}" ]]; then
     bad "bubblewrap can build a sandbox here" "a working sandbox" "the host refused a user namespace"
-    summary
+    finish
   fi
   skip "the checks that run the pruner" "bubblewrap cannot create a user namespace here"
-  summary
+  finish
 fi
 
 check_a_fixture_tree_is_pruned
 check_the_host_tmp_is_not_in_the_sandbox
 check_the_environment_is_not_inherited
-summary
+
+finish

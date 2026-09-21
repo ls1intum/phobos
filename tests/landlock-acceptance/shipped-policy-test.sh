@@ -16,13 +16,12 @@
 # no --security-opt.
 set -uo pipefail
 
+HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../harness.sh
+source "${HERE}/../harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
+
 CORE="${PHOBOS_HOME:-/var/tmp/opt/core}"
 EXERCISE=/var/tmp/testing-dir
-
-pass=0
-fail=0
-ok()  { printf 'ok    %s\n' "$1"; pass=$((pass + 1)); }
-bad() { printf 'FAIL  %s\n        %s\n' "$1" "$2"; fail=$((fail + 1)); }
 
 # A minimal exercise under the directory the shipped policy names.
 mkdir -p "$EXERCISE/assignment" "$EXERCISE/build"
@@ -84,6 +83,4 @@ else
   bad "shipped policy denies a path outside the allow-list" "$output"
 fi
 
-echo
-printf '%d passed, %d failed\n' "$pass" "$fail"
-(( fail == 0 ))
+finish

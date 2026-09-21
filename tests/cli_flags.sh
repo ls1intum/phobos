@@ -7,6 +7,8 @@
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=harness.sh
+source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
 # shellcheck source=../core/phobos-constants.sh
 source "${CORE}/phobos-constants.sh"
@@ -14,11 +16,6 @@ WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
-
-passed=0
-failed=0
-ok()  { printf 'ok    %s\n' "$1"; passed=$((passed + 1)); }
-bad() { printf 'FAIL  %s\n        expected: %s\n        actual:   %s\n' "$1" "$2" "$3"; failed=$((failed + 1)); }
 
 # A copy of core with a minimal base policy beside it, so phobos.sh has a sandbox to build,
 # and a pass-through stand-in for phobos-landlock so a run reaches the command with no real
@@ -263,6 +260,4 @@ else
     "empty stdout, PHB-EPOLICY on stderr" "stdout '$(cat "$DBG_OUT")', stderr '$(cat "$DBG_ERR")'"
 fi
 
-echo
-printf '%d passed, %d failed\n' "$passed" "$failed"
-(( failed == 0 )) || exit 1
+finish

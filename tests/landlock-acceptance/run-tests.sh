@@ -3,6 +3,10 @@
 # no --privileged, no --cap-add, no --security-opt.
 set -uo pipefail
 
+HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../harness.sh
+source "${HERE}/../harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
+
 CORE=/var/tmp/opt/core
 # The image carries the constants beside the scripts under test.
 # shellcheck source=/dev/null
@@ -20,12 +24,8 @@ LOG_EXCERPT_LINES=6
 SPIN_TIMEOUT_SECONDS=5
 SPIN_LATEST_SECONDS=20
 TD=/var/tmp/testing-dir
-PASS=0
-FAIL=0
 
 hdr() { printf '\n\033[1m%s\033[0m\n' "$*"; }
-ok()   { PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m %s\n' "$*"; }
-bad()  { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$*"; }
 
 hdr "0. Environment"
 echo "  kernel:  $(uname -r) ($(uname -m))"
@@ -41,8 +41,8 @@ echo "public-data" > "$TD/allowed-ro/data.txt"
 echo "TOP-SECRET-TESTCASE" > /var/tmp/secret/secret.txt
 mkdir -p /root && echo "home-secret" > /root/secret-home.txt
 
-javac -d "$TD/probe" /testsuite/PhobosProbe.java /testsuite/NetServers.java || exit 1
-cp /testsuite/BaseLanguage-java.cfg "$CORE/BaseLanguage-java.cfg"
+javac -d "$TD/probe" ${HERE}/PhobosProbe.java ${HERE}/NetServers.java || exit 1
+cp ${HERE}/BaseLanguage-java.cfg "$CORE/BaseLanguage-java.cfg"
 
 # --- Servers outside the sandbox ----------------------------------------
 java -cp "$TD/probe" NetServers "$ALLOWED_PORT" "$DENIED_PORT" > /tmp/servers.log 2>&1 &
@@ -88,7 +88,7 @@ probe OK "connect 127.0.0.1:${ALLOWED_PORT}"           connect 127.0.0.1 "$ALLOW
 
 hdr "5. Timeout (the JVM actively tries to block it with a shutdown hook)"
 START=$(date +%s)
-phobos.sh --config /testsuite/spin-timeout.cfg -- java -cp probe PhobosProbe spin > /tmp/spin.log 2>&1
+phobos.sh --config ${HERE}/spin-timeout.cfg -- java -cp probe PhobosProbe spin > /tmp/spin.log 2>&1
 RC=$?
 ELAPSED=$(( $(date +%s) - START ))
 echo "  exit=$RC after ${ELAPSED}s (PHB_ETIMEOUT=${PHB_ETIMEOUT} expected)"
@@ -111,5 +111,5 @@ fi
 
 kill "$SRV" 2>/dev/null
 hdr "Result"
-printf '  passed: %d, failed: %d\n\n' "$PASS" "$FAIL"
-[[ "$FAIL" -eq 0 ]]
+
+finish

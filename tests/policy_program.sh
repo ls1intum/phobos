@@ -7,6 +7,8 @@
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=harness.sh
+source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
 # shellcheck source=../core/phobos-constants.sh
 source "${CORE}/phobos-constants.sh"
@@ -14,18 +16,6 @@ WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
-
-passed=0
-failed=0
-ok()  { printf 'ok    %s\n' "$1"; passed=$((passed + 1)); }
-bad() { printf 'FAIL  %s\n        expected: %s\n        actual:   %s\n' "$1" "$2" "$3"; failed=$((failed + 1)); }
-# Compares what a case produced with what it should produce, and records the outcome.
-check() {
-  local name="$1"
-  local want="$2"
-  local got="$3"
-  if [[ "$got" == "$want" ]]; then ok "$name"; else bad "$name" "$want" "$got"; fi
-}
 
 CORE_X="$WORK/core-x"
 cp -R "$CORE" "$CORE_X"
@@ -165,6 +155,4 @@ chmod +x "$WORK/passthrough-landlock"
 mem="$(bash "$CORE_X/phobos-resources.sh" "$SPEC" -- bash -c 'ulimit -v' 2>/dev/null)"
 check "the resource layer applies the built limit (128 MB is 131072 KB)" "131072" "$mem"
 
-echo
-printf '%d passed, %d failed\n' "$passed" "$failed"
-(( failed == 0 )) || exit 1
+finish

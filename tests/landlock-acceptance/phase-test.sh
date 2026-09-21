@@ -14,16 +14,16 @@
 # ordinary container: no --privileged, no --cap-add, no --security-opt. PHOBOS_HOME names
 # where Phobos is installed in that image.
 set -uo pipefail
+
+HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../harness.sh
+source "${HERE}/../harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE=/var/tmp/opt/core
 # How many lines of a failing build's log a failure shows.
 LOG_EXCERPT_LINES=5
 LL=$CORE/phobos-landlock
 P=/var/tmp/project
-PASS=0
-FAIL=0
 hdr(){ printf '\n\033[1m%s\033[0m\n' "$*"; }
-ok(){ PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m %s\n' "$*"; }
-bad(){ FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$*"; }
 
 mkdir -p $P/src/main/java /var/tmp/secret
 echo "TOP-SECRET" > /var/tmp/secret/secret.txt
@@ -114,5 +114,5 @@ $LL $TEST_ONLY -- /bin/sh -c "cat /var/tmp/secret/secret.txt" >/dev/null 2>&1 \
   && bad "The child process escaped the restriction" || ok "The child process stays restricted"
 
 hdr "Result"
-printf '  passed: %d, failed: %d\n\n' "$PASS" "$FAIL"
-[[ $FAIL -eq 0 ]]
+
+finish

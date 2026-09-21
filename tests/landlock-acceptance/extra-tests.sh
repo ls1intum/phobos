@@ -11,6 +11,10 @@
 # It needs the run-phase image and an ordinary container: no --privileged, no --cap-add,
 # no --security-opt. PHOBOS_HOME names where Phobos is installed in that image.
 set -uo pipefail
+
+HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../harness.sh
+source "${HERE}/../harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE=/var/tmp/opt/core
 # The image carries the constants beside the scripts under test.
 # shellcheck source=/dev/null
@@ -29,17 +33,13 @@ DENIED_PORT=19002
 SERVER_WAIT_ATTEMPTS=40
 SERVER_WAIT_SECONDS=0.2
 TD=/var/tmp/testing-dir
-PASS=0
-FAIL=0
 hdr() { printf '\n\033[1m%s\033[0m\n' "$*"; }
-ok()  { PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m %s\n' "$*"; }
-bad() { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$*"; }
 
 mkdir -p "$TD/probe" "$TD/allowed-ro" "$TD/allowed-rw" /var/tmp/secret
 echo "public-data" > "$TD/allowed-ro/data.txt"
 echo "TOP-SECRET-TESTCASE" > /var/tmp/secret/secret.txt
-javac -d "$TD/probe" /testsuite/PhobosProbe.java || exit 1
-cp /testsuite/BaseLanguage-java.cfg "$CORE/BaseLanguage-java.cfg"
+javac -d "$TD/probe" ${HERE}/PhobosProbe.java || exit 1
+cp ${HERE}/BaseLanguage-java.cfg "$CORE/BaseLanguage-java.cfg"
 chmod -R a+rX "$TD" /var/tmp/opt /var/tmp/secret
 chmod a+w "$TD/allowed-rw"
 chmod "$SECRET_DIRECTORY_MODE" /var/tmp/secret
@@ -247,7 +247,6 @@ else
 fi
 rm -rf "$INHERITED_SPEC"
 
-
 hdr "Result of the additional tests"
-printf '  passed: %d, failed: %d\n\n' "$PASS" "$FAIL"
-[[ "$FAIL" -eq 0 ]]
+
+finish

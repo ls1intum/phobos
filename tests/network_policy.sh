@@ -9,17 +9,14 @@
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=harness.sh
+source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
 # shellcheck source=../core/phobos-constants.sh
 source "${CORE}/phobos-constants.sh"
 WORK="$(mktemp -d)"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
-
-passed=0
-failed=0
-ok()  { printf 'ok    %s\n' "$1"; passed=$((passed + 1)); }
-bad() { printf 'FAIL  %s\n        expected: %s\n        actual:   %s\n' "$1" "$2" "$3"; failed=$((failed + 1)); }
 
 # Runs build_network_args over a rules body in a subshell, so a policy refusal (which exits)
 # is captured rather than ending this suite. Prints "<exit>|<args>|<log>".
@@ -120,6 +117,4 @@ echo "== an out-of-range bind port is refused =="
 r="$(run_bind "* 70000")"
 [[ "$(field "$r" 1)" != 0 ]] && ok "a bind port above 65535 is refused" || bad "a bind port above 65535 is refused" "a non-zero exit" "exit $(field "$r" 1)"
 
-echo
-printf '%d passed, %d failed\n' "$passed" "$failed"
-(( failed == 0 ))
+finish
