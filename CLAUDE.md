@@ -84,13 +84,13 @@ ${PHOBOS_HOME}/phobos.sh --no-runtime-restriction -- <command>
 
 ### The linters, which are the gate
 
-`lint.yml` runs six lint jobs. It is not the whole of CI: `test.yml` runs the shell and
+`lint.yml` runs eight lint jobs. It is not the whole of CI: `test.yml` runs the shell and
 Python suites, `build.yml` builds the images and holds the run-phase image to the Landlock
 acceptance suites inside it, `codeql.yml` scans, and `pullrequest-template.yml` checks the
 body. The lint jobs are the ones you can run in full by hand before opening a pull request.
 
 ```
-# Same file sets and same flags as CI. Together these are all six jobs, and the C job is two
+# Same file sets and same flags as CI. Together these are all eight jobs, and the C job is two
 # steps rather than one: the compiler gate runs before cppcheck and fails on any warning.
 find . -name '*.sh'  -type f -print0 | xargs -0 shellcheck -x -S warning
 ( failed=0; while IFS= read -r f; do gcc-14 -std=gnu23 -fsyntax-only -Wall -Wextra -Werror -fanalyzer "$f" || failed=1; done < <(find . -name '*.c' -type f); exit "$failed" )
@@ -100,6 +100,8 @@ bandit --recursive --ini .bandit --severity-level medium docker/prune_phase/orch
 yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 actionlint
+ec --no-color                      # editorconfig-checker, configured by .editorconfig-checker.json
+awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print FILENAME":"FNR; e=1}} {p=$0} END{exit e}' core/*.sh
 ```
 
 One of those is narrower than it looks: `bandit` runs over exactly two directories, not the
