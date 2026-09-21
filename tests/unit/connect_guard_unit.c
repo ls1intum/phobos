@@ -48,8 +48,12 @@
 #define main sut_main
 #include "../../core/phobos-connect-guard.c"
 #undef main
+#include "../../core/phobos-connect-guard-child.h"
 #include "../../core/phobos-connect-guard-destination.h"
 #include "../../core/phobos-connect-guard-socket-types.h"
+
+#include <linux/filter.h>
+#include <linux/seccomp.h>
 
 /* ------------------------------------------------------------ the behaviour */
 
@@ -103,12 +107,23 @@ enum readlink_answer {
 /* Room for the link text the wrapped readlink writes. */
 static constexpr size_t READLINK_TEXT_LENGTH = 64;
 
+/* Room for the filter the child installs, so a case can run it against a seccomp_data of its
+ * own. Generous: a filter longer than this is a filter nobody meant to write. */
+static constexpr size_t CAPTURED_FILTER_LENGTH = 64;
+
+/* An audit architecture the build's own syscall numbers do not belong to, used to ask the
+ * filter what it does with a call arriving under a foreign ABI. */
+static constexpr uint32_t FOREIGN_AUDIT_ARCH = 0xdead0000;
+
 /* What the wrapped calls should do, and what they were handed. The record lives in
  * shared memory because a case that ends in exit() runs in a forked child of the
  * test while the assertions are made by the parent. */
 struct behaviour {
     /* seccomp NEW_LISTENER (via syscall) */
     long seccomp_listener_result;
+    /* The filter the child handed SECCOMP_SET_MODE_FILTER, kept so a case can run it. */
+    struct sock_filter installed_filter[CAPTURED_FILTER_LENGTH];
+    unsigned short installed_filter_length;
     /* SECCOMP_GET_NOTIF_SIZES (via syscall) */
     int notif_sizes_result;
     int notif_sizes_small;
@@ -228,7 +243,12 @@ long __wrap_syscall(long number, ...) {
     va_end(arguments);
     if (number == SYS_seccomp && a1 == SECCOMP_SET_MODE_FILTER) {
         (void)a2;
-        (void)a3;
+        const struct sock_fprog *program = (const struct sock_fprog *)(uintptr_t)a3;
+        if (program != NULL && program->len <= CAPTURED_FILTER_LENGTH) {
+            memcpy(bx->installed_filter, program->filter,
+                   (size_t)program->len * sizeof(struct sock_filter));
+            bx->installed_filter_length = program->len;
+        }
         if (bx->seccomp_listener_result < 0) {
             errno = EACCES;
         }
@@ -1479,6 +1499,85 @@ static void test_argument_errors(void) {
 }
 
 /* Setup failures before the command runs. A fork result of 0 takes the child path. */
+/* Runs the filter the child installed against one seccomp_data and answers what it returns.
+ * A classic BPF program of this shape is four instruction forms: load a word of the data,
+ * compare the accumulator with a constant, test bits of it, and return. Anything else is a
+ * form this filter does not use, and answering zero for it makes the case fail rather than
+ * quietly pass. Assumes a case has already run the child, so a filter was captured. */
+static uint32_t filter_answer(uint32_t audit_arch, int syscall_number) {
+    struct seccomp_data data;
+    memset(&data, 0, sizeof(data));
+    data.arch = audit_arch;
+    data.nr = syscall_number;
+    uint32_t accumulator = 0;
+    for (unsigned short at = 0; at < bx->installed_filter_length; at++) {
+        const struct sock_filter *instruction = &bx->installed_filter[at];
+        if (instruction->code == (BPF_LD | BPF_W | BPF_ABS)) {
+            memcpy(&accumulator, (const char *)&data + instruction->k, sizeof(accumulator));
+            continue;
+        }
+        if (instruction->code == (BPF_JMP | BPF_JEQ | BPF_K)) {
+            at += (accumulator == instruction->k) ? instruction->jt : instruction->jf;
+            continue;
+        }
+        if (instruction->code == (BPF_JMP | BPF_JSET | BPF_K)) {
+            at += (accumulator & instruction->k) ? instruction->jt : instruction->jf;
+            continue;
+        }
+        if (instruction->code == (BPF_RET | BPF_K)) {
+            return instruction->k;
+        }
+        return 0;
+    }
+    return 0;
+}
+
+/* Installs the filter by running the child far enough to hand it over, so that the checks
+ * below have one to run. The exec stand-in ends the child, which is what a case expects. */
+static void install_filter_for_inspection(void) {
+    char *argv[] = { "guard", "--", "cmd", NULL };
+    reset_behaviour();
+    bx->fork_result = 0;
+    bx->execvp_returns = 1;
+    (void)run_main(argv);
+}
+
+/* What the filter does with each class of call. The filter is the whole of the guard's
+ * reach: a syscall it allows is one the supervisor never sees, so the decision belongs to
+ * this program and not only to the code that services a notification. */
+static void test_egress_filter(void) {
+    constexpr uint32_t deny = SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA);
+    install_filter_for_inspection();
+    check("the child hands the kernel a filter at all", bx->installed_filter_length > 0);
+
+    check("a call under a foreign ABI is refused",
+          filter_answer(FOREIGN_AUDIT_ARCH, __NR_read) == deny);
+    check("an ordinary call under the native ABI is allowed",
+          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_read) == SECCOMP_RET_ALLOW);
+
+    check("io_uring_setup is refused",
+          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_io_uring_setup) == deny);
+    check("io_uring_enter is refused",
+          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_io_uring_enter) == deny);
+    check("io_uring_register is refused",
+          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_io_uring_register) == deny);
+    check("setsid is refused, so the command cannot leave the timeout's group",
+          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_setsid) == deny);
+    check("setpgid is refused, for the same reason",
+          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_setpgid) == deny);
+
+    check("connect is trapped to the supervisor",
+          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_connect) == SECCOMP_RET_USER_NOTIF);
+    check("socket is trapped to the supervisor",
+          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_socket) == SECCOMP_RET_USER_NOTIF);
+    check("sendto is trapped to the supervisor",
+          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_sendto) == SECCOMP_RET_USER_NOTIF);
+    check("sendmmsg is trapped to the supervisor",
+          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_sendmmsg) == SECCOMP_RET_USER_NOTIF);
+    check("sendmsg is deliberately not trapped, or the descriptor handoff would park",
+          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_sendmsg) == SECCOMP_RET_ALLOW);
+}
+
 static void test_child_setup_failures(void) {
     char *argv[] = { "guard", "--", "cmd", NULL };
 
@@ -1579,6 +1678,7 @@ int main(void) {
     test_connect_on_behalf_paths();
     test_supervise_loop();
     test_argument_errors();
+    test_egress_filter();
     test_child_setup_failures();
     test_parent_paths();
 
