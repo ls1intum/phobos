@@ -89,6 +89,39 @@ else
 fi
 
 echo
+echo "== a base policy the program cannot read stops it, rather than the rest going on =="
+# The glob has to tell "nothing matched" from "something matched and cannot be read". A name
+# the glob found and the program then skipped would build a policy from the bases that
+# happened to be readable, which is a narrower sandbox reported as a working one.
+UNREADABLE="$WORK/unreadable"
+cp -R "$CORE" "$UNREADABLE"
+chmod +x "$UNREADABLE"/*.sh
+printf '[read]\n/var/tmp\n' > "$UNREADABLE/BaseGood.cfg"
+ln -s "$WORK/there-is-no-such-file.cfg" "$UNREADABLE/BaseDangling.cfg"
+SPEC3="$(fresh_spec)"
+out="$(bash "$UNREADABLE/phobos-policy.sh" --spec-dir "$SPEC3" 2>&1)"
+rc=$?
+if [[ "$rc" -eq "$PHB_EPOLICY" && "$out" == *"PHB-EPOLICY"* ]]; then
+  ok "a Base*.cfg that is a broken symbolic link is refused (PHB-EPOLICY)"
+else
+  bad "a Base*.cfg that is a broken symbolic link is refused (PHB-EPOLICY)" "exit ${PHB_EPOLICY} reporting PHB-EPOLICY" "exit $rc: $out"
+fi
+
+ADIRECTORY="$WORK/adirectory"
+cp -R "$CORE" "$ADIRECTORY"
+chmod +x "$ADIRECTORY"/*.sh
+printf '[read]\n/var/tmp\n' > "$ADIRECTORY/BaseGood.cfg"
+mkdir -p "$ADIRECTORY/BaseOops.cfg"
+SPEC4="$(fresh_spec)"
+out="$(bash "$ADIRECTORY/phobos-policy.sh" --spec-dir "$SPEC4" 2>&1)"
+rc=$?
+if [[ "$rc" -eq "$PHB_EPOLICY" && "$out" == *"PHB-EPOLICY"* ]]; then
+  ok "a Base*.cfg that is a directory is refused (PHB-EPOLICY)"
+else
+  bad "a Base*.cfg that is a directory is refused (PHB-EPOLICY)" "exit ${PHB_EPOLICY} reporting PHB-EPOLICY" "exit $rc: $out"
+fi
+
+echo
 echo "== an unenforceable network rule is refused where the specification is built =="
 # The Landlock port rules are built by the filesystem layer, which a run can leave out.
 # Judging a rule only there would let a specification carry a port that the connect guard
