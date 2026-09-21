@@ -33,7 +33,15 @@ core/                      the sandbox itself
   phobos-network.sh        the network layer, runs the connect guard and drives the preload library
   phobos-resources.sh      the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
   phobos-timeout.sh        the timeout layer
-  phobos-common.sh         shared helpers, sourced by the others
+  phobos-common.sh         the shared helpers, sourced by the others; it sources the eight below
+  phobos-log.sh            reporting, and counting what a run was denied
+  phobos-paths.sh          the two canonical forms a path is compared in
+  phobos-time.sh           the timeout contract: how a value is spelled and compared
+  phobos-spec-dir.sh       the specification directory and its lifetime
+  phobos-policy-parse.sh   one cfg in, the parsed state and the specification files out
+  phobos-rights.sh         a parsed policy to the --rights= arguments phobos-landlock takes
+  phobos-network-args.sh   [connect] and [bind] to the TCP port rules Landlock enforces
+  phobos-netblocker-check.sh  refusing a preload library that would not filter anything
   phobos-constants.sh      the numbers the scripts share, named once, the exit statuses among them
   phobos-landlock*.c/.h    the C program that applies the Landlock policy, then exec's the command
   phobos-connect-guard*.c/.h  the connect guard: supervises the egress a command makes and enforces [connect] by host and port;
