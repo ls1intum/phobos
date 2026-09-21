@@ -5,10 +5,11 @@ failure. **A skipped check is not a passing one.** Where a suite can skip, the t
 what makes it skip and what turns that skip into a failure, because a skip reads as a pass
 in a workflow summary.
 
-Each suite is run by a step of its own in CI, so one run names every suite that broke
-rather than only the first.
+Each shell suite is run by a step of its own in CI, so one run names every suite that broke
+rather than only the first. The Python suites are the exception: pytest runs them together in
+one step and reports each failure itself.
 
-## Host suites, run by `test.yml`
+## Host suites, run by the `Shell suites` job of `test.yml`
 
 These need a shell, a compiler, a Python and Bubblewrap. No container, no kernel feature
 and no elevated permission.
@@ -28,6 +29,17 @@ and no elevated permission.
 | `prune_producer.sh` | what the prune phase produces: a run that finishes with artefacts missing, and one that leaves an earlier run's artefacts in place, both stop the merge | never |
 | `prune_sandbox.sh` | the real pruner against a fixture tree: how it reads a build's outcome, and that its sandbox hides what it says it hides | Bubblewrap cannot create a user namespace. `PHOBOS_REQUIRE_BWRAP=1`, which CI sets, turns that skip into a failure |
 | `runner-capability-probe.sh` | not a suite: it answers what a machine can do, and is run by `runner-capabilities.yml` on request | it is a diagnostic; the assert modes answer 0, 1 or 3 |
+
+## Python suites, run by the `Python helpers` job of `test.yml`
+
+The second job of the same workflow installs pytest and runs `python -m pytest tests/python`.
+It needs no container, no Bubblewrap and no compiler: the pruning entry point is replaced by a
+shell stub, so these drive the helpers alone.
+
+| Suite | What it proves | Skips when |
+| --- | --- | --- |
+| `python/test_orchestrate.py` | every way a language can drop out of a prune stops the merge rather than shrinking it: a language that fails, one that produces nothing, one whose artefacts disagree with the record written beside them | never |
+| `python/test_make_lang_sets.py` | the union never drops a path a run asked for, the intersection never keeps one a run did not, an earlier run's own output is never folded back in as a fresh result, and no input at all stops rather than writing an empty policy | never |
 
 ## Unit suites, run by `build.yml`
 

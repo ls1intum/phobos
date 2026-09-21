@@ -116,11 +116,18 @@ static void describe_destination(const struct sockaddr *destination, char *text,
     }
 }
 
-/* Whether a datagram or connection to this destination is one the network policy allows
- * through. A family that is not IPv4 or IPv6, an AF_UNIX socket among them, is not the
- * network this library filters and passes: the filesystem layer governs a UNIX socket,
- * and a raw or unknown family names no host or port to check. An IPv4 or IPv6
- * destination passes only when the allow-list names its address and port. */
+/* Whether a datagram to this destination is one the network policy allows through. A family
+ * that is not IPv4 or IPv6, an AF_UNIX socket among them, is not the network this library
+ * filters and passes: the filesystem layer governs a UNIX socket, and a raw or unknown family
+ * names no host or port to check. An IPv4 or IPv6 destination passes only when the allow-list
+ * names its address and port.
+ *
+ * The send hooks use this; connect() does not, and the difference is deliberate. connect()
+ * asks policy_permits_connection directly, so a family of neither kind yields the empty
+ * address text that the policy refuses, which matches the connect guard beside this library:
+ * it refuses a connect of a family it does not carry rather than make it outside the sandbox.
+ * A send names a destination on a socket that already exists, so there is nothing there to
+ * make outside the sandbox and nothing to refuse. */
 static bool destination_permitted(const struct sockaddr *destination) {
     char text[INET6_ADDRSTRLEN] = "";
     uint16_t port = 0;
@@ -151,7 +158,9 @@ int getaddrinfo(const char *node, const char *service, const struct addrinfo *hi
 }
 
 /* Refuses a connection to an address no rule covers and no permitted lookup recorded, with
- * EACCES. */
+ * EACCES. A family that is neither IPv4 nor IPv6 leaves the address text empty, which no rule
+ * names, so such a connect is refused too rather than passed: see destination_permitted for
+ * why the send hooks answer the same family the other way. */
 [[gnu::visibility("default")]]
 int connect(int descriptor, const struct sockaddr *destination, socklen_t length) {
     char text[INET6_ADDRSTRLEN] = "";

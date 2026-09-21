@@ -12,7 +12,6 @@ err()   { echo -e "${COLOUR_ERROR}[error]${COLOUR_RESET} $*" >&2; exit 1; }
 # prune without --verbose could never get past its first log line.
 log()   { [[ "${LOG_ENABLED:-0}" -eq 1 ]] && echo "[LOG] $*"; return 0; }
 
-# returns 0 if $1 has prefix of any subsequent args
 # Whether a path is one of the listed ones, or lives under it. By path component, not
 # by prefix: a child named /proc-secret is not the /proc pseudo-filesystem, and treating
 # it as one silently excludes it from the prune.
