@@ -110,34 +110,24 @@ as a dependency.
   allow-list, which is a weaker sandbox that still looks like it works. Say in the pull
   request which direction a heuristic errs in.
 
-## The compiled library
+## The compiled binaries
 
-`libnetblocker.so` is not committed. It is built from the C source in `ld_preloader/`, once
-per architecture, inside the run-phase image, alongside the two C products the image compiles.
-`.gitattributes` still marks `*.so` binary so that a stray one is never normalised.
+Neither C product is committed. `phobos-landlock` and the connect guard are built from the
+source under `core/`, once per architecture, inside the run-phase image. `.gitattributes`
+marks `*.so` binary so that a stray shared object is never normalised, though none is shipped.
 
 **Rule:**
 
-- Never check the library in. The `netblocker` job in `build.yml` builds it from the source on
-  the pinned amd64 toolchain and verifies it (right architecture, no newer glibc than the
-  run-phase image, exactly the six hooks). The `run-phase` job builds the image for amd64 and
-  arm64 on native runners and verifies the copy each image compiled, so both architectures are
-  proven on every run; publishing the multi-arch image is a manual step (below).
-- On amd64 the toolchain is pinned for a deterministic build; on arm64 it comes from the
-  ordinary archive, so the arm64 build is functional but not byte-reproducible.
-- The library must be built for x86-64 or AArch64 and need no glibc newer than the 2.39 the
-  run-phase image ships; `verify` refuses anything else. Where the loader cannot use it, the
-  network layer ends the run with PHB-ERUNTIME rather than running it unfiltered, so a bare
-  checkout with nothing built does not run: the delivery vehicle is the image.
-- To rebuild and check it locally, from the repository root with the container image that job
-  names:
-
-  ```
-  docker run --rm -v "$PWD:/repository" -w /repository <image> sh -c \
-    '.github/scripts/netblocker-build.sh install &&
-     .github/scripts/netblocker-build.sh build ld_preloader /tmp/libnetblocker.so &&
-     .github/scripts/netblocker-build.sh verify /tmp/libnetblocker.so'
-  ```
+- Never check a compiled binary in. The `run-phase` job in `build.yml` builds the image for
+  amd64 and arm64 on native runners and, on the copies each image ships, checks with `readelf`
+  that both are position-independent (`Type: DYN`) with full RELRO (`BIND_NOW`), so both
+  architectures are proven on every run; publishing the multi-arch image is a manual step (below).
+- Where the connect guard binary is missing the network layer ends the run with PHB-ERUNTIME
+  rather than running without connect supervision, so a bare checkout with nothing built does
+  not run: the delivery vehicle is the image.
+- To rebuild and check the image locally, build it and run the acceptance suites inside it, as
+  the run-phase job does; the exact commands are in the run-phase section of `build.yml` and in
+  CLAUDE.md.
 
 ## Publishing the run-phase image
 

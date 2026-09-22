@@ -17,13 +17,6 @@ rest exists to take privileges away. None of the following is a vulnerability.
   starts can only lose access. Code that assembles access rules from a configuration file
   looks like path injection, and is the mechanism. It needs no privilege: a task may always
   restrict itself further.
-- `ld_preloader/` holds the sources of `libnetblocker.so`, the library built from them
-  intercepts network calls through
-  `LD_PRELOAD`, hooking name resolution, `connect`, `bind`, and `sendto`, `sendmsg` and `sendmmsg` for
-  the datagrams a UDP socket names without connecting, refusing outbound hosts an allow-list
-  does not name and narrowing a local TCP bind to the addresses a `[bind]` allow-list names.
-  Function interposition of libc symbols is what the component is for. It is
-  defence in depth rather than a boundary: a process can step around a preload library.
 - `core/phobos-connect-guard.c` is the connect guard. When the network layer is on it
   supervises every `connect()` with a seccomp user-notification and makes an allowed
   connection itself from outside the sandboxed process, so for `connect` it is a boundary a
@@ -31,14 +24,16 @@ rest exists to take privileges away. None of the following is a vulnerability.
   It reads the destination address of the connect, so it holds a rule that names an IP literal
   (and the name `localhost`) to that exact address, a rule that names an IP range to that
   network, and a rule that names a DNS hostname it cannot tie to an address there to its port
-  alone, leaving that host to libnetblocker (an instructor who needs a rotating, CDN-backed
-  host enforced by the guard names its address range rather than its name). Since
-  seccomp stops the call before the kernel path where Landlock would check the port, the guard
-  connects outside Landlock and so is the whole connect boundary where it runs; Landlock's
-  `--connect-tcp` ports remain a second, kernel-enforced expression of the same ports. A
-  `connect` of a family the guard does not carry (a UNIX-domain socket) is refused rather than
-  made outside the Landlock view the command is held to. The boundary for external egress
-  beyond the allow-list, and for UDP, is still a container started with `--network none`.
+  alone. Such a hostname rule's host is enforced by the egress broker, an HAProxy the network
+  layer starts with `--egress-broker` that checks the TLS host name the guard cannot see; the
+  network layer refuses a hostname rule when the broker is off, so an instructor who needs a
+  rotating, CDN-backed host either turns the broker on or names its address range rather than
+  its name. Since seccomp stops the call before the kernel path where Landlock would check the
+  port, the guard connects outside Landlock and so is the whole connect boundary where it runs;
+  Landlock's `--connect-tcp` ports remain a second, kernel-enforced expression of the same
+  ports. A `connect` of a family the guard does not carry (a UNIX-domain socket) is refused
+  rather than made outside the Landlock view the command is held to. The boundary for external
+  egress beyond the allow-list, and for UDP, is still a container started with `--network none`.
 - `docker/prune_phase/` runs the discovery phase, which deliberately breaks a build over and
   over: it hides a directory, runs the tests, and concludes from the failure that the
   directory was needed. Its orchestrator therefore starts processes and interprets their
@@ -46,17 +41,16 @@ rest exists to take privileges away. None of the following is a vulnerability.
   phase uses Bubblewrap to hide directories; the sandbox an exercise runs in does not.
 - The Dockerfiles under `docker/` extend the Artemis test images and compile the C products.
   The run-phase image needs no user namespaces, no added capabilities and no security
-  options: Landlock, the preload library and the timeout are all self-imposed by the
+  options: Landlock, the connect guard and the timeout are all self-imposed by the
   unprivileged process. The container the grader starts should add `--network none` and
   cgroup limits, which are the outer boundary Phobos cannot set from inside itself.
 
-`libnetblocker.so` is not committed. It is built from the C source beside it, once per
-architecture, inside the run-phase image, and CI verifies each build: the right architecture,
-no newer glibc than the image ships, and exactly the six hooks. On amd64 a pinned toolchain
-keeps that build deterministic; on arm64 it is built from the ordinary archive. Where the
-loader cannot use the library the network layer refuses to start rather than run the command
-unfiltered, so a bare checkout with nothing built does not run. The delivery vehicle is the
-run-phase image, published multi-arch, so a grader pulls the build for its own architecture.
+The two C products, `phobos-landlock` and the connect guard, are not committed. They are
+compiled inside the run-phase image from the source under `core/`, and CI checks the copies the
+image ships are position-independent with full RELRO. Where the connect guard binary is missing
+the network layer refuses to start rather than run the command without connect supervision, so a
+bare checkout with nothing built does not run. The delivery vehicle is the run-phase image,
+published multi-arch, so a grader pulls the build for its own architecture.
 
 ## Threat model, in one paragraph
 
@@ -85,8 +79,8 @@ the same class as the filesystem or egress layers, and enabling it changes the r
 - **It removes `--network none`.** An external client cannot reach a `--network none` container,
   so an `[accept]` rule only works where the container has a real network. Turning it on therefore
   gives up the hard no-network backstop the rest of the sandbox leans on; egress is then contained
-  only by the connect guard, the Landlock TCP-port rules, the soft preload filter and whatever the
-  integrator firewalls, not by the absence of a network.
+  only by the connect guard, the Landlock TCP-port rules, the egress broker when it is on and
+  whatever the integrator firewalls, not by the absence of a network.
 - **Phobos hard-locks the listening port, not its reachability.** With `[bind]` naming only the
   backend port, Landlock refuses the student a listener on any other port, the public port
   included, in the kernel and against raw system calls. But Landlock's bind right is per port, not

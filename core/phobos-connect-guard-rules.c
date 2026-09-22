@@ -17,7 +17,7 @@ static constexpr unsigned long IPV4_ADDRESS_BITS = 32;
 static constexpr unsigned long IPV6_ADDRESS_BITS = 128;
 static constexpr int BITS_PER_BYTE = 8;
 /* The IPv4-mapped IPv6 form ::ffff:a.b.c.d: two marker bytes of 0xff, then the four bytes of
- * the IPv4 address, the same layout as ld_preloader/netblocker-address.c. */
+ * the IPv4 address. */
 static constexpr size_t MAPPED_MARKER_FIRST_BYTE = 10;
 static constexpr size_t MAPPED_MARKER_SECOND_BYTE = 11;
 static constexpr size_t MAPPED_IPV4_FIRST_BYTE = 12;

@@ -206,34 +206,27 @@ append_connect_rule() {
   printf '%s %s\n' "$host" "$port" >>"$rules"
 }
 
-# Appends one [bind] line to the rules file as "addr port". [bind] names a local TCP listening
-# endpoint, one 'allow <addr>:<port>' or 'allow <port>' per line. A bare port means any local
-# address. The port is enforced by Landlock (--bind-tcp) and must be concrete, because
-# Landlock's bind right is per-port and cannot express a wildcard; the local address is enforced
-# by libnetblocker's bind hook as defence in depth. IPv6 is bracketed, [::1]:8080. Assumes it is
-# called plainly, so that a refusal ends the run.
+# Appends one [bind] line to the rules file as "* port". [bind] names a local TCP listening port,
+# one 'allow <port>' per line, and a bare port is the only accepted form. Landlock's bind right is
+# per-port and cannot narrow to a local address, so a rule that names an address is refused: a
+# listener's reachability is governed by [accept] and the container's network isolation, not by the
+# bind address. The stored host is always "*", which build_bind_args ignores. The port range is
+# checked downstream by refuse_unusable_port. Assumes it is called plainly, so that a refusal ends
+# the run.
 append_bind_rule() {
   local line="$1"
   local rules="$2"
   local bind_target
-  local bind_host=""
-  local bind_port=""
   if [[ ! "$line" =~ ^allow[[:space:]]+(.+)$ ]]; then
-    report "Policy invalid: '${line}' in [bind] is not an 'allow <addr>:<port>' line. (PHB-EPOLICY)"
+    report "Policy invalid: '${line}' in [bind] is not an 'allow <port>' line. (PHB-EPOLICY)"
     exit "${PHB_EPOLICY}"
   fi
   bind_target="${BASH_REMATCH[1]}"
-  if [[ "$bind_target" =~ ^[0-9]+$ ]]; then
-    bind_host="*"
-    bind_port="$bind_target"
-  else
-    parse_network_target "$bind_target" bind_host bind_port
-  fi
-  if [[ "$bind_port" == "*" || -z "$bind_port" ]]; then
-    report "Policy invalid: '${bind_target}' in [bind] names no concrete port. Landlock enforces a bind by port, so name one. (PHB-EPOLICY)"
+  if [[ ! "$bind_target" =~ ^[0-9]+$ ]]; then
+    report "Policy invalid: '${bind_target}' in [bind] is not a bare port; [bind] takes only a port number, because Landlock enforces a bind by port and cannot narrow to a local address. Name the port alone, and govern a listener's reachability with [accept]. (PHB-EPOLICY)"
     exit "${PHB_EPOLICY}"
   fi
-  printf '%s %s\n' "$bind_host" "$bind_port" >>"$rules"
+  printf '%s %s\n' "*" "$bind_target" >>"$rules"
 }
 
 # Appends one [accept] line, "expose <public-port> to <backend-port> from <source>[, <source>...]",

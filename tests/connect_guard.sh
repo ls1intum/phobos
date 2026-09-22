@@ -407,9 +407,10 @@ else
 fi
 
 echo
-echo "== a hostname rule is held to its port; the host is left to libnetblocker =="
+echo "== a hostname rule is held to its port; the host is left to the egress broker =="
 # The guard cannot tie a DNS name to an address at connect time, so a hostname rule enforces
-# its port and lets any host through on it: the port is refused elsewhere, the host is not.
+# its port and lets any host through on it: the port is refused elsewhere, the host is left to
+# the egress broker, which the network layer requires such a rule to run under.
 printf 'example.invalid %s\n' "$PORT" > "$WORK/rules"
 lp=$(start_listener "$PORT")
 out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" inet 127.0.0.1 "$PORT" 2>&1)"

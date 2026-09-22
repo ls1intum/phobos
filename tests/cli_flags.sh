@@ -232,8 +232,8 @@ echo "== every PHB_ name a script reads is one a script defines =="
 # of a rarely taken branch. The names are cheap to check here instead. It reads the names a
 # script expands, so one used only in an arithmetic context, or set through declare, is
 # outside what this covers.
-# Assigned anywhere, not only in phobos-constants.sh: PHB_NETBLOCKER_SO is the channel one
-# layer exports for the next, and the suites set their own PHB_TEST_ names on a fixture.
+# Assigned anywhere, not only in phobos-constants.sh: PHB_DEBUG_ENABLED is set by phobos-log.sh
+# and read across the layers, and the suites set their own PHB_TEST_ names on a fixture.
 defined_names="$(grep -rhoE '(^|[^A-Za-z0-9_$])PHB_[A-Z0-9_]+=' "$CORE" "$HERE" --include='*.sh' \
                    | grep -oE 'PHB_[A-Z0-9_]+' | sort -u)"
 undefined_names=""

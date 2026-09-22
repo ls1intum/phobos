@@ -16,8 +16,7 @@ Restriction options (every restriction is applied by default):
   --no-runtime-restriction, -ntr     Disable the timeout (phobos-timeout.sh).
   --no-networksystem-restriction, -nnr
                                      Disable the whole network restriction: the
-                                     connect guard, the libnetblocker preload filter
-                                     and the Landlock TCP-port rules.
+                                     connect guard and the Landlock TCP-port rules.
   --no-resources-restriction, -nrr   Disable the resource limits (rlimits /
                                      phobos-resources.sh).
   --no-filesystem-restriction, -nfr  Disable the filesystem sandbox (Landlock). This
@@ -34,7 +33,6 @@ Restriction options (every restriction is applied by default):
 Override options (taken only from the command line, never from the environment):
   --landlock-bin <path>              The phobos-landlock binary (default: beside this script).
   --timeout-bin <path>              The timeout tool (default: timeout).
-  --netblocker-so <path>            The libnetblocker library (default: beside this script).
   --connect-guard-bin <path>        The connect guard (default: beside this script).
   --tail-flags-file <path>          The tail flags file (default: TailPhobos.cfg beside this script).
   --spec-parent <path>              Where the run's specification directory is made (default: /var/tmp).
@@ -84,7 +82,6 @@ enable_egress_broker=0
 # flags come from, or where the specification is written. Empty means the built-in default.
 opt_landlock_bin=""
 opt_timeout_bin=""
-opt_netblocker_so=""
 opt_connect_guard_bin=""
 opt_tail_flags_file=""
 opt_spec_parent=""
@@ -121,8 +118,6 @@ while (( "$#" )); do
       shift; [[ $# -gt 0 ]] || usage; opt_landlock_bin="$1"; shift;;
     --timeout-bin)
       shift; [[ $# -gt 0 ]] || usage; opt_timeout_bin="$1"; shift;;
-    --netblocker-so)
-      shift; [[ $# -gt 0 ]] || usage; opt_netblocker_so="$1"; shift;;
     --connect-guard-bin)
       shift; [[ $# -gt 0 ]] || usage; opt_connect_guard_bin="$1"; shift;;
     --tail-flags-file)
@@ -153,7 +148,7 @@ done
 if (( allow_unsandboxed )); then
   _log "WARNING: --allow-unsandboxed given; running the command RAW, with NO sandbox."
   _log "runtime restriction (timeout) DISABLED"
-  _log "network-system restriction (connect guard, libnetblocker) DISABLED"
+  _log "network-system restriction (connect guard) DISABLED"
   _log "resources restriction (rlimits) DISABLED"
   _log "filesystem restriction (Landlock) DISABLED"
   (( ${#cfgs[@]} )) && _log "--allow-unsandboxed ignores the ${#cfgs[@]} --config file(s) given: there is no sandbox to apply them to."
@@ -163,7 +158,7 @@ fi
 # Loudly record every restriction the caller switched off, so a run with a layer
 # disabled cannot look like an ordinary one in a log.
 (( enable_timeout ))    || _log "runtime restriction (timeout) DISABLED by --no-runtime-restriction"
-(( enable_network ))    || _log "network-system restriction (connect guard, libnetblocker) DISABLED by --no-networksystem-restriction"
+(( enable_network ))    || _log "network-system restriction (connect guard) DISABLED by --no-networksystem-restriction"
 (( enable_resources ))  || _log "resources restriction (rlimits) DISABLED by --no-resources-restriction"
 (( enable_filesystem )) || _log "filesystem restriction (Landlock) DISABLED by --no-filesystem-restriction"
 
@@ -173,17 +168,11 @@ if (( enable_egress_broker )) && (( ! enable_network )); then
   _log "egress broker requested by --egress-broker IGNORED because the network-system restriction is DISABLED"
 fi
 
-# Clear the internal channels a layer would otherwise inherit, so a value left in the
-# environment cannot make a layer act that the flags left out of the chain. Each layer that
-# is in the chain sets its own.
-unset PHB_NETBLOCKER_SO NETBLOCKER_CONF NETBLOCKER_BIND_CONF
-
 # Resolve the startup overrides from the flags, with the built-in defaults. The environment
 # is deliberately not consulted for any of them.
 tail_flags_file="${opt_tail_flags_file:-${HERE}/TailPhobos.cfg}"
 landlock_bin="${opt_landlock_bin:-${HERE}/phobos-landlock}"
 timeout_bin="${opt_timeout_bin:-timeout}"
-netblocker_so="${opt_netblocker_so:-${HERE}/libnetblocker.so}"
 connect_guard_bin="${opt_connect_guard_bin:-${HERE}/phobos-connect-guard}"
 haproxy_bin="${opt_haproxy_bin:-haproxy}"
 resolver="${opt_resolver:-}"
@@ -227,7 +216,7 @@ fi
 dbg=(); (( enable_debug )) && dbg=(--debug)
 chain=()
 if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeout.sh"   "${dbg[@]}" --timeout-bin "$timeout_bin" "$SPEC_DIR" -- ); fi
-network_flags=( "${dbg[@]}" --netblocker-so "$netblocker_so" --connect-guard-bin "$connect_guard_bin" --haproxy-bin "$haproxy_bin" )
+network_flags=( "${dbg[@]}" --connect-guard-bin "$connect_guard_bin" --haproxy-bin "$haproxy_bin" )
 if (( enable_egress_broker )); then
   network_flags+=( --egress-broker )
   if [[ -n "$resolver" ]]; then network_flags+=( --resolver "$resolver" ); fi
@@ -236,7 +225,7 @@ if (( enable_network ));   then chain+=( "${HERE}/phobos-network.sh"   "${networ
 fs_flags=( "${dbg[@]}" --landlock-bin "$landlock_bin" )
 if (( enable_resources )); then fs_flags+=( --resources-layer "${HERE}/phobos-resources.sh" ); fi
 if (( ! enable_filesystem )); then fs_flags+=( --no-landlock ); fi
-# The network restriction spans two layers: the preload filter in phobos-network.sh, left
+# The network restriction spans two layers: the connect guard in phobos-network.sh, left
 # out of the chain above, and the kernel-enforced Landlock TCP-port rules built in the
 # filesystem layer. Disabling the network restriction has to cover both, so tell the
 # filesystem layer to skip the port rules too.

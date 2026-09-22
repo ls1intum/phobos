@@ -187,8 +187,7 @@ fi
 # Every [connect] and [bind] rule is judged here, once, before anything is written. The
 # layer that builds the Landlock port rules checks the same thing, but it is not always in
 # the chain: with --no-filesystem-restriction nothing would look at these rules at all, and
-# the specification would carry a port the connect guard drops without a word while
-# libnetblocker reads it as something else.
+# the specification would carry a port the connect guard drops without a word.
 refuse_unenforceable_network_rules "$eff_net" "$eff_bind"
 
 # The inbound accept rules are judged against the merged bind set: the public port must not be one

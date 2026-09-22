@@ -7,8 +7,8 @@ submission legitimately needs and fail it. Both matter, and the second is the on
 tends to be discovered by an instructor rather than by a test.
 
 Read [SECURITY.md](SECURITY.md) before you run anything. The discovery phase deliberately
-breaks a build repeatedly. The run phase changes no host state: Landlock, the preload
-library and the timeout are all self-imposed by the unprivileged process.
+breaks a build repeatedly. The run phase changes no host state: Landlock, the connect guard
+and the timeout are all self-imposed by the unprivileged process.
 
 ## Identity and transparency
 
@@ -37,8 +37,8 @@ For general background on contributing to open source, see the
 
 ## Prerequisites
 
-Phobos runs on Linux, because it depends on Landlock and on `LD_PRELOAD` in the run phase
-and on Bubblewrap in the discovery phase. Docker is the supported way to work on it from
+Phobos runs on Linux, because it depends on Landlock and on seccomp user-notification in the
+run phase and on Bubblewrap in the discovery phase. Docker is the supported way to work on it from
 another operating system; the Compose file in the repository root brings up one container
 per language environment.
 
@@ -72,9 +72,10 @@ pull request, not only in a commit message.
    nothing about Python, and a change that touches the shared configuration affects both.
 3. **State the negative case.** A change is not verified by a passing exercise alone. Say
    what must still be blocked and how you confirmed it is.
-4. **Do not commit `libnetblocker.so`.** It is built from the source in this repository, once
-   per architecture, inside the run-phase image, and CI verifies each build. If you change the
-   source, say so; the command to rebuild and check it locally is in AGENTS.md.
+4. **Do not commit the compiled C products.** `phobos-landlock` and the connect guard are
+   built from the source under `core/`, once per architecture, inside the run-phase image, and
+   CI checks the copies the image ships are hardened. If you change the source, say so; the
+   command to rebuild and check the image locally is in AGENTS.md.
 
 ## Changing the discovery phase
 

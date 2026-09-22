@@ -4,8 +4,7 @@
 # Landlock enforces ports, not hosts. The policy is therefore "both": a concrete port is
 # enforced by the kernel, a loopback host with no port is tolerated because the no-network
 # container is its boundary, and a non-loopback host with no port is refused rather than
-# left to the preload library, which a submission can step around. This suite pins each of
-# those, in both directions.
+# left to the connect guard alone. This suite pins each of those, in both directions.
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -102,7 +101,7 @@ run_bind() {
 }
 
 echo
-echo "== [bind] emits one --bind-tcp per port; the local address is libnetblocker's =="
+echo "== [bind] emits one --bind-tcp per port; build_bind_args ignores the host field =="
 r="$(run_bind "* 8080")"
 [[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" == "--bind-tcp 8080" ]] && ok "a bind port emits --bind-tcp" || bad "a bind port emits --bind-tcp" "--bind-tcp 8080" "exit $(field "$r" 1): $(field "$r" 2)"
 r="$(run_bind "* 9000
@@ -116,5 +115,34 @@ echo
 echo "== an out-of-range bind port is refused =="
 r="$(run_bind "* 70000")"
 [[ "$(field "$r" 1)" != 0 ]] && ok "a bind port above 65535 is refused" || bad "a bind port above 65535 is refused" "a non-zero exit" "exit $(field "$r" 1)"
+
+echo
+echo "== a [connect] name rule needs the egress broker; the network layer refuses it otherwise =="
+# The connect guard enforces a [connect] rule by address and port. A rule that names a host only
+# constrains the onward address when the egress broker checks the TLS host name, so without the
+# broker the network layer refuses the name rule rather than widen it to any address on the port.
+# The guard binary is deliberately absent: the name check runs before the guard check, so a name
+# rule is refused there, while an address rule passes the name check and reaches the guard check,
+# a different PHB-ERUNTIME with its own message. That contrast shows the first refusal is the name
+# check, not a blanket one.
+name_spec="$(mktemp -d "$WORK/name-spec.XXXXXX")"
+printf 'example.test 443\n' > "$name_spec/net.rules"
+name_out="$(bash "$CORE/phobos-network.sh" --connect-guard-bin /nonexistent-guard "$name_spec" -- true 2>&1)"
+name_rc=$?
+if [[ "$name_rc" -eq "$PHB_ERUNTIME" && "$name_out" == *"--egress-broker"* ]]; then
+  ok "a [connect] name rule without the egress broker is refused (PHB-ERUNTIME)"
+else
+  bad "a [connect] name rule without the egress broker is refused (PHB-ERUNTIME)" "exit ${PHB_ERUNTIME} naming --egress-broker" "exit ${name_rc}: ${name_out}"
+fi
+
+addr_spec="$(mktemp -d "$WORK/addr-spec.XXXXXX")"
+printf '127.0.0.1 443\n' > "$addr_spec/net.rules"
+addr_out="$(bash "$CORE/phobos-network.sh" --connect-guard-bin /nonexistent-guard "$addr_spec" -- true 2>&1)"
+addr_rc=$?
+if [[ "$addr_rc" -eq "$PHB_ERUNTIME" && "$addr_out" == *"connect guard"* && "$addr_out" != *"--egress-broker"* ]]; then
+  ok "an address [connect] rule passes the name check and is left to the guard"
+else
+  bad "an address [connect] rule passes the name check and is left to the guard" "exit ${PHB_ERUNTIME} about the connect guard, not --egress-broker" "exit ${addr_rc}: ${addr_out}"
+fi
 
 finish

@@ -137,7 +137,7 @@ echo
 echo "== the full phobos.sh chain applies and clears the limits =="
 # phobos.sh captures the [limits] keys, writes them into the specification, and the resource
 # layer applies them. A passthrough stand-in for phobos-landlock lets the command run, and
-# --no-networksystem-restriction keeps the preload library out of it.
+# --no-networksystem-restriction keeps the connect guard out of it.
 printf '%s\n' '#!/usr/bin/env bash' \
   'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift; exec "$@"' > "$WORK/passthrough-landlock"
 chmod +x "$WORK/passthrough-landlock"

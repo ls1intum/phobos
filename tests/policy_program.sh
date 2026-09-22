@@ -115,8 +115,7 @@ echo
 echo "== an unenforceable network rule is refused where the specification is built =="
 # The Landlock port rules are built by the filesystem layer, which a run can leave out.
 # Judging a rule only there would let a specification carry a port that the connect guard
-# drops without a word and that libnetblocker reads as something else, so the policy program
-# judges every rule itself, before it writes anything.
+# drops without a word, so the policy program judges every rule itself, before it writes anything.
 refuse_case() {
   local name="$1"
   local body="$2"
@@ -141,11 +140,20 @@ refuse_case "a [bind] port above 65535 is refused"        '[bind]\nallow 99999\n
 # digits for must be refused by its shape rather than by its value: 2^64 + 1 evaluates to 1.
 refuse_case "a [connect] port of twenty digits is refused" '[connect]\nallow example.test:18446744073709551617\n'
 refuse_case "a [connect] port with a leading zero is refused" '[connect]\nallow example.test:08\n'
+# Landlock enforces a bind by port and cannot narrow to a local address, so [bind] takes only a
+# bare port; a rule that names an address is refused rather than silently widened to any address.
+refuse_case "a [bind] rule naming an address is refused"  '[bind]\nallow 127.0.0.1:8080\n'
+refuse_case "a [bind] rule naming a bracketed IPv6 address is refused" '[bind]\nallow [::1]:8080\n'
 
 SPEC_OK="$(fresh_spec)"
 printf '[connect]\nallow example.test:443\n' > "$WORK/good-net.cfg"
 bash "$CORE_X/phobos-policy.sh" --spec-dir "$SPEC_OK" --config "$WORK/good-net.cfg" > /dev/null 2>&1
 check "a concrete port still builds a specification" "example.test 443" "$(cat "$SPEC_OK/net.rules")"
+
+SPEC_BIND="$(fresh_spec)"
+printf '[bind]\nallow 8080\n' > "$WORK/good-bind.cfg"
+bash "$CORE_X/phobos-policy.sh" --spec-dir "$SPEC_BIND" --config "$WORK/good-bind.cfg" > /dev/null 2>&1
+check "a bare [bind] port still builds a specification (host stored as *)" "* 8080" "$(cat "$SPEC_BIND/bind.rules")"
 
 echo
 echo "== an unenforceable [accept] rule is refused against the merged policy =="

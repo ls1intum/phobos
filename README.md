@@ -5,7 +5,7 @@
 Phobos is a sandboxing solution for the [Artemis](https://github.com/ls1intum/Artemis) e-learning platform. It runs a student submission for a programming exercise with access to only what the exercise's own tests were shown to need, so a submission cannot read files or reach hosts the exercise never declared. It works in two phases:
 
 - **Resource discovery (pruning), offline.** Phobos runs a reference exercise repeatedly, hiding one directory at a time and observing whether the tests still pass, to discover the minimal set of files and network hosts the tests actually need. A directory whose absence changes nothing was never needed and stays hidden; one whose absence breaks the run is kept, read-only first and writable only if that is not enough. The result is a *path set*: every path the run needs, with the access mode it needs.
-- **Sandbox application, at grading time.** The submission runs confined to that path set. The filesystem is enforced by **Landlock**, a Linux kernel feature that lets an unprivileged process restrict its own access to the filesystem and to TCP ports and then hand that restriction down to everything it starts. Outbound connections are supervised by a **connect guard** that enforces the allow-list by host and port from outside the process, with a preload library (`libnetblocker`) as softer defence in depth beside it, and a timeout layer bounds the run.
+- **Sandbox application, at grading time.** The submission runs confined to that path set. The filesystem is enforced by **Landlock**, a Linux kernel feature that lets an unprivileged process restrict its own access to the filesystem and to TCP ports and then hand that restriction down to everything it starts. Outbound connections are supervised by a **connect guard** that enforces the allow-list by host and port from outside the process; a rule that names a host is enforced by the **egress broker** (an HAProxy that checks the TLS host name) when it is turned on, and a timeout layer bounds the run.
 
 The point of the split is that the expensive, fragile part happens once per language environment, offline, and grading itself only applies a fixed configuration.
 
@@ -16,12 +16,12 @@ Phobos is the operating-system layer, and no single layer is the whole story. A 
 | Layer | Guards | Mechanism | Covers |
 | --- | --- | --- | --- |
 | **Ares** | the JVM itself | bytecode/aspect instrumentation | reflection, `Unsafe`, deserialisation, class loading, and other in-process attacks that never touch the OS |
-| **Phobos** | the operating system | Landlock (files + TCP ports), `libnetblocker`, a timeout, rlimits | which files a submission may read or write, which TCP ports it may reach, how long it may run and how much memory, how many processes and files it may use |
+| **Phobos** | the operating system | Landlock (files + TCP ports), the connect guard, a timeout, rlimits | which files a submission may read or write, which TCP ports it may reach, how long it may run and how much memory, how many processes and files it may use |
 | **the container** | the machine | `--network none`, cgroup limits | all external network including UDP and DNS, and the hard caps on memory, processes and disk against a fork bomb or a disk-filling run |
 
-Phobos enforces the **filesystem and TCP-port** boundary, filters hosts as defence in depth, bounds the run with a timeout, and applies self-imposed resource limits (rlimits). It does **not** replace Ares (JVM-internal attacks are Ares's job) and it does **not** replace the container's own settings (`--network none` is what closes UDP and external egress; cgroups are the hard resource caps against a fork bomb or a run that fills the disk). The rlimits are an in-process line of defence beside those cgroup caps, not a substitute for them. A grading host is only safe when all three are in place. This division, and the evidence behind it, is set out in [SECURITY.md](SECURITY.md).
+Phobos enforces the **filesystem and TCP-port** boundary, enforces `[connect]` host names through the egress broker when it is turned on, bounds the run with a timeout, and applies self-imposed resource limits (rlimits). It does **not** replace Ares (JVM-internal attacks are Ares's job) and it does **not** replace the container's own settings (`--network none` is what closes UDP and external egress; cgroups are the hard resource caps against a fork bomb or a run that fills the disk). The rlimits are an in-process line of defence beside those cgroup caps, not a substitute for them. A grading host is only safe when all three are in place. This division, and the evidence behind it, is set out in [SECURITY.md](SECURITY.md).
 
-Phobos needs **no privileges, no capabilities and no container flags**: Landlock, the preload library and the rlimits are self-imposed by the unprivileged process before it runs the submission. The one thing the container must add is what Phobos cannot do from inside it: start the grading container with no network (`--network none`) and with cgroup limits.
+Phobos needs **no privileges, no capabilities and no container flags**: Landlock, the connect guard and the rlimits are self-imposed by the unprivileged process before it runs the submission. The one thing the container must add is what Phobos cannot do from inside it: start the grading container with no network (`--network none`) and with cgroup limits.
 
 ## Repository structure
 
@@ -30,10 +30,11 @@ core/                      the sandbox itself
   phobos.sh                entry point: parses the configuration, applies the layers
   phobos-policy.sh         turns the base and exercise configuration into a run's specification
   phobos-filesystem.sh     the filesystem layer, reads the path sets and applies Landlock
-  phobos-network.sh        the network layer, runs the connect guard and drives the preload library
+  phobos-network.sh        the network layer, runs the connect guard and the egress/inbound HAProxy
+  phobos-haproxy.sh        the egress broker and inbound filter: turns [connect]/[accept] into an haproxy.cfg
   phobos-resources.sh      the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
   phobos-timeout.sh        the timeout layer
-  phobos-common.sh         the shared helpers, sourced by the others; it sources the eight below
+  phobos-common.sh         the shared helpers, sourced by the others; it sources the seven below
   phobos-log.sh            reporting, and counting what a run was denied
   phobos-paths.sh          the two canonical forms a path is compared in
   phobos-time.sh           the timeout contract: how a value is spelled and compared
@@ -41,16 +42,12 @@ core/                      the sandbox itself
   phobos-policy-parse.sh   one cfg in, the parsed state and the specification files out
   phobos-rights.sh         a parsed policy to the --rights= arguments phobos-landlock takes
   phobos-network-args.sh   [connect] and [bind] to the TCP port rules Landlock enforces
-  phobos-netblocker-check.sh  refusing a preload library that would not filter anything
   phobos-constants.sh      the numbers the scripts share, named once, the exit statuses among them
   phobos-landlock*.c/.h    the C program that applies the Landlock policy, then exec's the command
   phobos-connect-guard*.c/.h  the connect guard: supervises the egress a command makes and enforces [connect] by host and port;
                            phobos-connect-guard.c is the sequence of stages, the modules beside it do the work
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
-  config_doc.txt           the [connect] and [bind] sections in full: every hook, and what enforces what
-ld_preloader/              the netblocker sources (the library is built from them in the image)
-  netblocker_visualisation.txt  how one outbound connection is decided, by both filters in turn
-  hook_visualisation.txt   how the loader comes to run the library at all
+  config_doc.txt           the [connect] and [bind] sections in full: what enforces what
 docker/prune_phase/        one image per language, plus the orchestrator
 docker/run_phase/          the image an exercise actually runs in
 tests/                     the acceptance and probe suites; tests/README.md maps each one to its CI step
@@ -71,9 +68,9 @@ Two consequences of using Landlock rather than a mount sandbox are worth knowing
 
 Landlock enforces **TCP ports**, so a policy that names a concrete port has that port enforced by the kernel, below anything a submission can do in user space. Landlock does not know hosts and does not cover UDP, so:
 
-- the **connect guard** (`phobos-connect-guard`) supervises every `connect()` with a seccomp user-notification and makes an allowed connection itself, so it enforces the `[connect]` allow-list by host and port from outside the process, which a raw system call cannot step around. It holds an IP-literal rule (and the name `localhost`) to that exact address; a rule naming a DNS hostname it cannot tie to an address is held to its port alone, with the host left to `libnetblocker`. A `connect` of another family, such as a UNIX-domain socket, is refused rather than made outside the sandbox.
-- `libnetblocker`, preloaded through `LD_PRELOAD`, filters by host name and address as **defence in depth** beside the guard. It is bypassable (a raw system call, or a re-exec without `LD_PRELOAD`, steps around it), so it is never the boundary on its own.
-- The boundary for external egress, and for UDP and DNS, is the container started with `--network none`. Under it, only loopback exists, and a loopback-only policy needs no port rules; an external host, if one is ever allowed, should name a concrete port so that Landlock can enforce it rather than leaving it to `libnetblocker` alone.
+- the **connect guard** (`phobos-connect-guard`) supervises every `connect()` with a seccomp user-notification and makes an allowed connection itself, so it enforces the `[connect]` allow-list by host and port from outside the process, which a raw system call cannot step around. It holds an IP-literal rule (and the name `localhost`) to that exact address; a rule naming a DNS hostname it cannot tie to an address is held to its port alone, with the host left to the egress broker. A `connect` of another family, such as a UNIX-domain socket, is refused rather than made outside the sandbox.
+- the **egress broker** (an HAProxy the network layer starts with `--egress-broker`) enforces a `[connect]` rule that names a host, by reading the TLS host name from the ClientHello the guard cannot see and, for an exact name, resolving it itself and connecting only to that address. A `[connect]` rule that names a host is refused when the broker is off, rather than run with a rule the guard would widen to any address on the port.
+- The boundary for external egress, and for UDP and DNS, is the container started with `--network none`. Under it, only loopback exists, and a loopback-only policy needs no port rules; an external host, if one is ever allowed, should name a concrete port so that Landlock can enforce it alongside the guard.
 
 ## How a run is put together
 
@@ -123,7 +120,7 @@ ${PHOBOS_HOME}/phobos.sh -- ./gradlew test
 
 `PHOBOS_HOME` is `/var/tmp/opt/core` in the image, and `phobos` on `PATH` is a symbolic link to the same script. `--config` is for an exercise configuration applied **on top of** that base, never for the base itself: naming a base file there applies it a second time.
 
-A bare checkout cannot run this. `phobos-policy.sh` finds the base policy by globbing `Base*.cfg` beside itself, and a checkout keeps those files in `core/config/` rather than in `core/`, so a run from one is refused with `PHB-EPOLICY` instead of running unconfined. The image is the delivery vehicle, as it is for the two C products and the preload library.
+A bare checkout cannot run this. `phobos-policy.sh` finds the base policy by globbing `Base*.cfg` beside itself, and a checkout keeps those files in `core/config/` rather than in `core/`, so a run from one is refused with `PHB-EPOLICY` instead of running unconfined. The image is the delivery vehicle, as it is for the two C products.
 
 Run the grading container with **`--network none`** and with cgroup limits (`--memory`, `--pids-limit`, `--cpus`, and a size-bounded `--tmpfs` for scratch). Those are the outer wall Phobos relies on and cannot set for itself.
 
@@ -153,11 +150,11 @@ than ignored, so a typo cannot silently drop a restriction.
 - `[connect]`: `allow <host>[:<port>]` lines, the outbound TCP destinations a submission may reach. A loopback host may omit the port; an external host must name a concrete port between 1 and 65535, because Landlock enforces ports rather than hosts. Every rule is judged when the specification is built, so a port that does not exist ends the run with PHB-EPOLICY whichever layers are switched on. A host may be written as:
   - an IP literal, `allow 192.0.2.10:443`, which the connect guard holds to that exact address;
   - an address range in CIDR notation, `allow 104.16.0.0/12:443`, for a service whose addresses rotate, such as a content delivery network. An IPv4 range counts its prefix from the IPv4 part, and a range written for an IPv4-mapped IPv6 address needs a prefix of at least 96 bits;
-  - a host name, `allow repo.example.org:443`. The guard cannot tie a name to an address before the connection is made, so such a rule is enforced by its port there and by its name inside the process, by libnetblocker;
-  - a name with a leading wildcard label, `allow *.example.org:443`, which libnetblocker matches by suffix;
+  - a host name, `allow repo.example.org:443`. The guard cannot tie a name to an address before the connection is made, so such a rule is enforced by its port there and by its name by the egress broker, which `--egress-broker` turns on; a host-name rule is refused when the broker is off;
+  - a name with a leading wildcard label, `allow *.example.org:443`, which the broker matches by suffix (a suffix routes by the TLS host name to the header's destination and does not itself constrain the onward address);
   - `*`, which names every host and is only meaningful with a port.
   Everything from a `#` to the end of a line is a comment, in every section. An IPv6 address has colons of its own, so a port is written in brackets, `allow [::1]:443`, and a bare `allow ::1` is the host with no port.
-- `[bind]`: `allow <addr>:<port>` or `allow <port>` lines, the local TCP endpoints a submission may listen on. The port is enforced by Landlock (`--bind-tcp`) and must be concrete; the local address is enforced by the libnetblocker bind hook as defence in depth, so a service can be pinned to loopback rather than every interface. A bare port means any local address. An IPv6 address is bracketed, `allow [::1]:8080`.
+- `[bind]`: `allow <port>` lines, the local TCP ports a submission may listen on. The port is enforced by Landlock (`--bind-tcp`) and must be concrete. Landlock's bind right is per-port and cannot narrow to a local address, so a `[bind]` rule takes only a port; a rule that names an address is refused (PHB-EPOLICY). A listener's reachability from outside is governed by `[accept]` and the container's network isolation, not by the bind address.
 - `[accept]`: `expose <public-port> to <backend-port> from <source>[, <source>...]` lines, which front a submission's TCP listener with an inbound HAProxy that admits only the named source addresses or CIDRs (IPv4 or IPv6) and forwards to the backend port on loopback. It is defence in depth for a networked deployment, not a hard boundary: an `[accept]` rule needs a networked container and therefore gives up the `--network none` default, and the backend is reachable only through the filter as far as the container's network isolation makes it so. The public port must be at or above 1024 and must not be a `[bind]` port; the backend port must be a `[bind]` port, so Landlock keeps the submission off every other port. A rule with no source admits no one. TCP only. See SECURITY.md.
 - `[limits]`: `timeout=<seconds>`, the wall-clock bound on the run, and optionally `mem_mb`, `nproc`, `nofile`, `fsize_mb` and `cpu`, applied as rlimits to bound the memory, processes, open files, file size and CPU time the run may use. They are set as the last step before Landlock, so they bind the command and everything it starts, and none of the helpers Phobos runs beside it: the command's output is never cut short because a helper met the command's limit. A value written as `0` switches that limit off. Each key must be named; a bare value is refused.
 
