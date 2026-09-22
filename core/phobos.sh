@@ -38,6 +38,10 @@ Override options (taken only from the command line, never from the environment):
   --connect-guard-bin <path>        The connect guard (default: beside this script).
   --tail-flags-file <path>          The tail flags file (default: TailPhobos.cfg beside this script).
   --spec-parent <path>              Where the run's specification directory is made (default: /var/tmp).
+  --resolver <ip[:port]>            The DNS resolver the egress broker resolves an exact [connect]
+                                    host name through (default DNS port when no port is given). A
+                                    run with --egress-broker and an exact-name rule is refused
+                                    without one. Ignored when the broker is off.
 
 Notes:
 - Base config: any "${HERE}/Base*.cfg" (INI-like) is applied first (sorted).
@@ -85,6 +89,7 @@ opt_connect_guard_bin=""
 opt_tail_flags_file=""
 opt_spec_parent=""
 opt_haproxy_bin=""
+opt_resolver=""
 
 cfgs=()
 cmd=()
@@ -108,6 +113,8 @@ while (( "$#" )); do
       enable_egress_broker=1; shift;;
     --haproxy-bin)
       shift; [[ $# -gt 0 ]] || usage; opt_haproxy_bin="$1"; shift;;
+    --resolver)
+      shift; [[ $# -gt 0 ]] || usage; opt_resolver="$1"; shift;;
     --debug)
       enable_debug=1; enable_debug_log; shift;;
     --landlock-bin)
@@ -179,6 +186,7 @@ timeout_bin="${opt_timeout_bin:-timeout}"
 netblocker_so="${opt_netblocker_so:-${HERE}/libnetblocker.so}"
 connect_guard_bin="${opt_connect_guard_bin:-${HERE}/phobos-connect-guard}"
 haproxy_bin="${opt_haproxy_bin:-haproxy}"
+resolver="${opt_resolver:-}"
 
 # The specification directory is created before any scratch file, so every temporary file
 # this script makes lives under it and is removed with it. phobos.sh ends with exec, so its
@@ -212,7 +220,10 @@ dbg=(); (( enable_debug )) && dbg=(--debug)
 chain=()
 if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeout.sh"   "${dbg[@]}" --timeout-bin "$timeout_bin" "$SPEC_DIR" -- ); fi
 network_flags=( "${dbg[@]}" --netblocker-so "$netblocker_so" --connect-guard-bin "$connect_guard_bin" )
-if (( enable_egress_broker )); then network_flags+=( --egress-broker --haproxy-bin "$haproxy_bin" ); fi
+if (( enable_egress_broker )); then
+  network_flags+=( --egress-broker --haproxy-bin "$haproxy_bin" )
+  if [[ -n "$resolver" ]]; then network_flags+=( --resolver "$resolver" ); fi
+fi
 if (( enable_network ));   then chain+=( "${HERE}/phobos-network.sh"   "${network_flags[@]}" "$SPEC_DIR" -- ); fi
 fs_flags=( "${dbg[@]}" --landlock-bin "$landlock_bin" )
 if (( enable_resources )); then fs_flags+=( --resources-layer "${HERE}/phobos-resources.sh" ); fi
