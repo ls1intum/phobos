@@ -189,8 +189,11 @@ void connect_on_behalf(int notify_descriptor, struct seccomp_notif_resp *respons
  * destination the allow-list does not name. For a stream socket, make the connection here and
  * inject it, so the child's connect() returns already connected to the address the check read
  * and a second thread cannot redirect it. For a datagram socket connect() only sets the default
- * peer, which cannot be injected, so the checked call is let through; an untracked descriptor is
- * let through the same way, best-effort, since its type is unknown. */
+ * peer, which cannot be injected, so the checked call is let through. A socket of unknown
+ * provenance is refused rather than let through: one the guard never recorded, one evicted from
+ * a full table, an injected replacement being reconnected, or a descriptor /proc cannot name.
+ * Letting such a call continue would run the child's own unmediated connect(), the very boundary
+ * a raw connect must not reach, so an unknown provenance fails closed. */
 static void service_connect(int notify_descriptor, struct seccomp_notif *request,
                             struct seccomp_notif_resp *response) {
     int target_descriptor = (int)request->data.args[CONNECT_ARGUMENT_DESCRIPTOR];
@@ -222,12 +225,18 @@ static void service_connect(int notify_descriptor, struct seccomp_notif *request
         return;
     }
     uint64_t inode = fd_socket_inode(request->pid, target_descriptor);
-    if (lookup_socket_type(inode) == FD_TYPE_STREAM) {
+    uint8_t provenance = lookup_socket_type(inode);
+    if (provenance == FD_TYPE_STREAM) {
         connect_on_behalf(notify_descriptor, response, request->id, target_descriptor,
                           where.family, (const struct sockaddr *)&storage, length);
         return;
     }
-    answer_continue(notify_descriptor, response, request->id);
+    if (provenance == FD_TYPE_DGRAM) {
+        answer_continue(notify_descriptor, response, request->id);
+        return;
+    }
+    log_verbose("refusing connect on a socket of unknown provenance, fd %d", target_descriptor);
+    answer(notify_descriptor, response, request->id, 0, -EACCES);
 }
 
 /* Decide one trapped socket(): refuse the socket kinds that reach the network outside the

@@ -17,7 +17,7 @@
  * among the live sockets of the system, so the type is keyed by inode instead. The table is
  * open-addressed; an entry is overwritten when an inode is reused, because every socket()
  * re-records it, and one evicted under pressure reads back as unknown, which the connect path
- * then handles best-effort. */
+ * refuses rather than let through. */
 static constexpr size_t SOCKET_TYPE_TABLE_SIZE = 65536;
 static constexpr uint8_t FD_TYPE_UNKNOWN = 0;
 static constexpr uint8_t FD_TYPE_STREAM = 1;
@@ -36,8 +36,8 @@ uint8_t lookup_socket_type(uint64_t inode);
  * callers: the supervisor's own fresh socket at socket() time, to record its type, and a child
  * descriptor parked on a trapped connect, to recall it. Answers 0 when the descriptor is not a
  * socket or /proc cannot answer; only a live socket yields an inode, so a descriptor since
- * reused for something that is not a socket reads back 0 and is treated as untracked, which the
- * connect path handles best-effort rather than injecting a socket over it. */
+ * reused for something that is not a socket reads back 0 and is treated as of unknown
+ * provenance, which the connect path refuses rather than inject a socket over. */
 uint64_t fd_socket_inode(pid_t owner_pid, int descriptor);
 
 #ifdef PHOBOS_CONNECT_GUARD_UNIT_TEST
