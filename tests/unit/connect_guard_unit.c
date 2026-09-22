@@ -36,6 +36,7 @@
 #include <netinet/in.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
@@ -66,6 +67,10 @@ static constexpr int FAKE_HANDOFF_SOCKET_DESCRIPTOR = 5;        /* the socket th
 static constexpr int FAKE_TARGET_DESCRIPTOR = 5;                /* the command's descriptor a connect is made for */
 static constexpr int FAKE_SOCKETPAIR_FIRST_END = 20;            /* the first end socketpair returns */
 static constexpr int FAKE_SOCKETPAIR_SECOND_END = 21;           /* the second end socketpair returns */
+static constexpr unsigned long FAKE_NOFILE_LIMIT = 4096;        /* a soft descriptor limit larger than the floor */
+static constexpr int FAKE_BOOTSTRAP_DESCRIPTOR = 1023;          /* where the bootstrap end is moved under that limit; matches BOOTSTRAP_DESCRIPTOR_FLOOR */
+static constexpr unsigned long FAKE_SMALL_NOFILE = 512;         /* a soft descriptor limit below the floor */
+static constexpr int FAKE_SMALL_BOOTSTRAP = 511;                /* where the bootstrap end is moved under that small limit: FAKE_SMALL_NOFILE - 1 */
 static constexpr int FAKE_RECEIVED_DESCRIPTOR = 30;             /* the descriptor recvmsg carries */
 static constexpr int FAKE_ADDFD_DESCRIPTOR = 40;                /* the descriptor ADDFD reports installed */
 static constexpr uint64_t FAKE_NOTIFICATION_ID = 555;           /* the id of every notification NOTIF_RECV returns */
@@ -124,6 +129,10 @@ struct behaviour {
     /* The filter the child handed SECCOMP_SET_MODE_FILTER, kept so a case can run it. */
     struct sock_filter installed_filter[CAPTURED_FILTER_LENGTH];
     unsigned short installed_filter_length;
+    /* The second, listener-less filter that locks out the bootstrap sendmsg, kept apart. */
+    struct sock_filter installed_filter2[CAPTURED_FILTER_LENGTH];
+    unsigned short installed_filter2_length;
+    long sendmsg_lockout_result;
     /* SECCOMP_GET_NOTIF_SIZES (via syscall) */
     int notif_sizes_result;
     int notif_sizes_small;
@@ -132,6 +141,10 @@ struct behaviour {
     long fork_result;
     int prctl_result;
     int execvp_returns;
+    /* getrlimit and dup2, for moving the bootstrap descriptor high before the filters go on */
+    int getrlimit_result;
+    unsigned long rlimit_nofile_cur;
+    int dup2_fails;
     /* sendmsg / recvmsg for the descriptor handoff */
     ssize_t sendmsg_result;
     int sendmsg_eintr_once;
@@ -150,6 +163,8 @@ struct behaviour {
     int mmsg_name_missing;
     int mmsg_addr_short;
     int mmsg_hetero;
+    int msg_mode;
+    int msg_name_missing;
     int addr_read_seen;
     unsigned int mmsg_count;
     int id_valid_seen;
@@ -204,6 +219,9 @@ static void reset_behaviour(void) {
     bx->socket_result = FAKE_OUTWARD_SOCKET_DESCRIPTOR;
     bx->connect_result = 0;
     bx->getsockopt_result = 0;
+    bx->getrlimit_result = 0;
+    bx->rlimit_nofile_cur = FAKE_NOFILE_LIMIT;
+    bx->dup2_fails = 0;
     connect_rules_reset_for_tests();
     set_verbose(false);
     socket_types_reset_for_tests();
@@ -242,17 +260,27 @@ long __wrap_syscall(long number, ...) {
     unsigned long a3 = va_arg(arguments, unsigned long);
     va_end(arguments);
     if (number == SYS_seccomp && a1 == SECCOMP_SET_MODE_FILTER) {
-        (void)a2;
         const struct sock_fprog *program = (const struct sock_fprog *)(uintptr_t)a3;
-        if (program != NULL && program->len <= CAPTURED_FILTER_LENGTH) {
-            memcpy(bx->installed_filter, program->filter,
-                   (size_t)program->len * sizeof(struct sock_filter));
-            bx->installed_filter_length = program->len;
+        if (a2 & SECCOMP_FILTER_FLAG_NEW_LISTENER) {
+            if (program != NULL && program->len <= CAPTURED_FILTER_LENGTH) {
+                memcpy(bx->installed_filter, program->filter,
+                       (size_t)program->len * sizeof(struct sock_filter));
+                bx->installed_filter_length = program->len;
+            }
+            if (bx->seccomp_listener_result < 0) {
+                errno = EACCES;
+            }
+            return bx->seccomp_listener_result;
         }
-        if (bx->seccomp_listener_result < 0) {
+        if (program != NULL && program->len <= CAPTURED_FILTER_LENGTH) {
+            memcpy(bx->installed_filter2, program->filter,
+                   (size_t)program->len * sizeof(struct sock_filter));
+            bx->installed_filter2_length = program->len;
+        }
+        if (bx->sendmsg_lockout_result != 0) {
             errno = EACCES;
         }
-        return bx->seccomp_listener_result;
+        return bx->sendmsg_lockout_result;
     }
     if (number == SYS_seccomp && a1 == SECCOMP_GET_NOTIF_SIZES) {
         struct seccomp_notif_sizes *sizes = (struct seccomp_notif_sizes *)(uintptr_t)a3;
@@ -284,6 +312,26 @@ int __wrap_socketpair(int domain, int type, int protocol, int pair[2]) {
     pair[0] = FAKE_SOCKETPAIR_FIRST_END;
     pair[1] = FAKE_SOCKETPAIR_SECOND_END;
     return 0;
+}
+
+int __wrap_getrlimit(int resource, struct rlimit *limit) {
+    (void)resource;
+    if (bx->getrlimit_result != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    limit->rlim_cur = (rlim_t)bx->rlimit_nofile_cur;
+    limit->rlim_max = (rlim_t)bx->rlimit_nofile_cur;
+    return 0;
+}
+
+int __wrap_dup2(int old_descriptor, int new_descriptor) {
+    (void)old_descriptor;
+    if (bx->dup2_fails) {
+        errno = EBADF;
+        return -1;
+    }
+    return new_descriptor;
 }
 
 pid_t __real_fork(void);
@@ -396,6 +444,16 @@ ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned l
             batch_entry.msg_hdr.msg_namelen = sizeof(struct sockaddr_in);
         }
         memcpy(local->iov_base, &batch_entry, local->iov_len);
+        return (ssize_t)local->iov_len;
+    }
+    if (bx->msg_mode && local->iov_len == sizeof(struct msghdr)) {
+        struct msghdr header;
+        memset(&header, 0, sizeof(header));
+        if (!bx->msg_name_missing) {
+            header.msg_name = (void *)FAKE_MESSAGE_NAME_POINTER;
+            header.msg_namelen = sizeof(struct sockaddr_in);
+        }
+        memcpy(local->iov_base, &header, local->iov_len);
         return (ssize_t)local->iov_len;
     }
     if (bx->mmsg_mode && bx->mmsg_addr_short) {
@@ -580,6 +638,9 @@ int __wrap_ioctl(int fd, unsigned long request, ...) {
             req->data.args[1] = FAKE_ADDRESS_POINTER;
             req->data.args[2] = bx->mmsg_count ? bx->mmsg_count : 1;
             req->data.args[3] = bx->notif_send_flags;
+        } else if (bx->notif_recv_nr == __NR_sendmsg) {
+            req->data.args[1] = FAKE_ADDRESS_POINTER;
+            req->data.args[2] = bx->notif_send_flags;
         } else {
             req->data.args[0] = bx->notif_recv_target_fd;
             req->data.args[1] = FAKE_ADDRESS_POINTER;
@@ -1065,6 +1126,80 @@ static void test_egress_syscalls(void) {
           bx->answers == 1 && bx->last_answer_error == -EACCES);
 
     reset_behaviour();
+    bx->notif_recv_nr = __NR_sendmsg;
+    bx->msg_mode = 1;
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->process_vm_readv_result = 1;
+    remember_rule("127.0.0.1", "53");
+    service_once();
+    check("a sendmsg to a listed destination continues",
+          bx->answers == 1 && bx->last_answer_error == 0 &&
+              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendmsg;
+    bx->msg_mode = 1;
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 9999;
+    bx->process_vm_readv_result = 1;
+    remember_rule("127.0.0.1", "53");
+    service_once();
+    check("a sendmsg to a destination the list does not name is refused",
+          bx->answers == 1 && bx->last_answer_error == -EACCES);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendmsg;
+    bx->msg_mode = 1;
+    bx->msg_name_missing = 1;
+    bx->process_vm_readv_result = 1;
+    service_once();
+    check("a sendmsg with no destination is a connected send and continues",
+          bx->answers == 1 && bx->last_answer_error == 0 &&
+              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendmsg;
+    bx->notif_send_flags = MSG_FASTOPEN;
+    bx->msg_mode = 1;
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->process_vm_readv_result = 1;
+    remember_rule("127.0.0.1", "53");
+    service_once();
+    check("a sendmsg with TCP Fast Open is refused even to a listed destination",
+          bx->answers == 1 && bx->last_answer_error == -EACCES);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendmsg;
+    bx->process_vm_readv_result = 0;
+    service_once();
+    check("a sendmsg whose header cannot be read is refused",
+          bx->answers == 1 && bx->last_answer_error == -EACCES);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendmsg;
+    bx->msg_mode = 1;
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->process_vm_readv_result = 1;
+    bx->id_valid_fail_at = 1;
+    service_once();
+    check("a sendmsg whose notification turns invalid after the header read is dropped",
+          bx->answers == 0);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_sendmsg;
+    bx->msg_mode = 1;
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->process_vm_readv_result = 1;
+    bx->id_valid_fail_at = 2;
+    service_once();
+    check("a sendmsg whose notification turns invalid after the address read is dropped",
+          bx->answers == 0);
+
+    reset_behaviour();
     bx->notif_recv_nr = __NR_sendmmsg;
     bx->mmsg_mode = 1;
     bx->notif_recv_family = AF_INET;
@@ -1505,14 +1640,17 @@ static void test_argument_errors(void) {
  * compare the accumulator with a constant, test bits of it, and return. Anything else is a
  * form this filter does not use, and answering zero for it makes the case fail rather than
  * quietly pass. Assumes a case has already run the child, so a filter was captured. */
-static uint32_t filter_answer(uint32_t audit_arch, int syscall_number) {
+static uint32_t run_captured_filter(const struct sock_filter *program, unsigned short length,
+                                    uint32_t audit_arch, int syscall_number,
+                                    uint64_t first_argument) {
     struct seccomp_data data;
     memset(&data, 0, sizeof(data));
     data.arch = audit_arch;
     data.nr = syscall_number;
+    data.args[0] = first_argument;
     uint32_t accumulator = 0;
-    for (unsigned short at = 0; at < bx->installed_filter_length; at++) {
-        const struct sock_filter *instruction = &bx->installed_filter[at];
+    for (unsigned short at = 0; at < length; at++) {
+        const struct sock_filter *instruction = &program[at];
         if (instruction->code == (BPF_LD | BPF_W | BPF_ABS)) {
             memcpy(&accumulator, (const char *)&data + instruction->k, sizeof(accumulator));
             continue;
@@ -1531,6 +1669,33 @@ static uint32_t filter_answer(uint32_t audit_arch, int syscall_number) {
         return 0;
     }
     return 0;
+}
+
+/* The first filter's answer for a call under the given ABI, with the first argument zero. */
+static uint32_t filter_answer(uint32_t audit_arch, int syscall_number) {
+    return run_captured_filter(bx->installed_filter, bx->installed_filter_length, audit_arch,
+                               syscall_number, 0);
+}
+
+/* The first filter's answer for a call whose first argument, a descriptor, decides it: the
+ * sendmsg exception is allowed only on the bootstrap descriptor and trapped on every other. */
+static uint32_t filter_answer_fd(uint32_t audit_arch, int syscall_number, uint64_t first_argument) {
+    return run_captured_filter(bx->installed_filter, bx->installed_filter_length, audit_arch,
+                               syscall_number, first_argument);
+}
+
+/* The lockout filter's answer for a native-ABI call whose first argument is a descriptor. */
+static uint32_t lockout_answer(int syscall_number, uint64_t first_argument) {
+    return run_captured_filter(bx->installed_filter2, bx->installed_filter2_length,
+                               GUARD_NATIVE_AUDIT_ARCH, syscall_number, first_argument);
+}
+
+/* What the two stacked filters answer together for a native-ABI call: the kernel takes the
+ * action with the lowest value, so the composition is the smaller of the two answers. */
+static uint32_t combined_answer(int syscall_number, uint64_t first_argument) {
+    uint32_t first = filter_answer_fd(GUARD_NATIVE_AUDIT_ARCH, syscall_number, first_argument);
+    uint32_t second = lockout_answer(syscall_number, first_argument);
+    return first < second ? first : second;
 }
 
 /* Installs the filter by running the child far enough to hand it over, so that the checks
@@ -1575,8 +1740,58 @@ static void test_egress_filter(void) {
           filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_sendto) == SECCOMP_RET_USER_NOTIF);
     check("sendmmsg is trapped to the supervisor",
           filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_sendmmsg) == SECCOMP_RET_USER_NOTIF);
-    check("sendmsg is deliberately not trapped, or the descriptor handoff would park",
-          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_sendmsg) == SECCOMP_RET_ALLOW);
+    check("sendmsg on the bootstrap descriptor is allowed, so the handoff is not parked",
+          filter_answer_fd(GUARD_NATIVE_AUDIT_ARCH, __NR_sendmsg, FAKE_BOOTSTRAP_DESCRIPTOR)
+              == SECCOMP_RET_ALLOW);
+    check("sendmsg on any other descriptor is trapped to the supervisor",
+          filter_answer_fd(GUARD_NATIVE_AUDIT_ARCH, __NR_sendmsg, FAKE_BOOTSTRAP_DESCRIPTOR + 1)
+              == SECCOMP_RET_USER_NOTIF);
+    check("sendmsg whose descriptor has a high word set is trapped, not read as the bootstrap one",
+          filter_answer_fd(GUARD_NATIVE_AUDIT_ARCH, __NR_sendmsg,
+                           ((uint64_t)1 << 32) | (uint64_t)FAKE_BOOTSTRAP_DESCRIPTOR)
+              == SECCOMP_RET_USER_NOTIF);
+
+    check("the lockout filter denies sendmsg on the bootstrap descriptor",
+          lockout_answer(__NR_sendmsg, FAKE_BOOTSTRAP_DESCRIPTOR) == deny);
+    check("the lockout filter leaves the trap in force on any other descriptor",
+          lockout_answer(__NR_sendmsg, FAKE_BOOTSTRAP_DESCRIPTOR + 1) == SECCOMP_RET_ALLOW);
+    check("the lockout filter reads the descriptor as two words, so a high word is not the bootstrap one",
+          lockout_answer(__NR_sendmsg, ((uint64_t)1 << 32) | (uint64_t)FAKE_BOOTSTRAP_DESCRIPTOR)
+              == SECCOMP_RET_ALLOW);
+    check("the lockout filter does not touch a non-sendmsg call",
+          lockout_answer(__NR_read, 0) == SECCOMP_RET_ALLOW);
+
+    check("the two filters compose to a refusal on the bootstrap descriptor",
+          combined_answer(__NR_sendmsg, FAKE_BOOTSTRAP_DESCRIPTOR) == deny);
+    check("the two filters compose to a trap on any other descriptor",
+          combined_answer(__NR_sendmsg, FAKE_BOOTSTRAP_DESCRIPTOR + 1) == SECCOMP_RET_USER_NOTIF);
+
+    reset_behaviour();
+    bx->dup2_fails = 1;
+    bx->execvp_returns = 1;
+    bx->fork_result = 0;
+    (void)run_main((char *[]){ "guard", "--", "cmd", NULL });
+    check("when the bootstrap descriptor cannot be moved, the original number is used",
+          filter_answer_fd(GUARD_NATIVE_AUDIT_ARCH, __NR_sendmsg, FAKE_SOCKETPAIR_SECOND_END)
+              == SECCOMP_RET_ALLOW);
+
+    reset_behaviour();
+    bx->getrlimit_result = -1;
+    bx->execvp_returns = 1;
+    bx->fork_result = 0;
+    (void)run_main((char *[]){ "guard", "--", "cmd", NULL });
+    check("with no descriptor limit to read, the bootstrap descriptor moves to the floor",
+          filter_answer_fd(GUARD_NATIVE_AUDIT_ARCH, __NR_sendmsg, FAKE_BOOTSTRAP_DESCRIPTOR)
+              == SECCOMP_RET_ALLOW);
+
+    reset_behaviour();
+    bx->rlimit_nofile_cur = FAKE_SMALL_NOFILE;
+    bx->execvp_returns = 1;
+    bx->fork_result = 0;
+    (void)run_main((char *[]){ "guard", "--", "cmd", NULL });
+    check("under a descriptor limit below the floor, the bootstrap descriptor stays within it",
+          filter_answer_fd(GUARD_NATIVE_AUDIT_ARCH, __NR_sendmsg, FAKE_SMALL_BOOTSTRAP)
+              == SECCOMP_RET_ALLOW);
 }
 
 static void test_child_setup_failures(void) {
@@ -1610,6 +1825,12 @@ static void test_child_setup_failures(void) {
     bx->fork_result = 0;
     bx->sendmsg_result = -1;
     check("a descriptor handoff that fails fails the child closed",
+          run_main(argv) == EXIT_CODE_SETUP_ERROR);
+
+    reset_behaviour();
+    bx->fork_result = 0;
+    bx->sendmsg_lockout_result = -1;
+    check("a sendmsg lockout that will not install fails the child closed",
           run_main(argv) == EXIT_CODE_SETUP_ERROR);
 
     reset_behaviour();

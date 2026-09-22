@@ -109,6 +109,52 @@ int main(int argc, char **argv) {
         printf("UDP-OK\n");
         return 0;
     }
+    if (argc >= 4 && strcmp(argv[1], "msg") == 0) {
+        int fd = socket(AF_INET, SOCK_DGRAM, 0);
+        struct sockaddr_in address;
+        memset(&address, 0, sizeof(address));
+        address.sin_family = AF_INET;
+        address.sin_port = htons((unsigned short)atoi(argv[3]));
+        inet_pton(AF_INET, argv[2], &address.sin_addr);
+        char payload = 'x';
+        struct iovec vector = { .iov_base = &payload, .iov_len = 1 };
+        struct msghdr header;
+        memset(&header, 0, sizeof(header));
+        header.msg_name = &address;
+        header.msg_namelen = sizeof(address);
+        header.msg_iov = &vector;
+        header.msg_iovlen = 1;
+        if (sendmsg(fd, &header, 0) < 0) {
+            fprintf(stderr, "sendmsg: %s\n", strerror(errno));
+            return PROBE_REFUSED;
+        }
+        printf("MSG-OK\n");
+        return 0;
+    }
+    if (argc >= 4 && strcmp(argv[1], "msg2") == 0) {
+        int filler = socket(AF_INET, SOCK_DGRAM, 0);
+        int fd = socket(AF_INET, SOCK_DGRAM, 0);
+        struct sockaddr_in address;
+        memset(&address, 0, sizeof(address));
+        address.sin_family = AF_INET;
+        address.sin_port = htons((unsigned short)atoi(argv[3]));
+        inet_pton(AF_INET, argv[2], &address.sin_addr);
+        char payload = 'x';
+        struct iovec vector = { .iov_base = &payload, .iov_len = 1 };
+        struct msghdr header;
+        memset(&header, 0, sizeof(header));
+        header.msg_name = &address;
+        header.msg_namelen = sizeof(address);
+        header.msg_iov = &vector;
+        header.msg_iovlen = 1;
+        if (sendmsg(fd, &header, 0) < 0) {
+            fprintf(stderr, "sendmsg: %s\n", strerror(errno));
+            return PROBE_REFUSED;
+        }
+        (void)filler;
+        printf("MSG2-OK\n");
+        return 0;
+    }
     if (argc >= 4 && strcmp(argv[1], "tfo") == 0) {
         int fd = socket(AF_INET, SOCK_STREAM, 0);
         struct sockaddr_in address;
@@ -348,6 +394,30 @@ if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "a datagram to a destination the list does not name is refused"
 else
   bad "a datagram to a destination the list does not name is refused" "rc=$rc out=$out"
+fi
+
+out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" msg 127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+if [[ $rc -eq 0 && "$out" == *MSG-OK* ]]; then
+  ok "a sendmsg datagram to a listed destination is allowed, so the handoff survived trapping sendmsg"
+else
+  bad "a sendmsg datagram to a listed destination is allowed" "rc=$rc out=$out"
+fi
+
+out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" msg 127.0.0.1 "$OTHER" 2>&1)"
+rc=$?
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
+  ok "a sendmsg datagram to a destination the list does not name is refused"
+else
+  bad "a sendmsg datagram to a destination the list does not name is refused" "rc=$rc out=$out"
+fi
+
+out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" msg2 127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+if [[ $rc -eq 0 && "$out" == *MSG2-OK* ]]; then
+  ok "a sendmsg on a low reused descriptor is still allowed, so the lockout does not over-deny"
+else
+  bad "a sendmsg on a low reused descriptor is still allowed, so the lockout does not over-deny" "rc=$rc out=$out"
 fi
 
 out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" tfo 127.0.0.1 "$PORT" 2>&1)"
