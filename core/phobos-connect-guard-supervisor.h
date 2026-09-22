@@ -9,6 +9,12 @@
 #include <stddef.h>
 #include <sys/socket.h>
 
+/* Point every allowed stream connection at a broker on the given "address:port" instead of at
+ * the destination the command named, so the broker can enforce by host name what the guard
+ * cannot see. The address is an IP literal, bracketed for IPv6. Returns whether it parsed. With
+ * no broker set, the guard connects to the destination itself as before. */
+bool configure_broker(const char *endpoint);
+
 /* Receive the one descriptor the child sends. Returns it, or -1 on any failure,
  * including the child exiting before it sent one (an end of file here). */
 int receive_descriptor(int socket_descriptor);
@@ -47,5 +53,11 @@ void supervise(int notify_descriptor);
 /* The child's wait status, turned into an exit code the way a shell would: the
  * command's own code, or 128 plus the signal that ended it. */
 int exit_code_from_status(int status);
+
+#ifdef PHOBOS_CONNECT_GUARD_UNIT_TEST
+/* Forgets any configured broker, so each test case starts with the guard connecting to the
+ * destination itself unless it configures a broker of its own. */
+void broker_reset_for_tests(void);
+#endif
 
 #endif

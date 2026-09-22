@@ -171,6 +171,7 @@ struct behaviour {
     int id_valid_fail_at;
     int notif_recv_family;
     uint16_t notif_recv_port;
+    uint32_t notif_recv_v4_addr;
     uint32_t notif_recv_target_fd;
     int notif_id_valid_result;
     int notif_addfd_result;
@@ -184,11 +185,20 @@ struct behaviour {
     int socket_result;
     int connect_result;      /* 0 ok, -1 sets connect_errno */
     int connect_errno;
+    int last_connect_family;
+    uint16_t last_connect_port;
     int poll_result;
     int poll_eintr_once;
     short poll_revents;
     int getsockopt_result;
     int getsockopt_so_error;
+    /* the PROXY header the guard sends a broker before the command's bytes */
+    int send_calls;
+    int send_fails;
+    int send_eintr_once;
+    int send_short_once;
+    unsigned char captured_header[64];
+    size_t captured_header_length;
     /* the supervise loop */
     int supervise_services;
     int supervise_poll_error;
@@ -223,6 +233,7 @@ static void reset_behaviour(void) {
     bx->rlimit_nofile_cur = FAKE_NOFILE_LIMIT;
     bx->dup2_fails = 0;
     connect_rules_reset_for_tests();
+    broker_reset_for_tests();
     set_verbose(false);
     socket_types_reset_for_tests();
 }
@@ -481,7 +492,7 @@ ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned l
         struct sockaddr_in *v4 = (struct sockaddr_in *)&storage;
         v4->sin_family = AF_INET;
         v4->sin_port = htons(effective_port);
-        v4->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        v4->sin_addr.s_addr = htonl(bx->notif_recv_v4_addr != 0 ? bx->notif_recv_v4_addr : INADDR_LOOPBACK);
         length = sizeof(*v4);
     }
     size_t copy = local->iov_len < length ? local->iov_len : length;
@@ -534,14 +545,45 @@ ssize_t __wrap_readlink(const char *path, char *buffer, size_t size) {
 
 int __wrap_connect(int fd, const struct sockaddr *address, socklen_t length) {
     (void)fd;
-    (void)address;
-    (void)length;
     bx->connect_calls++;
+    if (address != NULL && length >= (socklen_t)sizeof(struct sockaddr_in)) {
+        bx->last_connect_family = address->sa_family;
+        if (address->sa_family == AF_INET) {
+            bx->last_connect_port = ntohs(((const struct sockaddr_in *)address)->sin_port);
+        } else if (address->sa_family == AF_INET6) {
+            bx->last_connect_port = ntohs(((const struct sockaddr_in6 *)address)->sin6_port);
+        }
+    }
     if (bx->connect_result == 0) {
         return 0;
     }
     errno = bx->connect_errno;
     return -1;
+}
+
+ssize_t __wrap_send(int fd, const void *buffer, size_t length, int flags) {
+    (void)fd;
+    (void)flags;
+    bx->send_calls++;
+    if (bx->send_eintr_once) {
+        bx->send_eintr_once = 0;
+        errno = EINTR;
+        return -1;
+    }
+    if (bx->send_fails) {
+        errno = ECONNREFUSED;
+        return -1;
+    }
+    size_t take = length;
+    if (bx->send_short_once && take > 1) {
+        bx->send_short_once = 0;
+        take = 1;
+    }
+    if (bx->captured_header_length + take <= sizeof(bx->captured_header)) {
+        memcpy(bx->captured_header + bx->captured_header_length, buffer, take);
+        bx->captured_header_length += take;
+    }
+    return (ssize_t)take;
 }
 
 /* The supervise loop waits for POLLIN: hand out a readable turn for each arranged
@@ -1632,6 +1674,11 @@ static void test_argument_errors(void) {
     check("a --rules with no value is a usage error", run_main(dangling_rules) == EXIT_CODE_USAGE);
     char *unreadable[] = { "guard", "--rules", "/dev/null/impossible", "--", "cmd", NULL };
     check("an unreadable rules file refuses the run", run_main(unreadable) == EXIT_CODE_SETUP_ERROR);
+    char *dangling_broker[] = { "guard", "--broker", NULL };
+    check("a --broker with no value is a usage error", run_main(dangling_broker) == EXIT_CODE_USAGE);
+    char *bad_broker[] = { "guard", "--broker", "not-an-endpoint", "--", "cmd", NULL };
+    check("a broker endpoint that will not parse refuses the run",
+          run_main(bad_broker) == EXIT_CODE_SETUP_ERROR);
 }
 
 /* Setup failures before the command runs. A fork result of 0 takes the child path. */
@@ -1711,6 +1758,111 @@ static void install_filter_for_inspection(void) {
 /* What the filter does with each class of call. The filter is the whole of the guard's
  * reach: a syscall it allows is one the supervisor never sees, so the decision belongs to
  * this program and not only to the code that services a notification. */
+/* The twelve-byte PROXY protocol version 2 signature, a copy so the test can recognise the
+ * header the guard builds without reaching into the module's own constant. */
+static const unsigned char PROXY_V2_SIGNATURE_FOR_TEST[12] = {
+    0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A,
+};
+
+/* Drives one allowed stream connect with a broker configured, so connect_on_behalf redirects it,
+ * and returns after service_once. The destination is 127.0.0.1 or 2001:db8::1 by the family. */
+static void drive_broker_stream_connect(int family, uint16_t port, const char *rule_host) {
+    reset_behaviour();
+    configure_broker("127.0.0.1:3128");
+    bx->notif_recv_family = family;
+    bx->notif_recv_port = port;
+    bx->notif_recv_target_fd = 6;
+    bx->process_vm_readv_result = 1;
+    bx->readlink_inode = TRACKED_STREAM_INODE;
+    record_socket_type(TRACKED_STREAM_INODE, FD_TYPE_STREAM);
+    remember_rule(rule_host, "443");
+    service_once();
+}
+
+/* The broker handoff: with a broker configured, an allowed stream connect goes to the broker
+ * rather than the destination, and a PROXY protocol v2 header naming the destination is sent
+ * before the command's own bytes. */
+static void test_broker_handoff(void) {
+    check("a broker endpoint with an IPv4 address and port is accepted",
+          configure_broker("127.0.0.1:3128"));
+    check("a broker endpoint with a bracketed IPv6 address is accepted",
+          configure_broker("[::1]:3128"));
+    check("a broker endpoint with no port is refused", !configure_broker("127.0.0.1"));
+    check("a broker endpoint whose bracket does not close is refused", !configure_broker("[::1"));
+    check("a broker endpoint with an empty bracketed host is refused", !configure_broker("[]:3128"));
+    check("a broker endpoint on port zero is refused", !configure_broker("127.0.0.1:0"));
+    check("a broker endpoint whose port is not a number is refused",
+          !configure_broker("127.0.0.1:abc"));
+    check("a broker endpoint whose host is not an address is refused",
+          !configure_broker("notanip:3128"));
+
+    reset_behaviour();
+    configure_broker("127.0.0.1:3128");
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 443;
+    bx->notif_recv_v4_addr = 0xC0000207; /* 192.0.2.7, a documentation address distinct from loopback */
+    bx->notif_recv_target_fd = 6;
+    bx->process_vm_readv_result = 1;
+    bx->readlink_inode = TRACKED_STREAM_INODE;
+    record_socket_type(TRACKED_STREAM_INODE, FD_TYPE_STREAM);
+    remember_rule("192.0.2.7", "443");
+    service_once();
+    check("an allowed stream connect goes to the broker, not the destination",
+          bx->connect_calls == 1 && bx->last_connect_port == 3128 &&
+              bx->last_connect_family == AF_INET && bx->addfd_calls == 1 &&
+              bx->last_answer_error == 0);
+    uint16_t header_dst_port = 0;
+    memcpy(&header_dst_port, &bx->captured_header[26], 2);
+    check("the header names the IPv4 destination and port over a loopback source, not swapped",
+          bx->captured_header_length == 28 &&
+              memcmp(bx->captured_header, PROXY_V2_SIGNATURE_FOR_TEST, 12) == 0 &&
+              bx->captured_header[13] == 0x11 &&
+              bx->captured_header[16] == 127 && bx->captured_header[17] == 0 &&
+              bx->captured_header[18] == 0 && bx->captured_header[19] == 1 &&
+              bx->captured_header[20] == 192 && bx->captured_header[21] == 0 &&
+              bx->captured_header[22] == 2 && bx->captured_header[23] == 7 &&
+              ntohs(header_dst_port) == 443);
+
+    drive_broker_stream_connect(AF_INET6, 443, "2001:db8::1");
+    check("an IPv6 destination is carried in an IPv6 PROXY v2 header, distinct from the loopback source",
+          bx->addfd_calls == 1 && bx->last_answer_error == 0 &&
+              bx->captured_header_length == 52 && bx->captured_header[13] == 0x21 &&
+              bx->captured_header[16] == 0 && bx->captured_header[31] == 1 &&
+              bx->captured_header[32] == 0x20 && bx->captured_header[33] == 0x01 &&
+              bx->captured_header[34] == 0x0d && bx->captured_header[35] == 0xb8 &&
+              bx->captured_header[47] == 1);
+
+    reset_behaviour();
+    configure_broker("127.0.0.1:3128");
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 443;
+    bx->notif_recv_target_fd = 6;
+    bx->process_vm_readv_result = 1;
+    bx->readlink_inode = TRACKED_STREAM_INODE;
+    record_socket_type(TRACKED_STREAM_INODE, FD_TYPE_STREAM);
+    remember_rule("127.0.0.1", "443");
+    bx->send_fails = 1;
+    service_once();
+    check("a broker whose header cannot be sent refuses the connect and injects nothing",
+          bx->last_answer_error == -ECONNREFUSED && bx->addfd_calls == 0);
+
+    reset_behaviour();
+    configure_broker("127.0.0.1:3128");
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 443;
+    bx->notif_recv_target_fd = 6;
+    bx->process_vm_readv_result = 1;
+    bx->readlink_inode = TRACKED_STREAM_INODE;
+    record_socket_type(TRACKED_STREAM_INODE, FD_TYPE_STREAM);
+    remember_rule("127.0.0.1", "443");
+    bx->send_short_once = 1;
+    bx->send_eintr_once = 1;
+    service_once();
+    check("the header send retries a short write and an interruption, then completes",
+          bx->addfd_calls == 1 && bx->last_answer_error == 0 && bx->send_calls >= 3 &&
+              bx->captured_header_length == 28);
+}
+
 static void test_egress_filter(void) {
     constexpr uint32_t deny = SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA);
     install_filter_for_inspection();
@@ -1898,6 +2050,7 @@ int main(void) {
     test_egress_syscalls();
     test_socket_tracking();
     test_connect_on_behalf_paths();
+    test_broker_handoff();
     test_supervise_loop();
     test_argument_errors();
     test_egress_filter();

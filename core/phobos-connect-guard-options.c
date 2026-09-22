@@ -9,7 +9,8 @@
 
 [[noreturn]] void print_usage_and_exit(void) {
     fprintf(stderr,
-            "Usage: phobos-connect-guard [--verbose] [--rules FILE] -- COMMAND [ARGUMENTS...]\n");
+            "Usage: phobos-connect-guard [--verbose] [--rules FILE] [--broker ADDRESS:PORT] "
+            "-- COMMAND [ARGUMENTS...]\n");
     exit(EXIT_CODE_USAGE);
 }
 
@@ -27,6 +28,14 @@ void parse_arguments(int argument_count, char *arguments[], struct guard_options
                 print_usage_and_exit();
             }
             options->rules_path = arguments[index];
+            continue;
+        }
+        if (strcmp(arguments[index], "--broker") == 0) {
+            index++;
+            if (index >= argument_count) {
+                print_usage_and_exit();
+            }
+            options->broker_endpoint = arguments[index];
             continue;
         }
         if (strcmp(arguments[index], "--") == 0) {
