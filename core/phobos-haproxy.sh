@@ -255,3 +255,83 @@ build_haproxy_conf() {
     printf '    tcp-request content reject\n'
   } > "$out"
 }
+
+# Writes an haproxy.cfg for the inbound filter and the per-port source files it reads, from an
+# accept.rules file of "H P [src]" lines. For each public port H it emits a frontend bound
+# dual-stack on H that rejects a connection whose source address is not in H's source file, and a
+# backend that forwards to the student's backend port P on loopback. A public port with no source
+# lines gets an empty source file, so the frontend rejects every peer, fail-closed. Takes the
+# accept.rules file, the output config path, and a scratch directory the source files are written
+# into and the config references by absolute path.
+build_inbound_conf() {
+  local accept_rules="$1"
+  local out="$2"
+  local scratch="$3"
+  local h
+  local p
+  local src
+  local -A backend_of=()
+  mkdir -p "$scratch"
+  while read -r h p src; do
+    [[ -z "$h" ]] && continue
+    backend_of[$h]="$p"
+    [[ -f "${scratch}/in_${h}.src" ]] || : > "${scratch}/in_${h}.src"
+    if [[ -n "$src" ]]; then printf '%s\n' "$src" >> "${scratch}/in_${h}.src"; fi
+  done < "$accept_rules"
+  {
+    printf 'defaults\n'
+    printf '    mode tcp\n'
+    printf '    timeout connect 5s\n'
+    printf '    timeout client 30s\n'
+    printf '    timeout server 30s\n'
+    for h in "${!backend_of[@]}"; do
+      printf 'frontend in_%s\n' "$h"
+      printf '    bind :::%s v4v6\n' "$h"
+      printf '    tcp-request connection reject if !{ src -f %s }\n' "${scratch}/in_${h}.src"
+      printf '    default_backend be_%s\n' "$h"
+    done
+    for h in "${!backend_of[@]}"; do
+      printf 'backend be_%s\n' "$h"
+      printf '    server s 127.0.0.1:%s\n' "${backend_of[$h]}"
+    done
+  } > "$out"
+}
+
+# Starts the inbound filter for a specification directory and records its process id in
+# PHB_SPEC_INBOUND_PID, so the layer that ends the run stops it and frees the fixed public ports,
+# which the network layer cannot do itself because it execs. It generates the config and source
+# files, binds haproxy to the public ports the accept rules name, and waits for the first of them
+# to answer. haproxy runs in the foreground with -db so it stays a child in the run's process
+# group, its output going to a scratch log. It is launched with LD_PRELOAD and the libnetblocker
+# configuration stripped, because it binds a public port the graded code may not and connects to
+# the backend on loopback, both of which libnetblocker's bind and connect hooks would otherwise
+# refuse; it is trusted infrastructure, so it is placed outside that in-process filter. Returns
+# non-zero if the filter cannot start, so the caller can refuse the run. Assumes phobos-common.sh
+# was sourced, so PHB_SPEC_SCRATCH and PHB_SPEC_INBOUND_PID are set, and that accept_rules is not
+# empty.
+start_inbound_haproxy() {
+  local spec_dir="$1"
+  local accept_rules="$2"
+  local haproxy_bin="$3"
+  local scratch="${spec_dir}/${PHB_SPEC_SCRATCH}"
+  local cfg="${scratch}/inbound.cfg"
+  local log="${scratch}/inbound.log"
+  local first_port
+  local pid
+  local _
+  mkdir -p "$scratch"
+  build_inbound_conf "$accept_rules" "$cfg" "$scratch"
+  first_port="$(awk 'NF>=2 {print $1; exit}' "$accept_rules")"
+  env -u LD_PRELOAD -u NETBLOCKER_CONF -u NETBLOCKER_BIND_CONF "$haproxy_bin" -f "$cfg" -db > "$log" 2>&1 &
+  pid=$!
+  for _ in $(seq 1 60); do
+    kill -0 "$pid" 2>/dev/null || break
+    if (exec 3<>"/dev/tcp/127.0.0.1/${first_port}") 2>/dev/null; then
+      printf '%s\n' "$pid" > "${spec_dir}/${PHB_SPEC_INBOUND_PID}"
+      return 0
+    fi
+    sleep 0.05
+  done
+  if kill -0 "$pid" 2>/dev/null; then kill "$pid" 2>/dev/null; fi
+  return 1
+}

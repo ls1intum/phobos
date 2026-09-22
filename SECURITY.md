@@ -75,6 +75,33 @@ instructor and must never be writable by the code being graded; a submission tha
 its own exercise configuration could grant itself any access, and that is an integration
 requirement Phobos relies on rather than a boundary it enforces.
 
+## Inbound filtering assumes a networked container, and is defence in depth, not a boundary
+
+An `[accept]` rule fronts a student's TCP listener with an inbound HAProxy that admits only the
+source addresses the rule names, forwarding an admitted connection to the student's backend port.
+It is a defence-in-depth layer for deployments that expose a student's server, not a boundary of
+the same class as the filesystem or egress layers, and enabling it changes the run's posture:
+
+- **It removes `--network none`.** An external client cannot reach a `--network none` container,
+  so an `[accept]` rule only works where the container has a real network. Turning it on therefore
+  gives up the hard no-network backstop the rest of the sandbox leans on; egress is then contained
+  only by the connect guard, the Landlock TCP-port rules, the soft preload filter and whatever the
+  integrator firewalls, not by the absence of a network.
+- **Phobos hard-locks the listening port, not its reachability.** With `[bind]` naming only the
+  backend port, Landlock refuses the student a listener on any other port, the public port
+  included, in the kernel and against raw system calls. But Landlock's bind right is per port, not
+  per address, so the student may bind the backend port on all interfaces; that the backend is
+  reachable *only* through the filter is provided by the container's network isolation, not by
+  Phobos. That isolation must be concrete: a dedicated network with inter-container communication
+  disabled, only the public port published, no other or UDP port exposed. `[accept]` covers TCP
+  only.
+- **A source address is weak authentication.** It resists spoofing only for an established
+  handshake, and NAT and shared egress addresses make it coarse. Treat it as a filter, not an
+  identity.
+
+Enabling `[accept]` is deliberately not silent: a run with one present says loudly that it assumes
+this networked posture.
+
 ## Scope
 
 A report is in scope when Phobos fails at what it claims to do, or when it causes harm nobody

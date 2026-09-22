@@ -108,6 +108,62 @@ refuse_unenforceable_network_rules() {
   fi
 }
 
+# Refuses every [accept] rule that cannot be enforced against the merged policy: a public port
+# below 1024 (unbindable without a capability the run does not have), a public port the graded
+# code may itself bind (it could take the port before the inbound HAProxy and receive unfiltered
+# connections), a backend port the code may NOT bind (the filter would forward to a listener that
+# never comes up), and two rules fronting the same public port with different backends. A public
+# port with no source is left alone but warned about, since the filter then rejects every peer.
+# bind_rules holds "addr port" lines; accept_rules holds "H P [src]" lines. Ports are read base
+# ten so a leading zero is not taken as octal. Assumes it is called plainly, so a refusal ends the
+# run.
+refuse_unenforceable_accept_rules() {
+  local accept_rules="$1"
+  local bind_rules="$2"
+  [[ -n "$accept_rules" && -s "$accept_rules" ]] || return 0
+  local -A bound_ports=()
+  local host
+  local port
+  if [[ -n "$bind_rules" && -s "$bind_rules" ]]; then
+    while read -r host port; do
+      [[ -z "$port" ]] && continue
+      bound_ports[$((10#$port))]=1
+    done < "$bind_rules"
+  fi
+  local -A backend_of=()
+  local -A has_source=()
+  local h
+  local p
+  local src
+  while read -r h p src; do
+    [[ -z "$h" ]] && continue
+    h=$((10#$h))
+    p=$((10#$p))
+    if (( h < 1024 )); then
+      report "Policy invalid: [accept] public port ${h} is below 1024 and cannot be bound without a capability the run does not have. Use a port at or above 1024. (PHB-EPOLICY)"
+      exit "${PHB_EPOLICY}"
+    fi
+    if [[ -n "${bound_ports[$h]:-}" ]]; then
+      report "Policy invalid: [accept] public port ${h} is also a [bind] port, so the graded code could take it before the inbound filter. Front a port the code may not bind. (PHB-EPOLICY)"
+      exit "${PHB_EPOLICY}"
+    fi
+    if [[ -z "${bound_ports[$p]:-}" ]]; then
+      report "Policy invalid: [accept] backend port ${p} is not a [bind] port, so nothing would listen behind the inbound filter. Name it in [bind]. (PHB-EPOLICY)"
+      exit "${PHB_EPOLICY}"
+    fi
+    if [[ -n "${backend_of[$h]:-}" && "${backend_of[$h]}" != "$p" ]]; then
+      report "Policy invalid: [accept] fronts public port ${h} with two different backend ports (${backend_of[$h]} and ${p}). (PHB-EPOLICY)"
+      exit "${PHB_EPOLICY}"
+    fi
+    backend_of[$h]="$p"
+    [[ -n "$src" ]] && has_source[$h]=1
+  done < "$accept_rules"
+  for h in "${!backend_of[@]}"; do
+    [[ -z "${has_source[$h]:-}" ]] && _log "WARNING: [accept] public port ${h} names no source, so the inbound filter rejects every peer and the service is unreachable."
+  done
+  return 0
+}
+
 # Fills the named array with the TCP port rules Landlock can actually enforce.
 #
 # The policy language names a host and a port, Landlock knows only ports. A rule naming no

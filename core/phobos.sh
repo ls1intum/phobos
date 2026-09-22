@@ -209,6 +209,14 @@ if (( enable_debug )); then policy_flags+=( --debug ); fi
 for c in "${cfgs[@]}"; do policy_flags+=( --config "$c" ); done
 "${HERE}/phobos-policy.sh" "${policy_flags[@]}"
 
+# The inbound filter lives in the network layer, and the bind-port lock in the filesystem layer's
+# Landlock rules. With the network restriction off, an [accept] rule starts no filter and the
+# listener's port is not locked either, so the listener runs fully exposed. Say so rather than let
+# a disabled restriction quietly drop the enforcement.
+if [[ -s "${SPEC_DIR}/accept.rules" ]] && (( ! enable_network )); then
+  _log "inbound filter from an [accept] rule IGNORED because the network-system restriction is DISABLED; the listener runs unfiltered and its public port is not locked"
+fi
+
 # Assemble the layer chain from the flags: a disabled layer is left out of the chain rather
 # than entered and skipped, so no PHB_ENABLE_* has to travel with the run. Each wrapper does
 # its work and hands on the rest of the chain; the timeout layer, when a timeout is set, runs
@@ -219,9 +227,9 @@ for c in "${cfgs[@]}"; do policy_flags+=( --config "$c" ); done
 dbg=(); (( enable_debug )) && dbg=(--debug)
 chain=()
 if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeout.sh"   "${dbg[@]}" --timeout-bin "$timeout_bin" "$SPEC_DIR" -- ); fi
-network_flags=( "${dbg[@]}" --netblocker-so "$netblocker_so" --connect-guard-bin "$connect_guard_bin" )
+network_flags=( "${dbg[@]}" --netblocker-so "$netblocker_so" --connect-guard-bin "$connect_guard_bin" --haproxy-bin "$haproxy_bin" )
 if (( enable_egress_broker )); then
-  network_flags+=( --egress-broker --haproxy-bin "$haproxy_bin" )
+  network_flags+=( --egress-broker )
   if [[ -n "$resolver" ]]; then network_flags+=( --resolver "$resolver" ); fi
 fi
 if (( enable_network ));   then chain+=( "${HERE}/phobos-network.sh"   "${network_flags[@]}" "$SPEC_DIR" -- ); fi

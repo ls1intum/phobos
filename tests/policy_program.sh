@@ -148,6 +148,24 @@ bash "$CORE_X/phobos-policy.sh" --spec-dir "$SPEC_OK" --config "$WORK/good-net.c
 check "a concrete port still builds a specification" "example.test 443" "$(cat "$SPEC_OK/net.rules")"
 
 echo
+echo "== an unenforceable [accept] rule is refused against the merged policy =="
+# The inbound public port must be one the graded code may not bind and the backend one it may,
+# judged over the merged [bind] set once every config has been folded in.
+refuse_case "an [accept] public port below 1024 is refused"                 '[bind]\nallow 18080\n[accept]\nexpose 80 to 18080 from 1.2.3.4\n'
+refuse_case "an [accept] public port that is also a [bind] port is refused" '[bind]\nallow 8080\nallow 18080\n[accept]\nexpose 8080 to 18080 from 1.2.3.4\n'
+refuse_case "an [accept] backend port not in [bind] is refused"             '[bind]\nallow 9090\n[accept]\nexpose 8080 to 18080 from 1.2.3.4\n'
+refuse_case "an [accept] line of the wrong shape is refused"                '[accept]\nexpose here\n'
+refuse_case "an [accept] port with a leading zero is refused"               '[bind]\nallow 18080\n[accept]\nexpose 08080 to 18080 from 1.2.3.4\n'
+refuse_case "an [accept] port of twenty digits is refused"                  '[bind]\nallow 18080\n[accept]\nexpose 18446744073709551617 to 18080 from 1.2.3.4\n'
+refuse_case "two [accept] rules fronting one port with different backends are refused" '[bind]\nallow 18080\nallow 19090\n[accept]\nexpose 8080 to 18080 from 1.1.1.1\nexpose 8080 to 19090 from 2.2.2.2\n'
+
+SPEC_ACC="$(fresh_spec)"
+printf '[bind]\nallow 18080\n[accept]\nexpose 18888 to 18080 from 127.0.0.5, fd00::/8\n' > "$WORK/good-accept.cfg"
+bash "$CORE_X/phobos-policy.sh" --spec-dir "$SPEC_ACC" --config "$WORK/good-accept.cfg" > /dev/null 2>&1
+check "an [accept] rule builds the accept spec"     "18888 18080 127.0.0.5" "$(grep -F '127.0.0.5' "$SPEC_ACC/accept.rules")"
+check "an [accept] ipv6 source is carried through"  "18888 18080 fd00::/8"  "$(grep -F 'fd00' "$SPEC_ACC/accept.rules")"
+
+echo
 echo "== a single layer runs standalone over a specification phobos-policy.sh built =="
 printf '%s\n' '#!/usr/bin/env bash' \
   'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift; exec "$@"' > "$WORK/passthrough-landlock"

@@ -38,8 +38,13 @@ PHB_SPEC_MARKER=".phobos-owned-spec"
 # the run can stop the broker, which the network layer cannot do itself because it execs.
 PHB_SPEC_BROKER_PID="broker.pid"
 
+# The file the network layer writes the inbound filter's process id into, so the layer that ends
+# the run can stop it and free the fixed public port it holds, which the network layer cannot do
+# itself because it execs. It is separate from the broker's, so one is stopped without the other.
+PHB_SPEC_INBOUND_PID="inbound.pid"
+
 # The files write_spec creates, the only ones remove_owned_spec_dir deletes.
-PHB_SPEC_FILES="read.paths execute.paths write.paths create.paths delete.paths tail.flags net.rules bind.rules timeout.sec limits.conf"
+PHB_SPEC_FILES="read.paths execute.paths write.paths create.paths delete.paths tail.flags net.rules bind.rules accept.rules timeout.sec limits.conf"
 
 # The subdirectory phobos.sh keeps its own scratch files in, so they live under the
 # specification directory and are removed with it rather than left in /tmp. phobos.sh ends
@@ -75,6 +80,20 @@ stop_recorded_broker() {
   rm -f -- "$pid_file"
 }
 
+# Stops the inbound filter whose process id the network layer recorded in the specification
+# directory, if it recorded one, so the filter does not outlive the run and its fixed public port
+# is freed. A pid file that names nothing running is simply removed. Assumes the directory is one
+# Phobos owns.
+stop_recorded_inbound() {
+  local directory="$1"
+  local pid_file="$directory/${PHB_SPEC_INBOUND_PID}"
+  local pid
+  [[ -f "$pid_file" && ! -L "$pid_file" ]] || return 0
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  [[ "$pid" =~ ^[0-9]+$ ]] && kill "$pid" 2>/dev/null
+  rm -f -- "$pid_file"
+}
+
 # Removes a specification directory phobos.sh created, and does nothing to any
 # other. Stops any egress broker it recorded, then deletes the scratch subdirectory phobos.sh
 # made, the files write_spec writes and the marker, then the directory itself, so a directory
@@ -86,6 +105,7 @@ remove_owned_spec_dir() {
   [[ -n "$directory" && -d "$directory" && ! -L "$directory" ]] || return 0
   [[ -f "$directory/${PHB_SPEC_MARKER}" && ! -L "$directory/${PHB_SPEC_MARKER}" ]] || return 0
   stop_recorded_broker "$directory"
+  stop_recorded_inbound "$directory"
   rm -rf -- "${directory:?}/${PHB_SPEC_SCRATCH}" || return 1
   for name in ${PHB_SPEC_FILES}; do
     rm -f -- "$directory/$name" || return 1

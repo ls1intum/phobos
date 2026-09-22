@@ -186,7 +186,7 @@ refuse_unknown_section() {
   local section="$1"
   local cfg="$2"
   case "$section" in
-    read|execute|write|create|delete|connect|bind|limits) ;;
+    read|execute|write|create|delete|connect|bind|accept|limits) ;;
     *) report "Policy invalid: unknown section '[${section}]' in ${cfg}. (PHB-EPOLICY)"; exit "${PHB_EPOLICY}" ;;
   esac
 }
@@ -236,6 +236,51 @@ append_bind_rule() {
   printf '%s %s\n' "$bind_host" "$bind_port" >>"$rules"
 }
 
+# Appends one [accept] line, "expose <public-port> to <backend-port> from <source>[, <source>...]",
+# to the accept rules file as one "H P src" line per source, or "H P" when the source list is
+# empty (a service that is registered but accepts no one). [accept] fronts a student's TCP
+# listener with an inbound HAProxy: the public port H is what the container exposes and HAProxy
+# filters by source address, the backend port P is the student's own listening port, which [bind]
+# must name. Only the port range is checked here; that H is not itself a [bind] port, that P is a
+# [bind] port, and that H is a bindable non-privileged port are judged once over the merged
+# policy. A source is an IPv4 or IPv6 address or CIDR, validated in full by HAProxy. Assumes it is
+# called plainly, so that a refusal ends the run.
+append_accept_rule() {
+  local line="$1"
+  local rules="$2"
+  local h
+  local p
+  local srcs
+  local src
+  local any=0
+  if [[ ! "$line" =~ ^expose[[:space:]]+([0-9]+)[[:space:]]+to[[:space:]]+([0-9]+)[[:space:]]+from[[:space:]]*(.*)$ ]]; then
+    report "Policy invalid: '${line}' in [accept] is not an 'expose <public-port> to <backend-port> from <source>[, <source>...]' line. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  h="${BASH_REMATCH[1]}"
+  p="${BASH_REMATCH[2]}"
+  srcs="${BASH_REMATCH[3]}"
+  if [[ ! "$h" =~ ^[1-9][0-9]{0,4}$ || ! "$p" =~ ^[1-9][0-9]{0,4}$ ]] || (( h > 65535 || p > 65535 )); then
+    report "Policy invalid: '${line}' in [accept] names a port that is not a whole number from 1 to 65535. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  local IFS=','
+  for src in $srcs; do
+    src="${src#"${src%%[![:space:]]*}"}"
+    src="${src%"${src##*[![:space:]]}"}"
+    [[ -z "$src" ]] && continue
+    if [[ ! "$src" =~ ^[0-9a-fA-F:./]+$ ]]; then
+      report "Policy invalid: '${src}' in [accept] is not an IP address or CIDR. (PHB-EPOLICY)"
+      exit "${PHB_EPOLICY}"
+    fi
+    printf '%s %s %s\n' "$h" "$p" "$src" >>"$rules"
+    any=1
+  done
+  if (( ! any )); then
+    printf '%s %s\n' "$h" "$p" >>"$rules"
+  fi
+}
+
 # Reads one [limits] line into the PARSED_* values. Only the six known keys are accepted; a bare
 # value and an unknown key are refused rather than ignored, so a typo in a limit does not leave
 # the run unrestricted. Assumes it is called plainly, so that a refusal ends the run.
@@ -279,7 +324,8 @@ parse_cfg_policy() {
   local de="${tdir}/delete.paths"
   local net="${tdir}/net.rules"
   local bind="${tdir}/bind.rules"
-  : >"$rd"; : >"$ex"; : >"$wr"; : >"$cr"; : >"$de"; : >"$net"; : >"$bind"
+  local acc="${tdir}/accept.rules"
+  : >"$rd"; : >"$ex"; : >"$wr"; : >"$cr"; : >"$de"; : >"$net"; : >"$bind"; : >"$acc"
   reset_parsed_limits
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%%#*}"
@@ -299,6 +345,7 @@ parse_cfg_policy() {
       delete)  printf '%s\n' "$line" >>"$de" ;;
       connect) append_connect_rule "$line" "$net" ;;
       bind)    append_bind_rule "$line" "$bind" ;;
+      accept)  append_accept_rule "$line" "$acc" ;;
       limits)  read_limits_line "$line" "$sec" ;;
       "")
         report "Policy invalid: '${line}' appears before any [section] in ${cfg}. (PHB-EPOLICY)"
@@ -308,6 +355,7 @@ parse_cfg_policy() {
   PARSED_FS_DIR="$tdir"
   PARSED_NET_FILE="$net"
   PARSED_BIND_FILE="$bind"
+  PARSED_ACCEPT_FILE="$acc"
 }
 
 # Writes into the first file every distinct line of the remaining files, in the order first
@@ -342,6 +390,7 @@ write_spec() {
   local timeout="$4"
   local tail="$5"
   local bind="$6"
+  local accept="$7"
   mkdir -p "$spec_dir"
 
   local right
@@ -353,6 +402,7 @@ write_spec() {
   if [[ -n "$tail" && -f "$tail" ]]; then sed -E 's/#.*$//' "$tail" | sed '/^[[:space:]]*$/d' > "${spec_dir}/tail.flags"; else : > "${spec_dir}/tail.flags"; fi
   if [[ -n "$net" && -s "$net" ]]; then cp "$net" "${spec_dir}/net.rules"; else : > "${spec_dir}/net.rules"; fi
   if [[ -n "$bind" && -s "$bind" ]]; then cp "$bind" "${spec_dir}/bind.rules"; else : > "${spec_dir}/bind.rules"; fi
+  if [[ -n "$accept" && -s "$accept" ]]; then cp "$accept" "${spec_dir}/accept.rules"; else : > "${spec_dir}/accept.rules"; fi
 }
 # Unions the per-right file sets of in_dir into out_dir, canonicalising and de-duplicating
 # each right's paths. This is the one additive merge: it builds the base policy from several
