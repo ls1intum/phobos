@@ -66,6 +66,57 @@ haproxy_allow_rules() {
   printf '    default_backend refuse\n'
 }
 
+# Starts the egress broker for a specification directory and prints the "127.0.0.1:port" the
+# guard should hand connections to, or fails. It generates the broker's config from the rules,
+# binds it to a free loopback port, and records its process id in PHB_SPEC_BROKER_PID under the
+# directory, so the layer that ends the run stops it, which the network layer cannot do itself
+# because it execs. haproxy runs in the foreground with -db, so it stays a child of the caller
+# and in the run's process group, and its own output goes to a scratch log rather than the
+# command's stdout, which also keeps the background job from holding a command substitution open.
+# The broker is launched with LD_PRELOAD and the libnetblocker configuration stripped: the network
+# layer sets those for the graded command, and a child would inherit them, but libnetblocker
+# refuses a connect to any address it did not itself resolve from an allowed name, and the broker
+# forwards to addresses it never resolved, so under the preload every host-name forward is refused,
+# which is the enforcement the broker exists to provide. The broker is trusted infrastructure whose
+# every onward connection the guard already vetted by port and the broker itself vets by TLS host
+# name, so it is placed outside that in-process filter rather than broken by it. A port that already
+# answers is skipped before the broker binds it; because the broker holds the loopback port
+# exclusively, a probe that then answers on a live broker is answering the broker.
+# Assumes phobos-common.sh was sourced, so PHB_SPEC_SCRATCH and PHB_SPEC_BROKER_PID are set.
+start_egress_broker() {
+  local spec_dir="$1"
+  local rules="$2"
+  local haproxy_bin="$3"
+  local scratch="${spec_dir}/${PHB_SPEC_SCRATCH}"
+  local cfg
+  local log
+  local port
+  local pid
+  mkdir -p "$scratch"
+  cfg="${scratch}/broker.cfg"
+  log="${scratch}/broker.log"
+  for _ in 1 2 3 4 5; do
+    port=$(( 20000 + RANDOM % 40000 ))
+    if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+      continue
+    fi
+    build_haproxy_conf "$rules" "$cfg" "127.0.0.1:${port}"
+    env -u LD_PRELOAD -u NETBLOCKER_CONF -u NETBLOCKER_BIND_CONF "$haproxy_bin" -f "$cfg" -db > "$log" 2>&1 &
+    pid=$!
+    for _ in $(seq 1 60); do
+      kill -0 "$pid" 2>/dev/null || break
+      if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+        printf '%s\n' "$pid" > "${spec_dir}/${PHB_SPEC_BROKER_PID}"
+        printf '127.0.0.1:%s\n' "$port"
+        return 0
+      fi
+      sleep 0.05
+    done
+    kill "$pid" 2>/dev/null
+  done
+  return 1
+}
+
 # Writes a complete haproxy.cfg for the egress broker: the fixed preamble that keeps it a
 # loopback TCP proxy reading the PROXY header and the ClientHello, the allow-list rules
 # haproxy_allow_rules builds, and the two backends, one that connects to the destination the

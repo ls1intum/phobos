@@ -69,6 +69,10 @@ enable_filesystem=1
 enable_debug=0
 # Refusing to run without a base policy is the default; this is the explicit opt-out.
 allow_unsandboxed=0
+# The egress broker is off by default: it enforces the [connect] allow-list by TLS host name
+# from outside the process, which only helps a container that has a network, and it is not yet
+# the default while the name-resolution side is unfinished. This is the explicit opt-in.
+enable_egress_broker=0
 
 # Which enforcement tools and locations a run uses. Taken only from these flags, never from
 # the environment, so a value left in the environment cannot change which binary applies the
@@ -80,6 +84,7 @@ opt_netblocker_so=""
 opt_connect_guard_bin=""
 opt_tail_flags_file=""
 opt_spec_parent=""
+opt_haproxy_bin=""
 
 cfgs=()
 cmd=()
@@ -99,6 +104,10 @@ while (( "$#" )); do
       enable_filesystem=0; shift;;
     --allow-unsandboxed)
       allow_unsandboxed=1; shift;;
+    --egress-broker)
+      enable_egress_broker=1; shift;;
+    --haproxy-bin)
+      shift; [[ $# -gt 0 ]] || usage; opt_haproxy_bin="$1"; shift;;
     --debug)
       enable_debug=1; enable_debug_log; shift;;
     --landlock-bin)
@@ -151,6 +160,12 @@ fi
 (( enable_resources ))  || _log "resources restriction (rlimits) DISABLED by --no-resources-restriction"
 (( enable_filesystem )) || _log "filesystem restriction (Landlock) DISABLED by --no-filesystem-restriction"
 
+# The broker lives inside the network layer, so asking for it while that layer is off would
+# start nothing. Say so rather than drop the request without a word.
+if (( enable_egress_broker )) && (( ! enable_network )); then
+  _log "egress broker requested by --egress-broker IGNORED because the network-system restriction is DISABLED"
+fi
+
 # Clear the internal channels a layer would otherwise inherit, so a value left in the
 # environment cannot make a layer act that the flags left out of the chain. Each layer that
 # is in the chain sets its own.
@@ -163,6 +178,7 @@ landlock_bin="${opt_landlock_bin:-${HERE}/phobos-landlock}"
 timeout_bin="${opt_timeout_bin:-timeout}"
 netblocker_so="${opt_netblocker_so:-${HERE}/libnetblocker.so}"
 connect_guard_bin="${opt_connect_guard_bin:-${HERE}/phobos-connect-guard}"
+haproxy_bin="${opt_haproxy_bin:-haproxy}"
 
 # The specification directory is created before any scratch file, so every temporary file
 # this script makes lives under it and is removed with it. phobos.sh ends with exec, so its
@@ -195,7 +211,9 @@ for c in "${cfgs[@]}"; do policy_flags+=( --config "$c" ); done
 dbg=(); (( enable_debug )) && dbg=(--debug)
 chain=()
 if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeout.sh"   "${dbg[@]}" --timeout-bin "$timeout_bin" "$SPEC_DIR" -- ); fi
-if (( enable_network ));   then chain+=( "${HERE}/phobos-network.sh"   "${dbg[@]}" --netblocker-so "$netblocker_so" --connect-guard-bin "$connect_guard_bin" "$SPEC_DIR" -- ); fi
+network_flags=( "${dbg[@]}" --netblocker-so "$netblocker_so" --connect-guard-bin "$connect_guard_bin" )
+if (( enable_egress_broker )); then network_flags+=( --egress-broker --haproxy-bin "$haproxy_bin" ); fi
+if (( enable_network ));   then chain+=( "${HERE}/phobos-network.sh"   "${network_flags[@]}" "$SPEC_DIR" -- ); fi
 fs_flags=( "${dbg[@]}" --landlock-bin "$landlock_bin" )
 if (( enable_resources )); then fs_flags+=( --resources-layer "${HERE}/phobos-resources.sh" ); fi
 if (( ! enable_filesystem )); then fs_flags+=( --no-landlock ); fi
