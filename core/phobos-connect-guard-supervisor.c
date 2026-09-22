@@ -50,6 +50,8 @@ static constexpr int SENDTO_ARGUMENT_ADDRESS = 4;
 static constexpr int SENDTO_ARGUMENT_ADDRESS_LENGTH = 5;
 static constexpr int SENDMMSG_ARGUMENT_VECTOR = 1;
 static constexpr int SENDMMSG_ARGUMENT_COUNT = 2;
+static constexpr int SENDMSG_ARGUMENT_HEADER = 1;
+static constexpr int SENDMSG_ARGUMENT_FLAGS = 2;
 /* The most messages the kernel sends in one sendmmsg call (UIO_MAXIOV); a larger count is
  * cut down to it, so no more entries than it would send are read. */
 static constexpr unsigned int SENDMMSG_MAXIMUM_BATCH = 1024;
@@ -393,6 +395,44 @@ static void service_sendmmsg(int notify_descriptor, struct seccomp_notif *reques
     answer_continue(notify_descriptor, response, request->id);
 }
 
+/* Decide one trapped sendmsg: refuse TCP Fast Open, which carries a destination past connect(),
+ * then read the destination out of the message header and judge it as a datagram send. A header
+ * with no name is a send on a connected socket, whose connect the guard already decided, so it
+ * continues; a header naming an INET destination the allow-list does not name is refused. The
+ * flags of sendmsg are its third argument, unlike sendto and sendmmsg whose flags are the
+ * fourth, so this reads them itself rather than through send_flags. */
+static void service_sendmsg(int notify_descriptor, struct seccomp_notif *request,
+                            struct seccomp_notif_resp *response) {
+    if ((unsigned int)request->data.args[SENDMSG_ARGUMENT_FLAGS] & MSG_FASTOPEN) {
+        log_verbose("refusing a sendmsg with MSG_FASTOPEN, which opens a connection past connect()");
+        answer(notify_descriptor, response, request->id, 0, -EACCES);
+        return;
+    }
+    struct msghdr header;
+    memset(&header, 0, sizeof(header));
+    uintptr_t header_pointer = (uintptr_t)request->data.args[SENDMSG_ARGUMENT_HEADER];
+    bool read_ok = read_child_bytes(request->pid, header_pointer, &header, sizeof(header));
+    if (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_ID_VALID, &request->id) != 0) {
+        return;
+    }
+    if (!read_ok) {
+        answer(notify_descriptor, response, request->id, 0, -EACCES);
+        return;
+    }
+    if (header.msg_name == NULL || header.msg_namelen == 0) {
+        answer_continue(notify_descriptor, response, request->id);
+        return;
+    }
+    struct sockaddr_storage storage;
+    memset(&storage, 0, sizeof(storage));
+    socklen_t length = read_peer_address(request->pid, (uintptr_t)header.msg_name,
+                                         (socklen_t)header.msg_namelen, &storage);
+    if (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_ID_VALID, &request->id) != 0) {
+        return;
+    }
+    forward_or_refuse(notify_descriptor, request, response, &storage, length);
+}
+
 /* Decide one trapped send: refuse TCP Fast Open outright, since it carries a destination past
  * connect(), then judge the destination by the send syscall it came from. */
 static void service_send(int notify_descriptor, struct seccomp_notif *request,
@@ -425,6 +465,10 @@ void service_one(int notify_descriptor, struct seccomp_notif *request,
     }
     if (request->data.nr == __NR_sendto || request->data.nr == __NR_sendmmsg) {
         service_send(notify_descriptor, request, response);
+        return;
+    }
+    if (request->data.nr == __NR_sendmsg) {
+        service_sendmsg(notify_descriptor, request, response);
         return;
     }
     answer(notify_descriptor, response, request->id, 0, -EACCES);

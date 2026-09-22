@@ -5,11 +5,12 @@
  * The name is narrower than the program. connect() is what it decides against the
  * allow-list and connects on behalf of, and around that it closes the ways a command
  * could reach the network without one: socket(), so a raw, packet or ICMP socket is
- * refused before it exists; sendto() and sendmmsg(), so a datagram carrying its own
- * destination is judged like a connect and TCP Fast Open cannot open a connection past
+ * refused before it exists; sendto(), sendmmsg() and sendmsg(), so a datagram carrying its
+ * own destination is judged like a connect and TCP Fast Open cannot open a connection past
  * one; io_uring, a second syscall interface that would reach connect unseen; and
  * setsid/setpgid, which would take the command out of the group an outer timeout kills.
- * phobos-connect-guard-child.h holds the filter and says why sendmsg is not among them.
+ * phobos-connect-guard-child.h holds the filter and says how sendmsg is trapped without
+ * parking the child's own handoff of the notification descriptor.
  *
  * Usage:
  *   phobos-connect-guard [--verbose] [--rules FILE] -- COMMAND [ARGUMENTS...]
