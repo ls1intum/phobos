@@ -894,7 +894,7 @@ static void test_connect_ranges(void) {
 
     reset_behaviour();
     remember_rule("::ffff:104.16.0.0/12", "443");
-    check("an IPv4-mapped range with too short a prefix is dropped, as libnetblocker drops it",
+    check("an IPv4-mapped range with too short a prefix is dropped",
           connect_rules_count_for_tests() == 0);
 
     reset_behaviour();

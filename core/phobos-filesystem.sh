@@ -90,19 +90,17 @@ args=()
 if (( PHB_DEBUG_ENABLED )); then args+=( --verbose ); fi
 
 # The paths a submission can change: the union of the write, create and delete sections. The
-# preload library and its rules file must stay out of this set, or a submission could rewrite
-# its own network policy before starting another process.
-WRITABLE="$(new_scratch_file phobos-writable.XXXXXX)"
-cat "${WRITE}" "${CREATE}" "${DELETE}" 2>/dev/null > "${WRITABLE}" || :
-
-# Keep the LD_PRELOAD library and its rules file reachable, and out of reach of
-# change: Landlock must allow reading and mapping the library, or the loader skips
-# it, and reading the rules file, which every process the command starts opens.
-# PHB_NETBLOCKER_SO and NETBLOCKER_CONF are set by phobos-network.sh.
-if [[ -n "${PHB_NETBLOCKER_SO:-}" && -f "${PHB_NETBLOCKER_SO}" && -n "${NETBLOCKER_CONF:-}" ]]; then
-  append_netblocker_rules args "${WRITABLE}" "$PHB_NETBLOCKER_SO" "$NETBLOCKER_CONF" "${NETBLOCKER_BIND_CONF:-}"
+# specification directory must stay out of this set, or a submission could rewrite its own connect
+# policy, which the guard reads, or the clean-up's process-id files, which it kills. This matters
+# only when the network layer is on, since only then is net.rules read at run time and only then do
+# the broker and inbound process-id files exist, so the check is gated on the same flag as the port
+# rules below rather than run for a network-disabled run whose spec directory harms nothing.
+if (( ! NO_NETWORK_PORTS )); then
+  WRITABLE="$(new_scratch_file phobos-writable.XXXXXX)"
+  cat "${WRITE}" "${CREATE}" "${DELETE}" 2>/dev/null > "${WRITABLE}" || :
+  refuse_spec_dir_under_write_path "${SPEC_DIR}" "${WRITABLE}"
+  rm -f "${WRITABLE}"
 fi
-rm -f "${WRITABLE}"
 
 # One --rights=LETTERS rule per allow-listed path, the letters being exactly the sections the
 # path appears in: [read] grants r, [execute] x, [write] w, [create] m, [delete] d. Creating
@@ -112,7 +110,7 @@ rm -f "${WRITABLE}"
 build_path_args args "${READ}" "${EXECUTE}" "${WRITE}" "${CREATE}" "${DELETE}"
 # The Landlock TCP-port rules are the kernel-enforced half of the network boundary, built
 # here rather than in the network layer. With --no-network-ports the network restriction is
-# off as a whole, so they are skipped too, not only the preload filter.
+# off as a whole, so they are skipped too, along with the connect guard the network layer runs.
 if (( ! NO_NETWORK_PORTS )); then
   build_network_args args "${SPEC_DIR}/net.rules"
   build_bind_args args "${SPEC_DIR}/bind.rules"

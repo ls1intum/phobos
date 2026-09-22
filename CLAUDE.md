@@ -38,9 +38,10 @@ is a path set: every path the run needs, with the access mode it needs.
 **Sandbox application, at grading time.** The submission runs under a Landlock ruleset that
 grants exactly the rights the policy names on those paths; every other path is denied, though
 it stays visible by name. Outbound connections are supervised by the connect guard, which
-enforces the `[connect]` allow-list by host and port from outside the process, with a preload
-library (libnetblocker) filtering host names as defence in depth. A timeout and resource limits
-bound the run, and the container around it supplies `--network none` and the cgroup caps.
+enforces the `[connect]` allow-list by host and port from outside the process; a `[connect]`
+rule that names a host is enforced by the egress broker (an HAProxy that checks the TLS host
+name) when `--egress-broker` is on, and refused otherwise. A timeout and resource limits bound
+the run, and the container around it supplies `--network none` and the cgroup caps.
 
 The two phases do not deny in the same way. While pruning, a hidden directory is an empty,
 writable tmpfs; while grading, a path the policy does not name is refused with EACCES. A tool
@@ -54,7 +55,7 @@ environment, offline, and grading itself only applies a fixed configuration.
 ## Tech Stack
 
 - POSIX shell for the wrapper and the layers, which is the bulk of the repository
-- C for the preload library, `phobos-landlock` and the connect guard, all compiled inside the run-phase image
+- C for `phobos-landlock` and the connect guard, both compiled inside the run-phase image
 - Python for the prune orchestrator and the artefact helpers
 - Docker for both phases, one image per language environment
 - Java for exactly one file, `.github/scripts/CheckPullRequestTemplate.java`
@@ -127,8 +128,8 @@ shared `var/tmp` mount; nothing passes between containers except through that di
 
 ### The host
 
-The run phase installs nothing on the host and changes no host state. Landlock, the preload
-library and the timeout are all self-imposed by the unprivileged process, so there is no
+The run phase installs nothing on the host and changes no host state. Landlock, the connect
+guard and the timeout are all self-imposed by the unprivileged process, so there is no
 profile to deploy and no root step. The one thing the grading container must add from
 outside is `--network none` and cgroup limits, which Phobos cannot set for itself.
 
@@ -141,10 +142,11 @@ core/                      the sandbox itself
   phobos-landlock*.c/.h    the C program that applies the Landlock policy, then exec's
   phobos-connect-guard*.c/.h  the connect guard: supervises connect() and enforces [connect] by host and port
   phobos-policy.sh         turns the base and exercise configuration into a run's specification
-  phobos-network.sh        the network layer, drives the preload library
+  phobos-network.sh        the network layer, runs the connect guard and the egress/inbound HAProxy
+  phobos-haproxy.sh        the egress broker and inbound filter: turns [connect]/[accept] into an haproxy.cfg
   phobos-resources.sh      the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
   phobos-timeout.sh        the timeout layer
-  phobos-common.sh         the shared helpers, sourced by the others; it sources the eight below
+  phobos-common.sh         the shared helpers, sourced by the others; it sources the seven below
   phobos-log.sh            reporting, and counting what a run was denied
   phobos-paths.sh          the two canonical forms a path is compared in
   phobos-time.sh           the timeout contract: how a value is spelled and compared
@@ -152,10 +154,8 @@ core/                      the sandbox itself
   phobos-policy-parse.sh   one cfg in, the parsed state and the specification files out
   phobos-rights.sh         a parsed policy to the --rights= arguments phobos-landlock takes
   phobos-network-args.sh   [connect] and [bind] to the TCP port rules Landlock enforces
-  phobos-netblocker-check.sh  refusing a preload library that would not filter anything
   phobos-constants.sh      the numbers the scripts share, named once, the exit statuses among them
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
-ld_preloader/              the netblocker sources (the library is built from them in the image)
 docker/prune_phase/        one image per language, plus the orchestrator
 docker/run_phase/          the image an exercise actually runs in
 tests/                     the acceptance and probe suites

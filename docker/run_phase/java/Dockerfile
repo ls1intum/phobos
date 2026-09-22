@@ -1,13 +1,3 @@
-# libnetblocker.so is built in a stage of its own, on the toolchain netblocker-build.sh
-# pins, and copied into the image; it is not committed anywhere. The stage's C library is
-# newer than the image's; CI refuses a library that needs a newer one than the 2.39 the
-# image below ships.
-FROM ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78 AS netblocker
-COPY build/netblocker-build.sh /tmp/netblocker/netblocker-build.sh
-COPY netblocker/ /tmp/netblocker/source/
-RUN /tmp/netblocker/netblocker-build.sh install \
- && /tmp/netblocker/netblocker-build.sh build /tmp/netblocker/source /tmp/netblocker/libnetblocker.so
-
 # The two C programs are compiled in a stage of their own, from the same base image the run
 # phase uses, so they are built against the C library they will run with. Only the finished
 # binaries are copied on, so their sources stay out of the image a submission runs in. The
@@ -42,14 +32,13 @@ RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
 #
 # The toolchain stays, although the two programs above are no longer compiled here. Three
 # of the acceptance suites compile a C probe inside this image at run time: a raw connect()
-# that steps around the preload library, a bind probe and the connect-guard probe. They are
-# what makes those suites evidence about the image an exercise actually gets rather than
-# about a second image built to test with, so the compiler they need is part of it.
-# binutils is needed by the product itself: the network layer reads the symbols of
-# libnetblocker.so with readelf before every run and refuses to run unfiltered when it
-# cannot, so without it no run would start. haproxy is the egress broker: the connect guard
-# hands an allowed connection to it, and it enforces the allow-list by the TLS host name the
-# guard cannot see; tests/haproxy_broker.sh exercises that path inside this image.
+# the connect guard still catches at the seccomp boundary, a bind probe and the connect-guard
+# probe. They are what makes those suites evidence about the image an exercise actually gets
+# rather than about a second image built to test with, so the compiler they need is part of it.
+# binutils supplies the readelf the build-time hardening check below runs over the two compiled
+# binaries. haproxy is the egress broker: the connect guard hands an allowed connection to it,
+# and it enforces the allow-list by the TLS host name the guard cannot see;
+# tests/haproxy_broker.sh exercises that path inside this image.
 FROM ls1tum/artemis-maven-template:java17-25@sha256:521f4dd3f3c6d81f403e84f2e2af3c459cd42dfd0345886aac1d1032527b07f8
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -62,7 +51,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PHOBOS_HOME=/var/tmp/opt/core
 RUN mkdir -p "${PHOBOS_HOME}"
 COPY *.sh                ${PHOBOS_HOME}/
-COPY --from=netblocker /tmp/netblocker/libnetblocker.so ${PHOBOS_HOME}/
 COPY --from=enforcers /build/phobos-landlock ${PHOBOS_HOME}/
 COPY --from=enforcers /build/phobos-connect-guard ${PHOBOS_HOME}/
 COPY config/BaseLanguage-java.cfg                     ${PHOBOS_HOME}/
@@ -76,13 +64,11 @@ RUN readelf -h ${PHOBOS_HOME}/phobos-landlock > /tmp/wrapper-header.txt \
  && readelf -d ${PHOBOS_HOME}/phobos-landlock > /tmp/wrapper-dynamic.txt \
  && readelf -h ${PHOBOS_HOME}/phobos-connect-guard > /tmp/guard-header.txt \
  && readelf -d ${PHOBOS_HOME}/phobos-connect-guard > /tmp/guard-dynamic.txt \
- && readelf -d ${PHOBOS_HOME}/libnetblocker.so > /tmp/library-dynamic.txt \
  && grep -q 'Type:[[:space:]]*DYN' /tmp/wrapper-header.txt \
  && grep -q 'BIND_NOW' /tmp/wrapper-dynamic.txt \
  && grep -q 'Type:[[:space:]]*DYN' /tmp/guard-header.txt \
  && grep -q 'BIND_NOW' /tmp/guard-dynamic.txt \
- && grep -q 'BIND_NOW' /tmp/library-dynamic.txt \
- && rm -f /tmp/wrapper-header.txt /tmp/wrapper-dynamic.txt /tmp/guard-header.txt /tmp/guard-dynamic.txt /tmp/library-dynamic.txt
+ && rm -f /tmp/wrapper-header.txt /tmp/wrapper-dynamic.txt /tmp/guard-header.txt /tmp/guard-dynamic.txt
 # The six entry points, and not the two files that are only ever sourced: a mode on those
 # would say they can be run, which is what the check in test.yml states they cannot.
 RUN chmod +x ${PHOBOS_HOME}/phobos.sh ${PHOBOS_HOME}/phobos-policy.sh \

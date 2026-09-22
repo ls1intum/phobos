@@ -155,15 +155,12 @@ else
 fi
 
 hdr "I. The network policy lies outside the reach of the sandbox"
-# /tmp is a write path in this policy. The specification therefore lies under
-# /var/tmp, and the rule file in it may be read but not modified.
-# No redirection to /dev/null: this policy does not allow /dev/null.
-NET_OUT=$(phobos.sh -- /bin/sh -c 'echo "* 0" >> "$NETBLOCKER_CONF" && echo WRITE-OK || echo WRITE-DENIED; cat "$NETBLOCKER_CONF" && echo READ-OK' 2>&1)
-if printf '%s' "$NET_OUT" | grep -q WRITE-DENIED && printf '%s' "$NET_OUT" | grep -q READ-OK; then
-  ok "The rule file is readable from the sandbox but not writable"
-else
-  bad "The rule file is writable or not readable from the sandbox"; printf '%s\n' "$NET_OUT" | sed 's/^/       | /' | tail -n "$LOG_EXCERPT_LINES"
-fi
+# The specification directory holds net.rules, which the connect guard reads before the fork,
+# and the broker/inbound process-id files the trusted clean-up kills. It must therefore lie
+# outside every write path, so the graded command cannot rewrite the policy or the pid files.
+# The guard reads net.rules in the unrestricted supervisor, so the command is never granted
+# read on it and cannot name the directory; the enforceable invariant is that a policy which
+# would place the specification beneath a write path is refused before the run starts.
 # If the specification itself lies beneath a write path, Phobos refuses the run.
 SPEC_OUT=$(phobos.sh --spec-parent /tmp -- /bin/true 2>&1)
 SPEC_RC=$?

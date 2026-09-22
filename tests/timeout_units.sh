@@ -207,7 +207,7 @@ fi
 # Migrated from the removed legacy-wrapper checks. parse_cfg_policy in
 # phobos-common.sh is the single parser the entry point uses; it writes
 # "host port" lines into PARSED_NET_FILE. "::1:*" must keep the loopback host
-# rather than collapse to an empty host, which the preload library would read
+# rather than collapse to an empty host, which a downstream reader would take
 # as allow-all.
 # ---------------------------------------------------------------------
 

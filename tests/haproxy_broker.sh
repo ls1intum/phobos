@@ -13,10 +13,8 @@
 # localhost rule, which is loopback rather than a name to resolve; a broker that cannot start, and
 # an exact-name rule with no resolver, each refuse the run; and, end to end through the network
 # layer, the name is mapped to a placeholder the command resolves with no DNS before it reaches the
-# resolved address. The broker is started under the same libnetblocker preload the network layer
-# imposes, so its onward connection also proves it forwards from outside that filter. It needs a C
-# compiler, HAProxy, openssl and a kernel with seccomp user-notification, and skips itself where any
-# is absent.
+# resolved address. It needs a C compiler, HAProxy, openssl and a kernel with seccomp
+# user-notification, and skips itself where any is absent.
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -57,14 +55,6 @@ if ! command -v openssl >/dev/null 2>&1; then
 fi
 if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/guard" "${CORE}"/phobos-connect-guard*.c 2>"$WORK/cc.log"; then
   bad "the connect guard builds" "$(cat "$WORK/cc.log")"
-  finish
-fi
-# The network layer runs the broker with libnetblocker preloaded; the broker must forward all the
-# same, which it can only do outside that filter, so the suite starts it under the real preload
-# environment. A libnetblocker built from the same sources stands in for the one the image ships.
-netblocker_so="$WORK/libnetblocker.so"
-if ! "$compiler" -std=gnu23 -O2 -fPIC -shared -o "$netblocker_so" "${CORE}"/../ld_preloader/*.c 2>"$WORK/nb.log"; then
-  bad "libnetblocker builds for the broker's environment" "$(cat "$WORK/nb.log")"
   finish
 fi
 
@@ -294,7 +284,7 @@ spec_layer="$WORK/spec-layer"
 mkdir -p "$spec_layer"
 printf 'allowed.example %s\n' "$UPORT" > "$spec_layer/net.rules"
 layer_status=0
-"${CORE}/phobos-network.sh" --netblocker-so "$netblocker_so" --connect-guard-bin "$WORK/guard" \
+"${CORE}/phobos-network.sh" --connect-guard-bin "$WORK/guard" \
   --egress-broker "$spec_layer" -- true > "$WORK/layer.out" 2>&1 \
   || layer_status=$?
 if (( layer_status == PHB_ERUNTIME )); then
@@ -305,7 +295,7 @@ else
 fi
 
 # The real path: the resolver maps the name to REAL_IP, a decoy listens on DECOY_IP, and the broker
-# is started under the preload the network layer imposes, resolving the name itself.
+# resolves the name itself.
 spec="$WORK/spec"
 mkdir -p "$spec"
 printf 'allowed.example %s\n' "$UPORT" > "$spec/net.rules"
@@ -319,10 +309,7 @@ for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do grep -q UPSTREAM-LISTENING "$WOR
 for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do grep -q UPSTREAM-LISTENING "$WORK/decoy.out" 2>/dev/null && break; sleep "$LISTENER_WAIT_SECONDS"; done
 for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do grep -q DNS-LISTENING "$WORK/dns.out" 2>/dev/null && break; sleep "$LISTENER_WAIT_SECONDS"; done
 
-export LD_PRELOAD="$netblocker_so"
-export NETBLOCKER_CONF="$spec/net.rules"
 broker_endpoint="$(start_egress_broker "$spec" "$spec/net.rules" "$haproxy_bin" "127.0.0.1:${DNSPORT}")"
-unset LD_PRELOAD NETBLOCKER_CONF
 if [[ -z "$broker_endpoint" || ! -f "$spec/${PHB_SPEC_BROKER_PID}" ]]; then
   bad "the network layer starts the broker and records it" "endpoint=$broker_endpoint pidfile missing"
   finish
@@ -401,15 +388,15 @@ fi
 
 # The whole network layer, end to end: it writes the placeholder to /etc/hosts, starts the broker
 # with the resolver, and the command then resolves the name with no DNS, connects, and reaches the
-# address the broker resolves. A loopback rule is present for the guard-to-broker hop under the
-# preload, as the shipped base policy carries. It writes /etc/hosts, so it needs that file writable,
-# as the run-phase image the acceptance suite uses gives; where it is not, this one case is skipped.
+# address the broker resolves. A loopback rule is present for the guard-to-broker hop, as the
+# shipped base policy carries. It writes /etc/hosts, so it needs that file writable, as the
+# run-phase image the acceptance suite uses gives; where it is not, this one case is skipped.
 if [[ -w /etc/hosts ]]; then
   spec_e2e="$WORK/spec-e2e"
   mkdir -p "$spec_e2e"
   printf '127.0.0.1 *\nallowed.example %s\n' "$UPORT" > "$spec_e2e/net.rules"
   rm -f "$WORK/real.marker"
-  "${CORE}/phobos-network.sh" --netblocker-so "$netblocker_so" --connect-guard-bin "$WORK/guard" \
+  "${CORE}/phobos-network.sh" --connect-guard-bin "$WORK/guard" \
     --egress-broker --resolver "127.0.0.1:${DNSPORT}" "$spec_e2e" -- \
     timeout 4 openssl s_client -connect "allowed.example:${UPORT}" -servername allowed.example -quiet < /dev/null \
     > "$WORK/e2e.out" 2>&1 || true

@@ -6,10 +6,9 @@
 /test-repos/**
 
 # Build output. The C sources are compiled inside the run-phase image, but a contributor
-# who compiles the preload library by hand leaves the object files behind. No
-# libnetblocker.so is committed any more, so *.so is deliberately absent here: see
-# .gitattributes, which marks it binary so that a stray one is never normalised, and
-# AGENTS.md, which says why none may be checked in.
+# who compiles a program by hand leaves the object files behind. No compiled binary is
+# committed; *.so is deliberately absent here so that .gitattributes, which marks it binary,
+# still catches a stray one rather than normalising it.
 /build/
 *.o
 *.a

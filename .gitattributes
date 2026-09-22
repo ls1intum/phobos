@@ -8,8 +8,8 @@
 * text=auto eol=lf
 
 # Binary files, so that Git never applies text conversion to them. Phobos keeps no compiled
-# artefact in version control (the preload library and both C products are built per
-# architecture inside the image), but a stray one must never be normalised.
+# artefact in version control (both C products are built per architecture inside the image),
+# but a stray one must never be normalised.
 *.so       binary
 *.png      binary
 *.jpg      binary

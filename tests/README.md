@@ -28,9 +28,8 @@ and no elevated permission.
 | `limit_merge.sh` | the timeout and the resource limits merge across configurations: zero disables and wins, otherwise the largest value | never |
 | `resource_limits.sh` | the `[limits]` keys are parsed and applied as rlimits, and a malformed one is refused | never |
 | `policy_program.sh` | `phobos-policy.sh` writes the specification, the model is additive, a run without a base policy is refused, and an unenforceable network rule is refused before anything is written | never |
-| `network_policy.sh` | how a `[connect]` and a `[bind]` section become Landlock port rules, including the cases that are refused | never |
+| `network_policy.sh` | how a `[connect]` and a `[bind]` section become Landlock port rules, including the cases that are refused, and that the network layer refuses a `[connect]` name rule when the egress broker is off | never |
 | `filesystem_policy.sh` | how the filesystem sections become Landlock path rules: a nested entry narrower than its ancestor is refused as unenforceable, a redundant one and a merely different one are allowed, and the redundant one is what lets an exercise config name that path with fewer rights | never |
-| `network_cache_ports.sh` | the address cache of `libnetblocker` and its port restrictions, against the real library | the compiler named by `COMPILER`, `gcc-14` by default, is absent. There is no fallback: the library has to be built the way the image builds it. Three checks skip on their own where the host has no IPv6 loopback |
 | `connect_guard.sh` | the connect guard enforces the allow-list by host and port, and refuses what it cannot carry | the kernel has no seccomp user-notification, or no C compiler is installed at all; `gcc-14` is preferred and plain `gcc` is used when it is absent |
 | `haproxy_conf.sh` | how a `[connect]` section becomes the egress broker's config: a host name becomes a TLS-name allow, an address becomes a destination allow, and everything else is refused; where `haproxy` is installed it also checks a generated config parses | never |
 | `haproxy_broker.sh` | the egress broker enforces the allow-list by the TLS host name: a connection whose ClientHello names an allowed host reaches the destination, a forbidden one does not | a C compiler, `haproxy`, `openssl` or a kernel with seccomp user-notification is absent |
@@ -61,7 +60,6 @@ test makes is interposed.
 | Suite | What it covers | Coverage gate |
 | --- | --- | --- |
 | `unit/run.sh` | `phobos-landlock`: the options, the path rules, the ruleset | none; `unit/mutation.sh` measures this suite weekly instead, because the coverage runtime disturbs the calls it interposes |
-| `unit/netblocker_run.sh` | `libnetblocker`: the rules, the address cache, every hook | every line and every branch, with `--coverage` |
 | `unit/connect_guard_run.sh` | the connect guard: the filter, the supervisor, the socket types, the rules | every line, with `--coverage` |
 | `unit/mutation.sh` | mutation testing of the Landlock suite, weekly | reports a score; it is not a gate |
 
@@ -77,8 +75,7 @@ run them by hand.
 | `extra-tests.sh` | inheritance by a second process, a non-root run, the control probe, and the options no policy file reaches |
 | `phase-test.sh` | rights tightened and widened across four phases, and the trap of an unrestricted final phase |
 | `shipped-policy-test.sh` | the policy the image actually ships runs a real build |
-| `network-port-test.sh` | a raw `connect()` syscall, which steps around the preload library, is still refused by Landlock's port rule |
-| `bind-address-test.sh` | a `[bind]` rule is enforced by port, and the local address by the preload library |
+| `network-port-test.sh` | a raw `connect()` syscall is still refused by Landlock's port rule |
 | `scoping-test.sh` | Landlock scoping: a sandboxed process can neither signal a process outside its domain nor reach an abstract UNIX socket there |
 | `connect-guard-test.sh` | the connect guard inside the image: an allowed destination connects, a forbidden one is refused, and neither can be redirected |
 
@@ -87,9 +84,8 @@ run them by hand.
 | Variable | Read by | Meaning |
 | --- | --- | --- |
 | `PHOBOS_REQUIRE_BWRAP` | `prune_sandbox.sh` | any non-empty value turns a Bubblewrap skip into a failure |
-| `COMPILER` | the unit runners, `network_cache_ports.sh` | the compiler to build the C under test with; `gcc-14` by default |
+| `COMPILER` | the unit runners | the compiler to build the C under test with; `gcc-14` by default |
 | `COVERAGE_TOOL` | the unit runners | the gcov that matches that compiler; `gcov-14` by default |
 | `PHOBOS_HOME` | the acceptance suites | where Phobos is installed in the image; `/var/tmp/opt/core` by default |
-| `NETBLOCKER_SO_FOR_RUN` | `network_cache_ports.sh` | a prebuilt library to test against instead of building one |
 | `PROBE_CONTAINER_IMAGE` | `runner-capability-probe.sh` | the image the container half of the probe runs in |
 | `PRUNE_LOG_DIR`, `PRUNE_TARGET`, `TESTING_DIR`, `PHOBOS_KEEP_LOG` | the prune suites and the pruner itself | where a prune writes its logs, which tree it prunes, where the exercises live, and whether the raw log is kept |

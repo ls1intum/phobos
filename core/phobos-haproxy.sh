@@ -51,6 +51,24 @@ exact_connect_names() {
   done < <(sed -E 's/#.*$//' "$rules" 2>/dev/null | sed '/^[[:space:]]*$/d') | sort -u
 }
 
+# Prints, one per line and sorted, the host names a net.rules file names in [connect] whose match
+# depends on the egress broker: the "exact" and "suffix" hosts. The connect guard enforces a
+# [connect] rule by address and port alone, so a name-based rule constrains nothing about the onward
+# host unless the broker checks the TLS host name; the network layer uses this to refuse a name rule
+# when the broker is off, rather than run with a rule the guard would widen to any address on the
+# port. An address, "localhost" or "*" rule stays guard-enforced and is not listed. Assumes the file
+# is the "host port" form phobos-policy.sh writes; a missing file names nothing.
+name_connect_rules() {
+  local rules="$1"
+  local host
+  local kind
+  while read -r host _; do
+    [[ -z "$host" ]] && continue
+    kind="$(classify_connect_host "$host")"
+    [[ "$kind" == "exact" || "$kind" == "suffix" ]] && printf '%s\n' "$host"
+  done < <(sed -E 's/#.*$//' "$rules" 2>/dev/null | sed '/^[[:space:]]*$/d') | sort -u
+}
+
 # The loopback placeholder every exact [connect] name resolves to for the graded command, so its
 # getaddrinfo succeeds without a DNS query the guard would refuse. The command then connects to the
 # placeholder, the guard redirects to the broker, and the broker resolves the real address itself
@@ -93,7 +111,7 @@ write_broker_hosts() {
 # refusing an exact-name rule with no resolver. A suffix waits for the ClientHello and is sent to
 # the header's destination, the weaker match the name cannot be resolved from. An address rule is
 # accepted the moment its destination matches, so a connection with no ClientHello does not wait
-# out the inspect-delay. Name matching is case-insensitive, as the preload library's is. Assumes
+# out the inspect-delay. Name matching is case-insensitive. Assumes
 # it is called where its output belongs, inside the frontend and after set-dst.
 haproxy_allow_rules() {
   local rules="$1"
@@ -156,14 +174,9 @@ haproxy_allow_rules() {
 # because it execs. haproxy runs in the foreground with -db, so it stays a child of the caller
 # and in the run's process group, and its own output goes to a scratch log rather than the
 # command's stdout, which also keeps the background job from holding a command substitution open.
-# The broker is launched with LD_PRELOAD and the libnetblocker configuration stripped: the network
-# layer sets those for the graded command, and a child would inherit them, but libnetblocker
-# refuses a connect to any address it did not itself resolve from an allowed name, and the broker
-# forwards to addresses it never resolved, so under the preload every host-name forward is refused,
-# which is the enforcement the broker exists to provide. The broker is trusted infrastructure whose
-# every onward connection the guard already vetted by port and the broker itself vets by TLS host
-# name, so it is placed outside that in-process filter rather than broken by it. A port that already
-# answers is skipped before the broker binds it; because the broker holds the loopback port
+# The broker is trusted infrastructure started before the graded command: its every onward
+# connection the guard already vetted by port and the broker itself vets by TLS host name. A port
+# that already answers is skipped before the broker binds it; because the broker holds the loopback port
 # exclusively, a probe that then answers on a live broker is answering the broker. The upstream
 # resolver, "ip" or "ip:port", is the nameserver the broker resolves an exact host name through;
 # it is empty when no exact-name rule needs one, and the network layer refuses the run before here
@@ -188,7 +201,7 @@ start_egress_broker() {
       continue
     fi
     build_haproxy_conf "$rules" "$cfg" "127.0.0.1:${port}" "$resolver"
-    env -u LD_PRELOAD -u NETBLOCKER_CONF -u NETBLOCKER_BIND_CONF "$haproxy_bin" -f "$cfg" -db > "$log" 2>&1 &
+    "$haproxy_bin" -f "$cfg" -db > "$log" 2>&1 &
     pid=$!
     for _ in $(seq 1 60); do
       kill -0 "$pid" 2>/dev/null || break
@@ -302,11 +315,9 @@ build_inbound_conf() {
 # which the network layer cannot do itself because it execs. It generates the config and source
 # files, binds haproxy to the public ports the accept rules name, and waits for the first of them
 # to answer. haproxy runs in the foreground with -db so it stays a child in the run's process
-# group, its output going to a scratch log. It is launched with LD_PRELOAD and the libnetblocker
-# configuration stripped, because it binds a public port the graded code may not and connects to
-# the backend on loopback, both of which libnetblocker's bind and connect hooks would otherwise
-# refuse; it is trusted infrastructure, so it is placed outside that in-process filter. Returns
-# non-zero if the filter cannot start, so the caller can refuse the run. Assumes phobos-common.sh
+# group, its output going to a scratch log. It is trusted infrastructure started before the graded
+# command, so it binds a public port and connects to the backend on loopback on the run's behalf.
+# Returns non-zero if the filter cannot start, so the caller can refuse the run. Assumes phobos-common.sh
 # was sourced, so PHB_SPEC_SCRATCH and PHB_SPEC_INBOUND_PID are set, and that accept_rules is not
 # empty.
 start_inbound_haproxy() {
@@ -322,7 +333,7 @@ start_inbound_haproxy() {
   mkdir -p "$scratch"
   build_inbound_conf "$accept_rules" "$cfg" "$scratch"
   first_port="$(awk 'NF>=2 {print $1; exit}' "$accept_rules")"
-  env -u LD_PRELOAD -u NETBLOCKER_CONF -u NETBLOCKER_BIND_CONF "$haproxy_bin" -f "$cfg" -db > "$log" 2>&1 &
+  "$haproxy_bin" -f "$cfg" -db > "$log" 2>&1 &
   pid=$!
   for _ in $(seq 1 60); do
     kill -0 "$pid" 2>/dev/null || break

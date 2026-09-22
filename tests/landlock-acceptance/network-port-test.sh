@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Proves the network boundary the "both" policy relies on: Landlock's TCP-port rule holds
-# against a submission that steps around the preload library with a raw connect() syscall.
+# against a submission that reaches the network with a raw connect() syscall.
 #
-# libnetblocker is defence in depth and bypassable: a raw syscall never calls the hooked
-# libc connect, so the library never sees it. The kernel, through Landlock --connect-tcp,
-# does. This suite connects with a raw syscall to an allowed port and to a denied one and
-# shows the kernel permits the first and refuses the second, and, as a control, that with
-# the network layer off (no --connect-tcp) the same bypass reaches the denied port.
+# The connect guard interposes at the seccomp boundary and the kernel enforces the port
+# through Landlock --connect-tcp, so a raw syscall is caught rather than slipping past a
+# libc-level filter. This suite connects with a raw syscall to an allowed port and to a
+# denied one and shows the kernel permits the first and refuses the second, and, as a
+# control, that with the network layer off (no --connect-tcp) the same connect reaches the
+# denied port.
 #
 # It needs the run-phase image and an ordinary container: no --privileged, no --cap-add,
 # no --security-opt. Landlock network rules need ABI 4 (kernel 6.7) or newer.

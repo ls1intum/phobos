@@ -9,7 +9,6 @@ source "${HERE}/phobos-haproxy.sh"
 
 # A generic layer: it does its work and execs the rest of the chain. phobos.sh includes this
 # layer only when the network filter is enabled, so there is no enable flag to read.
-NETBLOCKER_SO_OPT=""
 GUARD_BIN_OPT=""
 EGRESS_BROKER=0
 HAPROXY_BIN_OPT=""
@@ -17,7 +16,6 @@ RESOLVER_OPT=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --debug) enable_debug_log; shift ;;
-    --netblocker-so) shift; NETBLOCKER_SO_OPT="${1:-}"; shift ;;
     --connect-guard-bin) shift; GUARD_BIN_OPT="${1:-}"; shift ;;
     --egress-broker) EGRESS_BROKER=1; shift ;;
     --haproxy-bin) shift; HAPROXY_BIN_OPT="${1:-}"; shift ;;
@@ -25,43 +23,32 @@ while [[ "${1:-}" == --* ]]; do
     *) break ;;
   esac
 done
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] [--netblocker-so <path>] [--connect-guard-bin <path>] [--egress-broker] [--haproxy-bin <path>] [--resolver <ip[:port]>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] [--connect-guard-bin <path>] [--egress-broker] [--haproxy-bin <path>] [--resolver <ip[:port]>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created if this layer ends before it hands over,
-# for instance because the library cannot be used.
+# for instance because a required piece cannot be started.
 trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 
 RULES="${SPEC_DIR}/net.rules"
-NETBLOCKER_SO="${NETBLOCKER_SO_OPT:-${HERE}/libnetblocker.so}"
-NETBLOCKER_SO="$(realpath --canonicalize-missing -- "${NETBLOCKER_SO}")"
-
-# The loader skips a preload library it cannot use with only a warning, so either way the
-# command would run with no network filtering. Refuse instead.
-refuse_unusable_netblocker "${NETBLOCKER_SO}"
-
-# Remember the path so the filesystem layer can grant it read and execute under Landlock.
-export PHB_NETBLOCKER_SO="${NETBLOCKER_SO}"
-
-case ":${LD_PRELOAD:-}:" in
-  *":${NETBLOCKER_SO}:"*) ;; # already there
-  *) export LD_PRELOAD="${NETBLOCKER_SO}${LD_PRELOAD:+:${LD_PRELOAD}}";;
-esac
-
-# Use the spec's net.rules file as config, whether or not it is empty; ensure it exists.
+# The guard reads this by path; ensure it exists whether or not the policy named any [connect] rule.
 [[ -f "$RULES" ]] || : > "$RULES"
-export NETBLOCKER_CONF="$RULES"
 
-# The spec's bind.rules gives libnetblocker the local-bind allow-list, whether or not it is
-# empty; an empty file leaves binding unrestricted, matching the absence of a Landlock
-# bind-port rule.
-BIND_RULES="${SPEC_DIR}/bind.rules"
-[[ -f "$BIND_RULES" ]] || : > "$BIND_RULES"
-export NETBLOCKER_BIND_CONF="$BIND_RULES"
+# The connect guard enforces a [connect] rule by address and port alone. A rule that names a host
+# (an exact name or a "*.name" suffix) constrains nothing about the onward address unless the egress
+# broker checks the TLS host name, so without the broker such a rule would silently widen to any
+# address on the port. Refuse instead of running with an enforcement the flag would provide but the
+# run did not ask for. The policy is valid, only unrunnable as configured, so this is PHB-ERUNTIME.
+if (( ! EGRESS_BROKER )); then
+  mapfile -t name_rules < <(name_connect_rules "$RULES")
+  if (( ${#name_rules[@]} > 0 )); then
+    report "The [connect] allow-list names a host (${name_rules[*]}), whose enforcement needs the egress broker to check the TLS host name; the connect guard alone enforces only address and port. Pass --egress-broker, or name an address instead. Refusing rather than run with a host rule the guard would widen to any address on the port. (PHB-ERUNTIME)"
+    exit "${PHB_ERUNTIME}"
+  fi
+fi
 
 # The connect guard supervises every connect the command makes and enforces the [connect]
-# allow-list by host and port from a place a raw syscall cannot step around, unlike the
-# preload library above, which stays as the softer in-process filter beside it. It forks a
+# allow-list by host and port from a place a raw syscall cannot step around. It forks a
 # supervisor and execs the rest of the chain, so it goes on the front of what this layer hands
 # over. It is refused when missing rather than skipped, so a run cannot lose connect
 # supervision unnoticed. When the egress broker is on, the guard is told to hand every allowed
@@ -111,6 +98,5 @@ if [[ -s "$ACCEPT_RULES" ]]; then
   fi
 fi
 guard_command+=( --rules "$RULES" -- )
-debug_log network "preload ${LD_PRELOAD} with NETBLOCKER_CONF=${NETBLOCKER_CONF} NETBLOCKER_BIND_CONF=${NETBLOCKER_BIND_CONF}"
 debug_log network "run" "${guard_command[@]}" "$@"
 exec "${guard_command[@]}" "$@"

@@ -52,8 +52,8 @@
     kernel and which container runtime)?
   - What should have happened instead?
   - Which layer of Phobos is at fault? Name it. Examples, not a complete list: the
-    filesystem sandbox that decides which paths a submission may reach, the LD_PRELOAD
-    network filter that decides which hosts it may contact, the timeout wrapper that
+    filesystem sandbox that decides which paths a submission may reach, the connect guard
+    and egress broker that decide which hosts it may contact, the timeout wrapper that
     stops a run that never finishes, the policy parser and the per-path merge that turn
     configuration files into an effective allow-list, the prune phase that discovers
     which paths a language environment actually needs, or the container images the run

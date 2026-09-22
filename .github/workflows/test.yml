@@ -86,10 +86,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/cli_flags.sh
 
-      - name: The address cache's port restrictions
-        if: ${{ !cancelled() }}
-        run: bash tests/network_cache_ports.sh
-
       # How the network allow-list becomes Landlock TCP-port rules: a concrete port is
       # enforced, a loopback host with no port is tolerated, a non-loopback host with no
       # port is refused, and the mixed case is refused. No sandbox needed.

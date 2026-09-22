@@ -33,8 +33,8 @@ is_loopback_host() {
 # Reads a "host port" allow-list, writing the concrete ports it names into the
 # second file and the first rule that names none into the third. An external host with no port
 # is refused, because it cannot be enforced: Landlock knows ports, not hosts, so leaving the
-# layer off for it would confine external egress to the preload library, which a submission can
-# step around. Loopback with no port is the one tolerated case.
+# layer off for it would confine external egress to the connect guard's port check alone, which
+# for a portless rule is nothing. Loopback with no port is the one tolerated case.
 #
 # Both results go to files rather than to stdout, so that the function is called
 # plainly and never in a command substitution, whose subshell a refusal's exit would
@@ -84,8 +84,8 @@ refuse_mixed_network_wildcard() {
 # concrete port. phobos-policy.sh asks this once, where the specification is written, so that
 # a rule is judged whether or not the layer that would otherwise have judged it is in the
 # chain: with --no-filesystem-restriction the Landlock port rules are never built, and the
-# spec would otherwise carry a rule the guard silently drops and the preload library reads
-# differently. Assumes it is called plainly, so that a refusal ends the run.
+# spec would otherwise carry a rule the guard silently drops. Assumes it is called plainly, so
+# that a refusal ends the run.
 refuse_unenforceable_network_rules() {
   local net_rules="$1"
   local bind_rules="$2"
@@ -114,7 +114,7 @@ refuse_unenforceable_network_rules() {
 # connections), a backend port the code may NOT bind (the filter would forward to a listener that
 # never comes up), and two rules fronting the same public port with different backends. A public
 # port with no source is left alone but warned about, since the filter then rejects every peer.
-# bind_rules holds "addr port" lines; accept_rules holds "H P [src]" lines. Ports are read base
+# bind_rules holds "* port" lines; accept_rules holds "H P [src]" lines. Ports are read base
 # ten so a leading zero is not taken as octal. Assumes it is called plainly, so a refusal ends the
 # run.
 refuse_unenforceable_accept_rules() {
@@ -187,7 +187,7 @@ build_network_args() {
   collect_network_ports "$rules" "$ports_file" "$wildcard_file"
   refuse_mixed_network_wildcard "$ports_file" "$wildcard_file"
   if [[ -s "$wildcard_file" ]]; then
-    _log "network: '$(cat "$wildcard_file")' names no port; the Landlock network layer stays off, and the connect guard and libnetblocker filter this run"
+    _log "network: '$(cat "$wildcard_file")' names no port; the Landlock network layer stays off, and the connect guard filters this run"
     rm -f "$ports_file" "$wildcard_file"
     return 0
   fi
@@ -199,12 +199,11 @@ build_network_args() {
 
 # Fills the named array with the TCP bind-port rules Landlock enforces.
 #
-# The [bind] section names local TCP ports a submission may listen on. Each rule is "addr port";
-# Landlock enforces the port, so several rules that share a port (different local addresses)
-# collapse to one --bind-tcp, and the address is left to libnetblocker's bind hook. Landlock's
-# bind right is per-port and knows no local address, so this emits one --bind-tcp per port.
-# The parser has already refused a [bind] line with no concrete port. A port outside 1..65535
-# is a policy mistake and ends the run.
+# The [bind] section names local TCP ports a submission may listen on. Each rule is "* port";
+# Landlock enforces the port, so several rules that share a port collapse to one --bind-tcp.
+# Landlock's bind right is per-port and knows no local address, so the parser refuses a [bind]
+# rule that names an address and this emits one --bind-tcp per port. The host field is always "*"
+# and is ignored here. A port outside 1..65535 is a policy mistake and ends the run.
 build_bind_args() {
   local arguments_name="$1"
   local rules="$2"

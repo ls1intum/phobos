@@ -34,7 +34,7 @@ cat > "$WORK/bind_probe.c" <<'C'
 #include <string.h>
 #include <sys/syscall.h>
 #include <unistd.h>
-/* Binds a TCP socket to a port with a raw bind system call, so no libc wrapper or preload can
+/* Binds a TCP socket to a port with a raw bind system call, so no libc wrapper can
  * stand between the call and the kernel, and reports whether the kernel allowed it. Argument: the
  * port, where 0 asks the kernel for an ephemeral one. */
 int main(int argc, char **argv) {

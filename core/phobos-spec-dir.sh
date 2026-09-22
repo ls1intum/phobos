@@ -61,6 +61,32 @@ refuse_unusable_spec_parent() {
   exit "${PHB_EPOLICY}"
 }
 
+# Refuses a policy whose write, create or delete paths would make the specification directory
+# writable by the graded command. The directory holds net.rules, which the connect guard reads
+# before Landlock is applied, and the broker's and inbound filter's process-id files, which the
+# trusted clean-up kills; a command that could write there could rewrite the connect policy or aim
+# the kill at any process. refuse_unusable_spec_parent only checks the parent is an absolute
+# existing directory, not the write paths, so this is the sole guarantor the directory lies outside
+# them. Both sides are resolved through their symbolic links, because Landlock anchors a rule on the
+# inode it opens. Takes the specification directory and a file holding the write paths, one per
+# line. Assumes it is called plainly, so a refusal ends the run.
+refuse_spec_dir_under_write_path() {
+  local spec_dir="$1"
+  local write_file="$2"
+  local resolved
+  local write_path
+  local resolved_write
+  resolved="$(printf '%s\n' "$spec_dir" | resolve_symlinks)"
+  while IFS= read -r write_path || [[ -n "$write_path" ]]; do
+    [[ -z "$write_path" ]] && continue
+    resolved_write="$(printf '%s\n' "$write_path" | resolve_symlinks)"
+    if [[ "$resolved" == "$resolved_write" || "$resolved" == "${resolved_write%/}/"* ]]; then
+      report "Policy unenforceable: the specification directory '${spec_dir}' lies beneath the write path '${write_path}', so the graded command could rewrite the connect policy or the clean-up's process-id files. (PHB-EPOLICY)"
+      exit "${PHB_EPOLICY}"
+    fi
+  done < "$write_file"
+}
+
 # Marks a directory phobos.sh has just created with mktemp as its own. Assumes
 # nothing else can write there yet, which mktemp's private mode guarantees.
 mark_owned_spec_dir() {

@@ -49,17 +49,6 @@ jobs:
       - name: Run the unit tests
         run: bash tests/unit/run.sh
 
-      - name: Run the network filter unit tests
-        if: ${{ !cancelled() }}
-        run: bash tests/unit/netblocker_run.sh
-
-      # Measured here, unlike the wrapper suite: its interposed calls pass straight
-      # through unless a case arms a failure, so gcov's own writes are undisturbed. The
-      # step fails unless every line and every branch of the network filter ran.
-      - name: Every line and branch of the network filter ran
-        if: ${{ !cancelled() }}
-        run: bash tests/unit/netblocker_run.sh --coverage
-
       - name: Run the connect guard unit tests
         if: ${{ !cancelled() }}
         run: bash tests/unit/connect_guard_run.sh
@@ -79,50 +68,6 @@ jobs:
       # run which goes through says nothing, and it means the figures come from a
       # perturbed run in the first place. tests/unit/mutation.sh is the stronger measure
       # of this suite and already runs weekly below.
-
-  # No libnetblocker.so is committed; it is built per architecture inside the run-phase
-  # image. This job is a fast, isolated check that the preload
-  # source still builds a valid library on the pinned amd64 toolchain (right symbols, no
-  # newer glibc than the run-phase image), without building the whole image around it.
-  netblocker:
-    name: libnetblocker.so builds and verifies from its source
-    runs-on: ubuntu-26.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    container:
-      image: ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install the pinned toolchain
-        run: .github/scripts/netblocker-build.sh install
-
-      - name: Build the library from its source
-        run: .github/scripts/netblocker-build.sh build ld_preloader "${RUNNER_TEMP}/libnetblocker.so"
-
-      # x86-64 here, no newer glibc than the run-phase image, the six hooks defined and loadable.
-      - name: Check what was built
-        run: .github/scripts/netblocker-build.sh verify "${RUNNER_TEMP}/libnetblocker.so"
-
-      # AGENTS.md says the amd64 build is byte-reproducible, which is why its toolchain is
-      # pinned to a snapshot at all. That claim was never measured, so a change that made
-      # the bytes depend on the build directory or on the order the sources are read in
-      # would have gone unnoticed until someone compared two images by hand. A second build
-      # from a copy of the source in another directory has to produce the same bytes. Two
-      # builds of one run share a date, so this says nothing about a date stamped into the
-      # library; the pinned toolchain is what holds that side.
-      - name: The build is reproducible on the pinned toolchain
-        run: |
-          mkdir -p "${RUNNER_TEMP}/second-build"
-          cp ld_preloader/*.c ld_preloader/*.h "${RUNNER_TEMP}/second-build/"
-          .github/scripts/netblocker-build.sh build \
-            "${RUNNER_TEMP}/second-build" "${RUNNER_TEMP}/libnetblocker-again.so"
-          .github/scripts/netblocker-build.sh compare \
-            "${RUNNER_TEMP}/libnetblocker.so" "${RUNNER_TEMP}/libnetblocker-again.so"
 
   images:
     name: Build the ${{ matrix.name }} image
@@ -217,18 +162,6 @@ jobs:
             -t phobos-run-phase:ci \
             "${RUNNER_TEMP}/run-phase-context"
 
-      # The image compiles its own library rather than shipping a committed one, so the
-      # copy an exercise actually gets is taken out of this exact image and verified: built
-      # for this architecture, no newer glibc than the image, and exactly the six hooks. A
-      # /bin/true command, because the image names none and docker create needs one.
-      - name: The image's libnetblocker.so verifies
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: |
-          container="$(docker create phobos-run-phase:ci /bin/true)"
-          docker cp "${container}:/var/tmp/opt/core/libnetblocker.so" "${RUNNER_TEMP}/image-libnetblocker.so"
-          docker rm "${container}" > /dev/null
-          .github/scripts/netblocker-build.sh verify "${RUNNER_TEMP}/image-libnetblocker.so"
-
       # No --privileged, no --cap-add, no --security-opt, in any of the acceptance steps
       # below. That is the claim these suites exist to make, and CI is where it stops
       # being a claim.
@@ -272,9 +205,8 @@ jobs:
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci bash /tests/landlock-acceptance/shipped-policy-test.sh
 
-      # The kernel-enforced network boundary holds against a raw connect() syscall that
-      # steps around the preload library, which is what makes concrete Landlock ports, not
-      # the library alone, the network boundary.
+      # The kernel-enforced network boundary holds against a raw connect() syscall, which is
+      # what makes concrete Landlock ports the network boundary alongside the connect guard.
       - name: The network port rule holds against a raw-syscall bypass
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
@@ -299,15 +231,6 @@ jobs:
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci bash /tests/landlock-acceptance/scoping-test.sh
-
-      # The libnetblocker bind hook narrows a local TCP bind to the addresses a [bind] rule
-      # names, which Landlock's per-port bind right cannot do. Runs against the library the
-      # image compiled, so it also confirms that copy carries the hook.
-      - name: The libnetblocker bind hook narrows a local bind by address
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: |
-          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
-            phobos-run-phase:ci bash /tests/landlock-acceptance/bind-address-test.sh
 
       # The connect guard the image compiled installs its seccomp user-notification filter under
       # the image's default seccomp profile in an ordinary container, and enforces the [connect]

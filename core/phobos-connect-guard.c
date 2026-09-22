@@ -45,7 +45,9 @@
  * what it sees: it reads the destination address of the connect, so it holds a
  * rule that names an IP literal (and the loopback name) to that exact address, and
  * a rule that names a DNS hostname it cannot tie to an address here to the port
- * alone. The host of a hostname rule stays libnetblocker's softer, in-process job.
+ * alone. A hostname rule's host is enforced by the egress broker, which the network
+ * layer requires such a rule to run under and which checks the TLS host name the
+ * guard cannot see; without the broker the network layer refuses the rule.
  *
  * It needs no privileges: with no_new_privs set, an ordinary process may install a
  * user-notification filter, and it reads the peer address and injects the socket

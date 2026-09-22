@@ -37,8 +37,8 @@ reviews:
         rules a run is confined by.
     - label: network
       instructions: >-
-        Apply when a change touches the connect guard, the LD_PRELOAD network filter, their
-        shared rule format, or the address cache.
+        Apply when a change touches the connect guard, the egress broker or inbound filter, their
+        shared rule format, or the network layer.
     - label: timeout
       instructions: Apply when a change touches the timeout wrapper or the deadline a run is stopped by.
     - label: policy
@@ -59,7 +59,6 @@ reviews:
     - ".coderabbit.yaml"
     - ".github/**"
     - "core/**"
-    - "ld_preloader/**"
     - "docker/**"
     - "tests/**"
     - "var/tmp/helpers/**"
@@ -130,13 +129,13 @@ reviews:
         an entry here grants a whole subtree. Check that a write path is not granted
         execute permission unless it must be, and that nothing outside the run needs
         is listed.
-    - path: "ld_preloader/**"
+    - path: "core/phobos-connect-guard*.c"
       instructions: >-
-        This is the network filter, and it works by interposing on library calls.
-        Check that its guarantees are not overstated: statically linked programs,
-        direct system calls and runtimes that bypass libc are not covered by it. Focus
-        on the rule parser, the address cache and whether a cached entry can carry a
-        port authorisation it was never granted.
+        This is the connect guard, which supervises connect() from outside the process with a
+        seccomp user-notification. Check that its guarantees are not overstated: it enforces by
+        address and port, and a rule that names a host is left to the egress broker. Focus on the
+        rule parser, the address matching, and whether a rule can carry a port authorisation it
+        was never granted.
     - path: "tests/**"
       instructions: >-
         Require every sandbox assertion to cover both directions: the forbidden case

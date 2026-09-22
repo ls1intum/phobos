@@ -8,9 +8,9 @@ abstract: >-
   runs break. Student submissions then execute under Landlock, an unprivileged Linux kernel
   sandbox, with access to only that allow-list and to the TCP ports it names. Outbound
   connections are supervised from outside the process by a seccomp-based connect guard,
-  which enforces the allow-list by host and port, with a preload library intercepting name
-  resolution and connection calls inside the process as defence in depth, so that
-  undeclared network access fails. A timeout and resource limits bound the run.
+  which enforces the allow-list by host and port, and a rule that names a host is enforced by
+  an optional egress broker that checks the TLS host name, so that undeclared network access
+  fails. A timeout and resource limits bound the run.
 type: software
 license: MIT
 version: "0.1.0"

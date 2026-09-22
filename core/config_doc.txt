@@ -1,49 +1,46 @@
 
-1. The libc functions libnetblocker actually interposes
-
-libnetblocker (ld_preloader/netblocker.c) defines exactly six hooks with
-default visibility. Everything else in the library is hidden, so no other
-symbol can take the place of a program's own.
-
-| Stage             | Hook                | What it does                                                     |
-| ----------------- | ------------------- | --------------------------------------------------------------- |
-| Name resolution   | `getaddrinfo()`     | Refuse a lookup of a host no rule covers (EAI_FAIL); cache the   |
-|                   |                     | addresses a permitted lookup returned.                          |
-| Outgoing connect  | `connect()`         | Refuse a TCP or connected-UDP peer no rule covers (EACCES).     |
-| Local TCP bind    | `bind()`            | Refuse a TCP bind to a local address no [bind] rule covers      |
-|                   |                     | (EACCES); only while a [bind] rule exists, and only for TCP.    |
-| UDP datagram      | `sendto()`          | Refuse a datagram whose destination no rule covers (EACCES).    |
-| UDP datagram      | `sendmsg()`         | The same, for a destination named in `msg_name`.                |
-| UDP datagram      | `sendmmsg()`        | The same for each message of a batch, stopping at the first     |
-|                   |                     | one a rule does not cover.                                       |
-
-There is NO hook on `socket()`, `listen()`, `accept()`/`accept4()`,
-`send()`/`recv()` or `read()`/`write()`. libnetblocker sees outbound name
-resolution, outbound connect, the local address of a TCP bind, and the ways
-an unconnected UDP socket names its destination. It does not filter inbound
-connections, and it is defence in depth that a raw system call steps around, as
-SECURITY.md says.
-
-
-2. Where the policy comes from
+1. What enforces a [connect] rule
 
 The allow-list is the [connect] section of a policy cfg (see the README's
-configuration format), turned into three things: concrete TCP ports handed to
-Landlock as `--connect-tcp`, host/address rules handed to libnetblocker through
-the NETBLOCKER_CONF rules file, and the same rules read by the connect guard
-(phobos-connect-guard). The connect guard supervises every connect() with a
-seccomp user-notification and makes an allowed connection itself, so where it
-runs it is the whole connect boundary, host and port, from outside the process,
-which a raw system call cannot step around; it holds an IP-literal rule (and the
-name localhost) to that exact address, an IP-range rule (addr/prefix) to that
-network, and a rule that names a DNS hostname it cannot tie to an address to its
-port alone, leaving that host to libnetblocker.
-Landlock's `--connect-tcp` ports stay as a second, kernel-enforced expression of
-the same ports; libnetblocker narrows by host as the softer in-process filter
-beside the guard. There is no `openConnections` / `sendData` / `receiveData`
-toggle: a rule either names a host and a port or it does not.
+configuration format), turned into two kernel- and syscall-level expressions of
+the same rules, with an optional third for host names:
 
-The [bind] section is turned the same way: its ports become Landlock `--bind-tcp`
-rules, and its local addresses reach libnetblocker's bind hook through the
-NETBLOCKER_BIND_CONF rules file, which narrows a TCP bind to the local addresses
-the policy names.
+- Concrete TCP ports are handed to Landlock as `--connect-tcp`. This is the
+  kernel-enforced half: a connect to a port no rule names is refused by Landlock
+  itself, and it cannot be stepped around from inside the process.
+- The host/address rules are read by the connect guard (phobos-connect-guard),
+  which supervises every connect() with a seccomp user-notification and makes an
+  allowed connection itself. Where it runs it is the whole connect boundary, host
+  and port, from outside the process, which a raw system call cannot step around.
+  It holds an IP-literal rule (and the name localhost) to that exact address, an
+  IP-range rule (addr/prefix) to that network, and a rule that names a DNS
+  hostname it cannot tie to an address to its port alone.
+- A rule that names a DNS hostname is enforced by host only when the egress
+  broker is on (`--egress-broker`): the broker (an HAProxy the network layer
+  starts) reads the TLS host name from the ClientHello, which the guard cannot
+  see, and for an exact name resolves it itself and connects only to that
+  address. The network layer refuses a hostname rule when the broker is off,
+  rather than run with a rule the guard would widen to any address on the port.
+
+There is no `openConnections` / `sendData` / `receiveData` toggle: a rule either
+names a host and a port or it does not.
+
+
+2. What enforces a [bind] rule
+
+The [bind] section names local TCP ports a submission may listen on, one bare
+port per line. Each port becomes a Landlock `--bind-tcp` rule, which is the whole
+of the enforcement: Landlock's bind right is per-port and cannot narrow to a
+local address, so a [bind] rule may name only a port and one that names an
+address is refused (PHB-EPOLICY). A listener's reachability from outside is
+governed by the [accept] section (an inbound HAProxy that filters by source
+address) and the container's network isolation, not by the bind address.
+
+
+3. What is not filtered in-process
+
+Phobos filters outbound stream connect() from outside the process, at the seccomp
+and Landlock boundaries, and does not interpose any libc call inside the process.
+UDP egress and inbound connections a [accept] rule does not front are governed by
+the container the run is placed in (`--network none`, or the operator's firewall
+in a networked posture), as SECURITY.md states.
