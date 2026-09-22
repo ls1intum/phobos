@@ -4,10 +4,11 @@
 #ifndef PHOBOS_CONNECT_GUARD_OPTIONS_H
 #define PHOBOS_CONNECT_GUARD_OPTIONS_H
 
-/* The command to supervise, the rules file and --verbose. */
+/* The command to supervise, the rules file, the optional broker endpoint and --verbose. */
 struct guard_options {
     char **command;
     const char *rules_path;
+    const char *broker_endpoint;
     bool verbose;
 };
 

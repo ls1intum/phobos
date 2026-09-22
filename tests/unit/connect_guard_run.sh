@@ -59,6 +59,7 @@ WRAPS=(
   -Wl,--wrap=waitpid
   -Wl,--wrap=sendmsg
   -Wl,--wrap=recvmsg
+  -Wl,--wrap=send
   -Wl,--wrap=process_vm_readv
   -Wl,--wrap=socket
   -Wl,--wrap=connect

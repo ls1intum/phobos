@@ -104,6 +104,11 @@ int main(int argument_count, char *arguments[]) {
                        options.rules_path, strerror(errno));
         return EXIT_CODE_SETUP_ERROR;
     }
+    if (options.broker_endpoint != nullptr && !configure_broker(options.broker_endpoint)) {
+        report_failure("the broker endpoint '%s' is not an ADDRESS:PORT this guard can use",
+                       options.broker_endpoint);
+        return EXIT_CODE_SETUP_ERROR;
+    }
 
     int pair[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) {

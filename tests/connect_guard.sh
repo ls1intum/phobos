@@ -255,10 +255,85 @@ int main(int argc, char **argv) {
     return 0;
 }
 C
+cat > "$WORK/broker.c" <<'C'
+#define _GNU_SOURCE
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+/* The status the broker ends with when it cannot bind its port. */
+enum { BROKER_BIND_FAILED = 3 };
+/* How many connections may wait to be accepted. */
+enum { LISTEN_BACKLOG = 4 };
+/* The PROXY protocol version 2 signature, the sixteen-byte prefix, and the IPv4 address block. */
+static const unsigned char PROXY_SIGNATURE[12] = { 0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A };
+enum { PROXY_PREFIX = 16 };
+enum { PROXY_IPV4_BLOCK = 12 };
+/* Reads exactly n bytes or fails. */
+static int read_fully(int fd, void *buffer, size_t n) {
+    size_t got = 0;
+    while (got < n) {
+        ssize_t r = read(fd, (char *)buffer + got, n - got);
+        if (r <= 0) {
+            return -1;
+        }
+        got += (size_t)r;
+    }
+    return 0;
+}
+int main(int argc, char **argv) {
+    int server = socket(AF_INET, SOCK_STREAM, 0);
+    int one = 1;
+    setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in address;
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_port = htons((unsigned short)atoi(argv[1]));
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(server, (struct sockaddr *)&address, sizeof(address)) != 0) {
+        perror("bind");
+        return BROKER_BIND_FAILED;
+    }
+    listen(server, LISTEN_BACKLOG);
+    printf("BROKER-LISTENING\n");
+    fflush(stdout);
+    int client = accept(server, NULL, NULL);
+    if (client < 0) {
+        return 1;
+    }
+    unsigned char prefix[PROXY_PREFIX];
+    if (read_fully(client, prefix, PROXY_PREFIX) != 0 || memcmp(prefix, PROXY_SIGNATURE, sizeof(PROXY_SIGNATURE)) != 0) {
+        printf("BROKER no-proxy-header\n");
+        return 1;
+    }
+    unsigned char block[PROXY_IPV4_BLOCK];
+    if (read_fully(client, block, PROXY_IPV4_BLOCK) != 0) {
+        printf("BROKER short-block\n");
+        return 1;
+    }
+    char destination[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &block[4], destination, sizeof(destination));
+    unsigned short destination_port = 0;
+    memcpy(&destination_port, &block[10], sizeof(destination_port));
+    char payload[16] = { 0 };
+    ssize_t got = read(client, payload, sizeof(payload) - 1);
+    (void)got;
+    printf("BROKER dst=%s:%u payload=%s\n", destination, ntohs(destination_port), payload);
+    fflush(stdout);
+    close(client);
+    close(server);
+    return 0;
+}
+C
 "$compiler" -O2 -o "$WORK/probe" "$WORK/probe.c" 2>"$WORK/probe-cc.log" \
   || { bad "the probe builds" "$(cat "$WORK/probe-cc.log")"; finish; }
 "$compiler" -O2 -o "$WORK/listener" "$WORK/listener.c" 2>"$WORK/listener-cc.log" \
   || { bad "the listener builds" "$(cat "$WORK/listener-cc.log")"; finish; }
+"$compiler" -O2 -o "$WORK/broker" "$WORK/broker.c" 2>"$WORK/broker-cc.log" \
+  || { bad "the broker builds" "$(cat "$WORK/broker-cc.log")"; finish; }
 
 # Where the kernel has no seccomp user-notification the guard cannot install its filter and
 # refuses; skip rather than fail, since that is the environment's limit, not a defect here.
@@ -497,6 +572,43 @@ if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "an address outside the range is refused, though it shares the allowed port"
 else
   bad "an address outside the range is refused, though it shares the allowed port" "rc=$rc out=$out"
+fi
+
+echo
+echo "== with a broker configured, an allowed connection is handed to it, destination named =="
+BROKERPORT=39313
+# A documentation-reserved destination (TEST-NET-1), never routed: the guard redirects the
+# connect to the loopback broker, so nothing is sent to it, and it differs from the loopback
+# source in the header, so a source/destination mix-up would be caught.
+DEST=192.0.2.7
+printf '%s %s\n' "$DEST" "$PORT" > "$WORK/rules"
+start_broker() {
+  "$WORK/broker" "$1" > "$2" 2>&1 &
+  echo $!
+  for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do grep -q BROKER-LISTENING "$2" 2>/dev/null && break; sleep "$LISTENER_WAIT_SECONDS"; done
+}
+bp=$(start_broker "$BROKERPORT" "$WORK/broker.out")
+out="$("$WORK/guard" --rules "$WORK/rules" --broker "127.0.0.1:$BROKERPORT" -- "$WORK/probe" csend "$DEST" "$PORT" 2>&1)"
+rc=$?
+kill "$bp" 2>/dev/null
+wait "$bp" 2>/dev/null
+brk="$(cat "$WORK/broker.out")"
+if [[ $rc -eq 0 && "$out" == *CSEND-OK* && "$brk" == *"dst=$DEST:$PORT"* && "$brk" == *"payload=ping"* ]]; then
+  ok "an allowed connect reaches the broker, which is told the destination and gets the payload"
+else
+  bad "an allowed connect reaches the broker, which is told the destination and gets the payload" "rc=$rc out=$out brk=$brk"
+fi
+
+bp=$(start_broker "$BROKERPORT" "$WORK/broker2.out")
+out="$("$WORK/guard" --rules "$WORK/rules" --broker "127.0.0.1:$BROKERPORT" -- "$WORK/probe" csend 127.0.0.1 "$OTHER" 2>&1)"
+rc=$?
+kill "$bp" 2>/dev/null
+wait "$bp" 2>/dev/null
+brk="$(cat "$WORK/broker2.out")"
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* && "$brk" != *"dst="* ]]; then
+  ok "a forbidden connect is refused before the broker, which receives nothing"
+else
+  bad "a forbidden connect is refused before the broker, which receives nothing" "rc=$rc out=$out brk=$brk"
 fi
 
 finish

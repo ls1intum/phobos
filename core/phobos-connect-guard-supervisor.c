@@ -15,8 +15,10 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 
@@ -160,13 +162,156 @@ int connect_within_deadline(int family, const struct sockaddr *address, socklen_
     return outward;
 }
 
+/* The twelve bytes a PROXY protocol version 2 header opens with, the marker a broker reads to
+ * know a header follows. */
+static const uint8_t PROXY_V2_SIGNATURE[] = {
+    0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A,
+};
+/* Version 2, command PROXY: the header describes a proxied connection rather than the proxy's own. */
+static constexpr uint8_t PROXY_V2_VERSION_COMMAND = 0x21;
+/* The transport byte: a TCP stream over IPv4, and over IPv6. */
+static constexpr uint8_t PROXY_V2_TCP_OVER_IPV4 = 0x11;
+static constexpr uint8_t PROXY_V2_TCP_OVER_IPV6 = 0x21;
+/* The address block that follows the sixteen-byte prefix: two addresses and two ports. */
+static constexpr uint16_t PROXY_V2_IPV4_BLOCK = 12;
+static constexpr uint16_t PROXY_V2_IPV6_BLOCK = 36;
+/* The prefix length and the largest header, prefix plus the IPv6 block. */
+static constexpr size_t PROXY_V2_PREFIX = 16;
+static constexpr size_t PROXY_V2_HEADER_MAXIMUM = PROXY_V2_PREFIX + PROXY_V2_IPV6_BLOCK;
+/* Room for a broker's host text, an IP literal at most, IPv6's forty-five characters and a null. */
+static constexpr size_t BROKER_HOST_TEXT = 64;
+
+/* The broker every allowed stream connection is pointed at, when one is configured. */
+static struct sockaddr_storage broker_address;
+static socklen_t broker_length = 0;
+static bool broker_set = false;
+
+bool configure_broker(const char *endpoint) {
+    char host[BROKER_HOST_TEXT];
+    const char *port_text = nullptr;
+    if (endpoint[0] == '[') {
+        const char *closing = strchr(endpoint, ']');
+        if (closing == nullptr || closing[1] != ':') {
+            return false;
+        }
+        size_t host_length = (size_t)(closing - endpoint - 1);
+        if (host_length == 0 || host_length >= sizeof(host)) {
+            return false;
+        }
+        memcpy(host, endpoint + 1, host_length);
+        host[host_length] = '\0';
+        port_text = closing + 2;
+    } else {
+        const char *colon = strrchr(endpoint, ':');
+        if (colon == nullptr || (size_t)(colon - endpoint) >= sizeof(host)) {
+            return false;
+        }
+        memcpy(host, endpoint, (size_t)(colon - endpoint));
+        host[colon - endpoint] = '\0';
+        port_text = colon + 1;
+    }
+    char *unconverted = nullptr;
+    unsigned long port = strtoul(port_text, &unconverted, 10);
+    if (*port_text == '\0' || *unconverted != '\0' || port == 0 || port > UINT16_MAX) {
+        return false;
+    }
+    memset(&broker_address, 0, sizeof(broker_address));
+    struct in_addr v4;
+    struct in6_addr v6;
+    if (inet_pton(AF_INET, host, &v4) == 1) {
+        struct sockaddr_in *sin = (struct sockaddr_in *)&broker_address;
+        sin->sin_family = AF_INET;
+        sin->sin_port = htons((uint16_t)port);
+        sin->sin_addr = v4;
+        broker_length = sizeof(*sin);
+    } else if (inet_pton(AF_INET6, host, &v6) == 1) {
+        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&broker_address;
+        sin6->sin6_family = AF_INET6;
+        sin6->sin6_port = htons((uint16_t)port);
+        sin6->sin6_addr = v6;
+        broker_length = sizeof(*sin6);
+    } else {
+        return false;
+    }
+    broker_set = true;
+    return true;
+}
+
+/* Builds into buffer a PROXY protocol version 2 header that names the original destination, so
+ * the broker connects onward to it although the guard connected to the broker. The source is the
+ * loopback of the destination's family with port zero: the broker routes by the destination, and
+ * the guard has no source of the command's to name. Returns the header length. Assumes buffer
+ * holds PROXY_V2_HEADER_MAXIMUM bytes and that the destination is IPv4 or IPv6, which service_connect
+ * has already established before any connection is made on the command's behalf. */
+static size_t build_proxy_v2_header(uint8_t *buffer, const struct sockaddr_storage *destination) {
+    memcpy(buffer, PROXY_V2_SIGNATURE, sizeof(PROXY_V2_SIGNATURE));
+    buffer[12] = PROXY_V2_VERSION_COMMAND;
+    uint16_t source_port = 0;
+    if (destination->ss_family == AF_INET) {
+        const struct sockaddr_in *sin = (const struct sockaddr_in *)destination;
+        buffer[13] = PROXY_V2_TCP_OVER_IPV4;
+        buffer[14] = (uint8_t)(PROXY_V2_IPV4_BLOCK >> 8);
+        buffer[15] = (uint8_t)(PROXY_V2_IPV4_BLOCK & 0xff);
+        uint32_t loopback = htonl(INADDR_LOOPBACK);
+        memcpy(&buffer[16], &loopback, 4);
+        memcpy(&buffer[20], &sin->sin_addr, 4);
+        memcpy(&buffer[24], &source_port, 2);
+        memcpy(&buffer[26], &sin->sin_port, 2);
+        return PROXY_V2_PREFIX + PROXY_V2_IPV4_BLOCK;
+    }
+    const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)destination;
+    buffer[13] = PROXY_V2_TCP_OVER_IPV6;
+    buffer[14] = (uint8_t)(PROXY_V2_IPV6_BLOCK >> 8);
+    buffer[15] = (uint8_t)(PROXY_V2_IPV6_BLOCK & 0xff);
+    memcpy(&buffer[16], &in6addr_loopback, 16);
+    memcpy(&buffer[32], &sin6->sin6_addr, 16);
+    memcpy(&buffer[48], &source_port, 2);
+    memcpy(&buffer[50], &sin6->sin6_port, 2);
+    return PROXY_V2_PREFIX + PROXY_V2_IPV6_BLOCK;
+}
+
+/* Sends the whole PROXY header on the socket before the command's own bytes, retrying a short
+ * write and an interruption. Returns whether all of it was sent. */
+static bool send_proxy_v2_header(int socket_descriptor, const struct sockaddr_storage *destination) {
+    uint8_t header[PROXY_V2_HEADER_MAXIMUM];
+    size_t length = build_proxy_v2_header(header, destination);
+    size_t sent = 0;
+    while (sent < length) {
+        ssize_t wrote = send(socket_descriptor, header + sent, length - sent, MSG_NOSIGNAL);
+        if (wrote < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        sent += (size_t)wrote;
+    }
+    return true;
+}
+
 void connect_on_behalf(int notify_descriptor, struct seccomp_notif_resp *response,
                        __u64 id, int target_descriptor, int family,
                        const struct sockaddr *address, socklen_t length) {
-    int outward = connect_within_deadline(family, address, length);
+    int outward;
+    if (broker_set) {
+        outward = connect_within_deadline(broker_address.ss_family,
+                                          (const struct sockaddr *)&broker_address, broker_length);
+    } else {
+        outward = connect_within_deadline(family, address, length);
+    }
     if (outward < 0) {
         answer(notify_descriptor, response, id, 0, outward);
         return;
+    }
+    if (broker_set) {
+        struct sockaddr_storage destination;
+        memset(&destination, 0, sizeof(destination));
+        memcpy(&destination, address, length < sizeof(destination) ? length : sizeof(destination));
+        if (!send_proxy_v2_header(outward, &destination)) {
+            close(outward);
+            answer(notify_descriptor, response, id, 0, -ECONNREFUSED);
+            return;
+        }
     }
     struct seccomp_notif_addfd addfd;
     memset(&addfd, 0, sizeof(addfd));
@@ -526,3 +671,10 @@ int exit_code_from_status(int status) {
     }
     return EXIT_CODE_SETUP_ERROR;
 }
+
+#ifdef PHOBOS_CONNECT_GUARD_UNIT_TEST
+void broker_reset_for_tests(void) {
+    broker_set = false;
+    broker_length = 0;
+}
+#endif
