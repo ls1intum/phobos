@@ -13,6 +13,7 @@ NETBLOCKER_SO_OPT=""
 GUARD_BIN_OPT=""
 EGRESS_BROKER=0
 HAPROXY_BIN_OPT=""
+RESOLVER_OPT=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --debug) enable_debug_log; shift ;;
@@ -20,10 +21,11 @@ while [[ "${1:-}" == --* ]]; do
     --connect-guard-bin) shift; GUARD_BIN_OPT="${1:-}"; shift ;;
     --egress-broker) EGRESS_BROKER=1; shift ;;
     --haproxy-bin) shift; HAPROXY_BIN_OPT="${1:-}"; shift ;;
+    --resolver) shift; RESOLVER_OPT="${1:-}"; shift ;;
     *) break ;;
   esac
 done
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] [--netblocker-so <path>] [--connect-guard-bin <path>] [--egress-broker] [--haproxy-bin <path>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] [--netblocker-so <path>] [--connect-guard-bin <path>] [--egress-broker] [--haproxy-bin <path>] [--resolver <ip[:port]>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created if this layer ends before it hands over,
@@ -72,7 +74,22 @@ fi
 guard_command=( "$GUARD_BIN" )
 if (( PHB_DEBUG_ENABLED )); then guard_command+=( --verbose ); fi
 if (( EGRESS_BROKER )); then
-  broker_endpoint="$(start_egress_broker "$SPEC_DIR" "$RULES" "${HAPROXY_BIN_OPT:-haproxy}")" || {
+  # An exact [connect] name is bound to its own address by the broker, which resolves it through
+  # the given resolver, and is mapped to a placeholder in /etc/hosts so the command can resolve it
+  # without a DNS query the guard would refuse. Both are refused-closed when they cannot be met, so
+  # a run never silently loses the host-name enforcement it asked for.
+  mapfile -t exact_names < <(exact_connect_names "$RULES")
+  if (( ${#exact_names[@]} > 0 )); then
+    if [[ -z "$RESOLVER_OPT" ]]; then
+      report "The [connect] allow-list names an exact host, which the egress broker binds by resolving it, but no resolver was given; pass --resolver <ip[:port]>. Refusing rather than run without host-name enforcement. (PHB-ERUNTIME)"
+      exit "${PHB_ERUNTIME}"
+    fi
+    if ! write_broker_hosts /etc/hosts "${exact_names[@]}"; then
+      report "Could not write /etc/hosts to map the exact [connect] names for the egress broker; refusing rather than run with names the command cannot resolve. (PHB-ERUNTIME)"
+      exit "${PHB_ERUNTIME}"
+    fi
+  fi
+  broker_endpoint="$(start_egress_broker "$SPEC_DIR" "$RULES" "${HAPROXY_BIN_OPT:-haproxy}" "$RESOLVER_OPT")" || {
     report "The egress broker could not be started; refusing to run rather than lose the host-name enforcement it was asked for. (PHB-ERUNTIME)"
     exit "${PHB_ERUNTIME}"
   }
