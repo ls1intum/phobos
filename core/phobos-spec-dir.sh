@@ -34,6 +34,10 @@ new_scratch_file() {
 # The file that marks a specification directory as one phobos.sh created.
 PHB_SPEC_MARKER=".phobos-owned-spec"
 
+# The file the network layer writes the egress broker's process id into, so the layer that ends
+# the run can stop the broker, which the network layer cannot do itself because it execs.
+PHB_SPEC_BROKER_PID="broker.pid"
+
 # The files write_spec creates, the only ones remove_owned_spec_dir deletes.
 PHB_SPEC_FILES="read.paths execute.paths write.paths create.paths delete.paths tail.flags net.rules bind.rules timeout.sec limits.conf"
 
@@ -58,16 +62,30 @@ mark_owned_spec_dir() {
   : > "$1/${PHB_SPEC_MARKER}"
 }
 
+# Stops the egress broker whose process id the network layer recorded in the specification
+# directory, if it recorded one, so the broker does not outlive the run it served. A pid file
+# that names nothing running is simply removed. Assumes the directory is one Phobos owns.
+stop_recorded_broker() {
+  local directory="$1"
+  local pid_file="$directory/${PHB_SPEC_BROKER_PID}"
+  local pid
+  [[ -f "$pid_file" && ! -L "$pid_file" ]] || return 0
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  [[ "$pid" =~ ^[0-9]+$ ]] && kill "$pid" 2>/dev/null
+  rm -f -- "$pid_file"
+}
+
 # Removes a specification directory phobos.sh created, and does nothing to any
-# other. Deletes the scratch subdirectory phobos.sh made, the files write_spec writes
-# and the marker, then the directory itself, so a directory that has gained anything
-# else stays and the failure is returned rather than the contents deleted. Assumes the
-# path may be empty, missing or not a directory, all of which leave nothing to do.
+# other. Stops any egress broker it recorded, then deletes the scratch subdirectory phobos.sh
+# made, the files write_spec writes and the marker, then the directory itself, so a directory
+# that has gained anything else stays and the failure is returned rather than the contents
+# deleted. Assumes the path may be empty, missing or not a directory, all of which leave nothing to do.
 remove_owned_spec_dir() {
   local directory="$1"
   local name
   [[ -n "$directory" && -d "$directory" && ! -L "$directory" ]] || return 0
   [[ -f "$directory/${PHB_SPEC_MARKER}" && ! -L "$directory/${PHB_SPEC_MARKER}" ]] || return 0
+  stop_recorded_broker "$directory"
   rm -rf -- "${directory:?}/${PHB_SPEC_SCRATCH}" || return 1
   for name in ${PHB_SPEC_FILES}; do
     rm -f -- "$directory/$name" || return 1

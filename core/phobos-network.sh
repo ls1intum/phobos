@@ -4,20 +4,26 @@ set -euo pipefail
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=phobos-common.sh
 source "${HERE}/phobos-common.sh"
+# shellcheck source=phobos-haproxy.sh
+source "${HERE}/phobos-haproxy.sh"
 
 # A generic layer: it does its work and execs the rest of the chain. phobos.sh includes this
 # layer only when the network filter is enabled, so there is no enable flag to read.
 NETBLOCKER_SO_OPT=""
 GUARD_BIN_OPT=""
+EGRESS_BROKER=0
+HAPROXY_BIN_OPT=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --debug) enable_debug_log; shift ;;
     --netblocker-so) shift; NETBLOCKER_SO_OPT="${1:-}"; shift ;;
     --connect-guard-bin) shift; GUARD_BIN_OPT="${1:-}"; shift ;;
+    --egress-broker) EGRESS_BROKER=1; shift ;;
+    --haproxy-bin) shift; HAPROXY_BIN_OPT="${1:-}"; shift ;;
     *) break ;;
   esac
 done
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] [--netblocker-so <path>] [--connect-guard-bin <path>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] [--netblocker-so <path>] [--connect-guard-bin <path>] [--egress-broker] [--haproxy-bin <path>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created if this layer ends before it hands over,
@@ -56,7 +62,8 @@ export NETBLOCKER_BIND_CONF="$BIND_RULES"
 # preload library above, which stays as the softer in-process filter beside it. It forks a
 # supervisor and execs the rest of the chain, so it goes on the front of what this layer hands
 # over. It is refused when missing rather than skipped, so a run cannot lose connect
-# supervision unnoticed.
+# supervision unnoticed. When the egress broker is on, the guard is told to hand every allowed
+# connection to it, so the broker can enforce by the TLS host name the guard cannot see.
 GUARD_BIN="${GUARD_BIN_OPT:-${HERE}/phobos-connect-guard}"
 if [[ ! -x "$GUARD_BIN" ]]; then
   report "The connect guard '${GUARD_BIN}' is missing or not executable; refusing to run without connect supervision. (PHB-ERUNTIME)"
@@ -64,6 +71,13 @@ if [[ ! -x "$GUARD_BIN" ]]; then
 fi
 guard_command=( "$GUARD_BIN" )
 if (( PHB_DEBUG_ENABLED )); then guard_command+=( --verbose ); fi
+if (( EGRESS_BROKER )); then
+  broker_endpoint="$(start_egress_broker "$SPEC_DIR" "$RULES" "${HAPROXY_BIN_OPT:-haproxy}")" || {
+    report "The egress broker could not be started; refusing to run rather than lose the host-name enforcement it was asked for. (PHB-ERUNTIME)"
+    exit "${PHB_ERUNTIME}"
+  }
+  guard_command+=( --broker "$broker_endpoint" )
+fi
 guard_command+=( --rules "$RULES" -- )
 debug_log network "preload ${LD_PRELOAD} with NETBLOCKER_CONF=${NETBLOCKER_CONF} NETBLOCKER_BIND_CONF=${NETBLOCKER_BIND_CONF}"
 debug_log network "run" "${guard_command[@]}" "$@"
