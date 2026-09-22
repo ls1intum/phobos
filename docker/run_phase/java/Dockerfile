@@ -47,13 +47,16 @@ RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
 # about a second image built to test with, so the compiler they need is part of it.
 # binutils is needed by the product itself: the network layer reads the symbols of
 # libnetblocker.so with readelf before every run and refuses to run unfiltered when it
-# cannot, so without it no run would start.
+# cannot, so without it no run would start. haproxy is the egress broker: the connect guard
+# hands an allowed connection to it, and it enforces the allow-list by the TLS host name the
+# guard cannot see; tests/haproxy_broker.sh exercises that path inside this image.
 FROM ls1tum/artemis-maven-template:java17-25@sha256:521f4dd3f3c6d81f403e84f2e2af3c459cd42dfd0345886aac1d1032527b07f8
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc-14 \
     binutils \
+    haproxy \
  && rm -rf /var/lib/apt/lists/*
 
 ENV PHOBOS_HOME=/var/tmp/opt/core

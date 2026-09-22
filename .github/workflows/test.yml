@@ -55,13 +55,15 @@ jobs:
       # What the suites here need beyond the runner's own image. Bubblewrap is what the
       # discovery phase measures with, so without it tests/prune_sandbox.sh skips exactly
       # the checks that exercise the pruner; gcc-14 is the compiler the C probes of the
-      # network suites are pinned to, and without it those suites skip themselves whole.
+      # network suites are pinned to, and without it those suites skip themselves whole;
+      # haproxy is the egress broker tests/haproxy_broker.sh drives, and openssl is the client
+      # that sends it a ClientHello with a host name; that suite skips without either.
       # A skip reads as a pass in the workflow's summary, so they are installed rather
       # than left to the image.
       - name: Install what the suites need
         run: |
           sudo apt-get update -qq
-          sudo apt-get install --yes --no-install-recommends bubblewrap gcc-14
+          sudo apt-get install --yes --no-install-recommends bubblewrap gcc-14 haproxy openssl
 
       # Each suite reports its own passed, failed and skipped counts and exits non-zero on
       # a failure, so they are separate steps: one run then names every suite that broke
@@ -98,6 +100,14 @@ jobs:
       - name: The connect guard enforces the allow-list by host and port
         if: ${{ !cancelled() }}
         run: bash tests/connect_guard.sh
+
+      - name: The allow-list becomes an egress-broker config
+        if: ${{ !cancelled() }}
+        run: bash tests/haproxy_conf.sh
+
+      - name: The egress broker enforces the allow-list by TLS host name
+        if: ${{ !cancelled() }}
+        run: bash tests/haproxy_broker.sh
 
       # The [limits] resource keys are parsed and, when applied, set the process's rlimits,
       # the in-process line against a fork bomb, a runaway allocation or a disk-filling file.
