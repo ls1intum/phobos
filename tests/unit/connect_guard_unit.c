@@ -1257,9 +1257,9 @@ static void test_socket_tracking(void) {
     bx->readlink_inode = 8301;
     remember_rule("127.0.0.1", "53");
     service_once();
-    check("a connect on an untracked socket is let through best-effort",
-          bx->answers == 1 && bx->connect_calls == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+    check("a connect on an untracked socket is refused, making no upstream connection",
+          bx->answers == 1 && bx->connect_calls == 0 && bx->last_answer_error == -EACCES &&
+              bx->last_answer_flags != SECCOMP_USER_NOTIF_FLAG_CONTINUE);
 
     reset_behaviour();
     bx->notif_recv_family = AF_INET;
@@ -1269,8 +1269,9 @@ static void test_socket_tracking(void) {
     bx->readlink_kind = READLINK_PIPE;
     remember_rule("127.0.0.1", "53");
     service_once();
-    check("a connect on a descriptor that is not a socket is not injected over",
-          bx->answers == 1 && bx->connect_calls == 0);
+    check("a connect on a descriptor that is not a socket is refused, not injected over",
+          bx->answers == 1 && bx->connect_calls == 0 && bx->last_answer_error == -EACCES &&
+              bx->last_answer_flags != SECCOMP_USER_NOTIF_FLAG_CONTINUE);
 
     reset_behaviour();
     bx->notif_recv_family = AF_INET;
@@ -1282,9 +1283,9 @@ static void test_socket_tracking(void) {
     record_socket_type(UNNAMEABLE_STREAM_INODE, FD_TYPE_STREAM);
     remember_rule("127.0.0.1", "53");
     service_once();
-    check("a stream connect is not injected when /proc cannot name the inode",
-          bx->answers == 1 && bx->connect_calls == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+    check("a stream connect is refused when /proc cannot name the inode",
+          bx->answers == 1 && bx->connect_calls == 0 && bx->last_answer_error == -EACCES &&
+              bx->last_answer_flags != SECCOMP_USER_NOTIF_FLAG_CONTINUE);
 
     reset_behaviour();
     bx->notif_recv_family = AF_INET;
