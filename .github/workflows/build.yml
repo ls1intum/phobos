@@ -281,6 +281,15 @@ jobs:
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci bash /tests/landlock-acceptance/network-port-test.sh
 
+      # The Landlock bind-port rule keeps a submission off every port but the ones a [bind] rule
+      # names, the public port an [accept] rule fronts included, against a raw bind and a
+      # kernel-chosen ephemeral port. This is the port containment the inbound filter relies on.
+      - name: The Landlock bind-port rule holds against a raw-syscall bind
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+            phobos-run-phase:ci bash /tests/landlock-acceptance/bind-port-test.sh
+
       # Scoping keeps a submission from signalling the grading process beside it or reaching
       # an abstract UNIX socket outside the sandbox, which the path and port rules do not
       # cover. It confines rather than forbidding, so a process inside the sandbox is still

@@ -95,6 +95,21 @@ if (( EGRESS_BROKER )); then
   }
   guard_command+=( --broker "$broker_endpoint" )
 fi
+
+# Any [accept] rule fronts a student's listener with an inbound filter on a public port. This
+# only works in a NETWORKED container, so turning it on removes the --network none default the
+# rest of the sandbox relies on, and the run is then contained only by the outer network
+# isolation the operator provides. Say so loudly, then start the filter, refusing the run if it
+# cannot start rather than leave the listener unfiltered. It is a sibling, so it is started here
+# and stopped by whichever layer ends the run, like the egress broker.
+ACCEPT_RULES="${SPEC_DIR}/accept.rules"
+if [[ -s "$ACCEPT_RULES" ]]; then
+  _log "NOTICE: an [accept] rule is present, so this run fronts a listener on a public port and assumes a NETWORKED container with the required isolation (only the public port reachable from outside, no other path to the backend port). This removes the --network none default; the outer network isolation, not Phobos, keeps the backend reachable only through the filter."
+  if ! start_inbound_haproxy "$SPEC_DIR" "$ACCEPT_RULES" "${HAPROXY_BIN_OPT:-haproxy}"; then
+    report "The inbound filter could not be started; refusing to run rather than expose the listener unfiltered. (PHB-ERUNTIME)"
+    exit "${PHB_ERUNTIME}"
+  fi
+fi
 guard_command+=( --rules "$RULES" -- )
 debug_log network "preload ${LD_PRELOAD} with NETBLOCKER_CONF=${NETBLOCKER_CONF} NETBLOCKER_BIND_CONF=${NETBLOCKER_BIND_CONF}"
 debug_log network "run" "${guard_command[@]}" "$@"

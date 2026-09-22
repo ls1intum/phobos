@@ -79,8 +79,9 @@ fi
 base_dir="$(mktemp -d -p "$PHOBOS_SCRATCH")"
 base_net="$(mktemp -p "$PHOBOS_SCRATCH")"
 base_bind="$(mktemp -p "$PHOBOS_SCRATCH")"
+base_accept="$(mktemp -p "$PHOBOS_SCRATCH")"
 for r in ${PHB_FS_RIGHTS}; do : >"${base_dir}/${r}.paths"; done
-: >"$base_net"; : >"$base_bind"
+: >"$base_net"; : >"$base_bind"; : >"$base_accept"
 # The timeout and each resource limit are pooled across every base and exercise cfg by the
 # same rule the setters use within a cfg: a zero anywhere disables that limit and wins, and
 # otherwise the largest value is kept, so the order of the cfgs does not matter. Timeouts are
@@ -135,6 +136,7 @@ fold_cfg_into() {
   local fs_dir="$2"
   local net_file="$3"
   local bind_file="$4"
+  local accept_file="$5"
   local merged
   parse_cfg_policy "$cfg"
   fs_union_dir "$fs_dir" "$PARSED_FS_DIR"
@@ -144,12 +146,15 @@ fold_cfg_into() {
   merged="$(mktemp -p "$PHOBOS_SCRATCH")"
   net_union "$merged" "$bind_file" "$PARSED_BIND_FILE"
   mv "$merged" "$bind_file"
+  merged="$(mktemp -p "$PHOBOS_SCRATCH")"
+  net_union "$merged" "$accept_file" "$PARSED_ACCEPT_FILE"
+  mv "$merged" "$accept_file"
   merge_limits
 }
 
 # Build the base policy: every Base*.cfg folded in, in sorted order.
 for b in "${base_cfgs[@]}"; do
-  fold_cfg_into "$b" "$base_dir" "$base_net" "$base_bind"
+  fold_cfg_into "$b" "$base_dir" "$base_net" "$base_bind" "$base_accept"
 done
 
 # Effective policy: start from the base, then add each exercise config on top. The model is
@@ -163,11 +168,12 @@ done
 eff_dir="$(mktemp -d -p "$PHOBOS_SCRATCH")"
 eff_net="$(mktemp -p "$PHOBOS_SCRATCH")"
 eff_bind="$(mktemp -p "$PHOBOS_SCRATCH")"
+eff_accept="$(mktemp -p "$PHOBOS_SCRATCH")"
 for r in ${PHB_FS_RIGHTS}; do cp "${base_dir}/${r}.paths" "${eff_dir}/${r}.paths"; done
-cp "$base_net" "$eff_net"; cp "$base_bind" "$eff_bind"
+cp "$base_net" "$eff_net"; cp "$base_bind" "$eff_bind"; cp "$base_accept" "$eff_accept"
 
 for c in "${cfgs[@]}"; do
-  fold_cfg_into "$c" "$eff_dir" "$eff_net" "$eff_bind"
+  fold_cfg_into "$c" "$eff_dir" "$eff_net" "$eff_bind" "$eff_accept"
 done
 
 # Resolve the pooled timeout. A disabled one is written as none, and a finite one is
@@ -185,7 +191,12 @@ fi
 # libnetblocker reads it as something else.
 refuse_unenforceable_network_rules "$eff_net" "$eff_bind"
 
-write_spec "$SPEC_DIR" "$eff_dir" "$eff_net" "$timeout_eff" "$tail_flags_file" "$eff_bind"
+# The inbound accept rules are judged against the merged bind set: the public port must not be one
+# the graded code may bind itself, and the backend port must be one it may, both known only once
+# every config has been folded in.
+refuse_unenforceable_accept_rules "$eff_accept" "$eff_bind"
+
+write_spec "$SPEC_DIR" "$eff_dir" "$eff_net" "$timeout_eff" "$tail_flags_file" "$eff_bind" "$eff_accept"
 
 # The resource limits go into the specification, one "key=value" per line for each limit a
 # [limits] section named. phobos-resources.sh reads them and sets them with rlimits right
