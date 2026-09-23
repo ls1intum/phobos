@@ -145,7 +145,10 @@ than ignored, so a typo cannot silently drop a restriction.
 - `[read]`: one path per line, granted read.
 - `[execute]`: one path per line, granted execute. A program tree needs both `[read]` and `[execute]`; a pure data tree needs only `[read]`.
 - `[write]`: one path per line, granted write into an existing file (and truncate).
-- `[create]`: one path per line, granted the creation of files, directories, sockets and named pipes (never device nodes or symbolic links).
+- `[create]`: one path per line, granted the creation of regular files and directories (never device nodes; sockets, named pipes and symbolic links have their own sections below).
+- `[create-ipc]`: one path per line, granted the creation of UNIX sockets and named pipes (FIFOs) beneath it, for a tool that needs local IPC objects without also being allowed to create ordinary files.
+- `[create-symlink]`: one path per line, granted the creation of symbolic links beneath it. Creating a link is a distinct right a policy opts into; a write through such a link is still resolved and checked by Landlock against the link's target, so the link cannot reach a path the policy does not name.
+- `[restructure]`: one path per line, granted create, delete and REFER together, so a tool may create, delete, and rename or move files and directories within the tree. REFER is the right Landlock requires for renaming or linking across directories, and it is granted only here rather than as a side effect of `[create]` plus `[delete]`. A path listed here need not also appear in `[create]` or `[delete]`.
 - `[delete]`: one path per line, granted the deletion of files and directories.
 - `[connect]`: `allow <host>[:<port>]` lines, the outbound TCP destinations a submission may reach. A loopback host may omit the port; an external host must name a concrete port between 1 and 65535, because Landlock enforces ports rather than hosts. Every rule is judged when the specification is built, so a port that does not exist ends the run with PHB-EPOLICY whichever layers are switched on. A host may be written as:
   - an IP literal, `allow 192.0.2.10:443`, which the connect guard holds to that exact address;

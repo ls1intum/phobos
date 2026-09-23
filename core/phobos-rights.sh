@@ -18,7 +18,7 @@
 # --------------------------------------------------------------------------
 
 # The order the usage text lists the letters in, used to normalise a set.
-PHB_RIGHTS_ORDER="rwxmdi"
+PHB_RIGHTS_ORDER="rwxmplfdi"
 
 # Answers whether every letter of the first set appears in the second.
 rights_subset() {
@@ -71,7 +71,8 @@ materialise_write_path() {
 }
 
 # Writes one "letter<TAB>resolved path<TAB>written path" line per policy entry into the named
-# table. Takes the five per-right section files. Assumes each holds one path per line.
+# table. Takes the eight per-right section files, in the order read, execute, write, create,
+# delete, ipc, symlink, refer. Assumes each holds one path per line.
 #
 # The changeable paths (write, create, delete) are materialised first, so a path that is also
 # read or executed exists by the time its read/execute row is built and keeps that right. A
@@ -85,9 +86,12 @@ collect_rights_table() {
   local write_file="$4"
   local create_file="$5"
   local delete_file="$6"
+  local ipc_file="$7"
+  local symlink_file="$8"
+  local refer_file="$9"
   local changeable
   local entry
-  for changeable in "$write_file" "$create_file" "$delete_file"; do
+  for changeable in "$write_file" "$create_file" "$delete_file" "$ipc_file" "$symlink_file" "$refer_file"; do
     [[ -n "$changeable" && -s "$changeable" ]] || continue
     while IFS= read -r entry; do
       [[ -z "$entry" ]] && continue
@@ -95,9 +99,9 @@ collect_rights_table() {
       materialise_write_path "$entry"
     done < "$changeable"
   done
-  local -a section_files=( "$read_file" "$execute_file" "$write_file" "$create_file" "$delete_file" )
-  local -a section_letters=( r x w m d )
-  local -a drop_if_missing=( 1 1 0 0 0 )
+  local -a section_files=( "$read_file" "$execute_file" "$write_file" "$create_file" "$delete_file" "$ipc_file" "$symlink_file" "$refer_file" )
+  local -a section_letters=( r x w m d p l f )
+  local -a drop_if_missing=( 1 1 0 0 0 0 0 0 )
   local index
   local section_file
   local letter
@@ -222,8 +226,8 @@ emit_rights_arguments() {
 }
 
 # Fills the named array with the path rules the policy asks for, after refusing a
-# hierarchy Landlock cannot hold. Assumes the three section files hold one path
-# per line and that write paths may be created.
+# hierarchy Landlock cannot hold. Assumes the eight section files hold one path
+# per line and that changeable paths may be created.
 #
 # Each stage is called plainly, never in a pipe or a process substitution: those
 # run it in a subshell, where its exit on an unenforceable policy would end only
@@ -235,13 +239,16 @@ build_path_args() {
   local write_file="$4"
   local create_file="$5"
   local delete_file="$6"
+  local ipc_file="$7"
+  local symlink_file="$8"
+  local refer_file="$9"
   local table
   local folded_table
   local effective_table
   table="$(new_scratch_file phobos-rights.XXXXXX)"
   folded_table="$(new_scratch_file phobos-rights-f.XXXXXX)"
   effective_table="$(new_scratch_file phobos-rights-e.XXXXXX)"
-  collect_rights_table "$table" "$read_file" "$execute_file" "$write_file" "$create_file" "$delete_file"
+  collect_rights_table "$table" "$read_file" "$execute_file" "$write_file" "$create_file" "$delete_file" "$ipc_file" "$symlink_file" "$refer_file"
   fold_table_by_target "$table" "$folded_table"
   report_folded_widenings "$table" "$folded_table"
   resolve_rights_hierarchy "$folded_table" "$effective_table"

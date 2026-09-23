@@ -6,16 +6,21 @@
 
 #include <fcntl.h>
 
-/* Creating device nodes and symbolic links is deliberately absent from the
- * "makeable" set. No build tool needs either, a device node is a way to reach
- * hardware the policy never named, and a symbolic link is a way to point a
- * later write somewhere the policy never named. They stay in the handled set,
- * so they are denied rather than unregulated.
+/* Each make right has its own field, because the risks differ. Creating regular
+ * files and directories (makeable) is the ordinary case; creating sockets and
+ * named pipes (makeable_ipc) is benign local IPC but separable; creating a
+ * symbolic link (makeable_symlink) is a distinct right a policy opts into
+ * deliberately. Creating device nodes has no field at all: a character or block
+ * device is a way to reach hardware the policy never named, and no build tool
+ * needs one, so it stays in the handled set and is denied rather than
+ * unregulated.
  *
- * Moving a file into or out of a directory is creating it on one side and
- * deleting it on the other, so REFER is granted only where both are. Without it
- * the kernel answers EXDEV, which makes a copying tool succeed quietly and an
- * atomic move fail. */
+ * REFER is its own right (referable), not derived from makeable and removable
+ * together. It governs moving or renaming across directories, which is the
+ * link/rename privilege-escalation surface Landlock guards, so a policy grants it
+ * on its own where a workspace needs moves rather than gaining it as a side
+ * effect of create plus delete. Without it the kernel answers EXDEV, which makes
+ * a copying tool succeed quietly and an atomic move fail. */
 uint64_t rights_granted_for(const struct path_rule *rule, int landlock_version) {
     uint64_t granted_rights = 0;
     if (rule->readable) {
@@ -33,15 +38,20 @@ uint64_t rights_granted_for(const struct path_rule *rule, int landlock_version) 
     }
     if (rule->makeable) {
         granted_rights |=
-            LANDLOCK_ACCESS_FILESYSTEM_MAKE_REGULAR_FILE |
-            LANDLOCK_ACCESS_FILESYSTEM_MAKE_DIRECTORY | LANDLOCK_ACCESS_FILESYSTEM_MAKE_SOCKET |
-            LANDLOCK_ACCESS_FILESYSTEM_MAKE_NAMED_PIPE;
+            LANDLOCK_ACCESS_FILESYSTEM_MAKE_REGULAR_FILE | LANDLOCK_ACCESS_FILESYSTEM_MAKE_DIRECTORY;
+    }
+    if (rule->makeable_ipc) {
+        granted_rights |=
+            LANDLOCK_ACCESS_FILESYSTEM_MAKE_SOCKET | LANDLOCK_ACCESS_FILESYSTEM_MAKE_NAMED_PIPE;
+    }
+    if (rule->makeable_symlink) {
+        granted_rights |= LANDLOCK_ACCESS_FILESYSTEM_MAKE_SYMBOLIC_LINK;
     }
     if (rule->removable) {
         granted_rights |=
             LANDLOCK_ACCESS_FILESYSTEM_REMOVE_FILE | LANDLOCK_ACCESS_FILESYSTEM_REMOVE_DIRECTORY;
     }
-    if (rule->makeable && rule->removable && landlock_version >= FIRST_VERSION_WITH_REFER) {
+    if (rule->referable && landlock_version >= FIRST_VERSION_WITH_REFER) {
         granted_rights |= LANDLOCK_ACCESS_FILESYSTEM_REFER;
     }
     if (rule->ioctl_device && landlock_version >= FIRST_VERSION_WITH_IOCTL_DEVICE) {
@@ -54,7 +64,8 @@ uint64_t rights_granted_for(const struct path_rule *rule, int landlock_version) 
  * carrying it deserves the same protection against being pointed somewhere else
  * as a writing one. */
 bool rule_can_change_anything(const struct path_rule *rule) {
-    return rule->writable || rule->makeable || rule->removable || rule->ioctl_device;
+    return rule->writable || rule->makeable || rule->makeable_ipc || rule->makeable_symlink ||
+           rule->referable || rule->removable || rule->ioctl_device;
 }
 
 /* A rule that may change something is the one worth redirecting, and it may

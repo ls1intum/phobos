@@ -438,6 +438,10 @@ static void test_rights_tables(void) {
                            .makeable = true, .removable = true};
     struct path_rule with_ioctl = {.path = "/x", .readable = true, .ioctl_device = true};
     struct path_rule write_only = {.path = "/x", .writable = true};
+    struct path_rule create_only = {.path = "/x", .makeable = true};
+    struct path_rule ipc = {.path = "/x", .makeable_ipc = true};
+    struct path_rule symlink = {.path = "/x", .makeable_symlink = true};
+    struct path_rule refer = {.path = "/x", .referable = true};
     check("read-only grants no write",
           (rights_granted_for(&ro, 8) & LANDLOCK_ACCESS_FILESYSTEM_WRITE_FILE) == 0);
     check("read-only grants no execute",
@@ -448,10 +452,32 @@ static void test_rights_tables(void) {
     check("a writable rule on version 1 grants neither REFER nor TRUNCATE",
           (rights_granted_for(&rw, 1) &
            (LANDLOCK_ACCESS_FILESYSTEM_REFER | LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE)) == 0);
-    check("a rule that may create and delete gets REFER on version 2",
-          (rights_granted_for(&rw, 2) & LANDLOCK_ACCESS_FILESYSTEM_REFER) != 0);
+    check("create and delete alone no longer grant REFER",
+          (rights_granted_for(&rw, 2) & LANDLOCK_ACCESS_FILESYSTEM_REFER) == 0);
+    check("a referable rule gets REFER on version 2",
+          (rights_granted_for(&refer, 2) & LANDLOCK_ACCESS_FILESYSTEM_REFER) != 0);
+    check("a referable rule gets no REFER on version 1",
+          (rights_granted_for(&refer, 1) & LANDLOCK_ACCESS_FILESYSTEM_REFER) == 0);
     check("writing alone is not enough for REFER",
           (rights_granted_for(&write_only, 8) & LANDLOCK_ACCESS_FILESYSTEM_REFER) == 0);
+    check("create grants regular file and directory",
+          (rights_granted_for(&create_only, 8) &
+           (LANDLOCK_ACCESS_FILESYSTEM_MAKE_REGULAR_FILE |
+            LANDLOCK_ACCESS_FILESYSTEM_MAKE_DIRECTORY)) ==
+          (LANDLOCK_ACCESS_FILESYSTEM_MAKE_REGULAR_FILE |
+           LANDLOCK_ACCESS_FILESYSTEM_MAKE_DIRECTORY));
+    check("create no longer grants socket or named pipe",
+          (rights_granted_for(&create_only, 8) &
+           (LANDLOCK_ACCESS_FILESYSTEM_MAKE_SOCKET |
+            LANDLOCK_ACCESS_FILESYSTEM_MAKE_NAMED_PIPE)) == 0);
+    check("ipc grants socket and named pipe",
+          (rights_granted_for(&ipc, 8) &
+           (LANDLOCK_ACCESS_FILESYSTEM_MAKE_SOCKET |
+            LANDLOCK_ACCESS_FILESYSTEM_MAKE_NAMED_PIPE)) ==
+          (LANDLOCK_ACCESS_FILESYSTEM_MAKE_SOCKET |
+           LANDLOCK_ACCESS_FILESYSTEM_MAKE_NAMED_PIPE));
+    check("ipc grants no regular file",
+          (rights_granted_for(&ipc, 8) & LANDLOCK_ACCESS_FILESYSTEM_MAKE_REGULAR_FILE) == 0);
     check("a writable rule on version 3 grants TRUNCATE",
           (rights_granted_for(&rw, 3) & LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE) != 0);
     check("a rule on version 4 is granted no IOCTL_DEV",
@@ -464,9 +490,15 @@ static void test_rights_tables(void) {
           (rights_granted_for(&rw, 8) &
            (LANDLOCK_ACCESS_FILESYSTEM_MAKE_CHARACTER_DEVICE |
             LANDLOCK_ACCESS_FILESYSTEM_MAKE_BLOCK_DEVICE)) == 0);
-    check("symbolic links are never granted",
+    check("a rule that did not ask for a symlink is not granted one",
           (rights_granted_for(&rw, 8) &
            LANDLOCK_ACCESS_FILESYSTEM_MAKE_SYMBOLIC_LINK) == 0);
+    check("a rule that asked for a symlink is granted it",
+          (rights_granted_for(&symlink, 8) &
+           LANDLOCK_ACCESS_FILESYSTEM_MAKE_SYMBOLIC_LINK) != 0);
+    check("a symlink rule grants nothing else",
+          (rights_granted_for(&symlink, 8) &
+           ~(uint64_t)LANDLOCK_ACCESS_FILESYSTEM_MAKE_SYMBOLIC_LINK) == 0);
     check("a granted_rights never exceeds what the version handles",
           (rights_granted_for(&rw, 1) & ~filesystem_rights_for_version(1)) == 0);
 
@@ -716,15 +748,21 @@ static constexpr int COMBINATION_BIT_EXECUTE = 4;
 static constexpr int COMBINATION_BIT_MAKE = 8;
 static constexpr int COMBINATION_BIT_DELETE = 16;
 static constexpr int COMBINATION_BIT_IOCTL = 32;
-static constexpr int RIGHTS_COMBINATION_COUNT = 64;
+static constexpr int COMBINATION_BIT_IPC = 64;
+static constexpr int COMBINATION_BIT_SYMLINK = 128;
+static constexpr int COMBINATION_BIT_REFER = 256;
+static constexpr int RIGHTS_COMBINATION_COUNT = 512;
 
 static void test_rights_contract(void) {
     printf("\nWhat every combination of letters means, at every version\n");
-    int device_or_symlink_ever = 0;
+    int device_ever = 0;
     int read_wrong = 0;
     int execute_wrong = 0;
     int write_wrong = 0;
     int truncate_wrong = 0;
+    int make_wrong = 0;
+    int ipc_wrong = 0;
+    int symlink_wrong = 0;
     int refer_wrong = 0;
     int ioctl_wrong = 0;
     int beyond_version = 0;
@@ -737,10 +775,14 @@ static void test_rights_contract(void) {
                                  .writable = (combination & COMBINATION_BIT_WRITE) != 0,
                                  .executable = (combination & COMBINATION_BIT_EXECUTE) != 0,
                                  .makeable = (combination & COMBINATION_BIT_MAKE) != 0,
+                                 .makeable_ipc = (combination & COMBINATION_BIT_IPC) != 0,
+                                 .makeable_symlink = (combination & COMBINATION_BIT_SYMLINK) != 0,
+                                 .referable = (combination & COMBINATION_BIT_REFER) != 0,
                                  .removable = (combination & COMBINATION_BIT_DELETE) != 0,
                                  .ioctl_device = (combination & COMBINATION_BIT_IOCTL) != 0};
-        bool can_change =
-            rule.writable || rule.makeable || rule.removable || rule.ioctl_device;
+        bool can_change = rule.writable || rule.makeable || rule.makeable_ipc ||
+                          rule.makeable_symlink || rule.referable || rule.removable ||
+                          rule.ioctl_device;
         if (rule_can_change_anything(&rule) != can_change) {
             change_wrong = 1;
         }
@@ -750,9 +792,20 @@ static void test_rights_contract(void) {
         for (int version = 1; version <= HIGHEST_KNOWN_LANDLOCK_VERSION; version++) {
             uint64_t granted = rights_granted_for(&rule, version);
             if ((granted & (LANDLOCK_ACCESS_FILESYSTEM_MAKE_CHARACTER_DEVICE |
-                            LANDLOCK_ACCESS_FILESYSTEM_MAKE_BLOCK_DEVICE |
-                            LANDLOCK_ACCESS_FILESYSTEM_MAKE_SYMBOLIC_LINK)) != 0) {
-                device_or_symlink_ever = 1;
+                            LANDLOCK_ACCESS_FILESYSTEM_MAKE_BLOCK_DEVICE)) != 0) {
+                device_ever = 1;
+            }
+            if (((granted & (LANDLOCK_ACCESS_FILESYSTEM_MAKE_REGULAR_FILE |
+                             LANDLOCK_ACCESS_FILESYSTEM_MAKE_DIRECTORY)) != 0) != rule.makeable) {
+                make_wrong = 1;
+            }
+            if (((granted & (LANDLOCK_ACCESS_FILESYSTEM_MAKE_SOCKET |
+                             LANDLOCK_ACCESS_FILESYSTEM_MAKE_NAMED_PIPE)) != 0) != rule.makeable_ipc) {
+                ipc_wrong = 1;
+            }
+            if (((granted & LANDLOCK_ACCESS_FILESYSTEM_MAKE_SYMBOLIC_LINK) != 0) !=
+                rule.makeable_symlink) {
+                symlink_wrong = 1;
             }
             if (((granted & LANDLOCK_ACCESS_FILESYSTEM_READ_FILE) != 0) != rule.readable) {
                 read_wrong = 1;
@@ -768,7 +821,7 @@ static void test_rights_contract(void) {
                 truncate_wrong = 1;
             }
             if (((granted & LANDLOCK_ACCESS_FILESYSTEM_REFER) != 0) !=
-                (rule.makeable && rule.removable && version >= FIRST_VERSION_WITH_REFER)) {
+                (rule.referable && version >= FIRST_VERSION_WITH_REFER)) {
                 refer_wrong = 1;
             }
             if (((granted & LANDLOCK_ACCESS_FILESYSTEM_IOCTL_DEVICE) != 0) !=
@@ -780,17 +833,19 @@ static void test_rights_contract(void) {
             }
         }
     }
-    check("no combination ever grants a device node or a symbolic link",
-          !device_or_symlink_ever);
+    check("no combination ever grants a device node", !device_ever);
     check("reading is granted exactly when r was asked for", !read_wrong);
     check("executing is granted exactly when x was asked for", !execute_wrong);
     check("writing is granted exactly when w was asked for", !write_wrong);
     check("shortening is granted exactly when w meets a version that knows it", !truncate_wrong);
-    check("moving between directories needs both m and d, and a version that knows it",
-          !refer_wrong);
+    check("regular file and directory are granted exactly when m was asked for", !make_wrong);
+    check("socket and named pipe are granted exactly when p was asked for", !ipc_wrong);
+    check("a symbolic link is granted exactly when l was asked for", !symlink_wrong);
+    check("moving between directories needs f, and a version that knows it", !refer_wrong);
     check("ioctl is granted exactly when i meets a version that knows it", !ioctl_wrong);
     check("no combination ever exceeds what its version handles", !beyond_version);
-    check("a rule counts as changing exactly when it may write, create, delete or ioctl",
+    check("a rule counts as changing exactly when it may write, create, ipc, symlink, refer, "
+          "delete or ioctl",
           !change_wrong);
     check("a rule that may change something refuses to follow a final symbolic link",
           !nofollow_wrong);
@@ -814,23 +869,40 @@ static void test_rights_letters(void) {
     remember_path_rule(&options, "m", "/d");
     remember_path_rule(&options, "d", "/e");
     remember_path_rule(&options, "i", "/f");
-    check("six rules were recorded", options.path_rule_count == 6);
+    remember_path_rule(&options, "p", "/g");
+    remember_path_rule(&options, "l", "/h");
+    remember_path_rule(&options, "f", "/i");
+    check("nine rules were recorded", options.path_rule_count == 9);
     check("r sets only readable",
           options.rules[0].readable && !options.rules[0].writable &&
               !options.rules[0].executable && !options.rules[0].makeable &&
-              !options.rules[0].removable && !options.rules[0].ioctl_device);
+              !options.rules[0].makeable_ipc && !options.rules[0].makeable_symlink &&
+              !options.rules[0].referable && !options.rules[0].removable &&
+              !options.rules[0].ioctl_device);
     check("w sets only writable", options.rules[1].writable && !options.rules[1].readable);
     check("x sets only executable", options.rules[2].executable && !options.rules[2].readable);
-    check("m sets only makeable", options.rules[3].makeable && !options.rules[3].removable);
+    check("m sets only makeable",
+          options.rules[3].makeable && !options.rules[3].removable &&
+              !options.rules[3].makeable_ipc && !options.rules[3].makeable_symlink);
     check("d sets only removable", options.rules[4].removable && !options.rules[4].makeable);
     check("i sets only ioctl_device", options.rules[5].ioctl_device && !options.rules[5].readable);
+    check("p sets only makeable_ipc",
+          options.rules[6].makeable_ipc && !options.rules[6].makeable &&
+              !options.rules[6].makeable_symlink && !options.rules[6].referable);
+    check("l sets only makeable_symlink",
+          options.rules[7].makeable_symlink && !options.rules[7].makeable &&
+              !options.rules[7].makeable_ipc && !options.rules[7].referable);
+    check("f sets only referable",
+          options.rules[8].referable && !options.rules[8].makeable &&
+              !options.rules[8].removable && !options.rules[8].makeable_ipc);
 
     memset(&options, 0, sizeof(options));
-    remember_path_rule(&options, "rwxmdi", "/all");
+    remember_path_rule(&options, "rwxmplfdi", "/all");
     check("every letter at once sets every field",
           options.rules[0].readable && options.rules[0].writable && options.rules[0].executable &&
-              options.rules[0].makeable && options.rules[0].removable &&
-              options.rules[0].ioctl_device);
+              options.rules[0].makeable && options.rules[0].makeable_ipc &&
+              options.rules[0].makeable_symlink && options.rules[0].referable &&
+              options.rules[0].removable && options.rules[0].ioctl_device);
 
     check("a letter that is not a right is refused",
           rights_refusal_exit("rz") == EXIT_CODE_POLICY_ERROR);
@@ -1062,6 +1134,12 @@ static void test_success_paths(void) {
     expect_exit("a rule that grants ioctl on a device runs", 0, with_ioctl_flag);
     check("--verbose names the ioctl right too", stderr_says("allow /dev/null +r +i"));
 
+    char *make_extra[] = {"phobos-landlock", "--verbose", "--rights=plf", "/tmp", "--",
+                          "/bin/true",       NULL};
+    expect_exit("a rule that grants ipc, symlink and refer runs", 0, make_extra);
+    check("--verbose names the ipc, symlink and refer rights",
+          stderr_says("allow /tmp +p +l +f"));
+
     char *bare[] = {"phobos-landlock", "--", "/bin/true", NULL};
     expect_exit("no rules at all, only a command", 0, bare);
 
@@ -1280,6 +1358,8 @@ static void test_file_versus_directory(void) {
     check("directory-only rights are named",
           (DIRECTORY_ONLY_ACCESS_RIGHTS & LANDLOCK_ACCESS_FILESYSTEM_READ_DIRECTORY) != 0 &&
               (DIRECTORY_ONLY_ACCESS_RIGHTS & LANDLOCK_ACCESS_FILESYSTEM_MAKE_DIRECTORY) != 0);
+    check("making a symbolic link is a directory-only right",
+          (DIRECTORY_ONLY_ACCESS_RIGHTS & LANDLOCK_ACCESS_FILESYSTEM_MAKE_SYMBOLIC_LINK) != 0);
     check("directory-only rights exclude reading a file",
           (DIRECTORY_ONLY_ACCESS_RIGHTS & LANDLOCK_ACCESS_FILESYSTEM_READ_FILE) == 0);
     check("directory-only rights exclude executing",

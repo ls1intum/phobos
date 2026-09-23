@@ -40,8 +40,8 @@ ln -s "$TREE" "$ALIAS"
 run_sections() {
   local right
   local index=1
-  for right in read execute write create delete; do
-    if [[ -n "${!index}" ]]; then printf '%s\n' "${!index}" > "$WORK/${right}.paths"; else : > "$WORK/${right}.paths"; fi
+  for right in read execute write create delete ipc symlink refer; do
+    if [[ -n "${!index:-}" ]]; then printf '%s\n' "${!index}" > "$WORK/${right}.paths"; else : > "$WORK/${right}.paths"; fi
     index=$((index + 1))
   done
   local out
@@ -52,7 +52,8 @@ run_sections() {
     source "${CORE}/phobos-common.sh"
     args=()
     build_path_args args "$WORK/read.paths" "$WORK/execute.paths" "$WORK/write.paths" \
-      "$WORK/create.paths" "$WORK/delete.paths" 2>"$WORK/log"
+      "$WORK/create.paths" "$WORK/delete.paths" "$WORK/ipc.paths" "$WORK/symlink.paths" \
+      "$WORK/refer.paths" 2>"$WORK/log"
     printf '%s' "${args[*]}"
   )"
   local rc=$?
@@ -126,7 +127,8 @@ run_composed() {
     source "${CORE}/phobos-common.sh"
     args=()
     build_path_args args "$spec/read.paths" "$spec/execute.paths" "$spec/write.paths" \
-      "$spec/create.paths" "$spec/delete.paths" >/dev/null 2>&1
+      "$spec/create.paths" "$spec/delete.paths" "$spec/ipc.paths" "$spec/symlink.paths" \
+      "$spec/refer.paths" >/dev/null 2>&1
   )
   printf '%s' "$?"
 }
@@ -167,6 +169,43 @@ if [[ "$(field "$r" 1)" == 0 && "$rules" == *"--rights=rx ${TREE}"* && "$rules" 
 else
   bad "a path and a symbolic link to it hold the union, and both spellings keep a rule" \
     "exit 0 and an rx rule for each spelling" "exit $(field "$r" 1): $rules"
+fi
+
+echo
+echo "== the new create buckets each grant exactly their own letter =="
+r="$(run_sections "" "" "" "" "" "$TREE" "" "")"
+if [[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" == "--rights=p ${TREE}" ]]; then
+  ok "a [create-ipc] path grants only p"
+else
+  bad "a [create-ipc] path grants only p" "exit 0 and --rights=p ${TREE}" "exit $(field "$r" 1): $(field "$r" 2)"
+fi
+
+r="$(run_sections "" "" "" "" "" "" "$TREE" "")"
+if [[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" == "--rights=l ${TREE}" ]]; then
+  ok "a [create-symlink] path grants only l"
+else
+  bad "a [create-symlink] path grants only l" "exit 0 and --rights=l ${TREE}" "exit $(field "$r" 1): $(field "$r" 2)"
+fi
+
+r="$(run_sections "" "" "" "" "" "" "" "$TREE")"
+if [[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" == "--rights=f ${TREE}" ]]; then
+  ok "a refer path grants only f"
+else
+  bad "a refer path grants only f" "exit 0 and --rights=f ${TREE}" "exit $(field "$r" 1): $(field "$r" 2)"
+fi
+
+echo
+echo "== [restructure] gives a path create, delete and refer together =="
+# parse_cfg_policy sends a [restructure] path into the create, delete and refer buckets, so the
+# path holds m, d and f together: it may create, delete, and rename or move across directories.
+# A path named in several buckets yields one rule per bucket, all with the same unioned rights,
+# exactly as a path in both [create] and [delete] does today; Landlock unions them harmlessly.
+r="$(run_sections "" "" "" "$TREE" "$TREE" "" "" "$TREE")"
+if [[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" == *"--rights=mfd ${TREE}"* ]]; then
+  ok "a path in create, delete and refer holds m, d and f"
+else
+  bad "a path in create, delete and refer holds m, d and f" \
+    "exit 0 and a --rights=mfd rule for ${TREE}" "exit $(field "$r" 1): $(field "$r" 2)"
 fi
 
 finish

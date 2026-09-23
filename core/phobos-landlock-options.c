@@ -35,11 +35,14 @@ static constexpr int OPTION_AND_VALUE_WORDS = 2;
             "  r  read a file, list a directory\n"
             "  w  write into an existing file, and shorten it\n"
             "  x  execute a file\n"
-            "  m  create files, directories, sockets and pipes\n"
+            "  m  create regular files and directories\n"
+            "  p  create sockets and named pipes\n"
+            "  l  create symbolic links\n"
+            "  f  move or rename across directories (REFER)\n"
             "  d  delete files and directories\n"
             "  i  ioctl on a character or block device\n"
             "\n"
-            "Creating device nodes and symbolic links is never granted.\n");
+            "Creating device nodes is never granted.\n");
     exit(EXIT_CODE_USAGE);
 }
 
@@ -68,6 +71,9 @@ static bool apply_rights_letter(struct path_rule *rule, char letter) {
     case RIGHTS_LETTER_WRITE: rule->writable = true; return true;
     case RIGHTS_LETTER_EXECUTE: rule->executable = true; return true;
     case RIGHTS_LETTER_MAKE: rule->makeable = true; return true;
+    case RIGHTS_LETTER_IPC: rule->makeable_ipc = true; return true;
+    case RIGHTS_LETTER_SYMLINK: rule->makeable_symlink = true; return true;
+    case RIGHTS_LETTER_REFER: rule->referable = true; return true;
     case RIGHTS_LETTER_DELETE: rule->removable = true; return true;
     case RIGHTS_LETTER_IOCTL: rule->ioctl_device = true; return true;
     default: return false;
@@ -83,6 +89,9 @@ static bool rights_letter_already_set(const struct path_rule *rule, char letter)
     case RIGHTS_LETTER_WRITE: return rule->writable;
     case RIGHTS_LETTER_EXECUTE: return rule->executable;
     case RIGHTS_LETTER_MAKE: return rule->makeable;
+    case RIGHTS_LETTER_IPC: return rule->makeable_ipc;
+    case RIGHTS_LETTER_SYMLINK: return rule->makeable_symlink;
+    case RIGHTS_LETTER_REFER: return rule->referable;
     case RIGHTS_LETTER_DELETE: return rule->removable;
     case RIGHTS_LETTER_IOCTL: return rule->ioctl_device;
     default: return false;

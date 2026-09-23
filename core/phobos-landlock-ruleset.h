@@ -90,13 +90,14 @@ enum landlock_scope : uint64_t {
 };
 
 /* Rights that only make sense on a directory, out of the ones this tool ever
- * grants. Device nodes and symbolic links are not in it because they are never
- * granted at all. */
+ * grants. Making a symbolic link is one of them, because a link is created in a
+ * directory. Device nodes are not in it because they are never granted at all. */
 static constexpr uint64_t DIRECTORY_ONLY_ACCESS_RIGHTS =
     LANDLOCK_ACCESS_FILESYSTEM_READ_DIRECTORY | LANDLOCK_ACCESS_FILESYSTEM_REMOVE_DIRECTORY |
     LANDLOCK_ACCESS_FILESYSTEM_REMOVE_FILE | LANDLOCK_ACCESS_FILESYSTEM_MAKE_DIRECTORY |
     LANDLOCK_ACCESS_FILESYSTEM_MAKE_REGULAR_FILE | LANDLOCK_ACCESS_FILESYSTEM_MAKE_SOCKET |
-    LANDLOCK_ACCESS_FILESYSTEM_MAKE_NAMED_PIPE | LANDLOCK_ACCESS_FILESYSTEM_REFER;
+    LANDLOCK_ACCESS_FILESYSTEM_MAKE_NAMED_PIPE | LANDLOCK_ACCESS_FILESYSTEM_MAKE_SYMBOLIC_LINK |
+    LANDLOCK_ACCESS_FILESYSTEM_REFER;
 
 /* Highest Landlock version whose access rights this tool enumerates. A newer
  * kernel may define rights we do not list, which would leave them

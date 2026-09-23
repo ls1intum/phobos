@@ -8,8 +8,12 @@
 # Every variable here is read by the scripts that source the aggregate, never in
 # this file, so SC2034 would fire on all of them by design.
 # shellcheck disable=SC2034
-# The filesystem sections, each granting exactly its own phobos-landlock right.
-PHB_FS_RIGHTS="read execute write create delete"
+# The filesystem buckets, one per phobos-landlock right letter: read (r), execute (x),
+# write (w), create (m: regular files and directories), delete (d), ipc (p: sockets and
+# named pipes), symlink (l), refer (f: move or rename across directories). The cfg section
+# [create-ipc] feeds ipc, [create-symlink] feeds symlink, and [restructure] feeds create,
+# delete and refer together, so a policy that names it may rename and move within the tree.
+PHB_FS_RIGHTS="read execute write create delete ipc symlink refer"
 
 # Merges one configured timeout value into PARSED_TIMEOUT and PARSED_TIMEOUT_DISABLED, which
 # parse_cfg_policy resets per call. The rule is the same within a file and across files:
@@ -186,7 +190,7 @@ refuse_unknown_section() {
   local section="$1"
   local cfg="$2"
   case "$section" in
-    read|execute|write|create|delete|connect|bind|accept|limits) ;;
+    read|execute|write|create|delete|create-ipc|create-symlink|restructure|connect|bind|accept|limits) ;;
     *) report "Policy invalid: unknown section '[${section}]' in ${cfg}. (PHB-EPOLICY)"; exit "${PHB_EPOLICY}" ;;
   esac
 }
@@ -315,10 +319,13 @@ parse_cfg_policy() {
   local wr="${tdir}/write.paths"
   local cr="${tdir}/create.paths"
   local de="${tdir}/delete.paths"
+  local ipc="${tdir}/ipc.paths"
+  local sym="${tdir}/symlink.paths"
+  local ref="${tdir}/refer.paths"
   local net="${tdir}/net.rules"
   local bind="${tdir}/bind.rules"
   local acc="${tdir}/accept.rules"
-  : >"$rd"; : >"$ex"; : >"$wr"; : >"$cr"; : >"$de"; : >"$net"; : >"$bind"; : >"$acc"
+  : >"$rd"; : >"$ex"; : >"$wr"; : >"$cr"; : >"$de"; : >"$ipc"; : >"$sym"; : >"$ref"; : >"$net"; : >"$bind"; : >"$acc"
   reset_parsed_limits
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%%#*}"
@@ -336,6 +343,9 @@ parse_cfg_policy() {
       write)   printf '%s\n' "$line" >>"$wr" ;;
       create)  printf '%s\n' "$line" >>"$cr" ;;
       delete)  printf '%s\n' "$line" >>"$de" ;;
+      create-ipc)     printf '%s\n' "$line" >>"$ipc" ;;
+      create-symlink) printf '%s\n' "$line" >>"$sym" ;;
+      restructure)    printf '%s\n' "$line" >>"$cr"; printf '%s\n' "$line" >>"$de"; printf '%s\n' "$line" >>"$ref" ;;
       connect) append_connect_rule "$line" "$net" ;;
       bind)    append_bind_rule "$line" "$bind" ;;
       accept)  append_accept_rule "$line" "$acc" ;;

@@ -44,7 +44,7 @@ PHB_SPEC_BROKER_PID="broker.pid"
 PHB_SPEC_INBOUND_PID="inbound.pid"
 
 # The files write_spec creates, the only ones remove_owned_spec_dir deletes.
-PHB_SPEC_FILES="read.paths execute.paths write.paths create.paths delete.paths tail.flags net.rules bind.rules accept.rules timeout.sec limits.conf"
+PHB_SPEC_FILES="read.paths execute.paths write.paths create.paths delete.paths ipc.paths symlink.paths refer.paths tail.flags net.rules bind.rules accept.rules timeout.sec limits.conf"
 
 # The subdirectory phobos.sh keeps its own scratch files in, so they live under the
 # specification directory and are removed with it rather than left in /tmp. phobos.sh ends
