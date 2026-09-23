@@ -162,16 +162,24 @@ int detect_landlock_version(int minimum_landlock_version, bool network_rules_wan
 
 /* Names every right this kernel cannot handle, and what that means in
  * practice. Landlock offers no hook below those versions, so there is nothing
- * to enforce in their place and the gap can only be reported. */
-void report_unenforceable_rights(int landlock_version);
+ * to enforce in their place and the gap can only be reported. The filesystem
+ * warnings are said only when this ruleset handles the filesystem; the scoping
+ * note is said either way, because signal and abstract-socket scoping matter to
+ * a network-only ruleset too. */
+void report_unenforceable_rights(int landlock_version, bool filesystem_handled);
 
 /* Creates a ruleset that denies everything it handles unless a rule allows it.
  *
  * handled_network names the directions the policy actually speaks about. A
  * direction that is handled but never granted is denied outright, so switching
  * on both because the policy mentioned one would forbid the other without
- * anyone asking for that. Pass 0 to leave network access alone entirely. */
-int create_ruleset(int landlock_version, uint64_t handled_network);
+ * anyone asking for that. Pass 0 to leave network access alone entirely.
+ *
+ * handled_filesystem is the filesystem rights this ruleset governs, or 0 for a
+ * network-only ruleset that leaves the filesystem alone so it can compose with a
+ * separate filesystem ruleset. Scoping is always applied where the kernel
+ * supports it, network-only ruleset included. */
+int create_ruleset(int landlock_version, uint64_t handled_filesystem, uint64_t handled_network);
 
 /* Adds one allow-listed path. */
 void add_path_rule(int ruleset_descriptor, int landlock_version, const struct path_rule *rule);

@@ -86,15 +86,15 @@ int detect_landlock_version(int minimum_landlock_version, bool network_rules_wan
  * gap: without REFER the kernel denies every rename across directories rather
  * than leaving it free. That breaks builds loudly instead of weakening the
  * sandbox quietly, so it is worth naming but it is not a hole. */
-void report_unenforceable_rights(int landlock_version) {
-    if (landlock_version < FIRST_VERSION_WITH_TRUNCATE) {
+void report_unenforceable_rights(int landlock_version, bool filesystem_handled) {
+    if (filesystem_handled && landlock_version < FIRST_VERSION_WITH_TRUNCATE) {
         warn_always("warning: Landlock version %d does not handle TRUNCATE; a file on a "
                     "read-only path can still be emptied with truncate(2) by anyone the "
                     "ordinary file permissions allow to write it. Pass "
                     "--minimum-landlock-version %d to refuse such a kernel instead.",
                     landlock_version, FIRST_VERSION_WITH_TRUNCATE);
     }
-    if (landlock_version < FIRST_VERSION_WITH_IOCTL_DEVICE) {
+    if (filesystem_handled && landlock_version < FIRST_VERSION_WITH_IOCTL_DEVICE) {
         warn_always("warning: Landlock version %d does not handle IOCTL_DEVICE; ioctl on a "
                     "character or block device is unrestricted on every allowed path. Pass "
                     "--minimum-landlock-version %d to refuse such a kernel instead.",
@@ -107,7 +107,7 @@ void report_unenforceable_rights(int landlock_version) {
                     "such a kernel instead.",
                     landlock_version, FIRST_VERSION_WITH_SCOPED);
     }
-    if (landlock_version < FIRST_VERSION_WITH_REFER) {
+    if (filesystem_handled && landlock_version < FIRST_VERSION_WITH_REFER) {
         warn_always("note: Landlock version %d has no REFER; moving a file between two "
                     "allowed directories is refused with EXDEV even where the policy permits "
                     "both sides.",
@@ -122,10 +122,10 @@ uint64_t scoped_for_version(int landlock_version) {
     return LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | LANDLOCK_SCOPE_SIGNAL;
 }
 
-int create_ruleset(int landlock_version, uint64_t handled_network) {
+int create_ruleset(int landlock_version, uint64_t handled_filesystem, uint64_t handled_network) {
     struct landlock_ruleset_attributes attributes;
     memset(&attributes, 0, sizeof(attributes));
-    attributes.handled_access_filesystem = filesystem_rights_for_version(landlock_version);
+    attributes.handled_access_filesystem = handled_filesystem;
     attributes.handled_access_network = handled_network;
     attributes.scoped = scoped_for_version(landlock_version);
 

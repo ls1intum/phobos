@@ -6,20 +6,18 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/phobos-common.sh"
 
 NO_LANDLOCK=0
-NO_NETWORK_PORTS=0
 LANDLOCK_BIN_OPT=""
 RESOURCES_LAYER_OPT=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --debug) enable_debug_log; shift ;;
     --no-landlock) NO_LANDLOCK=1; shift ;;
-    --no-network-ports) NO_NETWORK_PORTS=1; shift ;;
     --landlock-bin) shift; LANDLOCK_BIN_OPT="${1:-}"; shift ;;
     --resources-layer) shift; RESOURCES_LAYER_OPT="${1:-}"; shift ;;
     *) break ;;
   esac
 done
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-filesystem.sh [--debug] [--no-landlock] [--no-network-ports] [--landlock-bin <path>] [--resources-layer <path>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-filesystem.sh [--debug] [--no-landlock] [--landlock-bin <path>] [--resources-layer <path>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
 SPEC_DIR="$1"; shift 2
 CMD=("$@")
 
@@ -89,32 +87,16 @@ fi
 args=()
 if (( PHB_DEBUG_ENABLED )); then args+=( --verbose ); fi
 
-# The paths a submission can change: the union of the write, create and delete sections. The
-# specification directory must stay out of this set, or a submission could rewrite its own connect
-# policy, which the guard reads, or the clean-up's process-id files, which it kills. This matters
-# only when the network layer is on, since only then is net.rules read at run time and only then do
-# the broker and inbound process-id files exist, so the check is gated on the same flag as the port
-# rules below rather than run for a network-disabled run whose spec directory harms nothing.
-if (( ! NO_NETWORK_PORTS )); then
-  WRITABLE="$(new_scratch_file phobos-writable.XXXXXX)"
-  cat "${WRITE}" "${CREATE}" "${DELETE}" 2>/dev/null > "${WRITABLE}" || :
-  refuse_spec_dir_under_write_path "${SPEC_DIR}" "${WRITABLE}"
-  rm -f "${WRITABLE}"
-fi
-
 # One --rights=LETTERS rule per allow-listed path, the letters being exactly the sections the
 # path appears in: [read] grants r, [execute] x, [write] w, [create] m, [delete] d. Creating
 # device nodes and symbolic links is never granted, since those are the two ways to reach
 # something the policy never named. A path that names no right at all is simply not listed and
-# stays denied by Landlock's default.
+# stays denied by Landlock's default. The Landlock TCP-port rules are no longer built here: they
+# are the network boundary's kernel half and the network layer applies them on its own
+# network-only ruleset, which composes with this filesystem-only one. The specification directory
+# is kept out of every write path by phobos-policy.sh, where the write union is known and which
+# runs whichever layers are in the chain.
 build_path_args args "${READ}" "${EXECUTE}" "${WRITE}" "${CREATE}" "${DELETE}"
-# The Landlock TCP-port rules are the kernel-enforced half of the network boundary, built
-# here rather than in the network layer. With --no-network-ports the network restriction is
-# off as a whole, so they are skipped too, along with the connect guard the network layer runs.
-if (( ! NO_NETWORK_PORTS )); then
-  build_network_args args "${SPEC_DIR}/net.rules"
-  build_bind_args args "${SPEC_DIR}/bind.rules"
-fi
 if [[ -s "${TAIL}" ]]; then
   # Splitting is intended: tail.flags holds whitespace-separated arguments.
   # Read line by line so a multi-line file works too.

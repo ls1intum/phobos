@@ -27,7 +27,7 @@ static constexpr int OPTION_AND_VALUE_WORDS = 2;
     fprintf(stderr,
             "Usage: phobos-landlock --rights=LETTERS PATH [--rights=LETTERS PATH ...]\n"
             "                       [--connect-tcp PORT] [--bind-tcp PORT]\n"
-            "                       [--chdir DIRECTORY]\n"
+            "                       [--chdir DIRECTORY] [--no-filesystem]\n"
             "                       [--minimum-landlock-version NUMBER] [--verbose]\n"
             "                       -- COMMAND [ARGUMENTS...]\n"
             "\n"
@@ -136,6 +136,11 @@ void parse_arguments(int argument_count, char *arguments[], struct options *opti
             argument_index++;
             continue;
         }
+        if (strcmp(argument, "--no-filesystem") == 0) {
+            options->no_filesystem = true;
+            argument_index++;
+            continue;
+        }
         if (argument_index + 1 >= argument_count) {
             print_usage_and_exit();
         }
@@ -161,6 +166,11 @@ void parse_arguments(int argument_count, char *arguments[], struct options *opti
     }
     if (argument_index >= argument_count) {
         print_usage_and_exit();
+    }
+    if (options->no_filesystem && options->path_rule_count > 0) {
+        exit_with_format("--no-filesystem carries no filesystem rules, but %zu --rights= path(s) "
+                         "were given; a network-only ruleset names ports only",
+                         options->path_rule_count);
     }
     options->command = &arguments[argument_index];
 }

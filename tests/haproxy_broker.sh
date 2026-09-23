@@ -57,6 +57,12 @@ if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/guard" "${CORE}"
   bad "the connect guard builds" "$(cat "$WORK/cc.log")"
   finish
 fi
+# The network layer applies the Landlock TCP-port rules itself now, so the end-to-end case below,
+# whose [connect] rule names a port, needs the phobos-landlock binary too.
+if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/phobos-landlock" "${CORE}"/phobos-landlock*.c 2>"$WORK/cc.log"; then
+  bad "phobos-landlock builds" "$(cat "$WORK/cc.log")"
+  finish
+fi
 
 cat > "$WORK/upstream.c" <<'C'
 #include <arpa/inet.h>
@@ -388,15 +394,17 @@ fi
 
 # The whole network layer, end to end: it writes the placeholder to /etc/hosts, starts the broker
 # with the resolver, and the command then resolves the name with no DNS, connects, and reaches the
-# address the broker resolves. A loopback rule is present for the guard-to-broker hop, as the
-# shipped base policy carries. It writes /etc/hosts, so it needs that file writable, as the
-# run-phase image the acceptance suite uses gives; where it is not, this one case is skipped.
+# address the broker resolves. The rule names only the host and its port: mixing it with a
+# loopback wildcard rule (no port) is refused as unenforceable, because Landlock expresses ports,
+# not hosts, so a wildcard alongside a concrete port would be half-enforced. It writes /etc/hosts,
+# so it needs that file writable, as the run-phase image the acceptance suite uses gives; where it
+# is not, this one case is skipped.
 if [[ -w /etc/hosts ]]; then
   spec_e2e="$WORK/spec-e2e"
   mkdir -p "$spec_e2e"
-  printf '127.0.0.1 *\nallowed.example %s\n' "$UPORT" > "$spec_e2e/net.rules"
+  printf 'allowed.example %s\n' "$UPORT" > "$spec_e2e/net.rules"
   rm -f "$WORK/real.marker"
-  "${CORE}/phobos-network.sh" --connect-guard-bin "$WORK/guard" \
+  "${CORE}/phobos-network.sh" --connect-guard-bin "$WORK/guard" --landlock-bin "$WORK/phobos-landlock" \
     --resolver "127.0.0.1:${DNSPORT}" "$spec_e2e" -- \
     timeout 4 openssl s_client -connect "allowed.example:${UPORT}" -servername allowed.example -quiet < /dev/null \
     > "$WORK/e2e.out" 2>&1 || true

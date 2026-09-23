@@ -17,10 +17,19 @@ export TMPDIR="$WORK"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
 
+# A concrete writable directory for the test policies to grant, kept distinct from where the spec
+# directories are made. phobos-policy.sh now refuses a specification that lies beneath a write
+# path, exactly as a real run's /var/tmp spec parent lies outside the shipped policies' write
+# paths, so a test that granted write to the spec's own parent would be refused for the right
+# reason. fresh_spec makes specs directly under WORK, which this subdirectory is not an ancestor of.
+WRITABLE="$WORK/writable"
+mkdir -p "$WRITABLE"
+
 CORE_X="$WORK/core-x"
 cp -R "$CORE" "$CORE_X"
 chmod +x "$CORE_X"/*.sh
-printf '[read]\n/usr\n[execute]\n/usr\n[write]\n/tmp\n[create]\n/tmp\n[limits]\nmem_mb=64\n' > "$CORE_X/BaseTest.cfg"
+printf '[read]\n/usr\n[execute]\n/usr\n[write]\n%s\n[create]\n%s\n[limits]\nmem_mb=64\n' \
+  "$WRITABLE" "$WRITABLE" > "$CORE_X/BaseTest.cfg"
 
 # Makes an empty, owned specification directory the way phobos.sh does, and prints its path.
 fresh_spec() {
@@ -40,8 +49,8 @@ rc=$?
 if [[ "$rc" -eq 0 ]]; then ok "a base and an exercise config build a specification"; else bad "a base and an exercise config build a specification" "exit 0" "exit $rc"; fi
 check "the base read path is carried through"    "/usr" "$(cat "$SPEC/read.paths")"
 check "the base execute path is carried through" "/usr" "$(cat "$SPEC/execute.paths")"
-check "the base write path is carried through"   "/tmp" "$(cat "$SPEC/write.paths")"
-check "the base create path is carried through"  "/tmp" "$(cat "$SPEC/create.paths")"
+check "the base write path is carried through"   "$WRITABLE" "$(cat "$SPEC/write.paths")"
+check "the base create path is carried through"  "$WRITABLE" "$(cat "$SPEC/create.paths")"
 check "the largest memory limit wins in the merge" "mem_mb=128" "$(cat "$SPEC/limits.conf")"
 check "a path no config named is absent from the spec" "" "$(grep -F /never/granted "$SPEC/read.paths")"
 
@@ -61,7 +70,7 @@ out="$(bash "$CORE_X/phobos-policy.sh" --spec-dir "$WSPEC" --config "$WORK/widen
 rc=$?
 if [[ "$rc" -eq 0 ]]; then ok "an exercise widening the sandbox is accepted (additive model)"; else bad "an exercise widening the sandbox is accepted (additive model)" "exit 0" "exit $rc: $out"; fi
 check "the exercise adds write on a base path"      "/usr"       "$(grep -Fx /usr "$WSPEC/write.paths")"
-check "the base write path is still present"         "/tmp"       "$(grep -Fx /tmp "$WSPEC/write.paths")"
+check "the base write path is still present"         "$WRITABLE"  "$(grep -Fx "$WRITABLE" "$WSPEC/write.paths")"
 check "the exercise adds a path the base did not"    "/opt/extra" "$(grep -Fx /opt/extra "$WSPEC/read.paths")"
 
 echo

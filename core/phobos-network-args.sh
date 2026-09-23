@@ -83,9 +83,9 @@ refuse_mixed_network_wildcard() {
 # not one the protocol has, an external host with no port, and a loopback wildcard beside a
 # concrete port. phobos-policy.sh asks this once, where the specification is written, so that
 # a rule is judged whether or not the layer that would otherwise have judged it is in the
-# chain: with --no-filesystem-restriction the Landlock port rules are never built, and the
-# spec would otherwise carry a rule the guard silently drops. Assumes it is called plainly, so
-# that a refusal ends the run.
+# chain: with --no-networksystem-restriction the network layer is absent, so nobody builds the
+# Landlock port rules, and the spec would otherwise carry a rule that is silently dropped.
+# Assumes it is called plainly, so that a refusal ends the run.
 refuse_unenforceable_network_rules() {
   local net_rules="$1"
   local bind_rules="$2"

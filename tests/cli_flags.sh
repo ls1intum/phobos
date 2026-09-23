@@ -114,35 +114,40 @@ else
 fi
 
 echo
-echo "== --no-networksystem-restriction also drops the Landlock TCP-port rules =="
-# The kernel-enforced TCP-port rules are built in the filesystem layer, so disabling the
-# network restriction must reach it too. A recording stand-in for phobos-landlock captures
-# the arguments; a spec naming a concrete external port would produce a --connect-tcp rule.
+echo "== the network layer builds the Landlock TCP-port rules, the filesystem layer does not =="
+# The kernel-enforced TCP-port rules moved from the filesystem layer to the network layer, which
+# applies them on a network-only Landlock ruleset (--no-filesystem) inside the connect guard's
+# child lineage. A recording stand-in for phobos-landlock captures the arguments; a spec naming a
+# concrete external port produces a --connect-tcp rule on the network layer's invocation and none
+# on the filesystem layer's. The passthrough stand-in stands in for the connect guard: it skips
+# its own arguments to the first -- and execs the command tail, which is the network layer's
+# phobos-landlock invocation.
 printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" > "$LL_RECORD"; exit 0' > "$WORK/record-landlock"
 chmod +x "$WORK/record-landlock"
 PORTSPEC="$WORK/portspec"
 mkdir -p "$PORTSPEC"
-for f in read.paths execute.paths write.paths create.paths delete.paths tail.flags; do : > "$PORTSPEC/$f"; done
+for f in read.paths execute.paths write.paths create.paths delete.paths tail.flags bind.rules accept.rules; do : > "$PORTSPEC/$f"; done
 printf '1.2.3.4 443\n' > "$PORTSPEC/net.rules"
 
 rm -f "$WORK/ll-record"
-LL_RECORD="$WORK/ll-record" bash "$CORE_X/phobos-filesystem.sh" \
-  --landlock-bin "$WORK/record-landlock" "$PORTSPEC" -- /bin/true >/dev/null 2>&1
-with_rules="$(cat "$WORK/ll-record" 2>/dev/null)"
-if [[ "$with_rules" == *"--connect-tcp 443"* ]]; then
-  ok "with the network restriction on, the concrete port becomes a --connect-tcp rule"
+LL_RECORD="$WORK/ll-record" bash "$CORE_X/phobos-network.sh" \
+  --connect-guard-bin "$WORK/passthrough-landlock" --landlock-bin "$WORK/record-landlock" \
+  "$PORTSPEC" -- /bin/true >/dev/null 2>&1
+net_rules="$(cat "$WORK/ll-record" 2>/dev/null)"
+if [[ "$net_rules" == *"--no-filesystem"* && "$net_rules" == *"--connect-tcp 443"* ]]; then
+  ok "the network layer puts the concrete port on a --no-filesystem --connect-tcp ruleset"
 else
-  bad "with the network restriction on, the concrete port becomes a --connect-tcp rule" "a --connect-tcp 443 argument" "$with_rules"
+  bad "the network layer puts the concrete port on a --no-filesystem --connect-tcp ruleset" "--no-filesystem with --connect-tcp 443" "$net_rules"
 fi
 
 rm -f "$WORK/ll-record"
 LL_RECORD="$WORK/ll-record" bash "$CORE_X/phobos-filesystem.sh" \
-  --landlock-bin "$WORK/record-landlock" --no-network-ports "$PORTSPEC" -- /bin/true >/dev/null 2>&1
-without_rules="$(cat "$WORK/ll-record" 2>/dev/null)"
-if [[ "$without_rules" != *"--connect-tcp"* ]]; then
-  ok "--no-network-ports drops the --connect-tcp rule from Landlock"
+  --landlock-bin "$WORK/record-landlock" "$PORTSPEC" -- /bin/true >/dev/null 2>&1
+fs_rules="$(cat "$WORK/ll-record" 2>/dev/null)"
+if [[ "$fs_rules" != *"--connect-tcp"* ]]; then
+  ok "the filesystem layer builds no TCP-port rule; ports are the network layer's job"
 else
-  bad "--no-network-ports drops the --connect-tcp rule from Landlock" "no --connect-tcp argument" "$without_rules"
+  bad "the filesystem layer builds no TCP-port rule; ports are the network layer's job" "no --connect-tcp argument" "$fs_rules"
 fi
 
 echo "== --debug writes its trace to stderr, so the command's own stdout stays clean =="

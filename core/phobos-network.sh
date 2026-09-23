@@ -12,16 +12,18 @@ source "${HERE}/phobos-haproxy.sh"
 GUARD_BIN_OPT=""
 HAPROXY_BIN_OPT=""
 RESOLVER_OPT=""
+LANDLOCK_BIN_OPT=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --debug) enable_debug_log; shift ;;
     --connect-guard-bin) shift; GUARD_BIN_OPT="${1:-}"; shift ;;
     --haproxy-bin) shift; HAPROXY_BIN_OPT="${1:-}"; shift ;;
     --resolver) shift; RESOLVER_OPT="${1:-}"; shift ;;
+    --landlock-bin) shift; LANDLOCK_BIN_OPT="${1:-}"; shift ;;
     *) break ;;
   esac
 done
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] [--connect-guard-bin <path>] [--haproxy-bin <path>] [--resolver <ip[:port]>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] [--connect-guard-bin <path>] [--haproxy-bin <path>] [--resolver <ip[:port]>] [--landlock-bin <path>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created if this layer ends before it hands over,
@@ -99,5 +101,31 @@ if [[ -s "$ACCEPT_RULES" ]]; then
   fi
 fi
 guard_command+=( --rules "$RULES" -- )
-debug_log network "run" "${guard_command[@]}" "$@"
-exec "${guard_command[@]}" "$@"
+
+# The Landlock TCP-port rules are the kernel-enforced half of the network boundary, and this
+# layer applies them itself so that the network restriction is whole here rather than split
+# across another layer. They go on a network-only Landlock ruleset (--no-filesystem), which
+# leaves the filesystem to the filesystem layer's own ruleset and composes with it by
+# intersection. The ruleset is applied inside the connect guard's child lineage, after its
+# supervisor has forked, so the supervisor that connects on the command's behalf stays
+# unrestricted. When the policy names no TCP port, no ruleset is needed here and the guard alone
+# filters the run.
+LANDLOCK_BIN="${LANDLOCK_BIN_OPT:-${HERE}/phobos-landlock}"
+command_tail=( "$@" )
+port_args=()
+build_network_args port_args "$RULES"
+build_bind_args port_args "${SPEC_DIR}/bind.rules"
+if (( ${#port_args[@]} > 0 )); then
+  # Refused when missing rather than left to fail obscurely inside the guard's child, so a run
+  # that names a TCP port cannot lose its kernel-enforced port rules without a clear message.
+  if [[ ! -x "$LANDLOCK_BIN" ]]; then
+    report "The Landlock binary '${LANDLOCK_BIN}' is missing or not executable; refusing to run without the TCP-port rules the [connect]/[bind] policy names. (PHB-ERUNTIME)"
+    exit "${PHB_ERUNTIME}"
+  fi
+  landlock_prefix=( "$LANDLOCK_BIN" --no-filesystem )
+  if (( PHB_DEBUG_ENABLED )); then landlock_prefix+=( --verbose ); fi
+  command_tail=( "${landlock_prefix[@]}" "${port_args[@]}" -- "${command_tail[@]}" )
+fi
+
+debug_log network "run" "${guard_command[@]}" "${command_tail[@]}"
+exec "${guard_command[@]}" "${command_tail[@]}"

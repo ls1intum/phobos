@@ -564,6 +564,11 @@ static void test_limits(void) {
     binds[n++] = "/bin/true";
     binds[n] = NULL;
     expect_exit("one bind port more than the table holds", EXIT_CODE_POLICY_ERROR, binds);
+
+    char *no_fs_with_path[] = {"phobos-landlock", "--no-filesystem", "--rights=r", "/usr",
+                               "--",              "/bin/true",       NULL};
+    expect_exit("--no-filesystem with a path rule is refused", EXIT_CODE_POLICY_ERROR,
+                no_fs_with_path);
 }
 
 /* What the kernel can enforce against what the call demands.
@@ -854,7 +859,7 @@ static void test_rights_letters(void) {
  * atexit handler, and _exit walks past it, so the reported lines would look unexecuted
  * although they ran. The fflush(NULL) before the fork keeps this from duplicating any
  * buffered output. */
-static void capture_unenforceable_report(int landlock_version) {
+static void capture_unenforceable_report(int landlock_version, bool filesystem_handled) {
     reset_captured_stderr();
     fflush(NULL);
     pid_t pid = fork();
@@ -862,7 +867,7 @@ static void capture_unenforceable_report(int landlock_version) {
         if (dup2(fileno(captured_stderr), STDERR_FILENO) < 0) {
             _exit(CAPTURE_FAILED_EXIT_STATUS);
         }
-        report_unenforceable_rights(landlock_version);
+        report_unenforceable_rights(landlock_version, filesystem_handled);
         exit(0);
     }
     int status = 0;
@@ -873,7 +878,7 @@ static void capture_unenforceable_report(int landlock_version) {
 static void test_unenforceable_report(void) {
     printf("\nWhat is said about a kernel too old to handle a right\n");
 
-    capture_unenforceable_report(1);
+    capture_unenforceable_report(1, true);
     check("version 1 is told that TRUNCATE is not handled",
           stderr_says("does not handle TRUNCATE"));
     check("version 1 is told that IOCTL_DEVICE is not handled",
@@ -883,14 +888,26 @@ static void test_unenforceable_report(void) {
     check("the report names the option that would refuse such a kernel",
           stderr_says("--minimum-landlock-version 3"));
 
-    capture_unenforceable_report(4);
+    capture_unenforceable_report(4, true);
     check("version 4 is not told about TRUNCATE", !stderr_says("does not handle TRUNCATE"));
     check("version 4 is still told about IOCTL_DEVICE",
           stderr_says("does not handle IOCTL_DEVICE"));
     check("version 4 is not told about REFER", !stderr_says("has no REFER"));
 
-    capture_unenforceable_report(8);
+    capture_unenforceable_report(8, true);
     check("a kernel that handles everything is told nothing", !stderr_says("does not handle"));
+
+    /* A network-only ruleset (handled_access_filesystem == 0) governs no filesystem, so the
+     * filesystem warnings do not apply, but the scoping note still does: signal and abstract-
+     * socket scoping matter to a network-only ruleset too. */
+    capture_unenforceable_report(1, false);
+    check("a network-only ruleset is not told about TRUNCATE",
+          !stderr_says("does not handle TRUNCATE"));
+    check("a network-only ruleset is not told about IOCTL_DEVICE",
+          !stderr_says("does not handle IOCTL_DEVICE"));
+    check("a network-only ruleset is not told about REFER", !stderr_says("has no REFER"));
+    check("a network-only ruleset is still told about missing scoping",
+          stderr_says("does not handle scoping"));
 }
 
 static void test_syscall_failures(void) {
@@ -1159,6 +1176,17 @@ static void test_what_reaches_the_kernel(void) {
     check("both bind ports reach the kernel, in the order they were given",
           record->port_rule_count == 2 && record->port_rule_port[0] == 8080 &&
               record->port_rule_port[1] == 9090);
+
+    char *net_only[] = {"phobos-landlock", "--no-filesystem", "--connect-tcp", "443", "--",
+                        "/bin/true",       NULL};
+    expect_exit("a network-only ruleset runs", 0, net_only);
+    check("a network-only ruleset handles no filesystem access",
+          record->handled_access_filesystem == 0);
+    check("a network-only ruleset still handles the connect direction",
+          record->handled_access_network == LANDLOCK_ACCESS_NETWORK_CONNECT_TCP);
+    check("a network-only ruleset carries no path rule", record->path_rule_count == 0);
+    check("a network-only ruleset still scopes signals and abstract UNIX sockets",
+          record->scoped == (LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | LANDLOCK_SCOPE_SIGNAL));
 
     mock_landlock_version = 3;
     expect_exit("an older kernel runs", 0, read_only);

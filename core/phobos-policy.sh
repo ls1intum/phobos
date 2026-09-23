@@ -197,6 +197,16 @@ refuse_unenforceable_accept_rules "$eff_accept" "$eff_bind"
 
 write_spec "$SPEC_DIR" "$eff_dir" "$eff_net" "$timeout_eff" "$tail_flags_file" "$eff_bind" "$eff_accept"
 
+# The specification directory must lie outside every path the command may write, or the command
+# could rewrite the connect policy the guard reads at run time, or the process-id files the
+# clean-up kills. Checked here, where the write union is known and which runs for every layer
+# combination, rather than in the filesystem layer, which no longer sees the network runtime
+# state now that the port rules and the connect guard live in the network layer.
+writable_union="$(mktemp -p "$PHOBOS_SCRATCH")"
+cat "${SPEC_DIR}/write.paths" "${SPEC_DIR}/create.paths" "${SPEC_DIR}/delete.paths" 2>/dev/null \
+  > "$writable_union" || :
+refuse_spec_dir_under_write_path "$SPEC_DIR" "$writable_union"
+
 # The resource limits go into the specification, one "key=value" per line for each limit a
 # [limits] section named. phobos-resources.sh reads them and sets them with rlimits right
 # before phobos-landlock, so phobos-landlock and the command inherit them, rather than this
