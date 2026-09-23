@@ -93,6 +93,38 @@ mark_owned_spec_dir() {
   : > "$1/${PHB_SPEC_MARKER}"
 }
 
+# Builds a specification directory a single layer owns, for a standalone run from one or more
+# exercise configs, and leaves its path in BUILT_SPEC_DIR. It creates and marks the directory
+# under the parent, sets an EXIT trap that removes it, and fills it through phobos-policy.sh, the
+# one parser, so a layer never parses a config itself. The caller then runs the layer over
+# BUILT_SPEC_DIR in specification-directory mode as a child and exits with the child's status, so
+# the trap removes the directory once the run ends; a layer that execs its way to the command
+# leaves no waiter of its own, which is why the owner is this outer shell rather than the layer.
+# The trap is set before phobos-policy.sh runs, so a policy refusal removes the half-built
+# directory too. Assumes it is called plainly, not in a command substitution, so that a refusal
+# ends the run and phobos-policy.sh's messages reach the caller's own streams. Takes the directory
+# holding phobos-policy.sh, the spec parent, the tail flags file (empty for phobos-policy.sh's own
+# default), then the configs.
+build_owned_spec_from_configs() {
+  local policy_dir="$1"
+  local spec_parent="$2"
+  local tail_flags_file="$3"
+  shift 3
+  refuse_unusable_spec_parent "$spec_parent"
+  BUILT_SPEC_DIR="$(mktemp -d "${spec_parent%/}/phobos-spec.XXXXXX")"
+  mark_owned_spec_dir "$BUILT_SPEC_DIR"
+  mkdir -p "${BUILT_SPEC_DIR}/${PHB_SPEC_SCRATCH}"
+  # The directory is expanded into the trap now, so the trap removes this run's directory even
+  # after BUILT_SPEC_DIR is reused or unset.
+  # shellcheck disable=SC2064
+  trap "finish_owned_spec_dir \"\$?\" \"${BUILT_SPEC_DIR}\"" EXIT
+  local policy_args=( --spec-dir "$BUILT_SPEC_DIR" )
+  [[ -n "$tail_flags_file" ]] && policy_args+=( --tail-flags-file "$tail_flags_file" )
+  local cfg
+  for cfg in "$@"; do policy_args+=( --config "$cfg" ); done
+  "${policy_dir}/phobos-policy.sh" "${policy_args[@]}"
+}
+
 # Stops the egress broker whose process id the network layer recorded in the specification
 # directory, if it recorded one, so the broker does not outlive the run it served. A pid file
 # that names nothing running is simply removed. Assumes the directory is one Phobos owns.

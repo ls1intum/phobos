@@ -7,14 +7,39 @@ source "${HERE}/phobos-common.sh"
 
 # A generic layer: it sets the resource limits and execs the rest of the chain. phobos.sh has
 # the filesystem layer start it, and only when the resource limits are enabled, so there is no
-# enable flag to read. On its own, phobos-resources.sh SPEC -- CMD limits CMD.
+# enable flag to read. On its own, phobos-resources.sh SPEC -- CMD limits CMD, or, with one or
+# more --config files instead of a specification directory, it builds its own through
+# phobos-policy.sh and applies only the resource limits.
+CONFIGS=()
+SPEC_PARENT="/var/tmp"
+TAIL_FLAGS_FILE_OPT=""
+LAYER_FLAGS=()
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
-    --debug) enable_debug_log; shift ;;
+    --debug) enable_debug_log; LAYER_FLAGS+=( --debug ); shift ;;
+    --config) shift; CONFIGS+=( "${1:-}" ); shift ;;
+    --spec-parent) shift; SPEC_PARENT="${1:-}"; shift ;;
+    --tail-flags-file) shift; TAIL_FLAGS_FILE_OPT="${1:-}"; shift ;;
     *) break ;;
   esac
 done
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-resources.sh [--debug] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+
+# Standalone mode: given one or more --config files instead of a specification directory, build a
+# specification of this layer's own through the one parser, then run this layer over it in
+# specification-directory mode as a child, so the directory is owned and removed by this outer
+# shell rather than leaked when the layer execs the command.
+if (( ${#CONFIGS[@]} > 0 )); then
+  [[ "${1:-}" == "--" && $# -ge 2 ]] || { echo "Usage: phobos-resources.sh [flags] --config <file> [--config <file>]... [--spec-parent <dir>] [--tail-flags-file <file>] -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+  shift
+  build_owned_spec_from_configs "$HERE" "$SPEC_PARENT" "$TAIL_FLAGS_FILE_OPT" "${CONFIGS[@]}"
+  set +e
+  bash "${BASH_SOURCE[0]}" "${LAYER_FLAGS[@]}" "$BUILT_SPEC_DIR" -- "$@"
+  rc=$?
+  set -e
+  exit "$rc"
+fi
+
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-resources.sh [--debug] (<SPEC_DIR> | --config <file>...) -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created if this layer ends before it hands over. The

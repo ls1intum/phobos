@@ -8,22 +8,48 @@ source "${HERE}/phobos-common.sh"
 source "${HERE}/phobos-haproxy.sh"
 
 # A generic layer: it does its work and execs the rest of the chain. phobos.sh includes this
-# layer only when the network filter is enabled, so there is no enable flag to read.
+# layer only when the network filter is enabled, so there is no enable flag to read. Run on its
+# own with one or more --config files instead of a specification directory, it builds its own
+# specification through phobos-policy.sh and enforces only the network.
 GUARD_BIN_OPT=""
 HAPROXY_BIN_OPT=""
 RESOLVER_OPT=""
 LANDLOCK_BIN_OPT=""
+CONFIGS=()
+SPEC_PARENT="/var/tmp"
+TAIL_FLAGS_FILE_OPT=""
+LAYER_FLAGS=()
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
-    --debug) enable_debug_log; shift ;;
-    --connect-guard-bin) shift; GUARD_BIN_OPT="${1:-}"; shift ;;
-    --haproxy-bin) shift; HAPROXY_BIN_OPT="${1:-}"; shift ;;
-    --resolver) shift; RESOLVER_OPT="${1:-}"; shift ;;
-    --landlock-bin) shift; LANDLOCK_BIN_OPT="${1:-}"; shift ;;
+    --debug) enable_debug_log; LAYER_FLAGS+=( --debug ); shift ;;
+    --connect-guard-bin) shift; GUARD_BIN_OPT="${1:-}"; LAYER_FLAGS+=( --connect-guard-bin "${1:-}" ); shift ;;
+    --haproxy-bin) shift; HAPROXY_BIN_OPT="${1:-}"; LAYER_FLAGS+=( --haproxy-bin "${1:-}" ); shift ;;
+    --resolver) shift; RESOLVER_OPT="${1:-}"; LAYER_FLAGS+=( --resolver "${1:-}" ); shift ;;
+    --landlock-bin) shift; LANDLOCK_BIN_OPT="${1:-}"; LAYER_FLAGS+=( --landlock-bin "${1:-}" ); shift ;;
+    --config) shift; CONFIGS+=( "${1:-}" ); shift ;;
+    --spec-parent) shift; SPEC_PARENT="${1:-}"; shift ;;
+    --tail-flags-file) shift; TAIL_FLAGS_FILE_OPT="${1:-}"; shift ;;
     *) break ;;
   esac
 done
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] [--connect-guard-bin <path>] [--haproxy-bin <path>] [--resolver <ip[:port]>] [--landlock-bin <path>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+
+# Standalone mode: given one or more --config files instead of a specification directory, this
+# layer builds a specification of its own through the one parser, phobos-policy.sh, then runs
+# itself over that directory in specification-directory mode as a child. The directory is owned
+# and removed by this outer shell, because the specification-directory run execs the guard and so
+# leaves no waiter of its own to remove it.
+if (( ${#CONFIGS[@]} > 0 )); then
+  [[ "${1:-}" == "--" && $# -ge 2 ]] || { echo "Usage: phobos-network.sh [flags] --config <file> [--config <file>]... [--spec-parent <dir>] [--tail-flags-file <file>] -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+  shift
+  build_owned_spec_from_configs "$HERE" "$SPEC_PARENT" "$TAIL_FLAGS_FILE_OPT" "${CONFIGS[@]}"
+  set +e
+  bash "${BASH_SOURCE[0]}" "${LAYER_FLAGS[@]}" "$BUILT_SPEC_DIR" -- "$@"
+  rc=$?
+  set -e
+  exit "$rc"
+fi
+
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] [--connect-guard-bin <path>] [--haproxy-bin <path>] [--resolver <ip[:port]>] [--landlock-bin <path>] (<SPEC_DIR> | --config <file>...) -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created if this layer ends before it hands over,
