@@ -15,12 +15,13 @@ the same rules, with an optional third for host names:
   It holds an IP-literal rule (and the name localhost) to that exact address, an
   IP-range rule (addr/prefix) to that network, and a rule that names a DNS
   hostname it cannot tie to an address to its port alone.
-- A rule that names a DNS hostname is enforced by host only when the egress
-  broker is on (`--egress-broker`): the broker (an HAProxy the network layer
-  starts) reads the TLS host name from the ClientHello, which the guard cannot
-  see, and for an exact name resolves it itself and connects only to that
-  address. The network layer refuses a hostname rule when the broker is off,
-  rather than run with a rule the guard would widen to any address on the port.
+- A rule that names a DNS hostname is enforced by host by the egress broker,
+  which the network layer starts automatically whenever a [connect] rule names a
+  host: the broker (an HAProxy the network layer starts) reads the TLS host name
+  from the ClientHello, which the guard cannot see, and for an exact name resolves
+  it itself and connects only to that address. The network layer refuses an
+  exact-name rule when no resolver is given, rather than run with a name the
+  broker cannot pin to an address.
 
 There is no `openConnections` / `sendData` / `receiveData` toggle: a rule either
 names a host and a port or it does not.

@@ -40,8 +40,9 @@ grants exactly the rights the policy names on those paths; every other path is d
 it stays visible by name. Outbound connections are supervised by the connect guard, which
 enforces the `[connect]` allow-list by host and port from outside the process; a `[connect]`
 rule that names a host is enforced by the egress broker (an HAProxy that checks the TLS host
-name) when `--egress-broker` is on, and refused otherwise. A timeout and resource limits bound
-the run, and the container around it supplies `--network none` and the cgroup caps.
+name), which the network layer starts automatically for such a rule; an exact-name rule is
+refused when no resolver is given. A timeout and resource limits bound the run, and the
+container around it supplies `--network none` and the cgroup caps.
 
 The two phases do not deny in the same way. While pruning, a hidden directory is an empty,
 writable tmpfs; while grading, a path the policy does not name is refused with EACCES. A tool
