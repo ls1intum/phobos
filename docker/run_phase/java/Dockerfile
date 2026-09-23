@@ -1,4 +1,4 @@
-# The two C programs are compiled in a stage of their own, from the same base image the run
+# The three C programs are compiled in a stage of their own, from the same base image the run
 # phase uses, so they are built against the C library they will run with. Only the finished
 # binaries are copied on, so their sources stay out of the image a submission runs in. The
 # final stage below says why the compiler itself stays.
@@ -17,6 +17,7 @@ COPY phobos-landlock*.c           /build/
 COPY phobos-landlock*.h           /build/
 COPY phobos-connect-guard*.c      /build/
 COPY phobos-connect-guard*.h      /build/
+COPY phobos-pgroup-lock.c         /build/
 # -static-pie rather than -static: plain -static overrides the -fPIE default and
 # produces a fixed-address executable, so the binary that applies the sandbox
 # would be the one part of the image without address randomisation.
@@ -25,17 +26,20 @@ RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
 # The connect guard is built the same way and held to the same hardening below.
 RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
     -o /build/phobos-connect-guard /build/phobos-connect-guard*.c
+# The timeout's group lock is built the same way and held to the same hardening below.
+RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
+    -o /build/phobos-pgroup-lock /build/phobos-pgroup-lock.c
 
 # No bubblewrap: the filesystem layer is enforced by Landlock now, which needs no
 # privileges, no capabilities and no container flags, so the tool that needed all
 # three is gone from the image rather than left installed and unused.
 #
-# The toolchain stays, although the two programs above are no longer compiled here. Three
+# The toolchain stays, although the three programs above are no longer compiled here. Three
 # of the acceptance suites compile a C probe inside this image at run time: a raw connect()
 # the connect guard still catches at the seccomp boundary, a bind probe and the connect-guard
 # probe. They are what makes those suites evidence about the image an exercise actually gets
 # rather than about a second image built to test with, so the compiler they need is part of it.
-# binutils supplies the readelf the build-time hardening check below runs over the two compiled
+# binutils supplies the readelf the build-time hardening check below runs over the three compiled
 # binaries. haproxy is the egress broker: the connect guard hands an allowed connection to it,
 # and it enforces the allow-list by the TLS host name the guard cannot see;
 # tests/haproxy_broker.sh exercises that path inside this image.
@@ -53,6 +57,7 @@ RUN mkdir -p "${PHOBOS_HOME}"
 COPY *.sh                ${PHOBOS_HOME}/
 COPY --from=enforcers /build/phobos-landlock ${PHOBOS_HOME}/
 COPY --from=enforcers /build/phobos-connect-guard ${PHOBOS_HOME}/
+COPY --from=enforcers /build/phobos-pgroup-lock ${PHOBOS_HOME}/
 COPY config/BaseLanguage-java.cfg                     ${PHOBOS_HOME}/
 COPY config/TailPhobos.cfg                     ${PHOBOS_HOME}/
 # The hardening is measured, not assumed: a DYN type proves -static-pie kept the
@@ -64,11 +69,15 @@ RUN readelf -h ${PHOBOS_HOME}/phobos-landlock > /tmp/wrapper-header.txt \
  && readelf -d ${PHOBOS_HOME}/phobos-landlock > /tmp/wrapper-dynamic.txt \
  && readelf -h ${PHOBOS_HOME}/phobos-connect-guard > /tmp/guard-header.txt \
  && readelf -d ${PHOBOS_HOME}/phobos-connect-guard > /tmp/guard-dynamic.txt \
+ && readelf -h ${PHOBOS_HOME}/phobos-pgroup-lock > /tmp/lock-header.txt \
+ && readelf -d ${PHOBOS_HOME}/phobos-pgroup-lock > /tmp/lock-dynamic.txt \
  && grep -q 'Type:[[:space:]]*DYN' /tmp/wrapper-header.txt \
  && grep -q 'BIND_NOW' /tmp/wrapper-dynamic.txt \
  && grep -q 'Type:[[:space:]]*DYN' /tmp/guard-header.txt \
  && grep -q 'BIND_NOW' /tmp/guard-dynamic.txt \
- && rm -f /tmp/wrapper-header.txt /tmp/wrapper-dynamic.txt /tmp/guard-header.txt /tmp/guard-dynamic.txt
+ && grep -q 'Type:[[:space:]]*DYN' /tmp/lock-header.txt \
+ && grep -q 'BIND_NOW' /tmp/lock-dynamic.txt \
+ && rm -f /tmp/wrapper-header.txt /tmp/wrapper-dynamic.txt /tmp/guard-header.txt /tmp/guard-dynamic.txt /tmp/lock-header.txt /tmp/lock-dynamic.txt
 # The six entry points, and not the two files that are only ever sourced: a mode on those
 # would say they can be run, which is what the check in test.yml states they cannot.
 RUN chmod +x ${PHOBOS_HOME}/phobos.sh ${PHOBOS_HOME}/phobos-policy.sh \

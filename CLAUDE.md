@@ -56,7 +56,7 @@ environment, offline, and grading itself only applies a fixed configuration.
 ## Tech Stack
 
 - POSIX shell for the wrapper and the layers, which is the bulk of the repository
-- C for `phobos-landlock` and the connect guard, both compiled inside the run-phase image
+- C for `phobos-landlock`, the connect guard and the timeout's group lock, all compiled inside the run-phase image
 - Python for the prune orchestrator and the artefact helpers
 - Docker for both phases, one image per language environment
 - Java for exactly one file, `.github/scripts/CheckPullRequestTemplate.java`
@@ -146,7 +146,8 @@ core/                      the sandbox itself
   phobos-network.sh        the network layer, runs the connect guard and the egress/inbound HAProxy
   phobos-haproxy.sh        the egress broker and inbound filter: turns [connect]/[accept] into an haproxy.cfg
   phobos-resources.sh      the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
-  phobos-timeout.sh        the timeout layer
+  phobos-timeout.sh        the timeout layer, which applies the group lock below when a timeout is set
+  phobos-pgroup-lock.c     the group lock: a seccomp filter refusing setsid and setpgid, then exec's
   phobos-common.sh         the shared helpers, sourced by the others; it sources the seven below
   phobos-log.sh            reporting, and counting what a run was denied
   phobos-paths.sh          the two canonical forms a path is compared in

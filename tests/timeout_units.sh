@@ -147,6 +147,12 @@ exit 0
 FAKE
 chmod +x "$WORK/fake-timeout"
 
+# A stand-in for the timeout's group lock. The timeout layer checks it is executable before it
+# invokes GNU timeout; the fake timeout above records and exits without running it, so it need
+# only exist and be executable for this suite, which asserts the GNU timeout arguments alone.
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$WORK/pgroup-stub"
+chmod +x "$WORK/pgroup-stub"
+
 SPEC="$WORK/spec"
 mkdir -p "$SPEC"
 for f in read.paths execute.paths write.paths create.paths delete.paths tail.flags net.rules; do : > "$SPEC/$f"; done
@@ -161,7 +167,7 @@ timeout_arg_for() {
   printf '%s' "$value" > "$SPEC/timeout.sec"
   local rc
   PHB_TEST_RECORD="$WORK/record" \
-    bash "$CORE/phobos-timeout.sh" --timeout-bin "$WORK/fake-timeout" "$SPEC" -- /bin/true >/dev/null 2>&1
+    bash "$CORE/phobos-timeout.sh" --timeout-bin "$WORK/fake-timeout" --pgroup-lock-bin "$WORK/pgroup-stub" "$SPEC" -- /bin/true >/dev/null 2>&1
   rc=$?
   if [[ -f "$WORK/record" ]]; then
     printf 'rc=%s arg=%s' "$rc" "$(awk '{print $2}' "$WORK/record")"
@@ -188,7 +194,7 @@ echo "== modular runtime: the timeout group-kills and escalates =="
 rm -f "$WORK/record"
 printf '3' > "$SPEC/timeout.sec"
 PHB_TEST_RECORD="$WORK/record" \
-  bash "$CORE/phobos-timeout.sh" --timeout-bin "$WORK/fake-timeout" "$SPEC" -- /bin/true >/dev/null 2>&1
+  bash "$CORE/phobos-timeout.sh" --timeout-bin "$WORK/fake-timeout" --pgroup-lock-bin "$WORK/pgroup-stub" "$SPEC" -- /bin/true >/dev/null 2>&1
 invocation="$(cat "$WORK/record" 2>/dev/null)"
 if [[ "$invocation" == *"--kill-after=5s"* ]]; then
   ok "it escalates to SIGKILL with --kill-after"

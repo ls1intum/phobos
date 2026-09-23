@@ -120,7 +120,7 @@ ${PHOBOS_HOME}/phobos.sh -- ./gradlew test
 
 `PHOBOS_HOME` is `/var/tmp/opt/core` in the image, and `phobos` on `PATH` is a symbolic link to the same script. `--config` is for an exercise configuration applied **on top of** that base, never for the base itself: naming a base file there applies it a second time.
 
-A bare checkout cannot run this. `phobos-policy.sh` finds the base policy by globbing `Base*.cfg` beside itself, and a checkout keeps those files in `core/config/` rather than in `core/`, so a run from one is refused with `PHB-EPOLICY` instead of running unconfined. The image is the delivery vehicle, as it is for the two C products.
+A bare checkout cannot run this. `phobos-policy.sh` finds the base policy by globbing `Base*.cfg` beside itself, and a checkout keeps those files in `core/config/` rather than in `core/`, so a run from one is refused with `PHB-EPOLICY` instead of running unconfined. The image is the delivery vehicle, as it is for the three C products.
 
 Run the grading container with **`--network none`** and with cgroup limits (`--memory`, `--pids-limit`, `--cpus`, and a size-bounded `--tmpfs` for scratch). Those are the outer wall Phobos relies on and cannot set for itself.
 

@@ -82,6 +82,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/timeout_escalation.sh
 
+      - name: The timeout's group lock refuses setsid and setpgid
+        if: ${{ !cancelled() }}
+        run: bash tests/pgroup_lock.sh
+
       - name: The command-line contract
         if: ${{ !cancelled() }}
         run: bash tests/cli_flags.sh

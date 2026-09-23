@@ -50,7 +50,8 @@ merge_result() {
   local limits
   limits="$(PHB_TEST_TIMEOUT_RECORD="$WORK/timeout-record" bash "$CORE_X/phobos.sh" \
     --spec-parent "$SPECS" --landlock-bin "$WORK/passthrough-landlock" \
-    --timeout-bin "$WORK/fake-timeout" --no-networksystem-restriction "${cfgargs[@]}" -- \
+    --timeout-bin "$WORK/fake-timeout" --pgroup-lock-bin "$WORK/passthrough-landlock" \
+    --no-networksystem-restriction "${cfgargs[@]}" -- \
     bash -c 'printf "%s|%s" "$(ulimit -v)" "$(ulimit -n)"' 2>/dev/null)"
   local duration=""
   if [[ -f "$WORK/timeout-record" ]]; then duration="$(cat "$WORK/timeout-record")"; fi

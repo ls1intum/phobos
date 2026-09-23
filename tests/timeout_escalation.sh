@@ -6,7 +6,9 @@
 # GNU timeout's own child is still alive, so the layers between the timeout and the command
 # ignore SIGTERM and stay, and it is the SIGKILL that stops a command which ignores SIGTERM.
 # This proves that end to end through the real chain, with a stand-in for phobos-landlock so no
-# Landlock kernel is needed, and the network layer off to spare its readelf dependency.
+# Landlock kernel is needed, a stand-in for the timeout's group lock so no seccomp is needed here
+# (the lock's own behaviour is tests/pgroup_lock.sh), and the network layer off to spare its
+# readelf dependency.
 #
 # It needs GNU timeout (the real one, not a stand-in) and a C compiler. Where either is
 # missing the checks skip, saying so, rather than passing without having run.
@@ -88,7 +90,7 @@ run_chain() {
   local rc
   start=$(date +%s)
   out="$(timeout "${OUTER_BOUND_SECONDS}s" bash "$CORE_X/phobos.sh" --spec-parent "$SPECS" \
-    "${sandbox[@]}" --no-networksystem-restriction -- "$@" 2>&1)"
+    "${sandbox[@]}" --pgroup-lock-bin "$WORK/passthrough-landlock" --no-networksystem-restriction -- "$@" 2>&1)"
   rc=$?
   end=$(date +%s)
   printf '%s|%s|%s' "$rc" "$((end - start))" "$out"

@@ -112,15 +112,16 @@ as a dependency.
 
 ## The compiled binaries
 
-Neither C product is committed. `phobos-landlock` and the connect guard are built from the
-source under `core/`, once per architecture, inside the run-phase image. `.gitattributes`
-marks `*.so` binary so that a stray shared object is never normalised, though none is shipped.
+None of the C products is committed. `phobos-landlock`, the connect guard and the timeout's
+group lock are built from the source under `core/`, once per architecture, inside the run-phase
+image. `.gitattributes` marks `*.so` binary so that a stray shared object is never normalised,
+though none is shipped.
 
 **Rule:**
 
 - Never check a compiled binary in. The `run-phase` job in `build.yml` builds the image for
   amd64 and arm64 on native runners and, on the copies each image ships, checks with `readelf`
-  that both are position-independent (`Type: DYN`) with full RELRO (`BIND_NOW`), so both
+  that all three are position-independent (`Type: DYN`) with full RELRO (`BIND_NOW`), so both
   architectures are proven on every run; publishing the multi-arch image is a manual step (below).
 - Where the connect guard binary is missing the network layer ends the run with PHB-ERUNTIME
   rather than running without connect supervision, so a bare checkout with nothing built does
