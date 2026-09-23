@@ -33,6 +33,7 @@ Restriction options (every restriction is applied by default):
 Override options (taken only from the command line, never from the environment):
   --landlock-bin <path>              The phobos-landlock binary (default: beside this script).
   --timeout-bin <path>              The timeout tool (default: timeout).
+  --pgroup-lock-bin <path>          The group lock the timeout applies (default: beside this script).
   --connect-guard-bin <path>        The connect guard (default: beside this script).
   --tail-flags-file <path>          The tail flags file (default: TailPhobos.cfg beside this script).
   --spec-parent <path>              Where the run's specification directory is made (default: /var/tmp).
@@ -78,6 +79,7 @@ allow_unsandboxed=0
 # flags come from, or where the specification is written. Empty means the built-in default.
 opt_landlock_bin=""
 opt_timeout_bin=""
+opt_pgroup_lock_bin=""
 opt_connect_guard_bin=""
 opt_tail_flags_file=""
 opt_spec_parent=""
@@ -112,6 +114,8 @@ while (( "$#" )); do
       shift; [[ $# -gt 0 ]] || usage; opt_landlock_bin="$1"; shift;;
     --timeout-bin)
       shift; [[ $# -gt 0 ]] || usage; opt_timeout_bin="$1"; shift;;
+    --pgroup-lock-bin)
+      shift; [[ $# -gt 0 ]] || usage; opt_pgroup_lock_bin="$1"; shift;;
     --connect-guard-bin)
       shift; [[ $# -gt 0 ]] || usage; opt_connect_guard_bin="$1"; shift;;
     --tail-flags-file)
@@ -161,6 +165,7 @@ fi
 tail_flags_file="${opt_tail_flags_file:-${HERE}/TailPhobos.cfg}"
 landlock_bin="${opt_landlock_bin:-${HERE}/phobos-landlock}"
 timeout_bin="${opt_timeout_bin:-timeout}"
+pgroup_lock_bin="${opt_pgroup_lock_bin:-${HERE}/phobos-pgroup-lock}"
 connect_guard_bin="${opt_connect_guard_bin:-${HERE}/phobos-connect-guard}"
 haproxy_bin="${opt_haproxy_bin:-haproxy}"
 resolver="${opt_resolver:-}"
@@ -204,7 +209,7 @@ fi
 # phobos-landlock, so the command's limits bind the command and none of the helpers around it.
 dbg=(); (( enable_debug )) && dbg=(--debug)
 chain=()
-if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeout.sh"   "${dbg[@]}" --timeout-bin "$timeout_bin" "$SPEC_DIR" -- ); fi
+if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeout.sh"   "${dbg[@]}" --timeout-bin "$timeout_bin" --pgroup-lock-bin "$pgroup_lock_bin" "$SPEC_DIR" -- ); fi
 network_flags=( "${dbg[@]}" --connect-guard-bin "$connect_guard_bin" --haproxy-bin "$haproxy_bin" --landlock-bin "$landlock_bin" )
 # The network layer starts the broker itself when a [connect] rule names a host, so no flag
 # selects it here; the resolver it needs for an exact name is passed through when given. It also

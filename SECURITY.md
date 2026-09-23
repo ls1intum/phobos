@@ -45,9 +45,9 @@ rest exists to take privileges away. None of the following is a vulnerability.
   unprivileged process. The container the grader starts should add `--network none` and
   cgroup limits, which are the outer boundary Phobos cannot set from inside itself.
 
-The two C products, `phobos-landlock` and the connect guard, are not committed. They are
-compiled inside the run-phase image from the source under `core/`, and CI checks the copies the
-image ships are position-independent with full RELRO. Where the connect guard binary is missing
+The three C products, `phobos-landlock`, the connect guard and the timeout's group lock, are not
+committed. They are compiled inside the run-phase image from the source under `core/`, and CI
+checks the copies the image ships are position-independent with full RELRO. Where the connect guard binary is missing
 the network layer refuses to start rather than run the command without connect supervision, so a
 bare checkout with nothing built does not run. The delivery vehicle is the run-phase image,
 published multi-arch, so a grader pulls the build for its own architecture.

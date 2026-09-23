@@ -187,7 +187,7 @@ printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$@" > "$LL_RECORD"' \
   'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift; exec "$@"' > "$WORK/record-then-run-landlock"
 chmod +x "$WORK/record-then-run-landlock"
 LL_RECORD="$WORK/ll-debug" bash "$DEBUG_CORE/phobos.sh" --spec-parent "$SPECS" \
-  --landlock-bin "$WORK/record-then-run-landlock" --debug -nnr -- /bin/echo debug-payload > "$DBG_OUT" 2> "$DBG_ERR"
+  --landlock-bin "$WORK/record-then-run-landlock" --pgroup-lock-bin "$WORK/passthrough-landlock" --debug -nnr -- /bin/echo debug-payload > "$DBG_OUT" 2> "$DBG_ERR"
 if [[ "$(cat "$DBG_OUT")" == "debug-payload" ]]; then
   ok "with --debug stdout is still only the command's output"
 else
@@ -207,7 +207,7 @@ else
 fi
 
 PHB_DEBUG_ENABLED=1 LL_RECORD="$WORK/ll-env" bash "$DEBUG_CORE/phobos.sh" --spec-parent "$SPECS" \
-  --landlock-bin "$WORK/record-then-run-landlock" -nnr -- /bin/echo quiet-payload > "$DBG_OUT" 2> "$DBG_ERR"
+  --landlock-bin "$WORK/record-then-run-landlock" --pgroup-lock-bin "$WORK/passthrough-landlock" -nnr -- /bin/echo quiet-payload > "$DBG_OUT" 2> "$DBG_ERR"
 if ! grep -q '^\[phobos\] ' "$DBG_ERR" && ! grep -qx -- '--verbose' "$WORK/ll-env"; then
   ok "PHB_DEBUG_ENABLED in the environment does not switch debugging on"
 else
