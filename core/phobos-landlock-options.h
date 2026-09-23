@@ -32,6 +32,7 @@ struct options {
     size_t bind_tcp_port_count;
     const char *working_directory;
     int minimum_landlock_version;
+    bool no_filesystem;
     char **command;
 };
 

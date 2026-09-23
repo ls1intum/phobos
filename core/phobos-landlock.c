@@ -91,9 +91,31 @@ int main(int argument_count, char *arguments[]) {
     parse_arguments(argument_count, arguments, &options);
     int landlock_version =
         detect_landlock_version(options.minimum_landlock_version, network_rules_wanted(&options));
-    report_unenforceable_rights(landlock_version);
-    int ruleset_descriptor = create_ruleset(landlock_version, handled_network_access(&options));
-    add_path_rules(ruleset_descriptor, landlock_version, &options);
+
+    /* With --no-filesystem this ruleset governs the network alone, so it handles no filesystem
+     * right and carries no path rules; it composes by intersection with a separate filesystem
+     * ruleset a later layer applies. Otherwise it handles the filesystem as before. Scoping is
+     * applied either way, inside create_ruleset. */
+    uint64_t handled_filesystem =
+        options.no_filesystem ? 0 : filesystem_rights_for_version(landlock_version);
+    uint64_t handled_network = handled_network_access(&options);
+
+    report_unenforceable_rights(landlock_version, handled_filesystem != 0);
+
+    /* A ruleset the kernel would reject as empty: no filesystem right, no network direction, and
+     * a kernel too old to scope. Nothing is left for Landlock to hold, so enter the working
+     * directory and run the command rather than fail creating an empty ruleset. Only reachable
+     * with --no-filesystem and no port rules on a pre-scoping kernel, since a filesystem ruleset
+     * always handles a non-zero right. */
+    if (handled_filesystem == 0 && handled_network == 0 && scoped_for_version(landlock_version) == 0) {
+        enter_working_directory(&options);
+        exec_command(&options);
+    }
+
+    int ruleset_descriptor = create_ruleset(landlock_version, handled_filesystem, handled_network);
+    if (!options.no_filesystem) {
+        add_path_rules(ruleset_descriptor, landlock_version, &options);
+    }
     add_port_rules(ruleset_descriptor, &options);
     enter_working_directory(&options);
     apply_restriction(ruleset_descriptor);

@@ -19,9 +19,9 @@ Restriction options (every restriction is applied by default):
                                      connect guard and the Landlock TCP-port rules.
   --no-resources-restriction, -nrr   Disable the resource limits (rlimits /
                                      phobos-resources.sh).
-  --no-filesystem-restriction, -nfr  Disable the filesystem sandbox (Landlock). This
-                                     turns off ALL of Landlock, the TCP-port rules
-                                     included, since they are one kernel ruleset.
+  --no-filesystem-restriction, -nfr  Disable the filesystem sandbox (Landlock). The
+                                     TCP-port rules are unaffected: they are a separate
+                                     network-only ruleset the network layer applies.
   --allow-unsandboxed                Debug switch: run the command raw, with every
                                      layer disabled, EVEN when a base policy is
                                      present. For deliberate unconfined runs only.
@@ -186,10 +186,11 @@ if (( enable_debug )); then policy_flags+=( --debug ); fi
 for c in "${cfgs[@]}"; do policy_flags+=( --config "$c" ); done
 "${HERE}/phobos-policy.sh" "${policy_flags[@]}"
 
-# The inbound filter lives in the network layer, and the bind-port lock in the filesystem layer's
-# Landlock rules. With the network restriction off, an [accept] rule starts no filter and the
-# listener's port is not locked either, so the listener runs fully exposed. Say so rather than let
-# a disabled restriction quietly drop the enforcement.
+# The inbound filter and the bind-port lock both live in the network layer now: the filter is the
+# inbound haproxy and the lock is the network-only Landlock ruleset the network layer applies. With
+# the network restriction off, an [accept] rule starts no filter and the listener's port is not
+# locked either, so the listener runs fully exposed. Say so rather than let a disabled restriction
+# quietly drop the enforcement.
 if [[ -s "${SPEC_DIR}/accept.rules" ]] && (( ! enable_network )); then
   _log "inbound filter from an [accept] rule IGNORED because the network-system restriction is DISABLED; the listener runs unfiltered and its public port is not locked"
 fi
@@ -204,19 +205,17 @@ fi
 dbg=(); (( enable_debug )) && dbg=(--debug)
 chain=()
 if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeout.sh"   "${dbg[@]}" --timeout-bin "$timeout_bin" "$SPEC_DIR" -- ); fi
-network_flags=( "${dbg[@]}" --connect-guard-bin "$connect_guard_bin" --haproxy-bin "$haproxy_bin" )
+network_flags=( "${dbg[@]}" --connect-guard-bin "$connect_guard_bin" --haproxy-bin "$haproxy_bin" --landlock-bin "$landlock_bin" )
 # The network layer starts the broker itself when a [connect] rule names a host, so no flag
-# selects it here; the resolver it needs for an exact name is passed through when given.
+# selects it here; the resolver it needs for an exact name is passed through when given. It also
+# applies the kernel-enforced Landlock TCP-port rules on a network-only ruleset of its own, so the
+# whole network restriction, the connect guard and the port rules alike, lives in this one layer
+# and is simply left out of the chain when the network restriction is disabled.
 if [[ -n "$resolver" ]]; then network_flags+=( --resolver "$resolver" ); fi
 if (( enable_network ));   then chain+=( "${HERE}/phobos-network.sh"   "${network_flags[@]}" "$SPEC_DIR" -- ); fi
 fs_flags=( "${dbg[@]}" --landlock-bin "$landlock_bin" )
 if (( enable_resources )); then fs_flags+=( --resources-layer "${HERE}/phobos-resources.sh" ); fi
 if (( ! enable_filesystem )); then fs_flags+=( --no-landlock ); fi
-# The network restriction spans two layers: the connect guard in phobos-network.sh, left
-# out of the chain above, and the kernel-enforced Landlock TCP-port rules built in the
-# filesystem layer. Disabling the network restriction has to cover both, so tell the
-# filesystem layer to skip the port rules too.
-if (( ! enable_network )); then fs_flags+=( --no-network-ports ); fi
 chain+=( "${HERE}/phobos-filesystem.sh" "${fs_flags[@]}" "$SPEC_DIR" -- )
 debug_log phobos "run the layer chain" "${chain[@]}" "${cmd[@]}"
 exec "${chain[@]}" "${cmd[@]}"
