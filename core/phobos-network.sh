@@ -10,20 +10,18 @@ source "${HERE}/phobos-haproxy.sh"
 # A generic layer: it does its work and execs the rest of the chain. phobos.sh includes this
 # layer only when the network filter is enabled, so there is no enable flag to read.
 GUARD_BIN_OPT=""
-EGRESS_BROKER=0
 HAPROXY_BIN_OPT=""
 RESOLVER_OPT=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --debug) enable_debug_log; shift ;;
     --connect-guard-bin) shift; GUARD_BIN_OPT="${1:-}"; shift ;;
-    --egress-broker) EGRESS_BROKER=1; shift ;;
     --haproxy-bin) shift; HAPROXY_BIN_OPT="${1:-}"; shift ;;
     --resolver) shift; RESOLVER_OPT="${1:-}"; shift ;;
     *) break ;;
   esac
 done
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] [--connect-guard-bin <path>] [--egress-broker] [--haproxy-bin <path>] [--resolver <ip[:port]>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] [--connect-guard-bin <path>] [--haproxy-bin <path>] [--resolver <ip[:port]>] <SPEC_DIR> -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created if this layer ends before it hands over,
@@ -36,16 +34,14 @@ RULES="${SPEC_DIR}/net.rules"
 
 # The connect guard enforces a [connect] rule by address and port alone. A rule that names a host
 # (an exact name or a "*.name" suffix) constrains nothing about the onward address unless the egress
-# broker checks the TLS host name, so without the broker such a rule would silently widen to any
-# address on the port. Refuse instead of running with an enforcement the flag would provide but the
-# run did not ask for. The policy is valid, only unrunnable as configured, so this is PHB-ERUNTIME.
-if (( ! EGRESS_BROKER )); then
-  mapfile -t name_rules < <(name_connect_rules "$RULES")
-  if (( ${#name_rules[@]} > 0 )); then
-    report "The [connect] allow-list names a host (${name_rules[*]}), whose enforcement needs the egress broker to check the TLS host name; the connect guard alone enforces only address and port. Pass --egress-broker, or name an address instead. Refusing rather than run with a host rule the guard would widen to any address on the port. (PHB-ERUNTIME)"
-    exit "${PHB_ERUNTIME}"
-  fi
-fi
+# broker checks the TLS host name. So the broker is started automatically whenever the allow-list
+# names a host, rather than requiring a flag the run could forget and then widen the rule to any
+# address on the port. In the default --network none grading container the broker's onward
+# connection fails at run time rather than being refused up front, so say loudly that this run now
+# assumes a networked container, as the [accept] path does.
+want_broker=0
+mapfile -t name_rules < <(name_connect_rules "$RULES")
+if (( ${#name_rules[@]} > 0 )); then want_broker=1; fi
 
 # The connect guard supervises every connect the command makes and enforces the [connect]
 # allow-list by host and port from a place a raw syscall cannot step around. It forks a
@@ -60,7 +56,7 @@ if [[ ! -x "$GUARD_BIN" ]]; then
 fi
 guard_command=( "$GUARD_BIN" )
 if (( PHB_DEBUG_ENABLED )); then guard_command+=( --verbose ); fi
-if (( EGRESS_BROKER )); then
+if (( want_broker )); then
   # An exact [connect] name is bound to its own address by the broker, which resolves it through
   # the given resolver, and is mapped to a placeholder in /etc/hosts so the command can resolve it
   # without a DNS query the guard would refuse. Both are refused-closed when they cannot be met, so
@@ -76,6 +72,11 @@ if (( EGRESS_BROKER )); then
       exit "${PHB_ERUNTIME}"
     fi
   fi
+  # Said immediately before the broker starts, matching the [accept] path, so a run refused
+  # earlier (missing guard, an exact name without a resolver) does not log a broker that never
+  # started. In the default --network none grading container the broker's onward connection fails
+  # at run time rather than being refused up front, so say loudly that this run assumes a network.
+  _log "NOTICE: the [connect] allow-list names a host (${name_rules[*]}), so the egress broker is started to enforce it by the TLS host name the connect guard cannot see. This assumes a NETWORKED container; in a --network none container the onward connection cannot be made."
   broker_endpoint="$(start_egress_broker "$SPEC_DIR" "$RULES" "${HAPROXY_BIN_OPT:-haproxy}" "$RESOLVER_OPT")" || {
     report "The egress broker could not be started; refusing to run rather than lose the host-name enforcement it was asked for. (PHB-ERUNTIME)"
     exit "${PHB_ERUNTIME}"

@@ -285,7 +285,7 @@ mkdir -p "$spec_layer"
 printf 'allowed.example %s\n' "$UPORT" > "$spec_layer/net.rules"
 layer_status=0
 "${CORE}/phobos-network.sh" --connect-guard-bin "$WORK/guard" \
-  --egress-broker "$spec_layer" -- true > "$WORK/layer.out" 2>&1 \
+  "$spec_layer" -- true > "$WORK/layer.out" 2>&1 \
   || layer_status=$?
 if (( layer_status == PHB_ERUNTIME )); then
   ok "the network layer refuses an exact-name rule when no resolver was given"
@@ -397,7 +397,7 @@ if [[ -w /etc/hosts ]]; then
   printf '127.0.0.1 *\nallowed.example %s\n' "$UPORT" > "$spec_e2e/net.rules"
   rm -f "$WORK/real.marker"
   "${CORE}/phobos-network.sh" --connect-guard-bin "$WORK/guard" \
-    --egress-broker --resolver "127.0.0.1:${DNSPORT}" "$spec_e2e" -- \
+    --resolver "127.0.0.1:${DNSPORT}" "$spec_e2e" -- \
     timeout 4 openssl s_client -connect "allowed.example:${UPORT}" -servername allowed.example -quiet < /dev/null \
     > "$WORK/e2e.out" 2>&1 || true
   sleep 0.6

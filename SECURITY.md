@@ -25,10 +25,10 @@ rest exists to take privileges away. None of the following is a vulnerability.
   (and the name `localhost`) to that exact address, a rule that names an IP range to that
   network, and a rule that names a DNS hostname it cannot tie to an address there to its port
   alone. Such a hostname rule's host is enforced by the egress broker, an HAProxy the network
-  layer starts with `--egress-broker` that checks the TLS host name the guard cannot see; the
-  network layer refuses a hostname rule when the broker is off, so an instructor who needs a
-  rotating, CDN-backed host either turns the broker on or names its address range rather than
-  its name. Since seccomp stops the call before the kernel path where Landlock would check the
+  layer starts automatically for such a rule and that checks the TLS host name the guard cannot
+  see; the network layer refuses an exact-name rule when no resolver is given, so an instructor
+  who needs a rotating, CDN-backed host either gives a resolver or names its address range rather
+  than its name. Since seccomp stops the call before the kernel path where Landlock would check the
   port, the guard connects outside Landlock and so is the whole connect boundary where it runs;
   Landlock's `--connect-tcp` ports remain a second, kernel-enforced expression of the same
   ports. A `connect` of a family the guard does not carry (a UNIX-domain socket) is refused

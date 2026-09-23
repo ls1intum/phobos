@@ -117,22 +117,37 @@ r="$(run_bind "* 70000")"
 [[ "$(field "$r" 1)" != 0 ]] && ok "a bind port above 65535 is refused" || bad "a bind port above 65535 is refused" "a non-zero exit" "exit $(field "$r" 1)"
 
 echo
-echo "== a [connect] name rule needs the egress broker; the network layer refuses it otherwise =="
+echo "== a [connect] name rule starts the egress broker automatically; an exact name still needs a resolver =="
 # The connect guard enforces a [connect] rule by address and port. A rule that names a host only
-# constrains the onward address when the egress broker checks the TLS host name, so without the
-# broker the network layer refuses the name rule rather than widen it to any address on the port.
-# The guard binary is deliberately absent: the name check runs before the guard check, so a name
-# rule is refused there, while an address rule passes the name check and reaches the guard check,
-# a different PHB-ERUNTIME with its own message. That contrast shows the first refusal is the name
-# check, not a blanket one.
+# constrains the onward address when the egress broker checks the TLS host name, so the network
+# layer now starts the broker automatically whenever the allow-list names a host, rather than
+# demanding a flag. An exact name is bound by resolving it, so without a resolver the run is still
+# refused fail-closed rather than run with a name the broker cannot pin. An executable stub guard
+# passes the guard-binary check so this policy refusal, not a missing-guard one, is what fires.
+stub_guard="$(mktemp "$WORK/stub-guard.XXXXXX")"
+printf '#!/bin/sh\nexit 0\n' > "$stub_guard"
+chmod +x "$stub_guard"
 name_spec="$(mktemp -d "$WORK/name-spec.XXXXXX")"
 printf 'example.test 443\n' > "$name_spec/net.rules"
-name_out="$(bash "$CORE/phobos-network.sh" --connect-guard-bin /nonexistent-guard "$name_spec" -- true 2>&1)"
+name_out="$(bash "$CORE/phobos-network.sh" --connect-guard-bin "$stub_guard" "$name_spec" -- true 2>&1)"
 name_rc=$?
-if [[ "$name_rc" -eq "$PHB_ERUNTIME" && "$name_out" == *"--egress-broker"* ]]; then
-  ok "a [connect] name rule without the egress broker is refused (PHB-ERUNTIME)"
+if [[ "$name_rc" -eq "$PHB_ERUNTIME" && "$name_out" == *"resolver"* && "$name_out" != *"--egress-broker"* ]]; then
+  ok "an exact [connect] name without a resolver is refused fail-closed (PHB-ERUNTIME)"
 else
-  bad "a [connect] name rule without the egress broker is refused (PHB-ERUNTIME)" "exit ${PHB_ERUNTIME} naming --egress-broker" "exit ${name_rc}: ${name_out}"
+  bad "an exact [connect] name without a resolver is refused fail-closed (PHB-ERUNTIME)" "exit ${PHB_ERUNTIME} naming a resolver, not --egress-broker" "exit ${name_rc}: ${name_out}"
+fi
+
+# A suffix rule (*.name) also auto-starts the broker, but needs no resolver: the broker matches it
+# by TLS host name rather than pinning it to an address. With a missing haproxy the start refuses
+# fail-closed, but the NOTICE that precedes the start proves the suffix rule entered the broker path.
+suffix_spec="$(mktemp -d "$WORK/suffix-spec.XXXXXX")"
+printf '*.example.test 443\n' > "$suffix_spec/net.rules"
+suffix_out="$(bash "$CORE/phobos-network.sh" --connect-guard-bin "$stub_guard" --haproxy-bin /nonexistent-haproxy "$suffix_spec" -- true 2>&1)"
+suffix_rc=$?
+if [[ "$suffix_rc" -eq "$PHB_ERUNTIME" && "$suffix_out" == *"egress broker is started"* ]]; then
+  ok "a [connect] suffix rule auto-starts the broker and needs no resolver"
+else
+  bad "a [connect] suffix rule auto-starts the broker and needs no resolver" "exit ${PHB_ERUNTIME} after the broker NOTICE" "exit ${suffix_rc}: ${suffix_out}"
 fi
 
 addr_spec="$(mktemp -d "$WORK/addr-spec.XXXXXX")"
@@ -140,9 +155,9 @@ printf '127.0.0.1 443\n' > "$addr_spec/net.rules"
 addr_out="$(bash "$CORE/phobos-network.sh" --connect-guard-bin /nonexistent-guard "$addr_spec" -- true 2>&1)"
 addr_rc=$?
 if [[ "$addr_rc" -eq "$PHB_ERUNTIME" && "$addr_out" == *"connect guard"* && "$addr_out" != *"--egress-broker"* ]]; then
-  ok "an address [connect] rule passes the name check and is left to the guard"
+  ok "an address [connect] rule needs no broker and is left to the guard"
 else
-  bad "an address [connect] rule passes the name check and is left to the guard" "exit ${PHB_ERUNTIME} about the connect guard, not --egress-broker" "exit ${addr_rc}: ${addr_out}"
+  bad "an address [connect] rule needs no broker and is left to the guard" "exit ${PHB_ERUNTIME} about the connect guard, not --egress-broker" "exit ${addr_rc}: ${addr_out}"
 fi
 
 finish

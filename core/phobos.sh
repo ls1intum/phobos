@@ -37,9 +37,9 @@ Override options (taken only from the command line, never from the environment):
   --tail-flags-file <path>          The tail flags file (default: TailPhobos.cfg beside this script).
   --spec-parent <path>              Where the run's specification directory is made (default: /var/tmp).
   --resolver <ip[:port]>            The DNS resolver the egress broker resolves an exact [connect]
-                                    host name through (default DNS port when no port is given). A
-                                    run with --egress-broker and an exact-name rule is refused
-                                    without one. Ignored when the broker is off.
+                                    host name through (default DNS port when no port is given). The
+                                    broker starts automatically when a [connect] rule names a host;
+                                    an exact-name rule is then refused without a resolver.
 
 Notes:
 - Base config: any "${HERE}/Base*.cfg" (INI-like) is applied first (sorted).
@@ -71,10 +71,6 @@ enable_filesystem=1
 enable_debug=0
 # Refusing to run without a base policy is the default; this is the explicit opt-out.
 allow_unsandboxed=0
-# The egress broker is off by default: it enforces the [connect] allow-list by TLS host name
-# from outside the process, which only helps a container that has a network, and it is not yet
-# the default while the name-resolution side is unfinished. This is the explicit opt-in.
-enable_egress_broker=0
 
 # Which enforcement tools and locations a run uses. Taken only from these flags, never from
 # the environment, so a value left in the environment cannot change which binary applies the
@@ -106,8 +102,6 @@ while (( "$#" )); do
       enable_filesystem=0; shift;;
     --allow-unsandboxed)
       allow_unsandboxed=1; shift;;
-    --egress-broker)
-      enable_egress_broker=1; shift;;
     --haproxy-bin)
       shift; [[ $# -gt 0 ]] || usage; opt_haproxy_bin="$1"; shift;;
     --resolver)
@@ -162,12 +156,6 @@ fi
 (( enable_resources ))  || _log "resources restriction (rlimits) DISABLED by --no-resources-restriction"
 (( enable_filesystem )) || _log "filesystem restriction (Landlock) DISABLED by --no-filesystem-restriction"
 
-# The broker lives inside the network layer, so asking for it while that layer is off would
-# start nothing. Say so rather than drop the request without a word.
-if (( enable_egress_broker )) && (( ! enable_network )); then
-  _log "egress broker requested by --egress-broker IGNORED because the network-system restriction is DISABLED"
-fi
-
 # Resolve the startup overrides from the flags, with the built-in defaults. The environment
 # is deliberately not consulted for any of them.
 tail_flags_file="${opt_tail_flags_file:-${HERE}/TailPhobos.cfg}"
@@ -217,10 +205,9 @@ dbg=(); (( enable_debug )) && dbg=(--debug)
 chain=()
 if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeout.sh"   "${dbg[@]}" --timeout-bin "$timeout_bin" "$SPEC_DIR" -- ); fi
 network_flags=( "${dbg[@]}" --connect-guard-bin "$connect_guard_bin" --haproxy-bin "$haproxy_bin" )
-if (( enable_egress_broker )); then
-  network_flags+=( --egress-broker )
-  if [[ -n "$resolver" ]]; then network_flags+=( --resolver "$resolver" ); fi
-fi
+# The network layer starts the broker itself when a [connect] rule names a host, so no flag
+# selects it here; the resolver it needs for an exact name is passed through when given.
+if [[ -n "$resolver" ]]; then network_flags+=( --resolver "$resolver" ); fi
 if (( enable_network ));   then chain+=( "${HERE}/phobos-network.sh"   "${network_flags[@]}" "$SPEC_DIR" -- ); fi
 fs_flags=( "${dbg[@]}" --landlock-bin "$landlock_bin" )
 if (( enable_resources )); then fs_flags+=( --resources-layer "${HERE}/phobos-resources.sh" ); fi
