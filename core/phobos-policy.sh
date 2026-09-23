@@ -7,7 +7,8 @@
 # specification files (read/execute/write/create/delete.paths, net.rules, bind.rules, timeout.sec, tail.flags,
 # limits.conf) into a directory the caller owns. phobos.sh calls it once and then assembles
 # the layer chain over the same directory; a standalone caller can call it to build a
-# specification and then run any single layer script over that directory itself.
+# specification and then run any single layer script over that directory itself, which is what
+# each layer's own --config option does through this program, so no layer ever parses a config.
 #
 # Usage:
 #   phobos-policy.sh [--debug] --spec-dir <dir> [--tail-flags-file <file>] [--config <file>]...

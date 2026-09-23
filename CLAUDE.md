@@ -82,6 +82,10 @@ ${PHOBOS_HOME}/phobos.sh -- ./gradlew test
 
 # Layer switches, for isolating which layer a failure belongs to
 ${PHOBOS_HOME}/phobos.sh --no-runtime-restriction -- <command>
+
+# A single layer on its own, which builds its own specification from a config through
+# phobos-policy.sh and enforces only that layer's concern
+${PHOBOS_HOME}/phobos-network.sh --config <exercise.cfg> -- <command>
 ```
 
 ### The linters, which are the gate

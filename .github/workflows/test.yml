@@ -86,6 +86,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/pgroup_lock.sh
 
+      - name: Each layer runs on its own from a config
+        if: ${{ !cancelled() }}
+        run: bash tests/standalone_layers.sh
+
       - name: The command-line contract
         if: ${{ !cancelled() }}
         run: bash tests/cli_flags.sh
