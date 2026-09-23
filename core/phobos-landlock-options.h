@@ -20,6 +20,9 @@ static constexpr char RIGHTS_LETTER_READ = 'r';
 static constexpr char RIGHTS_LETTER_WRITE = 'w';
 static constexpr char RIGHTS_LETTER_EXECUTE = 'x';
 static constexpr char RIGHTS_LETTER_MAKE = 'm';
+static constexpr char RIGHTS_LETTER_IPC = 'p';
+static constexpr char RIGHTS_LETTER_SYMLINK = 'l';
+static constexpr char RIGHTS_LETTER_REFER = 'f';
 static constexpr char RIGHTS_LETTER_DELETE = 'd';
 static constexpr char RIGHTS_LETTER_IOCTL = 'i';
 

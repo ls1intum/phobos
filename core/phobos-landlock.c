@@ -11,8 +11,10 @@
  *                   [--chdir DIRECTORY] [--minimum-landlock-version NUMBER]
  *                   [--verbose] -- COMMAND [ARGUMENTS...]
  *
- * LETTERS is any combination of r (read), w (write), x (execute), m (create),
- * d (delete) and i (ioctl on a device), each at most once.
+ * LETTERS is any combination of r (read), w (write), x (execute), m (create
+ * regular files and directories), p (create sockets and named pipes), l (create
+ * symbolic links), f (move or rename across directories), d (delete) and i
+ * (ioctl on a device), each at most once.
  *
  * This file is the sequence of stages and nothing else. What each stage works
  * with lives beside it:

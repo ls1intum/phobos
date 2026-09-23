@@ -20,7 +20,10 @@ struct path_rule {
     bool readable;    /* r: read a file, list a directory */
     bool writable;    /* w: write into an existing file, and shorten it */
     bool executable;  /* x: execute a file, map it executable */
-    bool makeable;    /* m: create files, directories, sockets, pipes */
+    bool makeable;    /* m: create regular files and directories */
+    bool makeable_ipc; /* p: create sockets and named pipes */
+    bool makeable_symlink; /* l: create symbolic links */
+    bool referable;   /* f: move or rename across directories (REFER) */
     bool removable;   /* d: delete files and directories */
     bool ioctl_device; /* i: ioctl on a character or block device */
 };

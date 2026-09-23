@@ -171,10 +171,11 @@ void add_path_rule(int ruleset_descriptor, int landlock_version, const struct pa
                 &path_rule_attributes, 0) != 0) {
         exit_with_format("add_rule failed for %s: %s", rule->path, strerror(errno));
     }
-    log_verbose("allow %s%s%s%s%s%s%s", rule->path, rule->readable ? " +r" : "",
+    log_verbose("allow %s%s%s%s%s%s%s%s%s%s", rule->path, rule->readable ? " +r" : "",
                 rule->writable ? " +w" : "", rule->executable ? " +x" : "",
-                rule->makeable ? " +m" : "", rule->removable ? " +d" : "",
-                rule->ioctl_device ? " +i" : "");
+                rule->makeable ? " +m" : "", rule->makeable_ipc ? " +p" : "",
+                rule->makeable_symlink ? " +l" : "", rule->referable ? " +f" : "",
+                rule->removable ? " +d" : "", rule->ioctl_device ? " +i" : "");
     close(path_descriptor);
 }
 

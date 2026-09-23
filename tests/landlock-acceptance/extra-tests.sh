@@ -212,14 +212,54 @@ denied  "m alone does not allow deleting" \
 allowed "d allows deleting" \
   $LL $BASE --rights=rwmd "$TD/fine" -- /bin/rm -f "$TD/fine/new2.txt"
 
+# p, l and f are the rights split out of the old blanket "make": creating sockets and named
+# pipes, creating symbolic links, and moving or renaming across directories. Each is proven in
+# both directions, the right granted and the same act denied without it, because each was made
+# grantable where it was not before (l) or separable where it was bundled (p, f).
+allowed "p allows creating a named pipe" \
+  $LL $BASE --rights=rmp "$TD/fine" -- /bin/sh -c "mkfifo $TD/fine/fifo1"
+denied  "m alone does not allow creating a named pipe" \
+  $LL $BASE --rights=rwm "$TD/fine" -- /bin/sh -c "mkfifo $TD/fine/fifo2"
+allowed "l allows creating a symbolic link" \
+  $LL $BASE --rights=rml "$TD/fine" -- /bin/ln -s /etc/hostname "$TD/fine/link_ok"
+denied  "m alone does not allow creating a symbolic link" \
+  $LL $BASE --rights=rwm "$TD/fine" -- /bin/ln -s /etc/hostname "$TD/fine/link_no"
+
+# A cross-directory rename needs REFER (f) on both parents, and GNU mv falls back to copy on the
+# EXDEV a missing REFER returns, which would hide the denial. So the move is made by a probe that
+# calls rename(2) and nothing else, statically linked so it needs no library path granted, and run
+# from its own directory granted execute. rwmdf grants the move; rwmd (no f) must be refused.
+RENAME_DIR=$(mktemp -d)
+cat > "$RENAME_DIR/rename.c" <<'C'
+#include <stdio.h>
+int main(int argument_count, char *arguments[]) {
+    if (argument_count != 3) {
+        return 2;
+    }
+    return rename(arguments[1], arguments[2]) == 0 ? 0 : 1;
+}
+C
+rename_compiler=gcc-14
+command -v "$rename_compiler" >/dev/null 2>&1 || rename_compiler=gcc
+"$rename_compiler" -O2 -static -o "$RENAME_DIR/rename" "$RENAME_DIR/rename.c" 2>"$RENAME_DIR/cc.log" \
+    || { bad "compile the rename probe" "$(cat "$RENAME_DIR/cc.log")"; finish; }
+chmod a+rx "$RENAME_DIR" "$RENAME_DIR/rename"
+mkdir -p "$TD/mv/src" "$TD/mv/dst"; : > "$TD/mv/src/f"
+allowed "f allows renaming across directories" \
+  $LL $BASE --rights=rx "$RENAME_DIR" --rights=rwmdf "$TD/mv" -- "$RENAME_DIR/rename" "$TD/mv/src/f" "$TD/mv/dst/f"
+mkdir -p "$TD/mv2/src" "$TD/mv2/dst"; : > "$TD/mv2/src/f"
+denied  "without f a rename across directories is refused" \
+  $LL $BASE --rights=rx "$RENAME_DIR" --rights=rwmd "$TD/mv2" -- "$RENAME_DIR/rename" "$TD/mv2/src/f" "$TD/mv2/dst/f"
+
 # The device numbers of /dev/null, for a device node the sandbox must not be able to make.
 NULL_DEVICE_MAJOR=1
 NULL_DEVICE_MINOR=3
 hdr "G. What is never granted"
-denied "create a device file" \
-  $LL $BASE --rights=rwmd "$TD/fine" -- /bin/sh -c "mknod $TD/fine/device c ${NULL_DEVICE_MAJOR} ${NULL_DEVICE_MINOR}"
-denied "create a symbolic link" \
-  $LL $BASE --rights=rwmd "$TD/fine" -- /bin/ln -s /etc/passwd "$TD/fine/link"
+# A device node reaches hardware the policy never named and has no rights letter at all, so it
+# is denied even when every grantable make right is asked for. A symbolic link is no longer here:
+# it has its own right (l) and is proven in both directions in section F.
+denied "create a device file even with every grantable make right" \
+  $LL $BASE --rights=rwmdplf "$TD/fine" -- /bin/sh -c "mknod $TD/fine/device c ${NULL_DEVICE_MAJOR} ${NULL_DEVICE_MINOR}"
 allowed "creating an ordinary file still works" \
   $LL $BASE --rights=rwmd "$TD/fine" -- /bin/sh -c "echo x > $TD/fine/ordinary.txt"
 
@@ -233,7 +273,7 @@ hdr "H. Inherited rights are reported, not concealed"
 # with the per-right sections (for instance [read] on a subpath beneath [read] and
 # [write] on the ancestor) and is covered by the unit tests. What remains here is the
 # reported, not rejected, case.
-INHERITED_SPEC=$(mktemp -d); for f in read.paths execute.paths write.paths create.paths delete.paths tail.flags net.rules; do : > "$INHERITED_SPEC/$f"; done
+INHERITED_SPEC=$(mktemp -d); for f in read.paths execute.paths write.paths create.paths delete.paths ipc.paths symlink.paths refer.paths tail.flags net.rules; do : > "$INHERITED_SPEC/$f"; done
 printf '%s\n' "$TD/fine" > "$INHERITED_SPEC/read.paths"
 printf '%s\n' "$TD" > "$INHERITED_SPEC/write.paths"
 OUT=$("$CORE/phobos-filesystem.sh" "$INHERITED_SPEC" -- /bin/true 2>&1)

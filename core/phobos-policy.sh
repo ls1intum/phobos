@@ -204,7 +204,8 @@ write_spec "$SPEC_DIR" "$eff_dir" "$eff_net" "$timeout_eff" "$tail_flags_file" "
 # combination, rather than in the filesystem layer, which no longer sees the network runtime
 # state now that the port rules and the connect guard live in the network layer.
 writable_union="$(mktemp -p "$PHOBOS_SCRATCH")"
-cat "${SPEC_DIR}/write.paths" "${SPEC_DIR}/create.paths" "${SPEC_DIR}/delete.paths" 2>/dev/null \
+cat "${SPEC_DIR}/write.paths" "${SPEC_DIR}/create.paths" "${SPEC_DIR}/delete.paths" \
+  "${SPEC_DIR}/ipc.paths" "${SPEC_DIR}/symlink.paths" "${SPEC_DIR}/refer.paths" 2>/dev/null \
   > "$writable_union" || :
 refuse_spec_dir_under_write_path "$SPEC_DIR" "$writable_union"
 
