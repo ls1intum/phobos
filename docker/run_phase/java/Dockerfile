@@ -42,7 +42,7 @@ RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
 # binutils supplies the readelf the build-time hardening check below runs over the three compiled
 # binaries. haproxy is the egress broker: the connect guard hands an allowed connection to it,
 # and it enforces the allow-list by the TLS host name the guard cannot see;
-# tests/haproxy_broker.sh exercises that path inside this image.
+# tests/integration/haproxy_broker.sh exercises that path inside this image.
 FROM ls1tum/artemis-maven-template:java17-25@sha256:521f4dd3f3c6d81f403e84f2e2af3c459cd42dfd0345886aac1d1032527b07f8
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

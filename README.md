@@ -172,7 +172,7 @@ Every text file is stored with LF line endings: the path sets are read line by l
 There is no build system; the shell runs as it is and the C is compiled inside the image. The suites under `tests/` are the checks:
 
 - `tests/unit/`: the Landlock program, the connect guard and the network filter. CI holds the network filter to every line and branch and the connect guard to every line; the Landlock program's suite is measured by weekly mutation testing instead, since coverage instrumentation disturbs the calls it interposes.
-- `tests/landlock-filesystem-and-networksystem-acceptance/`: the sandbox applied to real commands in an ordinary container (no `--privileged`, `--cap-add` or `--security-opt`), proving both that a permitted action works and that a forbidden one is denied, and that the shipped policy runs.
+- `tests/integration/landlock-filesystem-and-networksystem-acceptance/`: the sandbox applied to real commands in an ordinary container (no `--privileged`, `--cap-add` or `--security-opt`), proving both that a permitted action works and that a forbidden one is denied, and that the shipped policy runs.
 - the shell suites under `tests/`: the address cache's port restrictions, the timeout contract, and the prune phase.
 
 `CONTRIBUTING.md` lists the linters, which are the gate, and `AGENTS.md` records the conventions a change here is held to.

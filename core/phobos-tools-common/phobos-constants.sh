@@ -7,7 +7,7 @@
 # shellcheck disable=SC2034
 
 # The statuses a Phobos run ends with when Phobos itself stops it. They are an external
-# contract, read by whatever grades the run, and tests/cli_flags.sh pins each one to its value.
+# contract, read by whatever grades the run, and tests/integration/cli_flags.sh pins each one to its value.
 PHB_EPOLICY=11
 PHB_ETIMEOUT=14
 PHB_ERUNTIME=15
