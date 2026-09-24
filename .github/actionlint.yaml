@@ -1,8 +1,16 @@
-# Configuration for rhysd/actionlint.
+# Configuration for rhysd/actionlint, run by .github/workflows/actionlint.yml.
+# Reference: https://github.com/rhysd/actionlint/blob/main/docs/config.md
+#
+# actionlint knows only the GitHub-hosted labels and rejects a job whose `runs-on` names
+# any other one unless it is listed under self-hosted-runner below. Only labels this
+# repository actually uses belong there: the list suppresses a lint, it is not an
+# inventory of the organisation's runners, and an entry no workflow references would
+# quietly accept a typo of exactly that label. Add a label together with the workflow that
+# needs it.
 #
 # Phobos currently runs every job on GitHub-hosted runners, so no self-hosted label is
-# declared here. Add a label together with the workflow that needs it: an entry no
-# workflow references would quietly accept a typo of that exact label.
+# declared.
+#
 # `ubuntu-26.04` is not a self-hosted label. It is here because actionlint 1.7.12, the
 # newest release (2026-03-30), predates the Ubuntu 26.04 runner image and rejects the label
 # as unknown. The `self-hosted-runner` list is the only mechanism actionlint offers to
