@@ -186,7 +186,7 @@ else
 fi
 
 echo
-echo "== the resources layer alone applies a configured limit and none without one =="
+echo "== the resources layer alone applies a configured limit, and the default without one =="
 printf '[read]\n/usr\n[limits]\nmem_mb=256\n' > "$WORK/mem.cfg"
 mem="$(run_layer phobos-resourcesystem.sh --config "$WORK/mem.cfg" -- /bin/bash -c 'echo mem=$(ulimit -v)')"
 if [[ "$mem" == *"mem=262144"* ]]; then
@@ -194,11 +194,15 @@ if [[ "$mem" == *"mem=262144"* ]]; then
 else
   bad "the resources layer alone applies the configured memory limit" "mem=262144" "$(printf '%s' "$mem" | tail -1)"
 fi
+# A limit no configuration names is no longer unbounded: it falls back to the default, which
+# is a floor rather than a cap, so the configured 256 MB above still wins although it is the
+# smaller value.
+DEFAULT_MEM_KB=$(( PHB_DEFAULT_LIMIT_MEM_MB * PHB_KILOBYTES_PER_MEGABYTE ))
 nomem="$(run_layer phobos-resourcesystem.sh --config "$CORE_X/BaseTest.cfg" -- /bin/bash -c 'echo mem=$(ulimit -v)')"
-if [[ "$nomem" == *"mem=unlimited"* ]]; then
-  ok "the resources layer alone applies no limit when none is named"
+if [[ "$nomem" == *"mem=${DEFAULT_MEM_KB}"* ]]; then
+  ok "the resources layer alone falls back to the default memory limit"
 else
-  bad "the resources layer alone applies no limit when none is named" "mem=unlimited" "$(printf '%s' "$nomem" | tail -1)"
+  bad "the resources layer alone falls back to the default memory limit" "mem=${DEFAULT_MEM_KB}" "$(printf '%s' "$nomem" | tail -1)"
 fi
 
 echo
