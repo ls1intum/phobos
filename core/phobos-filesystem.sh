@@ -2,12 +2,12 @@
 # shellcheck shell=bash
 set -euo pipefail
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=phobos-common.sh
-source "${HERE}/phobos-common.sh"
+# shellcheck source=phobos-tools-common/phobos-common.sh
+source "${HERE}/phobos-tools-common/phobos-common.sh"
 
 # The filesystem layer: it applies the Landlock policy and runs the command. phobos.sh hands it a
 # specification directory; run on its own with one or more --config files instead, it builds its
-# own through phobos-policy.sh and enforces only the filesystem.
+# own through phobos-policysystem.sh and enforces only the filesystem.
 NO_LANDLOCK=0
 LANDLOCK_BIN_OPT=""
 RESOURCES_LAYER_OPT=""
@@ -64,7 +64,7 @@ mkdir -p "$PHOBOS_SCRATCH"
 trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 
 # This layer runs the command as a child and waits on it, so its stderr can be watched for
-# denials. An outer timeout (phobos-timeout.sh) group-kills on expiry and escalates to SIGKILL
+# denials. An outer timeout (phobos-timeoutsystem.sh) group-kills on expiry and escalates to SIGKILL
 # only while GNU timeout's own child is still alive, so this layer ignores SIGTERM and stays
 # until the command it waits on is gone. The command is put back to the default disposition
 # just before it runs, so the graceful SIGTERM still reaches the command itself.
@@ -126,7 +126,7 @@ if (( PHB_DEBUG_ENABLED )); then args+=( --verbose ); fi
 # default. The Landlock TCP-port rules are no longer built here: they
 # are the network boundary's kernel half and the network layer applies them on its own
 # network-only ruleset, which composes with this filesystem-only one. The specification directory
-# is kept out of every write path by phobos-policy.sh, where the write union is known and which
+# is kept out of every write path by phobos-policysystem.sh, where the write union is known and which
 # runs whichever layers are in the chain.
 build_path_args args "${READ}" "${EXECUTE}" "${WRITE}" "${CREATE}" "${DELETE}" "${IPC}" "${SYMLINK}" "${REFER}"
 if [[ -s "${TAIL}" ]]; then
@@ -154,7 +154,7 @@ exec {filtered_stderr}> >(tee -p >(count_denials >&"$denial_counts") >&2)
 # resource layer, when there is one, and phobos-landlock-filesystem-and-networksystem, so phobos-landlock-filesystem-and-networksystem and the command it
 # runs are one process an outer timeout's kill escalation reaches directly, while this layer
 # ignores SIGTERM and waits so it can report the denials. The timeout itself, when set, is
-# phobos-timeout.sh's.
+# phobos-timeoutsystem.sh's.
 set +e
 (
   trap - TERM

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 orchestrate.py - prune, merge & build the Base*.cfg policy files that
-`core/phobos-policy.sh` applies at run time. Only the discovery (pruning) phase
+`core/phobos-policysystem.sh` applies at run time. Only the discovery (pruning) phase
 uses Bubblewrap; the run phase is enforced by Landlock, not Bubblewrap.
 
 It consumes the per-exercise artefacts (.paths and .json) that
@@ -29,7 +29,7 @@ inspected.
   needed with different rights is absent from it: the intersection is taken over whole
   "mode path" lines.
 
-Ship exactly one Base*.cfg beside phobos-policy.sh: it applies every Base*.cfg it
+Ship exactly one Base*.cfg beside phobos-policysystem.sh: it applies every Base*.cfg it
 finds there, so a BasePhobos.cfg left next to a BaseLanguage-java.cfg gives a Java
 run the paths of every other language as well.
 """

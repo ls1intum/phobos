@@ -203,12 +203,13 @@ jobs:
         with:
           persist-credentials: false
 
-      # AGENTS.md asks that every function in core/*.sh carry a comment saying what it does
-      # and what it assumes about its environment, and nothing measured it. This checks the
-      # narrow half that a machine can: that a comment line immediately precedes each
+      # AGENTS.md asks that every function in the core shell scripts carry a comment saying what
+      # it does and what it assumes about its environment, and nothing measured it. This checks
+      # the narrow half that a machine can: that a comment line immediately precedes each
       # function. It says nothing about whether the comment states the assumptions, which
-      # stays a reviewer's job, and it does not find a comment inside a body.
-      - name: Every function in core/*.sh is preceded by a comment
+      # stays a reviewer's job, and it does not find a comment inside a body. The helpers moved
+      # into phobos-tools-* subfolders, so the check globs those beside the top-level layers.
+      - name: Every function in the core shell scripts is preceded by a comment
         run: |
           awk 'FNR == 1 { previous = "" }
                /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/ {
@@ -218,7 +219,7 @@ jobs:
                  }
                }
                { previous = $0 }
-               END { exit undocumented }' core/*.sh
+               END { exit undocumented }' core/*.sh core/phobos-tools-*/*.sh
 
   # One check for a branch rule to require, rather than seven.
   #

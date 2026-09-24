@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests how the [connect] allow-list becomes an haproxy.cfg: haproxy_allow_rules turns the
-# "host port" lines phobos-policy.sh writes into the allow-list the egress broker enforces, and
+# "host port" lines phobos-policysystem.sh writes into the allow-list the egress broker enforces, and
 # build_haproxy_conf wraps them in the fixed loopback-proxy preamble and backends. The broker's
 # real enforcement is proven in the run-phase image by the acceptance suite; this pins the
 # translation, which is deterministic and needs no HAProxy. Where haproxy is installed, it also
@@ -11,8 +11,8 @@ HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=harness.sh
 source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
-# shellcheck source=../core/phobos-haproxy.sh
-source "${CORE}/phobos-haproxy.sh"
+# shellcheck source=../core/phobos-tools-networksystem/phobos-haproxy.sh
+source "${CORE}/phobos-tools-networksystem/phobos-haproxy.sh"
 
 WORK="$(mktemp -d)"
 cleanup() { rm -rf "$WORK"; }

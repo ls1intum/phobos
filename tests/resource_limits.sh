@@ -10,8 +10,8 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=harness.sh
 source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
-# shellcheck source=../core/phobos-constants.sh
-source "${CORE}/phobos-constants.sh"
+# shellcheck source=../core/phobos-tools-common/phobos-constants.sh
+source "${CORE}/phobos-tools-common/phobos-constants.sh"
 WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
 cleanup() { rm -rf "$WORK"; }
@@ -21,7 +21,7 @@ trap cleanup EXIT
 parse_limits() {
   printf '%s\n' "$1" > "$WORK/policy.cfg"
   bash -c '
-    source "$1/phobos-common.sh"
+    source "$1/phobos-tools-common/phobos-common.sh"
     parse_cfg_policy "$2"
     printf "%s,%s,%s,%s,%s" "$PARSED_LIMIT_MEM_MB" "$PARSED_LIMIT_NPROC" \
       "$PARSED_LIMIT_NOFILE" "$PARSED_LIMIT_FSIZE_MB" "$PARSED_LIMIT_CPU"
@@ -70,7 +70,7 @@ echo "== applying the limits sets this process's rlimits =="
 # shell where no process limit is in force.
 result="$(
   bash -c '
-    source "$1/phobos-common.sh"
+    source "$1/phobos-tools-common/phobos-common.sh"
     apply_resource_limits 64 32 256 10 5
     ulimit -v
     ulimit -u
@@ -108,7 +108,7 @@ for f in read.paths execute.paths write.paths create.paths delete.paths tail.fla
 run_resource_layer() {
   local limits_body=$1
   printf '%s\n' "$limits_body" > "$SPEC/limits.conf"
-  bash "$CORE_X/phobos-resources.sh" "$SPEC" -- \
+  bash "$CORE_X/phobos-resourcesystem.sh" "$SPEC" -- \
       bash -c 'ulimit -v; ulimit -n; ulimit -f; ulimit -t' 2>&1 | paste -sd, -
 }
 
@@ -124,7 +124,7 @@ echo "== the resource layer refuses a malformed limit rather than running unrest
 # fail closed, and must never reach the arithmetic apply_resource_limits performs.
 rm -f "$WORK/pwned"
 printf 'mem_mb=$(touch %s/pwned)\n' "$WORK" > "$SPEC/limits.conf"
-  bash "$CORE_X/phobos-resources.sh" "$SPEC" -- /bin/echo ran >/dev/null 2>&1
+  bash "$CORE_X/phobos-resourcesystem.sh" "$SPEC" -- /bin/echo ran >/dev/null 2>&1
 rc=$?
 if [[ "$rc" -eq "$PHB_EPOLICY" && ! -e "$WORK/pwned" ]]; then
   ok "a malformed limit is refused (PHB-EPOLICY) and never evaluated"

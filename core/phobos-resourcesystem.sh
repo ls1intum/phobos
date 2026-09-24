@@ -2,14 +2,14 @@
 # shellcheck shell=bash
 set -euo pipefail
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=phobos-common.sh
-source "${HERE}/phobos-common.sh"
+# shellcheck source=phobos-tools-common/phobos-common.sh
+source "${HERE}/phobos-tools-common/phobos-common.sh"
 
 # A generic layer: it sets the resource limits and execs the rest of the chain. phobos.sh has
 # the filesystem layer start it, and only when the resource limits are enabled, so there is no
-# enable flag to read. On its own, phobos-resources.sh SPEC -- CMD limits CMD, or, with one or
+# enable flag to read. On its own, phobos-resourcesystem.sh SPEC -- CMD limits CMD, or, with one or
 # more --config files instead of a specification directory, it builds its own through
-# phobos-policy.sh and applies only the resource limits.
+# phobos-policysystem.sh and applies only the resource limits.
 CONFIGS=()
 SPEC_PARENT="/var/tmp"
 TAIL_FLAGS_FILE_OPT=""
@@ -29,7 +29,7 @@ done
 # specification-directory mode as a child, so the directory is owned and removed by this outer
 # shell rather than leaked when the layer execs the command.
 if (( ${#CONFIGS[@]} > 0 )); then
-  [[ "${1:-}" == "--" && $# -ge 2 ]] || { echo "Usage: phobos-resources.sh [flags] --config <file> [--config <file>]... [--spec-parent <dir>] [--tail-flags-file <file>] -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+  [[ "${1:-}" == "--" && $# -ge 2 ]] || { echo "Usage: phobos-resourcesystem.sh [flags] --config <file> [--config <file>]... [--spec-parent <dir>] [--tail-flags-file <file>] -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
   shift
   build_owned_spec_from_configs "$HERE" "$SPEC_PARENT" "$TAIL_FLAGS_FILE_OPT" "${CONFIGS[@]}"
   set +e
@@ -39,7 +39,7 @@ if (( ${#CONFIGS[@]} > 0 )); then
   exit "$rc"
 fi
 
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-resources.sh [--debug] (<SPEC_DIR> | --config <file>...) -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-resourcesystem.sh [--debug] (<SPEC_DIR> | --config <file>...) -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created if this layer ends before it hands over. The
@@ -49,7 +49,7 @@ SPEC_DIR="$1"; shift 2
 # which remove_owned_spec_dir treats as done.
 trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 
-# The limits phobos-policy.sh wrote into the specification, re-validated at this boundary
+# The limits phobos-policysystem.sh wrote into the specification, re-validated at this boundary
 # rather than trusted, one entry per key; an absent file or key leaves that limit unset.
 declare -A limits
 read_limits_conf "${SPEC_DIR}/limits.conf" limits

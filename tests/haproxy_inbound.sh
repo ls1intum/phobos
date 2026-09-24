@@ -2,7 +2,7 @@
 # The inbound filter fronts a student's TCP listener on a public port and admits only the source
 # addresses an [accept] rule names, on a real HAProxy.
 #
-# build_inbound_conf turns the "H P src" accept rules phobos-policy.sh writes into an haproxy.cfg
+# build_inbound_conf turns the "H P src" accept rules phobos-policysystem.sh writes into an haproxy.cfg
 # that binds each public port H dual-stack and rejects a connection whose source is not in H's
 # source file, forwarding an admitted one to the student's backend port P on loopback.
 # start_inbound_haproxy starts it and records its process id for the layer to stop later. This
@@ -17,10 +17,10 @@ HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=harness.sh
 source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
-# shellcheck source=../core/phobos-common.sh
-source "${CORE}/phobos-common.sh"
-# shellcheck source=../core/phobos-haproxy.sh
-source "${CORE}/phobos-haproxy.sh"
+# shellcheck source=../core/phobos-tools-common/phobos-common.sh
+source "${CORE}/phobos-tools-common/phobos-common.sh"
+# shellcheck source=../core/phobos-tools-networksystem/phobos-haproxy.sh
+source "${CORE}/phobos-tools-networksystem/phobos-haproxy.sh"
 
 WORK="$(mktemp -d)"
 cleanup() {

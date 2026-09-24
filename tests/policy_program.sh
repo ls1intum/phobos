@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phobos-policy.sh builds a run's specification from the base and exercise configuration. It
+# phobos-policysystem.sh builds a run's specification from the base and exercise configuration. It
 # is the one program that discovers the base policy, parses, merges and writes the spec files,
 # and it is callable on its own, so a single layer can be run standalone over a directory it
 # fills. No Landlock kernel is needed: this only checks the files it writes and that a layer
@@ -10,15 +10,15 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=harness.sh
 source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
-# shellcheck source=../core/phobos-constants.sh
-source "${CORE}/phobos-constants.sh"
+# shellcheck source=../core/phobos-tools-common/phobos-constants.sh
+source "${CORE}/phobos-tools-common/phobos-constants.sh"
 WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
 
 # A concrete writable directory for the test policies to grant, kept distinct from where the spec
-# directories are made. phobos-policy.sh now refuses a specification that lies beneath a write
+# directories are made. phobos-policysystem.sh now refuses a specification that lies beneath a write
 # path, exactly as a real run's /var/tmp spec parent lies outside the shipped policies' write
 # paths, so a test that granted write to the spec's own parent would be refused for the right
 # reason. fresh_spec makes specs directly under WORK, which this subdirectory is not an ancestor of.
@@ -39,12 +39,12 @@ fresh_spec() {
   printf '%s' "$dir"
 }
 
-echo "== phobos-policy.sh writes the specification files =="
+echo "== phobos-policysystem.sh writes the specification files =="
 SPEC="$(fresh_spec)"
 # The policy is additive: an exercise config adds paths, rights and the larger limit on top
 # of the base. Here it only raises a limit; the base paths are all carried through.
 printf '[limits]\nmem_mb=128\n' > "$WORK/exercise.cfg"
-bash "$CORE_X/phobos-policy.sh" --spec-dir "$SPEC" --config "$WORK/exercise.cfg"
+bash "$CORE_X/phobos-policysystem.sh" --spec-dir "$SPEC" --config "$WORK/exercise.cfg"
 rc=$?
 if [[ "$rc" -eq 0 ]]; then ok "a base and an exercise config build a specification"; else bad "a base and an exercise config build a specification" "exit 0" "exit $rc"; fi
 check "the base read path is carried through"    "/usr" "$(cat "$SPEC/read.paths")"
@@ -60,13 +60,13 @@ echo "== an exercise adds to the base and cannot remove a base right =="
 # that path. Listing /usr in [read] leaves the base's execute right on /usr in place.
 NSPEC="$(fresh_spec)"
 printf '[read]\n/usr\n' > "$WORK/reaffirm.cfg"
-bash "$CORE_X/phobos-policy.sh" --spec-dir "$NSPEC" --config "$WORK/reaffirm.cfg" >/dev/null 2>&1
+bash "$CORE_X/phobos-policysystem.sh" --spec-dir "$NSPEC" --config "$WORK/reaffirm.cfg" >/dev/null 2>&1
 check "the base read right is kept"                 "/usr" "$(cat "$NSPEC/read.paths")"
 check "the base execute right is not removed"       "/usr" "$(cat "$NSPEC/execute.paths")"
 # An exercise may grant a right, and name a path, the base did not: the model is additive.
 WSPEC="$(fresh_spec)"
 printf '[write]\n/usr\n[read]\n/opt/extra\n' > "$WORK/widen.cfg"
-out="$(bash "$CORE_X/phobos-policy.sh" --spec-dir "$WSPEC" --config "$WORK/widen.cfg" 2>&1)"
+out="$(bash "$CORE_X/phobos-policysystem.sh" --spec-dir "$WSPEC" --config "$WORK/widen.cfg" 2>&1)"
 rc=$?
 if [[ "$rc" -eq 0 ]]; then ok "an exercise widening the sandbox is accepted (additive model)"; else bad "an exercise widening the sandbox is accepted (additive model)" "exit 0" "exit $rc: $out"; fi
 check "the exercise adds write on a base path"      "/usr"       "$(grep -Fx /usr "$WSPEC/write.paths")"
@@ -74,12 +74,12 @@ check "the base write path is still present"         "$WRITABLE"  "$(grep -Fx "$
 check "the exercise adds a path the base did not"    "/opt/extra" "$(grep -Fx /opt/extra "$WSPEC/read.paths")"
 
 echo
-echo "== phobos-policy.sh refuses when there is no base policy =="
+echo "== phobos-policysystem.sh refuses when there is no base policy =="
 NOBASE="$WORK/nobase"
 cp -R "$CORE" "$NOBASE"
 chmod +x "$NOBASE"/*.sh
 SPEC2="$(fresh_spec)"
-out="$(bash "$NOBASE/phobos-policy.sh" --spec-dir "$SPEC2" 2>&1)"
+out="$(bash "$NOBASE/phobos-policysystem.sh" --spec-dir "$SPEC2" 2>&1)"
 rc=$?
 if [[ "$rc" -eq "$PHB_EPOLICY" && "$out" == *"PHB-EPOLICY"* ]]; then
   ok "no Base*.cfg beside the policy program is refused (PHB-EPOLICY)"
@@ -98,7 +98,7 @@ chmod +x "$UNREADABLE"/*.sh
 printf '[read]\n/var/tmp\n' > "$UNREADABLE/BaseGood.cfg"
 ln -s "$WORK/there-is-no-such-file.cfg" "$UNREADABLE/BaseDangling.cfg"
 SPEC3="$(fresh_spec)"
-out="$(bash "$UNREADABLE/phobos-policy.sh" --spec-dir "$SPEC3" 2>&1)"
+out="$(bash "$UNREADABLE/phobos-policysystem.sh" --spec-dir "$SPEC3" 2>&1)"
 rc=$?
 if [[ "$rc" -eq "$PHB_EPOLICY" && "$out" == *"PHB-EPOLICY"* ]]; then
   ok "a Base*.cfg that is a broken symbolic link is refused (PHB-EPOLICY)"
@@ -112,7 +112,7 @@ chmod +x "$ADIRECTORY"/*.sh
 printf '[read]\n/var/tmp\n' > "$ADIRECTORY/BaseGood.cfg"
 mkdir -p "$ADIRECTORY/BaseOops.cfg"
 SPEC4="$(fresh_spec)"
-out="$(bash "$ADIRECTORY/phobos-policy.sh" --spec-dir "$SPEC4" 2>&1)"
+out="$(bash "$ADIRECTORY/phobos-policysystem.sh" --spec-dir "$SPEC4" 2>&1)"
 rc=$?
 if [[ "$rc" -eq "$PHB_EPOLICY" && "$out" == *"PHB-EPOLICY"* ]]; then
   ok "a Base*.cfg that is a directory is refused (PHB-EPOLICY)"
@@ -133,7 +133,7 @@ refuse_case() {
   local rc
   spec="$(fresh_spec)"
   printf "%b" "$body" > "$WORK/bad-net.cfg"
-  out="$(bash "$CORE_X/phobos-policy.sh" --spec-dir "$spec" --config "$WORK/bad-net.cfg" 2>&1)"
+  out="$(bash "$CORE_X/phobos-policysystem.sh" --spec-dir "$spec" --config "$WORK/bad-net.cfg" 2>&1)"
   rc=$?
   if [[ "$rc" -eq "$PHB_EPOLICY" && "$out" == *"PHB-EPOLICY"* && ! -f "$spec/net.rules" ]]; then
     ok "$name"
@@ -156,12 +156,12 @@ refuse_case "a [bind] rule naming a bracketed IPv6 address is refused" '[bind]\n
 
 SPEC_OK="$(fresh_spec)"
 printf '[connect]\nallow example.test:443\n' > "$WORK/good-net.cfg"
-bash "$CORE_X/phobos-policy.sh" --spec-dir "$SPEC_OK" --config "$WORK/good-net.cfg" > /dev/null 2>&1
+bash "$CORE_X/phobos-policysystem.sh" --spec-dir "$SPEC_OK" --config "$WORK/good-net.cfg" > /dev/null 2>&1
 check "a concrete port still builds a specification" "example.test 443" "$(cat "$SPEC_OK/net.rules")"
 
 SPEC_BIND="$(fresh_spec)"
 printf '[bind]\nallow 8080\n' > "$WORK/good-bind.cfg"
-bash "$CORE_X/phobos-policy.sh" --spec-dir "$SPEC_BIND" --config "$WORK/good-bind.cfg" > /dev/null 2>&1
+bash "$CORE_X/phobos-policysystem.sh" --spec-dir "$SPEC_BIND" --config "$WORK/good-bind.cfg" > /dev/null 2>&1
 check "a bare [bind] port still builds a specification (host stored as *)" "* 8080" "$(cat "$SPEC_BIND/bind.rules")"
 
 echo
@@ -178,16 +178,16 @@ refuse_case "two [accept] rules fronting one port with different backends are re
 
 SPEC_ACC="$(fresh_spec)"
 printf '[bind]\nallow 18080\n[accept]\nexpose 18888 to 18080 from 127.0.0.5, fd00::/8\n' > "$WORK/good-accept.cfg"
-bash "$CORE_X/phobos-policy.sh" --spec-dir "$SPEC_ACC" --config "$WORK/good-accept.cfg" > /dev/null 2>&1
+bash "$CORE_X/phobos-policysystem.sh" --spec-dir "$SPEC_ACC" --config "$WORK/good-accept.cfg" > /dev/null 2>&1
 check "an [accept] rule builds the accept spec"     "18888 18080 127.0.0.5" "$(grep -F '127.0.0.5' "$SPEC_ACC/accept.rules")"
 check "an [accept] ipv6 source is carried through"  "18888 18080 fd00::/8"  "$(grep -F 'fd00' "$SPEC_ACC/accept.rules")"
 
 echo
-echo "== a single layer runs standalone over a specification phobos-policy.sh built =="
+echo "== a single layer runs standalone over a specification phobos-policysystem.sh built =="
 printf '%s\n' '#!/usr/bin/env bash' \
   'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift; exec "$@"' > "$WORK/passthrough-landlock"
 chmod +x "$WORK/passthrough-landlock"
-mem="$(bash "$CORE_X/phobos-resources.sh" "$SPEC" -- bash -c 'ulimit -v' 2>/dev/null)"
+mem="$(bash "$CORE_X/phobos-resourcesystem.sh" "$SPEC" -- bash -c 'ulimit -v' 2>/dev/null)"
 check "the resource layer applies the built limit (128 MB is 131072 KB)" "131072" "$mem"
 
 finish

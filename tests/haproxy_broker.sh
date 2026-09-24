@@ -21,10 +21,10 @@ HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=harness.sh
 source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
-# shellcheck source=../core/phobos-common.sh
-source "${CORE}/phobos-common.sh"
-# shellcheck source=../core/phobos-haproxy.sh
-source "${CORE}/phobos-haproxy.sh"
+# shellcheck source=../core/phobos-tools-common/phobos-common.sh
+source "${CORE}/phobos-tools-common/phobos-common.sh"
+# shellcheck source=../core/phobos-tools-networksystem/phobos-haproxy.sh
+source "${CORE}/phobos-tools-networksystem/phobos-haproxy.sh"
 
 WORK="$(mktemp -d)"
 cleanup() {
@@ -290,7 +290,7 @@ spec_layer="$WORK/spec-layer"
 mkdir -p "$spec_layer"
 printf 'allowed.example %s\n' "$UPORT" > "$spec_layer/net.rules"
 layer_status=0
-"${CORE}/phobos-network.sh" --connect-guard-bin "$WORK/guard" \
+"${CORE}/phobos-networksystem.sh" --connect-guard-bin "$WORK/guard" \
   "$spec_layer" -- true > "$WORK/layer.out" 2>&1 \
   || layer_status=$?
 if (( layer_status == PHB_ERUNTIME )); then
@@ -404,7 +404,7 @@ if [[ -w /etc/hosts ]]; then
   mkdir -p "$spec_e2e"
   printf 'allowed.example %s\n' "$UPORT" > "$spec_e2e/net.rules"
   rm -f "$WORK/real.marker"
-  "${CORE}/phobos-network.sh" --connect-guard-bin "$WORK/guard" --landlock-bin "$WORK/phobos-landlock-filesystem-and-networksystem" \
+  "${CORE}/phobos-networksystem.sh" --connect-guard-bin "$WORK/guard" --landlock-bin "$WORK/phobos-landlock-filesystem-and-networksystem" \
     --resolver "127.0.0.1:${DNSPORT}" "$spec_e2e" -- \
     timeout 4 openssl s_client -connect "allowed.example:${UPORT}" -servername allowed.example -quiet < /dev/null \
     > "$WORK/e2e.out" 2>&1 || true

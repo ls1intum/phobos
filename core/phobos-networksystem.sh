@@ -2,15 +2,15 @@
 # shellcheck shell=bash
 set -euo pipefail
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=phobos-common.sh
-source "${HERE}/phobos-common.sh"
-# shellcheck source=phobos-haproxy.sh
-source "${HERE}/phobos-haproxy.sh"
+# shellcheck source=phobos-tools-common/phobos-common.sh
+source "${HERE}/phobos-tools-common/phobos-common.sh"
+# shellcheck source=phobos-tools-networksystem/phobos-haproxy.sh
+source "${HERE}/phobos-tools-networksystem/phobos-haproxy.sh"
 
 # A generic layer: it does its work and execs the rest of the chain. phobos.sh includes this
 # layer only when the network filter is enabled, so there is no enable flag to read. Run on its
 # own with one or more --config files instead of a specification directory, it builds its own
-# specification through phobos-policy.sh and enforces only the network.
+# specification through phobos-policysystem.sh and enforces only the network.
 GUARD_BIN_OPT=""
 HAPROXY_BIN_OPT=""
 RESOLVER_OPT=""
@@ -34,12 +34,12 @@ while [[ "${1:-}" == --* ]]; do
 done
 
 # Standalone mode: given one or more --config files instead of a specification directory, this
-# layer builds a specification of its own through the one parser, phobos-policy.sh, then runs
+# layer builds a specification of its own through the one parser, phobos-policysystem.sh, then runs
 # itself over that directory in specification-directory mode as a child. The directory is owned
 # and removed by this outer shell, because the specification-directory run execs the guard and so
 # leaves no waiter of its own to remove it.
 if (( ${#CONFIGS[@]} > 0 )); then
-  [[ "${1:-}" == "--" && $# -ge 2 ]] || { echo "Usage: phobos-network.sh [flags] --config <file> [--config <file>]... [--spec-parent <dir>] [--tail-flags-file <file>] -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+  [[ "${1:-}" == "--" && $# -ge 2 ]] || { echo "Usage: phobos-networksystem.sh [flags] --config <file> [--config <file>]... [--spec-parent <dir>] [--tail-flags-file <file>] -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
   shift
   build_owned_spec_from_configs "$HERE" "$SPEC_PARENT" "$TAIL_FLAGS_FILE_OPT" "${CONFIGS[@]}"
   set +e
@@ -49,7 +49,7 @@ if (( ${#CONFIGS[@]} > 0 )); then
   exit "$rc"
 fi
 
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-network.sh [--debug] [--connect-guard-bin <path>] [--haproxy-bin <path>] [--resolver <ip[:port]>] [--landlock-bin <path>] (<SPEC_DIR> | --config <file>...) -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-networksystem.sh [--debug] [--connect-guard-bin <path>] [--haproxy-bin <path>] [--resolver <ip[:port]>] [--landlock-bin <path>] (<SPEC_DIR> | --config <file>...) -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created if this layer ends before it hands over,

@@ -11,8 +11,8 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=harness.sh
 source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
-# shellcheck source=../core/phobos-constants.sh
-source "${CORE}/phobos-constants.sh"
+# shellcheck source=../core/phobos-tools-common/phobos-constants.sh
+source "${CORE}/phobos-tools-common/phobos-constants.sh"
 
 WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
@@ -34,7 +34,7 @@ run_parser() {
   local out
   local rc
   out=$(bash -c '
-      source "$1/phobos-common.sh"
+      source "$1/phobos-tools-common/phobos-common.sh"
       parse_cfg_policy "$2"
       printf "value=%s" "${PARSED_TIMEOUT}"
     ' _ "$CORE" "$WORK/policy.cfg" 2>&1)
@@ -167,7 +167,7 @@ timeout_arg_for() {
   printf '%s' "$value" > "$SPEC/timeout.sec"
   local rc
   PHB_TEST_RECORD="$WORK/record" \
-    bash "$CORE/phobos-timeout.sh" --timeout-bin "$WORK/fake-timeout" --pgroup-lock-bin "$WORK/pgroup-stub" "$SPEC" -- /bin/true >/dev/null 2>&1
+    bash "$CORE/phobos-timeoutsystem.sh" --timeout-bin "$WORK/fake-timeout" --pgroup-lock-bin "$WORK/pgroup-stub" "$SPEC" -- /bin/true >/dev/null 2>&1
   rc=$?
   if [[ -f "$WORK/record" ]]; then
     printf 'rc=%s arg=%s' "$rc" "$(awk '{print $2}' "$WORK/record")"
@@ -194,7 +194,7 @@ echo "== modular runtime: the timeout group-kills and escalates =="
 rm -f "$WORK/record"
 printf '3' > "$SPEC/timeout.sec"
 PHB_TEST_RECORD="$WORK/record" \
-  bash "$CORE/phobos-timeout.sh" --timeout-bin "$WORK/fake-timeout" --pgroup-lock-bin "$WORK/pgroup-stub" "$SPEC" -- /bin/true >/dev/null 2>&1
+  bash "$CORE/phobos-timeoutsystem.sh" --timeout-bin "$WORK/fake-timeout" --pgroup-lock-bin "$WORK/pgroup-stub" "$SPEC" -- /bin/true >/dev/null 2>&1
 invocation="$(cat "$WORK/record" 2>/dev/null)"
 if [[ "$invocation" == *"--kill-after=5s"* ]]; then
   ok "it escalates to SIGKILL with --kill-after"
@@ -224,7 +224,7 @@ echo "== modular parser: [connect] host:port grammar =="
 # the body is refused (a refusal is asserted separately with rejects_net).
 parsed_net_rules() {
   bash -c '
-    source "$1/phobos-common.sh"
+    source "$1/phobos-tools-common/phobos-common.sh"
     printf "%s\n" "$2" > "$3/net.cfg"
     parse_cfg_policy "$3/net.cfg" >/dev/null 2>&1
     cat "$PARSED_NET_FILE"
@@ -238,7 +238,7 @@ rejects_net() {
   local out
   local rc
   printf '%s\n' "$body" > "$WORK/net.cfg"
-  out=$(bash -c 'source "$1/phobos-common.sh"; parse_cfg_policy "$2"' _ "$CORE" "$WORK/net.cfg" 2>&1)
+  out=$(bash -c 'source "$1/phobos-tools-common/phobos-common.sh"; parse_cfg_policy "$2"' _ "$CORE" "$WORK/net.cfg" 2>&1)
   rc=$?
   if [[ "$rc" == "$PHB_EPOLICY" && "$out" == *"PHB-EPOLICY"* ]]; then
     ok "$name"
@@ -286,7 +286,7 @@ rejects_net "a bare value in a [limits] section is refused" '[limits]
 # configured value, and "passed-through" otherwise.
 reached() {
   bash -c '
-      source "$1/phobos-common.sh"
+      source "$1/phobos-tools-common/phobos-common.sh"
       if run_reached_timeout "$2" "$3" "$4"; then echo timeout; else echo passed-through; fi
     ' _ "$CORE" "$1" "$2" "$3"
 }
@@ -300,7 +300,7 @@ check "attribution: another status is never a timeout"         "passed-through" 
 check "attribution: milliseconds of the timeout count"         "passed-through" "$(reached "$PHB_TIMEOUT_EXPIRED_EXIT" "$TWO_SECONDS_MICROSECONDS" 2.001)"
 
 microseconds_of() {
-  bash -c 'source "$1/phobos-common.sh"; epoch_realtime_microseconds "$2"' _ "$CORE" "$1"
+  bash -c 'source "$1/phobos-tools-common/phobos-common.sh"; epoch_realtime_microseconds "$2"' _ "$CORE" "$1"
 }
 check "clock: a point as the decimal separator"                "1789821309904702" "$(microseconds_of 1789821309.904702)"
 check "clock: a comma as the decimal separator (de_DE)"        "1789821309904702" "$(microseconds_of 1789821309,904702)"

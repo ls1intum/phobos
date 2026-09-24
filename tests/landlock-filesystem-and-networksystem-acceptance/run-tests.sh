@@ -10,7 +10,7 @@ source "${HERE}/../harness.sh" || { echo "cannot source the harness beside ${HER
 CORE=/var/tmp/opt/core
 # The image carries the constants beside the scripts under test.
 # shellcheck source=/dev/null
-source "${CORE}/phobos-constants.sh"
+source "${CORE}/phobos-tools-common/phobos-constants.sh"
 # The loopback ports of the network checks: BaseLanguage-java.cfg beside this suite allows the
 # first and not the second, so the two must stay in step with it;
 # how often and how far apart the servers' start is awaited; how many lines of a failing

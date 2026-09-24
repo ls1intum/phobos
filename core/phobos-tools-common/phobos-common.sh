@@ -21,9 +21,9 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/phobos-paths.sh"
 source "$(dirname -- "${BASH_SOURCE[0]}")/phobos-time.sh"
 # shellcheck source=phobos-spec-dir.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/phobos-spec-dir.sh"
-# shellcheck source=phobos-policy-parse.sh
-source "$(dirname -- "${BASH_SOURCE[0]}")/phobos-policy-parse.sh"
-# shellcheck source=phobos-rights.sh
-source "$(dirname -- "${BASH_SOURCE[0]}")/phobos-rights.sh"
-# shellcheck source=phobos-network-args.sh
-source "$(dirname -- "${BASH_SOURCE[0]}")/phobos-network-args.sh"
+# shellcheck source=../phobos-tools-policysystem/phobos-policy-parse.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/../phobos-tools-policysystem/phobos-policy-parse.sh"
+# shellcheck source=../phobos-tools-filesystem/phobos-rights.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/../phobos-tools-filesystem/phobos-rights.sh"
+# shellcheck source=../phobos-tools-networksystem/phobos-network-args.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/../phobos-tools-networksystem/phobos-network-args.sh"

@@ -36,7 +36,7 @@ jobs:
       # notice, because every suite invokes its script through `bash`.
       #
       # The layers under core/ are checked for the same reason. phobos.sh runs
-      # phobos-policy.sh and every layer as a program rather than through `bash`, and the
+      # phobos-policysystem.sh and every layer as a program rather than through `bash`, and the
       # README and CLAUDE.md tell a reader to call core/phobos.sh directly, so a mode lost
       # here ends a run with exit 126 outside the image, which sets the modes itself.
       # phobos-common.sh and phobos-constants.sh are absent on purpose: they are sourced,
@@ -44,8 +44,8 @@ jobs:
       - name: The entry points are executable
         run: |
           for script in var/tmp/pruning/run_minimal_fs_all.sh var/tmp/pruning/detect_minimal_fs.sh \
-                        core/phobos.sh core/phobos-policy.sh core/phobos-filesystem.sh \
-                        core/phobos-network.sh core/phobos-resources.sh core/phobos-timeout.sh; do
+                        core/phobos.sh core/phobos-policysystem.sh core/phobos-filesystem.sh \
+                        core/phobos-networksystem.sh core/phobos-resourcesystem.sh core/phobos-timeoutsystem.sh; do
             if [ ! -x "${script}" ]; then
               echo "::error file=${script}::not executable, so it cannot be started as a program"
               exit 1

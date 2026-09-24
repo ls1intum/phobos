@@ -18,8 +18,8 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=harness.sh
 source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
-# shellcheck source=../core/phobos-constants.sh
-source "${CORE}/phobos-constants.sh"
+# shellcheck source=../core/phobos-tools-common/phobos-constants.sh
+source "${CORE}/phobos-tools-common/phobos-constants.sh"
 WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
 cleanup() { rm -rf "$WORK"; }

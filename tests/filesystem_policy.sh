@@ -17,8 +17,8 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=harness.sh
 source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
-# shellcheck source=../core/phobos-constants.sh
-source "${CORE}/phobos-constants.sh"
+# shellcheck source=../core/phobos-tools-common/phobos-constants.sh
+source "${CORE}/phobos-tools-common/phobos-constants.sh"
 WORK="$(mktemp -d)"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -48,8 +48,8 @@ run_sections() {
   out="$(
     export PHOBOS_SCRATCH="$WORK/scratch"
     mkdir -p "$PHOBOS_SCRATCH"
-    # shellcheck source=../core/phobos-common.sh
-    source "${CORE}/phobos-common.sh"
+    # shellcheck source=../core/phobos-tools-common/phobos-common.sh
+    source "${CORE}/phobos-tools-common/phobos-common.sh"
     args=()
     build_path_args args "$WORK/read.paths" "$WORK/execute.paths" "$WORK/write.paths" \
       "$WORK/create.paths" "$WORK/delete.paths" "$WORK/ipc.paths" "$WORK/symlink.paths" \
@@ -97,7 +97,7 @@ fi
 echo
 echo "== a redundant base entry is what lets an exercise name that path with fewer rights =="
 # This one goes through the real merge rather than through hand-written section files:
-# phobos-policy.sh folds a base configuration and an exercise configuration into one
+# phobos-policysystem.sh folds a base configuration and an exercise configuration into one
 # specification, and the filesystem layer then builds the rules from it. Feeding
 # build_path_args an already-unioned set would prove nothing about that fold.
 #
@@ -109,6 +109,9 @@ run_composed() {
   work="$(mktemp -d -p "$WORK")"
   mkdir -p "$work/core"
   cp "$CORE"/*.sh "$work/core/"
+  # The layer scripts source their helpers from the phobos-tools-* folders, so the minimal core
+  # copy needs those folders too, not only the top-level scripts.
+  cp -R "$CORE"/phobos-tools-* "$work/core/"
   {
     printf '[read]\n%s\n' "$TREE"
     [[ "$base_names_the_child" == yes ]] && printf '%s\n' "$TREE/child"
@@ -118,13 +121,13 @@ run_composed() {
   printf '[read]\n%s\n' "$TREE/child" > "$work/exercise.cfg"
   local spec="$work/spec"
   mkdir -p "$spec"
-  bash "$work/core/phobos-policy.sh" --spec-dir "$spec" --config "$work/exercise.cfg" \
+  bash "$work/core/phobos-policysystem.sh" --spec-dir "$spec" --config "$work/exercise.cfg" \
     >/dev/null 2>&1 || { printf 'policy:%s' "$?"; return 0; }
   (
     export PHOBOS_SCRATCH="$spec/scratch"
     mkdir -p "$PHOBOS_SCRATCH"
-    # shellcheck source=../core/phobos-common.sh
-    source "${CORE}/phobos-common.sh"
+    # shellcheck source=../core/phobos-tools-common/phobos-common.sh
+    source "${CORE}/phobos-tools-common/phobos-common.sh"
     args=()
     build_path_args args "$spec/read.paths" "$spec/execute.paths" "$spec/write.paths" \
       "$spec/create.paths" "$spec/delete.paths" "$spec/ipc.paths" "$spec/symlink.paths" \
