@@ -144,14 +144,14 @@ outside is `--network none` and cgroup limits, which Phobos cannot set for itsel
 core/                      the sandbox itself
   phobos.sh                entry point: parses the configuration, applies the layers
   phobos-filesystem.sh     the filesystem layer, reads the path sets and applies Landlock
-  phobos-landlock-filesystem-and-networksystem*.c/.h    the C program that applies the Landlock policy, then exec's
-  phobos-seccomp-networksystem*.c/.h  the connect guard: supervises connect() and enforces [connect] by host and port
+  phobos-landlock-filesystem-and-networksystem/  its *.c/.h: the C program that applies the Landlock policy, then exec's
+  phobos-seccomp-networksystem/  its *.c/.h: the connect guard, supervises connect() and enforces [connect] by host and port
   phobos-policy.sh         turns the base and exercise configuration into a run's specification
   phobos-network.sh        the network layer, runs the connect guard and the egress/inbound HAProxy
   phobos-haproxy.sh        the egress broker and inbound filter: turns [connect]/[accept] into an haproxy.cfg
   phobos-resources.sh      the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
   phobos-timeout.sh        the timeout layer, which applies the group lock below when a timeout is set
-  phobos-seccomp-timeoutsystem.c     the group lock: a seccomp filter refusing setsid and setpgid, then exec's
+  phobos-seccomp-timeoutsystem/  its *.c: the group lock, a seccomp filter refusing setsid and setpgid, then exec's
   phobos-common.sh         the shared helpers, sourced by the others; it sources the seven below
   phobos-log.sh            reporting, and counting what a run was denied
   phobos-paths.sh          the two canonical forms a path is compared in

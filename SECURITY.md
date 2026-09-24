@@ -17,7 +17,7 @@ rest exists to take privileges away. None of the following is a vulnerability.
   starts can only lose access. Code that assembles access rules from a configuration file
   looks like path injection, and is the mechanism. It needs no privilege: a task may always
   restrict itself further.
-- `core/phobos-seccomp-networksystem.c` is the connect guard. When the network layer is on it
+- `core/phobos-seccomp-networksystem/phobos-seccomp-networksystem.c` is the connect guard. When the network layer is on it
   supervises every `connect()` with a seccomp user-notification and makes an allowed
   connection itself from outside the sandboxed process, so for `connect` it is a boundary a
   raw system call cannot step around, enforcing the `[connect]` allow-list by host and port.

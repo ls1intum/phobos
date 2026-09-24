@@ -44,7 +44,7 @@ if ! command -v setsid >/dev/null 2>&1; then
 fi
 
 LOCK="$WORK/phobos-seccomp-timeoutsystem"
-if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$LOCK" "${CORE}/phobos-seccomp-timeoutsystem.c" 2>"$WORK/cc.log"; then
+if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$LOCK" "${CORE}/phobos-seccomp-timeoutsystem/phobos-seccomp-timeoutsystem.c" 2>"$WORK/cc.log"; then
   skip "the group lock" "it did not build, so the kernel or compiler is too old: $(cat "$WORK/cc.log")"
   finish
 fi
@@ -104,6 +104,9 @@ echo "== a missing lock binary is refused fail-closed when a timeout is set =="
 CORE_X="$WORK/core-x"
 cp -R "$CORE" "$CORE_X"
 chmod +x "$CORE_X"/*.sh
+# The copy carries the enforcer source folders; drop them so a compiled binary placed at the same
+# name below is a flat file beside the scripts, as the run-phase image ships it, not a directory.
+rm -rf "$CORE_X/phobos-landlock-filesystem-and-networksystem" "$CORE_X/phobos-seccomp-networksystem" "$CORE_X/phobos-seccomp-timeoutsystem"
 cp "$LOCK" "$CORE_X/phobos-seccomp-timeoutsystem"
 printf '[read]\n/usr\n[limits]\ntimeout=3\n' > "$CORE_X/BaseTest.cfg"
 printf '%s\n' '#!/usr/bin/env bash' \
@@ -154,7 +157,7 @@ echo "== with the network on, the connect guard still traps a forbidden connect 
 # guard still decides every connect although the lock is in force. This exercises both layers on,
 # with a timeout set, over a loopback-only policy so no broker is needed and the network layer's
 # own Landlock is not invoked. It needs the connect guard, so it is built here.
-if "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/guard" "${CORE}"/phobos-seccomp-networksystem*.c 2>"$WORK/guard-cc.log"; then
+if "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/guard" "${CORE}"/phobos-seccomp-networksystem/phobos-seccomp-networksystem*.c 2>"$WORK/guard-cc.log"; then
   cp "$WORK/guard" "$CORE_X/phobos-seccomp-networksystem"
   cat > "$WORK/connect-probe.c" <<'C'
 #define _GNU_SOURCE

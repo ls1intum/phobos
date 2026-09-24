@@ -40,11 +40,11 @@ fi
 
 mkdir -p "${DESTINATION}/config"
 cp "${REPOSITORY}"/core/*.sh "${DESTINATION}/"
-cp "${REPOSITORY}"/core/phobos-landlock-filesystem-and-networksystem*.c "${DESTINATION}/"
-cp "${REPOSITORY}"/core/phobos-landlock-filesystem-and-networksystem*.h "${DESTINATION}/"
-cp "${REPOSITORY}"/core/phobos-seccomp-networksystem*.c "${DESTINATION}/"
-cp "${REPOSITORY}"/core/phobos-seccomp-networksystem*.h "${DESTINATION}/"
-cp "${REPOSITORY}"/core/phobos-seccomp-timeoutsystem.c "${DESTINATION}/"
+cp "${REPOSITORY}"/core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem*.c "${DESTINATION}/"
+cp "${REPOSITORY}"/core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem*.h "${DESTINATION}/"
+cp "${REPOSITORY}"/core/phobos-seccomp-networksystem/phobos-seccomp-networksystem*.c "${DESTINATION}/"
+cp "${REPOSITORY}"/core/phobos-seccomp-networksystem/phobos-seccomp-networksystem*.h "${DESTINATION}/"
+cp "${REPOSITORY}"/core/phobos-seccomp-timeoutsystem/phobos-seccomp-timeoutsystem.c "${DESTINATION}/"
 cp "${REPOSITORY}"/core/config/*.cfg "${DESTINATION}/config/"
 
 touch "${DESTINATION}/${MARKER}"

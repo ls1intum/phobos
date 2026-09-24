@@ -53,13 +53,13 @@ if ! command -v openssl >/dev/null 2>&1; then
   skip "the egress broker" "openssl is not installed here, so no ClientHello can be sent"
   finish
 fi
-if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/guard" "${CORE}"/phobos-seccomp-networksystem*.c 2>"$WORK/cc.log"; then
+if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/guard" "${CORE}"/phobos-seccomp-networksystem/phobos-seccomp-networksystem*.c 2>"$WORK/cc.log"; then
   bad "the connect guard builds" "$(cat "$WORK/cc.log")"
   finish
 fi
 # The network layer applies the Landlock TCP-port rules itself now, so the end-to-end case below,
 # whose [connect] rule names a port, needs the phobos-landlock-filesystem-and-networksystem binary too.
-if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/phobos-landlock-filesystem-and-networksystem" "${CORE}"/phobos-landlock-filesystem-and-networksystem*.c 2>"$WORK/cc.log"; then
+if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/phobos-landlock-filesystem-and-networksystem" "${CORE}"/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem*.c 2>"$WORK/cc.log"; then
   bad "phobos-landlock-filesystem-and-networksystem builds" "$(cat "$WORK/cc.log")"
   finish
 fi

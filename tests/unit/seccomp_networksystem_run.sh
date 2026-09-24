@@ -33,13 +33,13 @@ trap 'rm -rf "$WORK"' EXIT
 # built with the define that gives them their per-case reset functions.
 CORE="${HERE}/../../core"
 MODULES=(
-  "${CORE}/phobos-seccomp-networksystem-child.c"
-  "${CORE}/phobos-seccomp-networksystem-destination.c"
-  "${CORE}/phobos-seccomp-networksystem-diagnostics.c"
-  "${CORE}/phobos-seccomp-networksystem-options.c"
-  "${CORE}/phobos-seccomp-networksystem-rules.c"
-  "${CORE}/phobos-seccomp-networksystem-socket-types.c"
-  "${CORE}/phobos-seccomp-networksystem-supervisor.c"
+  "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-child.c"
+  "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-destination.c"
+  "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-diagnostics.c"
+  "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-options.c"
+  "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-rules.c"
+  "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-socket-types.c"
+  "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-supervisor.c"
 )
 UNIT_TEST_DEFINE=-DPHOBOS_CONNECT_GUARD_UNIT_TEST
 

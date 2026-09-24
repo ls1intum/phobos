@@ -129,7 +129,7 @@ reviews:
         an entry here grants a whole subtree. Check that a write path is not granted
         execute permission unless it must be, and that nothing outside the run needs
         is listed.
-    - path: "core/phobos-seccomp-networksystem*.c"
+    - path: "core/phobos-seccomp-networksystem/phobos-seccomp-networksystem*.c"
       instructions: >-
         This is the connect guard, which supervises connect() from outside the process with a
         seccomp user-notification. Check that its guarantees are not overstated: it enforces by

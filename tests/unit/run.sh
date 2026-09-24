@@ -42,10 +42,10 @@ fi
 
 # The stage sequence is included by the test file; its modules are linked.
 MODULES=(
-  "${HERE}/../../core/phobos-landlock-filesystem-and-networksystem-diagnostics.c"
-  "${HERE}/../../core/phobos-landlock-filesystem-and-networksystem-path-rule.c"
-  "${HERE}/../../core/phobos-landlock-filesystem-and-networksystem-options.c"
-  "${HERE}/../../core/phobos-landlock-filesystem-and-networksystem-ruleset.c"
+  "${HERE}/../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-diagnostics.c"
+  "${HERE}/../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-path-rule.c"
+  "${HERE}/../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-options.c"
+  "${HERE}/../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-ruleset.c"
 )
 
 # Every syscall the tool makes is wrapped so a failure can be injected.

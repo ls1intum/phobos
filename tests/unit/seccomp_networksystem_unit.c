@@ -47,11 +47,11 @@
 #define PHOBOS_CONNECT_GUARD_UNIT_TEST
 #endif
 #define main sut_main
-#include "../../core/phobos-seccomp-networksystem.c"
+#include "../../core/phobos-seccomp-networksystem/phobos-seccomp-networksystem.c"
 #undef main
-#include "../../core/phobos-seccomp-networksystem-child.h"
-#include "../../core/phobos-seccomp-networksystem-destination.h"
-#include "../../core/phobos-seccomp-networksystem-socket-types.h"
+#include "../../core/phobos-seccomp-networksystem/phobos-seccomp-networksystem-child.h"
+#include "../../core/phobos-seccomp-networksystem/phobos-seccomp-networksystem-destination.h"
+#include "../../core/phobos-seccomp-networksystem/phobos-seccomp-networksystem-socket-types.h"
 
 #include <linux/filter.h>
 #include <linux/seccomp.h>
