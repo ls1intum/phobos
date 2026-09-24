@@ -117,6 +117,45 @@ r="$(run_bind "* 70000")"
 [[ "$(field "$r" 1)" != 0 ]] && ok "a bind port above 65535 is refused" || bad "a bind port above 65535 is refused" "a non-zero exit" "exit $(field "$r" 1)"
 
 echo
+echo "== [connect] emits --connect-udp for a udp rule; tcp stays --connect-tcp =="
+r="$(run_rules "8.8.8.8 53 udp")"
+[[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" == "--connect-udp 53" ]] && ok "a udp connect rule emits --connect-udp" || bad "a udp connect rule emits --connect-udp" "--connect-udp 53" "exit $(field "$r" 1): $(field "$r" 2)"
+r="$(run_rules "1.2.3.4 443
+8.8.8.8 53 udp")"
+[[ "$(field "$r" 2)" == "--connect-tcp 443 --connect-udp 53" ]] && ok "tcp and udp connect rules are emitted apart" || bad "tcp and udp connect rules are emitted apart" "--connect-tcp 443 --connect-udp 53" "$(field "$r" 2)"
+
+echo
+echo "== [bind] emits --bind-udp for a udp rule; tcp stays --bind-tcp =="
+r="$(run_bind "* 5353 udp")"
+[[ "$(field "$r" 2)" == "--bind-udp 5353" ]] && ok "a udp bind rule emits --bind-udp" || bad "a udp bind rule emits --bind-udp" "--bind-udp 5353" "$(field "$r" 2)"
+r="$(run_bind "* 8080
+* 5353 udp")"
+[[ "$(field "$r" 2)" == "--bind-tcp 8080 --bind-udp 5353" ]] && ok "tcp and udp bind rules are emitted apart" || bad "tcp and udp bind rules are emitted apart" "--bind-tcp 8080 --bind-udp 5353" "$(field "$r" 2)"
+
+# Runs add_udp_ephemeral_bind_if_needed over a whitespace-separated argument list in a subshell.
+run_ephemeral() {
+  local body=$1
+  (
+    # shellcheck source=../core/phobos-common.sh
+    source "${CORE}/phobos-common.sh"
+    # Word-splitting the body into an argument array is intended here.
+    # shellcheck disable=SC2206
+    args=( $body )
+    add_udp_ephemeral_bind_if_needed args
+    printf '%s' "${args[*]}"
+  )
+}
+
+echo
+echo "== the ephemeral udp source bind is added only when both udp directions are present =="
+got="$(run_ephemeral "--connect-udp 53 --bind-udp 5353")"
+[[ "$got" == *"--bind-udp 0"* ]] && ok "both udp directions add --bind-udp 0 for the ephemeral source" || bad "both udp directions add --bind-udp 0 for the ephemeral source" "an argument list containing --bind-udp 0" "$got"
+got="$(run_ephemeral "--connect-udp 53")"
+[[ "$got" != *"--bind-udp"* ]] && ok "a connect-only udp policy adds no bind" || bad "a connect-only udp policy adds no bind" "no --bind-udp" "$got"
+got="$(run_ephemeral "--connect-tcp 443 --bind-tcp 8080")"
+[[ "$got" != *"--bind-udp"* ]] && ok "a tcp-only policy adds no udp bind" || bad "a tcp-only policy adds no udp bind" "no --bind-udp" "$got"
+
+echo
 echo "== a [connect] name rule starts the egress broker automatically; an exact name still needs a resolver =="
 # The connect guard enforces a [connect] rule by address and port. A rule that names a host only
 # constrains the onward address when the egress broker checks the TLS host name, so the network

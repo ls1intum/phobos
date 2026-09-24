@@ -159,7 +159,7 @@ core/                      the sandbox itself
   phobos-spec-dir.sh       the specification directory and its lifetime
   phobos-policy-parse.sh   one cfg in, the parsed state and the specification files out
   phobos-rights.sh         a parsed policy to the --rights= arguments phobos-landlock takes
-  phobos-network-args.sh   [connect] and [bind] to the TCP port rules Landlock enforces
+  phobos-network-args.sh   [connect] and [bind] to the TCP and UDP port rules Landlock enforces
   phobos-constants.sh      the numbers the scripts share, named once, the exit statuses among them
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
 docker/prune_phase/        one image per language, plus the orchestrator

@@ -8,6 +8,7 @@
  * Usage:
  *   phobos-landlock --rights=LETTERS PATH [--rights=LETTERS PATH ...]
  *                   [--connect-tcp PORT] [--bind-tcp PORT]
+ *                   [--connect-udp PORT] [--bind-udp PORT]
  *                   [--chdir DIRECTORY] [--minimum-landlock-version NUMBER]
  *                   [--verbose] -- COMMAND [ARGUMENTS...]
  *
@@ -56,11 +57,19 @@ static void add_path_rules(int ruleset_descriptor, int landlock_version,
 static void add_port_rules(int ruleset_descriptor, const struct options *options) {
     for (size_t port_index = 0; port_index < options->connect_tcp_port_count; port_index++) {
         add_port_rule(ruleset_descriptor, options->connect_tcp_ports[port_index],
-                      LANDLOCK_ACCESS_NETWORK_CONNECT_TCP, "connect");
+                      LANDLOCK_ACCESS_NETWORK_CONNECT_TCP, "connect", "tcp");
     }
     for (size_t port_index = 0; port_index < options->bind_tcp_port_count; port_index++) {
         add_port_rule(ruleset_descriptor, options->bind_tcp_ports[port_index],
-                      LANDLOCK_ACCESS_NETWORK_BIND_TCP, "bind");
+                      LANDLOCK_ACCESS_NETWORK_BIND_TCP, "bind", "tcp");
+    }
+    for (size_t port_index = 0; port_index < options->connect_udp_port_count; port_index++) {
+        add_port_rule(ruleset_descriptor, options->connect_udp_ports[port_index],
+                      LANDLOCK_ACCESS_NETWORK_CONNECT_SEND_UDP, "connect", "udp");
+    }
+    for (size_t port_index = 0; port_index < options->bind_udp_port_count; port_index++) {
+        add_port_rule(ruleset_descriptor, options->bind_udp_ports[port_index],
+                      LANDLOCK_ACCESS_NETWORK_BIND_UDP, "bind", "udp");
     }
 }
 
@@ -92,7 +101,8 @@ int main(int argument_count, char *arguments[]) {
 
     parse_arguments(argument_count, arguments, &options);
     int landlock_version =
-        detect_landlock_version(options.minimum_landlock_version, network_rules_wanted(&options));
+        detect_landlock_version(options.minimum_landlock_version, network_rules_wanted(&options),
+                                udp_rules_wanted(&options));
 
     /* With --no-filesystem this ruleset governs the network alone, so it handles no filesystem
      * right and carries no path rules; it composes by intersection with a separate filesystem

@@ -20,9 +20,11 @@ static constexpr size_t MAXIMUM_HOST = 256;
  * span addresses outside the IPv4 block. */
 static constexpr int IPV4_MAPPED_PREFIX_BITS = 96;
 
-/* One line of the outbound allow-list: a host, or an IP range, and the port it is allowed on.
- * A range keeps its network and prefix length in the canonical IPv6 form an IPv4 address maps
- * to, so one comparison covers both families. */
+/* One line of the outbound allow-list: a host, or an IP range, the port it is allowed on, and the
+ * transport it applies to. A range keeps its network and prefix length in the canonical IPv6 form
+ * an IPv4 address maps to, so one comparison covers both families. is_udp records the optional
+ * third column of net.rules: a udp rule applies to UDP traffic only, a rule without the column to
+ * TCP only, so a UDP-only policy never permits a TCP connection to the same host and port. */
 struct connect_rule {
     char host[MAXIMUM_HOST];
     bool any_port;
@@ -30,10 +32,12 @@ struct connect_rule {
     bool is_range;
     struct in6_addr network;
     int prefix_length;
+    bool is_udp;
 };
 
-/* Records one "host port" line, unless the table is full or the line is malformed. */
-void remember_rule(const char *host, const char *port_text);
+/* Records one "host port [proto]" line, unless the table is full or the line is malformed. proto
+ * is "udp" for a UDP rule and absent (or "tcp") for a TCP rule. */
+void remember_rule(const char *host, const char *port_text, bool is_udp);
 
 /* Reads the allow-list from the spec's net.rules, one "host port" line each. An absent file
  * leaves the list empty, which denies every destination. Returns false only when a rules file
@@ -59,11 +63,13 @@ bool address_within(const struct in6_addr *address, const struct in6_addr *netwo
  * rule rests on its port alone, with the egress broker checking the host name. */
 bool rule_host_matches(const struct connect_rule *rule, int family, const void *address);
 
-/* Whether the allow-list permits a connection to this destination. An empty list denies
- * everything: the policy grants egress by naming it, so a run whose policy names no
- * destination reaches none, matching the deny-first model. Otherwise a rule permits it when its
- * port covers the port and its host covers the address. */
-bool connection_permitted(int family, const void *address, uint16_t port);
+/* Whether the allow-list permits a connection to this destination on the given transport. An
+ * empty list denies everything: the policy grants egress by naming it, so a run whose policy
+ * names no destination reaches none, matching the deny-first model. Otherwise a rule permits it
+ * when its transport matches is_udp, its port covers the port and its host covers the address.
+ * is_udp is true for a UDP datagram and false for a TCP stream, so a rule of one transport never
+ * permits the other. */
+bool connection_permitted(int family, const void *address, uint16_t port, bool is_udp);
 
 #ifdef PHOBOS_CONNECT_GUARD_UNIT_TEST
 /* Forgets every rule, so each test case starts from an empty table. */

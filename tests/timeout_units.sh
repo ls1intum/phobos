@@ -257,9 +257,17 @@ check "parser: IPv4 with a port"                          "127.0.0.1 8080" "$(pa
 allow 127.0.0.1:8080')"
 check "parser: an unbracketed ::1:* is a bogus host"      "::1:* *"        "$(parsed_net_rules '[connect]
 allow ::1:*')"
+check "parser: a udp connect rule keeps the udp marker"   "8.8.8.8 53 udp" "$(parsed_net_rules '[connect]
+allow 8.8.8.8:53 udp')"
+check "parser: an explicit tcp marker stays two-field"    "1.2.3.4 443"    "$(parsed_net_rules '[connect]
+allow 1.2.3.4:443 tcp')"
 
 rejects_net "a [connect] line without allow is refused"    '[connect]
 localhost'
+rejects_net "a udp [connect] rule naming a host is refused" '[connect]
+allow example.test:443 udp'
+rejects_net "an unknown transport marker is refused"        '[connect]
+allow 1.2.3.4:443 sctp'
 rejects_net "an IPv6 bracket that never closes is refused" '[connect]
 allow [::1'
 rejects_net "an unknown section is refused"                '[bogus]

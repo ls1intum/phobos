@@ -33,6 +33,10 @@ struct options {
     size_t connect_tcp_port_count;
     uint64_t bind_tcp_ports[MAXIMUM_PORT_RULES];
     size_t bind_tcp_port_count;
+    uint64_t connect_udp_ports[MAXIMUM_PORT_RULES];
+    size_t connect_udp_port_count;
+    uint64_t bind_udp_ports[MAXIMUM_PORT_RULES];
+    size_t bind_udp_port_count;
     const char *working_directory;
     int minimum_landlock_version;
     bool no_filesystem;
@@ -46,6 +50,10 @@ void parse_arguments(int argument_count, char *arguments[], struct options *opti
 /* True when any network rule was asked for, which decides whether the run needs
  * a kernel new enough to know about network access at all. */
 bool network_rules_wanted(const struct options *options);
+
+/* True when a UDP network rule was asked for, which decides whether the run needs
+ * a kernel new enough (version 10) to handle UDP access at all. */
+bool udp_rules_wanted(const struct options *options);
 
 /* The directions the command line actually spoke about. Only these are handed
  * to the kernel as handled, because a handled direction with no rule is a

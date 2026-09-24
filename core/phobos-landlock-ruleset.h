@@ -72,12 +72,17 @@ enum landlock_filesystem_access : uint64_t {
     LANDLOCK_ACCESS_FILESYSTEM_REFER = 1ULL << 13,        /* since version 2 */
     LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE = 1ULL << 14,     /* since version 3 */
     LANDLOCK_ACCESS_FILESYSTEM_IOCTL_DEVICE = 1ULL << 15, /* since version 5 */
+    LANDLOCK_ACCESS_FILESYSTEM_RESOLVE_UNIX = 1ULL << 16, /* since version 9 */
 };
 
-/* Network access rights, available since Landlock version 4. */
+/* Network access rights. TCP is available since Landlock version 4, UDP since version 10.
+ * CONNECT_SEND_UDP covers both connecting a datagram socket and sending a datagram to a remote
+ * port, because UDP is connectionless and a bare sendto reaches a peer no connect ever vetted. */
 enum landlock_network_access : uint64_t {
     LANDLOCK_ACCESS_NETWORK_BIND_TCP = 1ULL << 0,
     LANDLOCK_ACCESS_NETWORK_CONNECT_TCP = 1ULL << 1,
+    LANDLOCK_ACCESS_NETWORK_BIND_UDP = 1ULL << 2,          /* since version 10 */
+    LANDLOCK_ACCESS_NETWORK_CONNECT_SEND_UDP = 1ULL << 3,  /* since version 10 */
 };
 
 /* Scope restrictions, available since Landlock version 6. They keep a sandboxed process
@@ -101,8 +106,15 @@ static constexpr uint64_t DIRECTORY_ONLY_ACCESS_RIGHTS =
 
 /* Highest Landlock version whose access rights this tool enumerates. A newer
  * kernel may define rights we do not list, which would leave them
- * unrestricted, so say so loudly rather than pretending the policy is whole. */
-static constexpr int HIGHEST_KNOWN_LANDLOCK_VERSION = 8;
+ * unrestricted, so say so loudly rather than pretending the policy is whole.
+ *
+ * This is 10 because every access right and scope up to ABI version 10 is
+ * enumerated here: filesystem rights through RESOLVE_UNIX (version 9), network
+ * rights through the two UDP rights (version 10), and both scopes (version 6).
+ * Versions 7, 8 and 11 add only landlock_restrict_self flags (audit logging,
+ * TSYNC, an atomic no_new_privs), not access rights or scopes, so they leave
+ * nothing here unhandled. */
+static constexpr int HIGHEST_KNOWN_LANDLOCK_VERSION = 10;
 
 /* Versions at which a right first exists. Below them the kernel does not
  * handle the right at all, so it is neither granted nor denied to anyone. */
@@ -111,6 +123,8 @@ static constexpr int FIRST_VERSION_WITH_TRUNCATE = 3;
 static constexpr int FIRST_VERSION_WITH_NETWORK = 4;
 static constexpr int FIRST_VERSION_WITH_IOCTL_DEVICE = 5;
 static constexpr int FIRST_VERSION_WITH_SCOPED = 6;
+static constexpr int FIRST_VERSION_WITH_RESOLVE_UNIX = 9;
+static constexpr int FIRST_VERSION_WITH_UDP = 10;
 
 /* Layout fixed by the kernel. Raw data, never a class. */
 struct landlock_ruleset_attributes {
@@ -158,8 +172,11 @@ uint64_t scoped_for_version(int landlock_version);
 
 /* Asks the kernel for its Landlock version and refuses anything below the
  * demanded minimum, so an unsupported kernel stops the run instead of quietly
- * running it unprotected. */
-int detect_landlock_version(int minimum_landlock_version, bool network_rules_wanted);
+ * running it unprotected. TCP network rules require version 4; UDP network rules
+ * require version 10, so a policy naming a UDP port is refused rather than run
+ * with UDP unrestricted on a kernel too old to handle it. */
+int detect_landlock_version(int minimum_landlock_version, bool network_rules_wanted,
+                            bool udp_rules_wanted);
 
 /* Names every right this kernel cannot handle, and what that means in
  * practice. Landlock offers no hook below those versions, so there is nothing
@@ -185,9 +202,10 @@ int create_ruleset(int landlock_version, uint64_t handled_filesystem, uint64_t h
 /* Adds one allow-listed path. */
 void add_path_rule(int ruleset_descriptor, int landlock_version, const struct path_rule *rule);
 
-/* Adds one allowed TCP port. */
+/* Adds one allowed port. `what` names the direction ("connect" or "bind") for a failure, and
+ * `protocol` names the transport ("tcp" or "udp") for the verbose line. */
 void add_port_rule(int ruleset_descriptor, uint64_t port, uint64_t allowed_access,
-                   const char *what);
+                   const char *what, const char *protocol);
 
 /* The one-way door: after this the process, and everything it starts, can only
  * lose access, never regain it. */

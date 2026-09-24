@@ -27,6 +27,7 @@ static constexpr int OPTION_AND_VALUE_WORDS = 2;
     fprintf(stderr,
             "Usage: phobos-landlock --rights=LETTERS PATH [--rights=LETTERS PATH ...]\n"
             "                       [--connect-tcp PORT] [--bind-tcp PORT]\n"
+            "                       [--connect-udp PORT] [--bind-udp PORT]\n"
             "                       [--chdir DIRECTORY] [--no-filesystem]\n"
             "                       [--minimum-landlock-version NUMBER] [--verbose]\n"
             "                       -- COMMAND [ARGUMENTS...]\n"
@@ -119,13 +120,16 @@ void remember_path_rule(struct options *options, const char *letters, const char
     options->path_rule_count++;
 }
 
-/* Records one --connect-tcp or --bind-tcp port. A port outside 1..65535 is a
- * policy mistake, not something to pass on, and is refused. */
-static void remember_port(uint64_t *ports, size_t *count, const char *value, const char *what) {
+/* Records one connect or bind port. A port outside lowest..65535 is a policy mistake, not
+ * something to pass on, and is refused. lowest is 1 for every rule but --bind-udp, which accepts 0
+ * to mean "any local port": the kernel auto-binds an ephemeral UDP source port, and a port-0
+ * BIND_UDP rule is how that auto-bind is permitted when both UDP directions are handled. */
+static void remember_port(uint64_t *ports, size_t *count, const char *value, unsigned long lowest,
+                          const char *overflow_message, const char *number_message) {
     if (*count >= MAXIMUM_PORT_RULES) {
-        exit_with_message(what);
+        exit_with_message(overflow_message);
     }
-    ports[*count] = (uint64_t)parse_number(value, 1, HIGHEST_PORT, "not a TCP port");
+    ports[*count] = (uint64_t)parse_number(value, lowest, HIGHEST_PORT, number_message);
     (*count)++;
 }
 
@@ -157,11 +161,17 @@ void parse_arguments(int argument_count, char *arguments[], struct options *opti
         if (strncmp(argument, RIGHTS_PREFIX, RIGHTS_PREFIX_LENGTH) == 0) {
             remember_path_rule(options, argument + RIGHTS_PREFIX_LENGTH, value);
         } else if (strcmp(argument, "--connect-tcp") == 0) {
-            remember_port(options->connect_tcp_ports, &options->connect_tcp_port_count, value,
-                          "too many --connect-tcp ports");
+            remember_port(options->connect_tcp_ports, &options->connect_tcp_port_count, value, 1,
+                          "too many --connect-tcp ports", "not a TCP port");
         } else if (strcmp(argument, "--bind-tcp") == 0) {
-            remember_port(options->bind_tcp_ports, &options->bind_tcp_port_count, value,
-                          "too many --bind-tcp ports");
+            remember_port(options->bind_tcp_ports, &options->bind_tcp_port_count, value, 1,
+                          "too many --bind-tcp ports", "not a TCP port");
+        } else if (strcmp(argument, "--connect-udp") == 0) {
+            remember_port(options->connect_udp_ports, &options->connect_udp_port_count, value, 1,
+                          "too many --connect-udp ports", "not a UDP port");
+        } else if (strcmp(argument, "--bind-udp") == 0) {
+            remember_port(options->bind_udp_ports, &options->bind_udp_port_count, value, 0,
+                          "too many --bind-udp ports", "not a UDP port");
         } else if (strcmp(argument, "--chdir") == 0) {
             options->working_directory = value;
         } else if (strcmp(argument, "--minimum-landlock-version") == 0) {
@@ -185,7 +195,12 @@ void parse_arguments(int argument_count, char *arguments[], struct options *opti
 }
 
 bool network_rules_wanted(const struct options *options) {
-    return options->connect_tcp_port_count > 0 || options->bind_tcp_port_count > 0;
+    return options->connect_tcp_port_count > 0 || options->bind_tcp_port_count > 0 ||
+           options->connect_udp_port_count > 0 || options->bind_udp_port_count > 0;
+}
+
+bool udp_rules_wanted(const struct options *options) {
+    return options->connect_udp_port_count > 0 || options->bind_udp_port_count > 0;
 }
 
 uint64_t handled_network_access(const struct options *options) {
@@ -195,6 +210,12 @@ uint64_t handled_network_access(const struct options *options) {
     }
     if (options->bind_tcp_port_count > 0) {
         handled |= LANDLOCK_ACCESS_NETWORK_BIND_TCP;
+    }
+    if (options->connect_udp_port_count > 0) {
+        handled |= LANDLOCK_ACCESS_NETWORK_CONNECT_SEND_UDP;
+    }
+    if (options->bind_udp_port_count > 0) {
+        handled |= LANDLOCK_ACCESS_NETWORK_BIND_UDP;
     }
     return handled;
 }

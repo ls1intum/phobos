@@ -32,8 +32,13 @@ rest exists to take privileges away. None of the following is a vulnerability.
   port, the guard connects outside Landlock and so is the whole connect boundary where it runs;
   Landlock's `--connect-tcp` ports remain a second, kernel-enforced expression of the same
   ports. A `connect` of a family the guard does not carry (a UNIX-domain socket) is refused
-  rather than made outside the Landlock view the command is held to. The boundary for external
-  egress beyond the allow-list, and for UDP, is still a container started with `--network none`.
+  rather than made outside the Landlock view the command is held to. A `[connect]`/`[bind]` rule may
+  carry a `udp` transport marker: the guard enforces it for the UDP transport apart from TCP, and
+  Landlock's `--connect-udp`/`--bind-udp` (the version-10 UDP rights) are its second, kernel-enforced
+  expression. UDP needs Landlock version 10, so a udp rule is refused on an older kernel rather than
+  left unenforced. Host-level UDP egress beyond the allow-list (a udp rule may name only an address
+  or a range, not a host name), and external egress in general, are still a container started with
+  `--network none`.
 - `docker/prune_phase/` runs the discovery phase, which deliberately breaks a build over and
   over: it hides a directory, runs the tests, and concludes from the failure that the
   directory was needed. Its orchestrator therefore starts processes and interprets their
@@ -101,8 +106,8 @@ this networked posture.
 A report is in scope when Phobos fails at what it claims to do, or when it causes harm nobody
 asked for. Concretely:
 
-- a submission reaching a file, or a TCP port Landlock was given, that the active allow-list
-  does not permit
+- a submission reaching a file, or a TCP or (on Landlock version 10) UDP port Landlock was given,
+  that the active allow-list does not permit
 - the sandbox failing open, that is, running the tests unconfined while reporting success
 - the pruning phase writing an allow-list that grants more than the runs it observed required
 - privilege escalation out of the sandbox onto the host

@@ -23,8 +23,19 @@ the same rules, with an optional third for host names:
   exact-name rule when no resolver is given, rather than run with a name the
   broker cannot pin to an address.
 
-There is no `openConnections` / `sendData` / `receiveData` toggle: a rule either
-names a host and a port or it does not.
+A [connect] rule may end with a transport marker, `udp` or `tcp`. The marker is
+optional and defaults to tcp, so every existing rule keeps its meaning. A `udp`
+rule is handed to Landlock as `--connect-udp` (the CONNECT_SEND_UDP right, which
+covers both connecting a datagram socket and sending a datagram to a remote port),
+and the connect guard enforces it for the UDP transport apart from TCP, so a udp
+rule never admits a TCP connection to the same host and port, nor the reverse. UDP
+needs Landlock version 10; on an older kernel a udp rule is refused (PHB-EPOLICY)
+rather than run with UDP left unenforced. There is no egress broker for UDP, whose
+host enforcement rests on the TLS host name, so a udp [connect] rule may name only
+an address, a CIDR, a loopback name or "*", never a DNS host name.
+
+There is no `openConnections` / `sendData` / `receiveData` toggle: a rule names a
+host, a port and a transport, or it does not.
 
 
 2. What enforces a [bind] rule
@@ -37,11 +48,21 @@ address is refused (PHB-EPOLICY). A listener's reachability from outside is
 governed by the [accept] section (an inbound HAProxy that filters by source
 address) and the container's network isolation, not by the bind address.
 
+A [bind] rule may likewise end with `udp`, handed to Landlock as `--bind-udp`; the
+marker defaults to tcp. When a run handles both a udp bind and a udp connect rule,
+Phobos also grants `--bind-udp` on port 0 (any local port), because the kernel
+auto-binds an ephemeral UDP source port for an outgoing datagram and gates that
+auto-bind by BIND_UDP once it is handled. UDP bind needs Landlock version 10.
+
 
 3. What is not filtered in-process
 
 Phobos filters outbound stream connect() from outside the process, at the seccomp
 and Landlock boundaries, and does not interpose any libc call inside the process.
-UDP egress and inbound connections a [accept] rule does not front are governed by
-the container the run is placed in (`--network none`, or the operator's firewall
-in a networked posture), as SECURITY.md states.
+On a Landlock version 10 kernel it also enforces UDP ports (connect/send and bind)
+at those boundaries when the policy names them; on an older kernel a udp rule is
+refused rather than left unenforced. Host-level UDP egress (a udp rule may name
+only an address or a range, never a host name) and inbound connections a [accept]
+rule does not front are governed by the container the run is placed in
+(`--network none`, or the operator's firewall in a networked posture), as
+SECURITY.md states.
