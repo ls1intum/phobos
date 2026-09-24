@@ -1277,6 +1277,43 @@ static void test_what_reaches_the_kernel(void) {
     check("the rule carries only rights version 3 knows",
           record->path_rule_allowed_access[0] == rights_granted_for(&read_only_rule, 3));
 
+    mock_landlock_version = 10;
+    char *udp_ports[] = {"phobos-landlock", "--connect-udp", "53", "--bind-udp", "5353",
+                         "--rights=r",      "/usr",          "--", "/bin/true",  NULL};
+    expect_exit("a connect-udp and a bind-udp rule run on a version 10 kernel", 0, udp_ports);
+    check("both udp port rules reach the kernel", record->port_rule_count == 2);
+    check("the connect-udp rule carries CONNECT_SEND_UDP on its port",
+          record->port_rule_port[0] == 53 &&
+              record->port_rule_allowed_access[0] == LANDLOCK_ACCESS_NETWORK_CONNECT_SEND_UDP);
+    check("the bind-udp rule carries BIND_UDP on its port",
+          record->port_rule_port[1] == 5353 &&
+              record->port_rule_allowed_access[1] == LANDLOCK_ACCESS_NETWORK_BIND_UDP);
+    check("the ruleset handles both udp directions",
+          (record->handled_access_network &
+           (LANDLOCK_ACCESS_NETWORK_BIND_UDP | LANDLOCK_ACCESS_NETWORK_CONNECT_SEND_UDP)) ==
+              (LANDLOCK_ACCESS_NETWORK_BIND_UDP | LANDLOCK_ACCESS_NETWORK_CONNECT_SEND_UDP));
+
+    mock_landlock_version = 10;
+    char *bind_udp_any[] = {"phobos-landlock", "--bind-udp", "0",         "--rights=r",
+                            "/usr",            "--",         "/bin/true", NULL};
+    expect_exit("a bind-udp rule on port 0 (any local port) is accepted", 0, bind_udp_any);
+    check("the port-0 udp bind reaches the kernel",
+          record->port_rule_count == 1 && record->port_rule_port[0] == 0 &&
+              record->port_rule_allowed_access[0] == LANDLOCK_ACCESS_NETWORK_BIND_UDP);
+
+    mock_landlock_version = 9;
+    char *udp_too_old[] = {"phobos-landlock", "--connect-udp", "53",        "--rights=r",
+                           "/usr",            "--",            "/bin/true", NULL};
+    expect_exit("a udp rule on a kernel below version 10 is refused", EXIT_CODE_POLICY_ERROR,
+                udp_too_old);
+
+    mock_landlock_version = 9;
+    expect_exit("a read rule on a version 9 kernel runs", 0, read_only);
+    check("version 9 grants RESOLVE_UNIX with the read right",
+          (record->path_rule_allowed_access[0] & LANDLOCK_ACCESS_FILESYSTEM_RESOLVE_UNIX) != 0);
+    check("version 8 does not know RESOLVE_UNIX, so a version-8 kernel leaves it unhandled",
+          (filesystem_rights_for_version(8) & LANDLOCK_ACCESS_FILESYSTEM_RESOLVE_UNIX) == 0);
+
     char *moving[] = {"phobos-landlock", "--chdir", "/tmp", "--rights=r", "/usr", "--",
                       "/bin/true",       NULL};
     expect_exit("a working directory is entered", 0, moving);

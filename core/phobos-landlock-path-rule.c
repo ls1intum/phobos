@@ -20,12 +20,23 @@
  * link/rename privilege-escalation surface Landlock guards, so a policy grants it
  * on its own where a workspace needs moves rather than gaining it as a side
  * effect of create plus delete. Without it the kernel answers EXDEV, which makes
- * a copying tool succeed quietly and an atomic move fail. */
+ * a copying tool succeed quietly and an atomic move fail.
+ *
+ * RESOLVE_UNIX (since version 9) gates connecting or sending to a pathname UNIX
+ * socket whose server was created outside this Landlock domain. It is granted
+ * with the read right, because reaching such a socket by its pathname is a
+ * read-like resolution: a path a policy may read, it may also reach the sockets
+ * beneath, and a path it may not read, it may not. It is not a directory-only
+ * right, so it holds on a socket-file rule as well as on a directory rule, and
+ * the mask by filesystem_rights_for_version keeps it off a kernel below 9. */
 uint64_t rights_granted_for(const struct path_rule *rule, int landlock_version) {
     uint64_t granted_rights = 0;
     if (rule->readable) {
         granted_rights |=
             LANDLOCK_ACCESS_FILESYSTEM_READ_FILE | LANDLOCK_ACCESS_FILESYSTEM_READ_DIRECTORY;
+        if (landlock_version >= FIRST_VERSION_WITH_RESOLVE_UNIX) {
+            granted_rights |= LANDLOCK_ACCESS_FILESYSTEM_RESOLVE_UNIX;
+        }
     }
     if (rule->executable) {
         granted_rights |= LANDLOCK_ACCESS_FILESYSTEM_EXECUTE;

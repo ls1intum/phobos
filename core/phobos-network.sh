@@ -141,6 +141,10 @@ command_tail=( "$@" )
 port_args=()
 build_network_args port_args "$RULES"
 build_bind_args port_args "${SPEC_DIR}/bind.rules"
+# When the policy handles both UDP directions, the kernel gates an outgoing datagram's ephemeral
+# source-port auto-bind by BIND_UDP, so a "--bind-udp 0" is added or an allowed send is denied its
+# source. Added here, after both builders, because it depends on connect and bind rules together.
+add_udp_ephemeral_bind_if_needed port_args
 if (( ${#port_args[@]} > 0 )); then
   # Refused when missing rather than left to fail obscurely inside the guard's child, so a run
   # that names a TCP port cannot lose its kernel-enforced port rules without a clear message.

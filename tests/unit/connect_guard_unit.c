@@ -788,17 +788,17 @@ static void test_rule_parsing(void) {
     check("an unreadable file refuses (not ENOENT)", !load_rules("/dev/null/impossible"));
 
     reset_behaviour();
-    remember_rule("h", "0");
-    remember_rule("h", "70000");
-    remember_rule("h", "notanumber");
+    remember_rule("h", "0", false);
+    remember_rule("h", "70000", false);
+    remember_rule("h", "notanumber", false);
     check("port zero, out of range and non-numeric are dropped", connect_rules_count_for_tests() == 0);
     char big[MAXIMUM_HOST + OVERLONG_HOST_EXCESS];
     memset(big, 'a', sizeof(big) - 1);
     big[sizeof(big) - 1] = '\0';
-    remember_rule(big, "443");
+    remember_rule(big, "443", false);
     check("an over-long host is dropped", connect_rules_count_for_tests() == 0);
     for (size_t i = 0; i < MAXIMUM_RULES + RULE_TABLE_OVERFLOW; i++) {
-        remember_rule("127.0.0.1", "443");
+        remember_rule("127.0.0.1", "443", false);
     }
     check("the rule table does not overflow", connect_rules_count_for_tests() == MAXIMUM_RULES);
 }
@@ -806,7 +806,7 @@ static void test_rule_parsing(void) {
 static bool permits_v4(const char *ip, uint16_t port) {
     struct in_addr address;
     inet_pton(AF_INET, ip, &address);
-    return connection_permitted(AF_INET, &address, port);
+    return connection_permitted(AF_INET, &address, port, false);
 }
 
 static void test_policy_matching(void) {
@@ -814,60 +814,60 @@ static void test_policy_matching(void) {
     check("an empty allow-list denies every connect", !permits_v4("9.9.9.9", 443));
 
     reset_behaviour();
-    remember_rule("127.0.0.1", "443");
+    remember_rule("127.0.0.1", "443", false);
     check("an allow-listed IP and port is permitted", permits_v4("127.0.0.1", 443));
     check("the same IP on another port is refused", !permits_v4("127.0.0.1", 444));
     check("another IP on the allowed port is refused", !permits_v4("127.0.0.2", 443));
 
     reset_behaviour();
-    remember_rule("example.com", "8080");
+    remember_rule("example.com", "8080", false);
     check("a hostname rule permits any host on its port", permits_v4("9.9.9.9", 8080));
     check("a hostname rule refuses another port", !permits_v4("9.9.9.9", 80));
 
     reset_behaviour();
-    remember_rule("localhost", "*");
+    remember_rule("localhost", "*", false);
     check("localhost matches a loopback address", permits_v4("127.0.0.5", 12345));
     check("localhost refuses a non-loopback address", !permits_v4("8.8.8.8", 12345));
 
     reset_behaviour();
-    remember_rule("*", "443");
+    remember_rule("*", "443", false);
     check("a wildcard host rests on the port", permits_v4("8.8.8.8", 443));
 
     reset_behaviour();
-    remember_rule("::1", "443");
+    remember_rule("::1", "443", false);
     struct in6_addr loop;
     inet_pton(AF_INET6, "::1", &loop);
-    check("an IPv6 literal matches its address", connection_permitted(AF_INET6, &loop, 443));
+    check("an IPv6 literal matches its address", connection_permitted(AF_INET6, &loop, 443, false));
     struct in6_addr other;
     inet_pton(AF_INET6, "2001:db8::2", &other);
-    check("an IPv6 literal refuses another address", !connection_permitted(AF_INET6, &other, 443));
+    check("an IPv6 literal refuses another address", !connection_permitted(AF_INET6, &other, 443, false));
 
     reset_behaviour();
-    remember_rule("2001:db8::1", "443");
+    remember_rule("2001:db8::1", "443", false);
     check("an IPv6 literal refuses yet another address",
-          !connection_permitted(AF_INET6, &loop, 443));
+          !connection_permitted(AF_INET6, &loop, 443, false));
     struct in_addr v4;
     inet_pton(AF_INET, "127.0.0.1", &v4);
     check("an IPv6 literal rule does not match an IPv4 destination",
-          !connection_permitted(AF_INET, &v4, 443));
+          !connection_permitted(AF_INET, &v4, 443, false));
 
     reset_behaviour();
-    remember_rule("1.2.3.4", "443");
+    remember_rule("1.2.3.4", "443", false);
     struct in6_addr any6;
     inet_pton(AF_INET6, "2001:db8::1", &any6);
     check("an IPv4 literal rule does not match an IPv6 destination",
-          !connection_permitted(AF_INET6, &any6, 443));
+          !connection_permitted(AF_INET6, &any6, 443, false));
 }
 
 static bool permits_v6(const char *ip, uint16_t port) {
     struct in6_addr address;
     inet_pton(AF_INET6, ip, &address);
-    return connection_permitted(AF_INET6, &address, port);
+    return connection_permitted(AF_INET6, &address, port, false);
 }
 
 static void test_connect_ranges(void) {
     reset_behaviour();
-    remember_rule("104.16.0.0/12", "443");
+    remember_rule("104.16.0.0/12", "443", false);
     check("the range table kept the rule", connect_rules_count_for_tests() == 1);
     check("an IPv4 address inside the range on its port is permitted",
           permits_v4("104.16.5.5", 443));
@@ -876,35 +876,35 @@ static void test_connect_ranges(void) {
     check("an IPv4 address outside the range is refused", !permits_v4("8.8.8.8", 443));
 
     reset_behaviour();
-    remember_rule("127.0.0.1/32", "443");
+    remember_rule("127.0.0.1/32", "443", false);
     check("a /32 range matches exactly its address", permits_v4("127.0.0.1", 443));
     check("a /32 range refuses the neighbouring address", !permits_v4("127.0.0.2", 443));
 
     reset_behaviour();
-    remember_rule("2001:db8::/32", "443");
+    remember_rule("2001:db8::/32", "443", false);
     check("an IPv6 address inside the range is permitted", permits_v6("2001:db8::5", 443));
     check("an IPv6 address outside the range is refused", !permits_v6("2001:dead::5", 443));
 
     reset_behaviour();
-    remember_rule("10.0.0.0/33", "443");
-    remember_rule("10.0.0.0/0", "443");
-    remember_rule("10.0.0.0/x", "443");
-    remember_rule("nothost/8", "443");
+    remember_rule("10.0.0.0/33", "443", false);
+    remember_rule("10.0.0.0/0", "443", false);
+    remember_rule("10.0.0.0/x", "443", false);
+    remember_rule("nothost/8", "443", false);
     check("a malformed range is dropped", connect_rules_count_for_tests() == 0);
 
     reset_behaviour();
-    remember_rule("::ffff:104.16.0.0/12", "443");
+    remember_rule("::ffff:104.16.0.0/12", "443", false);
     check("an IPv4-mapped range with too short a prefix is dropped",
           connect_rules_count_for_tests() == 0);
 
     reset_behaviour();
-    remember_rule("::ffff:104.16.0.0/108", "443");
+    remember_rule("::ffff:104.16.0.0/108", "443", false);
     check("an IPv4-mapped range with a long-enough prefix is kept", connect_rules_count_for_tests() == 1);
     check("the mapped range matches an in-range IPv4 address", permits_v4("104.16.5.5", 443));
     check("the mapped range refuses an out-of-range IPv4 address", !permits_v4("8.8.8.8", 443));
 
     reset_behaviour();
-    remember_rule("104.16.0.0/12", "*");
+    remember_rule("104.16.0.0/12", "*", false);
     check("an any-port range permits an in-range address on any port",
           permits_v4("104.16.5.5", 12345));
     check("an any-port range refuses an out-of-range address", !permits_v4("8.8.8.8", 12345));
@@ -1032,7 +1032,7 @@ static void test_service_paths(void) {
     bx->notif_recv_family = AF_INET;
     bx->notif_recv_port = 443;
     bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.2", "443");
+    remember_rule("127.0.0.2", "443", false);
     service_once();
     check("a destination the list forbids is refused",
           bx->answers == 1 && bx->last_answer_error == -EACCES && bx->connect_calls == 0);
@@ -1044,7 +1044,7 @@ static void test_service_paths(void) {
     bx->process_vm_readv_result = 1;
     bx->readlink_inode = PERMITTED_STREAM_INODE;
     record_socket_type(PERMITTED_STREAM_INODE, FD_TYPE_STREAM);
-    remember_rule("127.0.0.1", "443");
+    remember_rule("127.0.0.1", "443", false);
     service_once();
     check("a destination the list names by host and port is connected on the command's behalf",
           bx->connect_calls == 1 && bx->addfd_calls == 1 && bx->last_answer_error == 0);
@@ -1056,7 +1056,7 @@ static void test_service_paths(void) {
     bx->process_vm_readv_result = 1;
     bx->readlink_inode = PERMITTED_STREAM_INODE;
     record_socket_type(PERMITTED_STREAM_INODE, FD_TYPE_STREAM);
-    remember_rule("127.0.0.1", "443");
+    remember_rule("127.0.0.1", "443", false);
     service_once();
     check("a permitted connect is made and answered with success",
           bx->connect_calls == 1 && bx->addfd_calls == 1 && bx->answers == 1 &&
@@ -1068,7 +1068,7 @@ static void test_service_paths(void) {
     bx->process_vm_readv_result = 1;
     bx->readlink_inode = PERMITTED_IPV6_STREAM_INODE;
     record_socket_type(PERMITTED_IPV6_STREAM_INODE, FD_TYPE_STREAM);
-    remember_rule("2001:db8::1", "443");
+    remember_rule("2001:db8::1", "443", false);
     service_once();
     check("a permitted IPv6 connect is made on the command's behalf",
           bx->connect_calls == 1 && bx->addfd_calls == 1 && bx->last_answer_error == 0);
@@ -1116,7 +1116,7 @@ static void test_egress_syscalls(void) {
     bx->notif_recv_port = 443;
     bx->notif_send_flags = MSG_FASTOPEN;
     bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "443");
+    remember_rule("127.0.0.1", "443", false);
     service_once();
     check("a TCP Fast Open send is refused even to a listed destination",
           bx->answers == 1 && bx->last_answer_error == -EACCES);
@@ -1143,7 +1143,7 @@ static void test_egress_syscalls(void) {
     bx->notif_recv_family = AF_INET;
     bx->notif_recv_port = 53;
     bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53");
+    remember_rule("127.0.0.1", "53", true);
     service_once();
     check("a datagram to a listed destination continues",
           bx->answers == 1 && bx->last_answer_error == 0 &&
@@ -1154,7 +1154,7 @@ static void test_egress_syscalls(void) {
     bx->notif_recv_family = AF_INET;
     bx->notif_recv_port = 9999;
     bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53");
+    remember_rule("127.0.0.1", "53", true);
     service_once();
     check("a datagram to a destination the list does not name is refused",
           bx->answers == 1 && bx->last_answer_error == -EACCES);
@@ -1173,7 +1173,7 @@ static void test_egress_syscalls(void) {
     bx->notif_recv_family = AF_INET;
     bx->notif_recv_port = 53;
     bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53");
+    remember_rule("127.0.0.1", "53", true);
     service_once();
     check("a sendmsg to a listed destination continues",
           bx->answers == 1 && bx->last_answer_error == 0 &&
@@ -1185,7 +1185,7 @@ static void test_egress_syscalls(void) {
     bx->notif_recv_family = AF_INET;
     bx->notif_recv_port = 9999;
     bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53");
+    remember_rule("127.0.0.1", "53", true);
     service_once();
     check("a sendmsg to a destination the list does not name is refused",
           bx->answers == 1 && bx->last_answer_error == -EACCES);
@@ -1207,7 +1207,7 @@ static void test_egress_syscalls(void) {
     bx->notif_recv_family = AF_INET;
     bx->notif_recv_port = 53;
     bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53");
+    remember_rule("127.0.0.1", "53", true);
     service_once();
     check("a sendmsg with TCP Fast Open is refused even to a listed destination",
           bx->answers == 1 && bx->last_answer_error == -EACCES);
@@ -1247,7 +1247,7 @@ static void test_egress_syscalls(void) {
     bx->notif_recv_family = AF_INET;
     bx->notif_recv_port = 53;
     bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53");
+    remember_rule("127.0.0.1", "53", true);
     service_once();
     check("a sendmmsg batch to a listed destination continues",
           bx->answers == 1 && bx->last_answer_error == 0 &&
@@ -1259,7 +1259,7 @@ static void test_egress_syscalls(void) {
     bx->notif_recv_family = AF_INET;
     bx->notif_recv_port = 9999;
     bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53");
+    remember_rule("127.0.0.1", "53", true);
     service_once();
     check("a sendmmsg batch naming a disallowed destination is refused whole",
           bx->answers == 1 && bx->last_answer_error == -EACCES);
@@ -1349,7 +1349,7 @@ static void test_egress_syscalls(void) {
     bx->notif_recv_family = AF_INET;
     bx->notif_recv_port = 53;
     bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53");
+    remember_rule("127.0.0.1", "53", true);
     service_once();
     check("a sendmmsg batch is refused when a later entry names a disallowed destination",
           bx->answers == 1 && bx->last_answer_error == -EACCES);
@@ -1420,7 +1420,7 @@ static void test_socket_tracking(void) {
     bx->process_vm_readv_result = 1;
     bx->readlink_inode = TRACKED_DATAGRAM_INODE;
     record_socket_type(TRACKED_DATAGRAM_INODE, FD_TYPE_DGRAM);
-    remember_rule("127.0.0.1", "53");
+    remember_rule("127.0.0.1", "53", true);
     service_once();
     check("a connect on a datagram socket is checked then let through, not injected",
           bx->answers == 1 && bx->last_answer_error == 0 && bx->connect_calls == 0 &&
@@ -1432,7 +1432,7 @@ static void test_socket_tracking(void) {
     bx->notif_recv_target_fd = 9;
     bx->process_vm_readv_result = 1;
     bx->readlink_inode = 8301;
-    remember_rule("127.0.0.1", "53");
+    remember_rule("127.0.0.1", "53", false);
     service_once();
     check("a connect on an untracked socket is refused, making no upstream connection",
           bx->answers == 1 && bx->connect_calls == 0 && bx->last_answer_error == -EACCES &&
@@ -1444,7 +1444,7 @@ static void test_socket_tracking(void) {
     bx->notif_recv_target_fd = 6;
     bx->process_vm_readv_result = 1;
     bx->readlink_kind = READLINK_PIPE;
-    remember_rule("127.0.0.1", "53");
+    remember_rule("127.0.0.1", "53", false);
     service_once();
     check("a connect on a descriptor that is not a socket is refused, not injected over",
           bx->answers == 1 && bx->connect_calls == 0 && bx->last_answer_error == -EACCES &&
@@ -1458,7 +1458,7 @@ static void test_socket_tracking(void) {
     bx->readlink_kind = READLINK_FAILS;
     bx->readlink_inode = UNNAMEABLE_STREAM_INODE;
     record_socket_type(UNNAMEABLE_STREAM_INODE, FD_TYPE_STREAM);
-    remember_rule("127.0.0.1", "53");
+    remember_rule("127.0.0.1", "53", false);
     service_once();
     check("a stream connect is refused when /proc cannot name the inode",
           bx->answers == 1 && bx->connect_calls == 0 && bx->last_answer_error == -EACCES &&
@@ -1471,10 +1471,23 @@ static void test_socket_tracking(void) {
     bx->process_vm_readv_result = 1;
     bx->readlink_inode = TRACKED_STREAM_INODE;
     record_socket_type(TRACKED_STREAM_INODE, FD_TYPE_STREAM);
-    remember_rule("127.0.0.1", "53");
+    remember_rule("127.0.0.1", "53", false);
     service_once();
     check("a connect on a tracked stream socket is injected, race-free",
           bx->answers == 1 && bx->connect_calls == 1 && bx->addfd_calls == 1);
+
+    reset_behaviour();
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->notif_recv_target_fd = 6;
+    bx->process_vm_readv_result = 1;
+    bx->readlink_inode = TRACKED_STREAM_INODE;
+    record_socket_type(TRACKED_STREAM_INODE, FD_TYPE_STREAM);
+    remember_rule("127.0.0.1", "53", true);
+    service_once();
+    check("a stream connect is refused when only a udp rule names the destination",
+          bx->answers == 1 && bx->connect_calls == 0 && bx->last_answer_error == -EACCES &&
+              bx->last_answer_flags != SECCOMP_USER_NOTIF_FLAG_CONTINUE);
 
     reset_behaviour();
     record_socket_type(0, FD_TYPE_STREAM);
@@ -1775,7 +1788,7 @@ static void drive_broker_stream_connect(int family, uint16_t port, const char *r
     bx->process_vm_readv_result = 1;
     bx->readlink_inode = TRACKED_STREAM_INODE;
     record_socket_type(TRACKED_STREAM_INODE, FD_TYPE_STREAM);
-    remember_rule(rule_host, "443");
+    remember_rule(rule_host, "443", false);
     service_once();
 }
 
@@ -1805,7 +1818,7 @@ static void test_broker_handoff(void) {
     bx->process_vm_readv_result = 1;
     bx->readlink_inode = TRACKED_STREAM_INODE;
     record_socket_type(TRACKED_STREAM_INODE, FD_TYPE_STREAM);
-    remember_rule("192.0.2.7", "443");
+    remember_rule("192.0.2.7", "443", false);
     service_once();
     check("an allowed stream connect goes to the broker, not the destination",
           bx->connect_calls == 1 && bx->last_connect_port == 3128 &&
@@ -1840,7 +1853,7 @@ static void test_broker_handoff(void) {
     bx->process_vm_readv_result = 1;
     bx->readlink_inode = TRACKED_STREAM_INODE;
     record_socket_type(TRACKED_STREAM_INODE, FD_TYPE_STREAM);
-    remember_rule("127.0.0.1", "443");
+    remember_rule("127.0.0.1", "443", false);
     bx->send_fails = 1;
     service_once();
     check("a broker whose header cannot be sent refuses the connect and injects nothing",
@@ -1854,7 +1867,7 @@ static void test_broker_handoff(void) {
     bx->process_vm_readv_result = 1;
     bx->readlink_inode = TRACKED_STREAM_INODE;
     record_socket_type(TRACKED_STREAM_INODE, FD_TYPE_STREAM);
-    remember_rule("127.0.0.1", "443");
+    remember_rule("127.0.0.1", "443", false);
     bx->send_short_once = 1;
     bx->send_eintr_once = 1;
     service_once();

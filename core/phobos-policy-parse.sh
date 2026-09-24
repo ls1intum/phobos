@@ -195,42 +195,92 @@ refuse_unknown_section() {
   esac
 }
 
-# Appends one [connect] line, "allow <host>[:<port>]", to the rules file as "host port". A line
-# of any other shape is refused. Assumes it is called plainly, so that the refusal ends the run.
+# Appends one [connect] line, "allow <host>[:<port>] [udp|tcp]", to the rules file as "host port"
+# for TCP, or "host port udp" for UDP. The transport marker is optional and defaults to tcp, so
+# every existing rule keeps its two-field form and its meaning. A UDP rule may name only an
+# address, a CIDR, a loopback name or "*": a host name in a UDP rule is refused, because the egress
+# broker enforces a host name through the TLS host name, which is TCP-only, so a UDP host name would
+# rest on its port alone with no host enforcement. A line of any other shape, or an unknown marker,
+# is refused. Assumes it is called plainly, so that the refusal ends the run.
 append_connect_rule() {
   local line="$1"
   local rules="$2"
   local host=""
   local port="*"
   if [[ ! "$line" =~ ^allow[[:space:]]+(.+)$ ]]; then
-    report "Policy invalid: '${line}' in [connect] is not an 'allow <host>[:<port>]' line. (PHB-EPOLICY)"
+    report "Policy invalid: '${line}' in [connect] is not an 'allow <host>[:<port>] [udp|tcp]' line. (PHB-EPOLICY)"
     exit "${PHB_EPOLICY}"
   fi
-  parse_network_target "${BASH_REMATCH[1]}" host port
-  printf '%s %s\n' "$host" "$port" >>"$rules"
+  local -a fields=()
+  read -ra fields <<< "${BASH_REMATCH[1]}"
+  local target="${fields[0]}"
+  local proto="tcp"
+  if (( ${#fields[@]} == 2 )); then
+    proto="${fields[1]}"
+  elif (( ${#fields[@]} > 2 )); then
+    report "Policy invalid: '${line}' in [connect] has trailing words; use 'allow <host>[:<port>] [udp|tcp]'. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  if [[ "$proto" != "tcp" && "$proto" != "udp" ]]; then
+    report "Policy invalid: '${proto}' in [connect] is not a transport; use 'udp' or 'tcp'. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  parse_network_target "$target" host port
+  if [[ "$proto" == "udp" ]]; then
+    case "$host" in
+      "*" | localhost) ;;
+      *:* | */*) ;;
+      *[!0-9.]*)
+        report "Policy invalid: '${host}' in a udp [connect] rule names a host, which UDP cannot enforce (the egress broker checks TLS host names for TCP only). Name an address, a CIDR or '*'. (PHB-EPOLICY)"
+        exit "${PHB_EPOLICY}" ;;
+      *) ;;
+    esac
+    printf '%s %s %s\n' "$host" "$port" "udp" >>"$rules"
+  else
+    printf '%s %s\n' "$host" "$port" >>"$rules"
+  fi
 }
 
-# Appends one [bind] line to the rules file as "* port". [bind] names a local TCP listening port,
-# one 'allow <port>' per line, and a bare port is the only accepted form. Landlock's bind right is
-# per-port and cannot narrow to a local address, so a rule that names an address is refused: a
-# listener's reachability is governed by [accept] and the container's network isolation, not by the
-# bind address. The stored host is always "*", which build_bind_args ignores. The port range is
-# checked downstream by refuse_unusable_port. Assumes it is called plainly, so that a refusal ends
-# the run.
+# Appends one [bind] line to the rules file as "* port" for TCP, or "* port udp" for UDP. [bind]
+# names a local listening port, one 'allow <port> [udp|tcp]' per line, and a bare port is the only
+# accepted target. The transport marker is optional and defaults to tcp, so every existing rule
+# keeps its two-field form and its meaning. Landlock's bind right is per-port and cannot narrow to a
+# local address, so a rule that names an address is refused: a listener's reachability is governed
+# by [accept] and the container's network isolation, not by the bind address. The stored host is
+# always "*", which build_bind_args ignores. The port range is checked downstream by
+# refuse_unusable_port. An unknown marker is refused. Assumes it is called plainly, so that a
+# refusal ends the run.
 append_bind_rule() {
   local line="$1"
   local rules="$2"
   local bind_target
   if [[ ! "$line" =~ ^allow[[:space:]]+(.+)$ ]]; then
-    report "Policy invalid: '${line}' in [bind] is not an 'allow <port>' line. (PHB-EPOLICY)"
+    report "Policy invalid: '${line}' in [bind] is not an 'allow <port> [udp|tcp]' line. (PHB-EPOLICY)"
     exit "${PHB_EPOLICY}"
   fi
-  bind_target="${BASH_REMATCH[1]}"
+  local -a fields=()
+  read -ra fields <<< "${BASH_REMATCH[1]}"
+  bind_target="${fields[0]}"
+  local proto="tcp"
+  if (( ${#fields[@]} == 2 )); then
+    proto="${fields[1]}"
+  elif (( ${#fields[@]} > 2 )); then
+    report "Policy invalid: '${line}' in [bind] has trailing words; use 'allow <port> [udp|tcp]'. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  if [[ "$proto" != "tcp" && "$proto" != "udp" ]]; then
+    report "Policy invalid: '${proto}' in [bind] is not a transport; use 'udp' or 'tcp'. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
   if [[ ! "$bind_target" =~ ^[0-9]+$ ]]; then
     report "Policy invalid: '${bind_target}' in [bind] is not a bare port; [bind] takes only a port number, because Landlock enforces a bind by port and cannot narrow to a local address. Name the port alone, and govern a listener's reachability with [accept]. (PHB-EPOLICY)"
     exit "${PHB_EPOLICY}"
   fi
-  printf '%s %s\n' "*" "$bind_target" >>"$rules"
+  if [[ "$proto" == "udp" ]]; then
+    printf '%s %s %s\n' "*" "$bind_target" "udp" >>"$rules"
+  else
+    printf '%s %s\n' "*" "$bind_target" >>"$rules"
+  fi
 }
 
 # Appends one [accept] line, "expose <public-port> to <backend-port> from <source>[, <source>...]",

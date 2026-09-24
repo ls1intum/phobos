@@ -24,14 +24,17 @@ static constexpr size_t MAPPED_IPV4_FIRST_BYTE = 12;
 static constexpr uint8_t MAPPED_MARKER = 0xff;
 /* The highest TCP or UDP port; the lowest is 1. */
 static constexpr unsigned long HIGHEST_PORT = 65535;
-/* The longest line of the rules file read at once, and the longest port word. */
+/* The longest line of the rules file read at once, the longest port word, and the longest
+ * transport word ("udp"/"tcp" plus its terminating zero, with room to spare). */
 static constexpr size_t RULE_LINE_LENGTH = 512;
 static constexpr size_t PORT_TEXT_LENGTH = 16;
-/* A rules line is two words, the host and the port. */
+static constexpr size_t PROTO_TEXT_LENGTH = 8;
+/* A rules line is at least two words, the host and the port; a third optional word is the
+ * transport. */
 static constexpr int RULE_WORDS = 2;
-/* The field widths of the sscanf format in load_rules are MAXIMUM_HOST - 1 and
- * PORT_TEXT_LENGTH - 1. A format cannot name a constant, so the two are tied together here. */
-static_assert(MAXIMUM_HOST == 256 && PORT_TEXT_LENGTH == 16,
+/* The field widths of the sscanf format in load_rules are MAXIMUM_HOST - 1, PORT_TEXT_LENGTH - 1
+ * and PROTO_TEXT_LENGTH - 1. A format cannot name a constant, so the three are tied together here. */
+static_assert(MAXIMUM_HOST == 256 && PORT_TEXT_LENGTH == 16 && PROTO_TEXT_LENGTH == 8,
               "the widths in load_rules' sscanf format must follow the buffer sizes");
 /* 127.0.0.0/8 is IPv4 loopback: the first octet, the top eight of the address's 32 bits. */
 static constexpr uint32_t IPV4_LOOPBACK_FIRST_OCTET = 127;
@@ -40,7 +43,7 @@ static constexpr int IPV4_FIRST_OCTET_SHIFT = 24;
 static struct connect_rule connect_rules[MAXIMUM_RULES];
 static size_t connect_rule_count = 0;
 
-void remember_rule(const char *host, const char *port_text) {
+void remember_rule(const char *host, const char *port_text, bool is_udp) {
     if (connect_rule_count >= MAXIMUM_RULES || strlen(host) >= MAXIMUM_HOST) {
         log_verbose("dropping the rule '%s %s': the table is full or the host is too long",
                     host, port_text);
@@ -48,6 +51,7 @@ void remember_rule(const char *host, const char *port_text) {
     }
     struct connect_rule *rule = &connect_rules[connect_rule_count];
     memset(rule, 0, sizeof(*rule));
+    rule->is_udp = is_udp;
     snprintf(rule->host, sizeof(rule->host), "%s", host);
     char *slash = strchr(rule->host, '/');
     if (slash != nullptr) {
@@ -111,8 +115,9 @@ bool load_rules(const char *path) {
     while (fgets(line, sizeof(line), file) != nullptr) {
         char host[MAXIMUM_HOST] = "";
         char port_text[PORT_TEXT_LENGTH] = "";
-        if (sscanf(line, "%255s %15s", host, port_text) == RULE_WORDS) {
-            remember_rule(host, port_text);
+        char proto_text[PROTO_TEXT_LENGTH] = "";
+        if (sscanf(line, "%255s %15s %7s", host, port_text, proto_text) >= RULE_WORDS) {
+            remember_rule(host, port_text, strcmp(proto_text, "udp") == 0);
         }
     }
     fclose(file);
@@ -186,12 +191,15 @@ bool rule_host_matches(const struct connect_rule *rule, int family, const void *
     return true;
 }
 
-bool connection_permitted(int family, const void *address, uint16_t port) {
+bool connection_permitted(int family, const void *address, uint16_t port, bool is_udp) {
     if (connect_rule_count == 0) {
         return false;
     }
     for (size_t index = 0; index < connect_rule_count; index++) {
         const struct connect_rule *rule = &connect_rules[index];
+        if (rule->is_udp != is_udp) {
+            continue;
+        }
         if (!rule->any_port && rule->port != port) {
             continue;
         }

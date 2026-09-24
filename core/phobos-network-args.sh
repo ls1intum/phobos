@@ -15,7 +15,7 @@ refuse_unusable_port() {
   local host="$1"
   local port="$2"
   [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] && (( port <= PHB_HIGHEST_PORT )) && return 0
-  report "Policy invalid: '${host}:${port}' names no usable TCP port. (PHB-EPOLICY)"
+  report "Policy invalid: '${host}:${port}' names no usable port. (PHB-EPOLICY)"
   exit "${PHB_EPOLICY}"
 }
 
@@ -30,33 +30,34 @@ is_loopback_host() {
   esac
 }
 
-# Reads a "host port" allow-list, writing the concrete ports it names into the
-# second file and the first rule that names none into the third. An external host with no port
-# is refused, because it cannot be enforced: Landlock knows ports, not hosts, so leaving the
-# layer off for it would confine external egress to the connect guard's port check alone, which
-# for a portless rule is nothing. Loopback with no port is the one tolerated case.
+# Reads a "host port [proto]" allow-list for one transport, writing the concrete ports it names on
+# that transport into the third file and the first such rule that names none into the fourth. The
+# optional third column is the transport, "udp" or absent/"tcp", so this reads only the rows whose
+# transport matches want_proto and ignores the rest. An external host with no port is refused,
+# because it cannot be enforced: Landlock knows ports, not hosts, so leaving the layer off for it
+# would confine external egress to the connect guard's port check alone, which for a portless rule
+# is nothing. Loopback with no port is the one tolerated case.
 #
 # Both results go to files rather than to stdout, so that the function is called
 # plainly and never in a command substitution, whose subshell a refusal's exit would
 # end instead of the run.
-#
-# net.rules holds pairs separated by a space, so the default field splitting is
-# what is wanted here: with IFS cleared, read puts the whole line into the first
-# variable and leaves the second empty, which makes every rule look like a
-# wildcard.
 collect_network_ports() {
   local rules="$1"
-  local ports_file="$2"
-  local wildcard_file="$3"
+  local want_proto="$2"
+  local ports_file="$3"
+  local wildcard_file="$4"
   local host
   local port
+  local proto
   : > "$ports_file"
   : > "$wildcard_file"
-  while read -r host port; do
+  while read -r host port proto; do
     [[ -z "$host" ]] && continue
+    [[ -z "$proto" ]] && proto="tcp"
+    [[ "$proto" != "$want_proto" ]] && continue
     if [[ "$port" == "*" || -z "$port" ]]; then
       if ! is_loopback_host "$host"; then
-        report "Policy unenforceable: '${host}' names a host with no port. Landlock enforces TCP ports, not hosts, so an external host with no port cannot be enforced. Name a concrete port, and rely on a no-network container as the outer boundary. (PHB-EPOLICY)"
+        report "Policy unenforceable: '${host}' names a host with no port. Landlock enforces ports, not hosts, so an external host with no port cannot be enforced. Name a concrete port, and rely on a no-network container as the outer boundary. (PHB-EPOLICY)"
         exit "${PHB_EPOLICY}"
       fi
       [[ -s "$wildcard_file" ]] || printf '%s:%s\n' "$host" "${port:-*}" > "$wildcard_file"
@@ -91,17 +92,20 @@ refuse_unenforceable_network_rules() {
   local bind_rules="$2"
   local ports_file
   local wildcard_file
+  local proto
   local host
   local port
   if [[ -n "$net_rules" && -s "$net_rules" ]]; then
-    ports_file="$(new_scratch_file phobos-check-ports.XXXXXX)"
-    wildcard_file="$(new_scratch_file phobos-check-wildcard.XXXXXX)"
-    collect_network_ports "$net_rules" "$ports_file" "$wildcard_file"
-    refuse_mixed_network_wildcard "$ports_file" "$wildcard_file"
-    rm -f "$ports_file" "$wildcard_file"
+    for proto in tcp udp; do
+      ports_file="$(new_scratch_file phobos-check-ports.XXXXXX)"
+      wildcard_file="$(new_scratch_file phobos-check-wildcard.XXXXXX)"
+      collect_network_ports "$net_rules" "$proto" "$ports_file" "$wildcard_file"
+      refuse_mixed_network_wildcard "$ports_file" "$wildcard_file"
+      rm -f "$ports_file" "$wildcard_file"
+    done
   fi
   if [[ -n "$bind_rules" && -s "$bind_rules" ]]; then
-    while read -r host port; do
+    while read -r host port _; do
       [[ -z "$host" ]] && continue
       refuse_unusable_port "$host" "$port"
     done < "$bind_rules"
@@ -124,9 +128,11 @@ refuse_unenforceable_accept_rules() {
   local -A bound_ports=()
   local host
   local port
+  local proto
   if [[ -n "$bind_rules" && -s "$bind_rules" ]]; then
-    while read -r host port; do
+    while read -r host port proto; do
       [[ -z "$port" ]] && continue
+      [[ "$proto" == "udp" ]] && continue
       bound_ports[$((10#$port))]=1
     done < "$bind_rules"
   fi
@@ -164,63 +170,117 @@ refuse_unenforceable_accept_rules() {
   return 0
 }
 
-# Fills the named array with the TCP port rules Landlock can actually enforce.
-#
-# The policy language names a host and a port, Landlock knows only ports. A rule naming no
-# port therefore cannot be expressed. Only a LOOPBACK host may name no port: a section made
-# only of those leaves the network layer off and says so, which is what the shipped policies
-# do, and the no-network container is that rule's boundary. Only an explicit star or an
-# omitted port is that wildcard; "host:0" names no port that exists and is a policy mistake,
-# not a licence to switch the layer off. Every refusal this can reach has already been made
-# by refuse_unenforceable_network_rules where the policy was built; it is repeated here so
-# that a layer run standalone over a specification is judged too.
-build_network_args() {
-  local arguments_name="$1"
+# Emits the connect-port arguments for one transport into the named array. Collects the concrete
+# ports the allow-list names on that transport, refuses a wildcard mixed with a concrete port, and
+# either leaves the layer off for a section made only of loopback wildcards (saying so with the
+# given message) or emits one flag per port. Takes the array name, the rules file, the transport,
+# the flag (--connect-tcp or --connect-udp) and the "layer stays off" message.
+emit_connect_port_args() {
+  local -n ref="$1"
   local rules="$2"
-  local -n network_ref="$arguments_name"
+  local proto="$3"
+  local flag="$4"
+  local layer_off_message="$5"
   local ports_file
   local wildcard_file
   local port
-  [[ -n "$rules" && -s "$rules" ]] || return 0
   ports_file="$(new_scratch_file phobos-ports.XXXXXX)"
   wildcard_file="$(new_scratch_file phobos-wildcard.XXXXXX)"
-  collect_network_ports "$rules" "$ports_file" "$wildcard_file"
+  collect_network_ports "$rules" "$proto" "$ports_file" "$wildcard_file"
   refuse_mixed_network_wildcard "$ports_file" "$wildcard_file"
   if [[ -s "$wildcard_file" ]]; then
-    _log "network: '$(cat "$wildcard_file")' names no port; the Landlock network layer stays off, and the connect guard filters this run"
+    _log "network: '$(cat "$wildcard_file")' names no port; ${layer_off_message}"
     rm -f "$ports_file" "$wildcard_file"
     return 0
   fi
   while IFS= read -r port; do
-    network_ref+=( --connect-tcp "$port" )
+    ref+=( "$flag" "$port" )
   done < <(sort -n -u "$ports_file")
   rm -f "$ports_file" "$wildcard_file"
 }
 
-# Fills the named array with the TCP bind-port rules Landlock enforces.
+# Fills the named array with the TCP and UDP connect-port rules Landlock can actually enforce.
 #
-# The [bind] section names local TCP ports a submission may listen on. Each rule is "* port";
-# Landlock enforces the port, so several rules that share a port collapse to one --bind-tcp.
-# Landlock's bind right is per-port and knows no local address, so the parser refuses a [bind]
-# rule that names an address and this emits one --bind-tcp per port. The host field is always "*"
-# and is ignored here. A port outside 1..65535 is a policy mistake and ends the run.
+# The policy language names a host, a port and a transport, Landlock knows only ports per transport.
+# A rule naming no port therefore cannot be expressed. Only a LOOPBACK host may name no port: a
+# section made only of those leaves that transport's network layer off and says so, which is what
+# the shipped policies do, and the no-network container is that rule's boundary. Only an explicit
+# star or an omitted port is that wildcard; "host:0" names no port that exists and is a policy
+# mistake, not a licence to switch the layer off. TCP and UDP are collected apart, so a wildcard on
+# one transport never mixes with a concrete port on the other. Every refusal this can reach has
+# already been made by refuse_unenforceable_network_rules where the policy was built; it is repeated
+# here so that a layer run standalone over a specification is judged too. The TCP "stays off"
+# message is kept verbatim so a tcp-only policy's log is unchanged.
+build_network_args() {
+  local arguments_name="$1"
+  local rules="$2"
+  [[ -n "$rules" && -s "$rules" ]] || return 0
+  emit_connect_port_args "$arguments_name" "$rules" tcp --connect-tcp \
+    "the Landlock network layer stays off, and the connect guard filters this run"
+  emit_connect_port_args "$arguments_name" "$rules" udp --connect-udp \
+    "the Landlock udp network layer stays off, and the connect guard filters this run"
+}
+
+# Fills the named array with the TCP and UDP bind-port rules Landlock enforces.
+#
+# The [bind] section names local ports a submission may listen on, one "* port [proto]" per line.
+# Landlock enforces the port per transport, so several rules that share a port and transport
+# collapse to one flag. Landlock's bind right is per-port and knows no local address, so the parser
+# refuses a [bind] rule that names an address and this emits one --bind-tcp or --bind-udp per port.
+# The host field is always "*" and is ignored here. A port outside 1..65535 is a policy mistake and
+# ends the run.
 build_bind_args() {
   local arguments_name="$1"
   local rules="$2"
   local -n bind_ref="$arguments_name"
   local host
   local port
-  local ports_file
+  local proto
+  local tcp_ports
+  local udp_ports
   local emitted
   [[ -n "$rules" && -s "$rules" ]] || return 0
-  ports_file="$(new_scratch_file phobos-bindports.XXXXXX)"
-  while read -r host port; do
+  tcp_ports="$(new_scratch_file phobos-bindports.XXXXXX)"
+  udp_ports="$(new_scratch_file phobos-bindports-udp.XXXXXX)"
+  while read -r host port proto; do
     [[ -z "$host" ]] && continue
     refuse_unusable_port "$host" "$port"
-    printf '%s\n' "$port" >> "$ports_file"
+    if [[ "$proto" == "udp" ]]; then
+      printf '%s\n' "$port" >> "$udp_ports"
+    else
+      printf '%s\n' "$port" >> "$tcp_ports"
+    fi
   done < "$rules"
   while IFS= read -r emitted; do
     bind_ref+=( --bind-tcp "$emitted" )
-  done < <(sort -n -u "$ports_file")
-  rm -f "$ports_file"
+  done < <(sort -n -u "$tcp_ports")
+  while IFS= read -r emitted; do
+    bind_ref+=( --bind-udp "$emitted" )
+  done < <(sort -n -u "$udp_ports")
+  rm -f "$tcp_ports" "$udp_ports"
+}
+
+# Adds a "--bind-udp 0" (any local port) to the named argument array when the policy handles both
+# UDP directions and does not already grant it. The kernel auto-binds an ephemeral local source
+# port for an outgoing datagram, and when BIND_UDP is handled that auto-bind is itself gated by
+# BIND_UDP, so without a port-0 rule an allowed send is denied its source port. This is only added
+# when a --connect-udp and a --bind-udp are both present, so a TCP-only or connect-only-UDP policy
+# gains no bind capability it did not ask for. Takes the argument array by name.
+add_udp_ephemeral_bind_if_needed() {
+  local -n args_ref="$1"
+  local has_connect_udp=0
+  local has_bind_udp=0
+  local has_bind_udp_zero=0
+  local index
+  for (( index = 0; index < ${#args_ref[@]}; index++ )); do
+    case "${args_ref[$index]}" in
+      --connect-udp) has_connect_udp=1 ;;
+      --bind-udp)
+        has_bind_udp=1
+        [[ "${args_ref[$((index + 1))]:-}" == "0" ]] && has_bind_udp_zero=1 ;;
+    esac
+  done
+  if (( has_connect_udp && has_bind_udp && ! has_bind_udp_zero )); then
+    args_ref+=( --bind-udp 0 )
+  fi
 }

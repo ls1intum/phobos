@@ -332,15 +332,18 @@ void connect_on_behalf(int notify_descriptor, struct seccomp_notif_resp *respons
 }
 
 /* Decide one trapped connect: read the destination from the child, confirm the notification is
- * still valid so the read belongs to this call, refuse a family this guard does not carry or a
- * destination the allow-list does not name. For a stream socket, make the connection here and
- * inject it, so the child's connect() returns already connected to the address the check read
- * and a second thread cannot redirect it. For a datagram socket connect() only sets the default
- * peer, which cannot be injected, so the checked call is let through. A socket of unknown
- * provenance is refused rather than let through: one the guard never recorded, one evicted from
- * a full table, an injected replacement being reconnected, or a descriptor /proc cannot name.
- * Letting such a call continue would run the child's own unmediated connect(), the very boundary
- * a raw connect must not reach, so an unknown provenance fails closed. */
+ * still valid so the read belongs to this call, and refuse a family this guard does not carry.
+ * The socket's provenance is then resolved before the allow-list check, because the transport is
+ * part of the decision: a stream socket is TCP and a datagram socket is UDP, and the allow-list
+ * holds each transport apart, so a UDP-only rule must not admit a TCP connection to the same host
+ * and port. A socket of unknown provenance is refused first: one the guard never recorded, one
+ * evicted from a full table, an injected replacement being reconnected, or a descriptor /proc
+ * cannot name. Letting such a call continue would run the child's own unmediated connect(), the
+ * very boundary a raw connect must not reach, so an unknown provenance fails closed. For a stream
+ * socket, make the connection here and inject it, so the child's connect() returns already
+ * connected to the address the check read and a second thread cannot redirect it. For a datagram
+ * socket connect() only sets the default peer, which cannot be injected, so the checked call is
+ * let through. */
 static void service_connect(int notify_descriptor, struct seccomp_notif *request,
                             struct seccomp_notif_resp *response) {
     int target_descriptor = (int)request->data.args[CONNECT_ARGUMENT_DESCRIPTOR];
@@ -365,25 +368,26 @@ static void service_connect(int notify_descriptor, struct seccomp_notif *request
         answer(notify_descriptor, response, request->id, 0, -EACCES);
         return;
     }
-    if (!connection_permitted(where.family, where.address, where.port)) {
+    uint64_t inode = fd_socket_inode(request->pid, target_descriptor);
+    uint8_t provenance = lookup_socket_type(inode);
+    if (provenance != FD_TYPE_STREAM && provenance != FD_TYPE_DGRAM) {
+        log_verbose("refusing connect on a socket of unknown provenance, fd %d", target_descriptor);
+        answer(notify_descriptor, response, request->id, 0, -EACCES);
+        return;
+    }
+    if (!connection_permitted(where.family, where.address, where.port,
+                              provenance == FD_TYPE_DGRAM)) {
         log_verbose("refusing connect to a destination the allow-list does not name, port %u",
                     (unsigned)where.port);
         answer(notify_descriptor, response, request->id, 0, -EACCES);
         return;
     }
-    uint64_t inode = fd_socket_inode(request->pid, target_descriptor);
-    uint8_t provenance = lookup_socket_type(inode);
     if (provenance == FD_TYPE_STREAM) {
         connect_on_behalf(notify_descriptor, response, request->id, target_descriptor,
                           where.family, (const struct sockaddr *)&storage, length);
         return;
     }
-    if (provenance == FD_TYPE_DGRAM) {
-        answer_continue(notify_descriptor, response, request->id);
-        return;
-    }
-    log_verbose("refusing connect on a socket of unknown provenance, fd %d", target_descriptor);
-    answer(notify_descriptor, response, request->id, 0, -EACCES);
+    answer_continue(notify_descriptor, response, request->id);
 }
 
 /* Decide one trapped socket(): refuse the socket kinds that reach the network outside the
@@ -445,7 +449,10 @@ static void service_socket(int notify_descriptor, struct seccomp_notif *request,
 /* Answer one send whose destination has already been read: let a non-INET destination through
  * (a UNIX or netlink address is not the network this guard governs), refuse an INET destination
  * the allow-list does not name or one that could not be read, and otherwise let the kernel run
- * the send. */
+ * the send. A send that carries its own destination is judged as UDP: the destination-bearing
+ * sends are the datagram calls, so the allow-list is consulted for the UDP transport. A sendto
+ * with a destination on a stream socket is unusual and is deliberately judged the same way, so it
+ * is refused unless a UDP rule names the destination rather than passing on a TCP rule. */
 static void forward_or_refuse(int notify_descriptor, struct seccomp_notif *request,
                               struct seccomp_notif_resp *response,
                               const struct sockaddr_storage *storage, socklen_t length) {
@@ -458,7 +465,7 @@ static void forward_or_refuse(int notify_descriptor, struct seccomp_notif *reque
         answer_continue(notify_descriptor, response, request->id);
         return;
     }
-    if (!connection_permitted(where.family, where.address, where.port)) {
+    if (!connection_permitted(where.family, where.address, where.port, true)) {
         log_verbose("refusing a datagram to a destination the allow-list does not name, port %u",
                     (unsigned)where.port);
         answer(notify_descriptor, response, request->id, 0, -EACCES);
@@ -531,7 +538,7 @@ static void service_sendmmsg(int notify_descriptor, struct seccomp_notif *reques
         }
         struct destination where = read_destination(&storage);
         if ((where.family == AF_INET || where.family == AF_INET6)
-            && !connection_permitted(where.family, where.address, where.port)) {
+            && !connection_permitted(where.family, where.address, where.port, true)) {
             log_verbose("refusing a sendmmsg batch: entry %u names a disallowed destination", index);
             answer(notify_descriptor, response, request->id, 0, -EACCES);
             return;

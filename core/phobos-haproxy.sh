@@ -45,8 +45,10 @@ classify_connect_host() {
 exact_connect_names() {
   local rules="$1"
   local host
-  while read -r host _; do
+  local proto
+  while read -r host _ proto; do
     [[ -z "$host" ]] && continue
+    [[ "$proto" == "udp" ]] && continue
     [[ "$(classify_connect_host "$host")" == "exact" ]] && printf '%s\n' "$host"
   done < <(sed -E 's/#.*$//' "$rules" 2>/dev/null | sed '/^[[:space:]]*$/d') | sort -u
 }
@@ -62,8 +64,10 @@ name_connect_rules() {
   local rules="$1"
   local host
   local kind
-  while read -r host _; do
+  local proto
+  while read -r host _ proto; do
     [[ -z "$host" ]] && continue
+    [[ "$proto" == "udp" ]] && continue
     kind="$(classify_connect_host "$host")"
     [[ "$kind" == "exact" || "$kind" == "suffix" ]] && printf '%s\n' "$host"
   done < <(sed -E 's/#.*$//' "$rules" 2>/dev/null | sed '/^[[:space:]]*$/d') | sort -u
@@ -116,12 +120,14 @@ write_broker_hosts() {
 haproxy_allow_rules() {
   local rules="$1"
   local host
+  local proto
   local -a names=()
   local -a suffixes=()
   local -a addresses=()
   local any_host=0
-  while read -r host _; do
+  while read -r host _ proto; do
     [[ -z "$host" ]] && continue
+    [[ "$proto" == "udp" ]] && continue
     case "$(classify_connect_host "$host")" in
       any) any_host=1 ;;
       address)

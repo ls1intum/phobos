@@ -34,6 +34,9 @@ uint64_t filesystem_rights_for_version(int landlock_version) {
     if (landlock_version >= FIRST_VERSION_WITH_IOCTL_DEVICE) {
         rights |= LANDLOCK_ACCESS_FILESYSTEM_IOCTL_DEVICE;
     }
+    if (landlock_version >= FIRST_VERSION_WITH_RESOLVE_UNIX) {
+        rights |= LANDLOCK_ACCESS_FILESYSTEM_RESOLVE_UNIX;
+    }
     return rights;
 }
 
@@ -48,7 +51,8 @@ size_t ruleset_attributes_size_for_version(int landlock_version) {
     return sizeof(struct landlock_ruleset_attributes);
 }
 
-int detect_landlock_version(int minimum_landlock_version, bool network_rules_wanted) {
+int detect_landlock_version(int minimum_landlock_version, bool network_rules_wanted,
+                            bool udp_rules_wanted) {
     long landlock_version =
         syscall(SYSCALL_NUMBER_LANDLOCK_CREATE_RULESET, nullptr, 0, LANDLOCK_CREATE_RULESET_VERSION);
     if (landlock_version < 0) {
@@ -71,6 +75,12 @@ int detect_landlock_version(int minimum_landlock_version, bool network_rules_wan
     if (network_rules_wanted && landlock_version < FIRST_VERSION_WITH_NETWORK) {
         exit_with_format("network rules require Landlock version %d (kernel 6.7)",
                          FIRST_VERSION_WITH_NETWORK);
+    }
+    /* UDP port rules are refused on a kernel too old to handle them, rather than run with UDP
+     * left unrestricted: a policy that named a UDP port must be enforced or the run must stop. */
+    if (udp_rules_wanted && landlock_version < FIRST_VERSION_WITH_UDP) {
+        exit_with_format("UDP network rules require Landlock version %d",
+                         FIRST_VERSION_WITH_UDP);
     }
     return (int)landlock_version;
 }
@@ -180,7 +190,7 @@ void add_path_rule(int ruleset_descriptor, int landlock_version, const struct pa
 }
 
 void add_port_rule(int ruleset_descriptor, uint64_t port, uint64_t allowed_access,
-                   const char *what) {
+                   const char *what, const char *protocol) {
     struct landlock_network_port_attributes port_rule_attributes;
     memset(&port_rule_attributes, 0, sizeof(port_rule_attributes));
     port_rule_attributes.allowed_access = allowed_access;
@@ -189,7 +199,7 @@ void add_port_rule(int ruleset_descriptor, uint64_t port, uint64_t allowed_acces
                 &port_rule_attributes, 0) != 0) {
         exit_with_system_error(what);
     }
-    log_verbose("allow %s tcp/%llu", what, (unsigned long long)port);
+    log_verbose("allow %s %s/%llu", what, protocol, (unsigned long long)port);
 }
 
 /* Sets no_new_privs first, because Landlock requires it and it also closes the
