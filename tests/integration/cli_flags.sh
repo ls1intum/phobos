@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The command-line contract of phobos.sh: the renamed restriction flags and their short
 # forms, the refusal of an unknown or obsolete option, where the command's own arguments
-# begin, and the --allow-unsandboxed debug bypass. None of this needs a Landlock kernel:
+# begin, and the --no-restriction debug bypass. None of this needs a Landlock kernel:
 # the flags decide which layers assemble, and the bypass runs the command raw. A
 # pass-through stand-in for phobos-landlock-filesystem-and-networksystem lets an ordinary run reach the command.
 set -uo pipefail
@@ -28,6 +28,10 @@ BASE="$CORE_X/BaseTest.cfg"
 printf '%s\n' '#!/usr/bin/env bash' \
   'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift; exec "$@"' > "$WORK/passthrough-landlock"
 chmod +x "$WORK/passthrough-landlock"
+# The same stand-in serves as the timeout's group lock. A default timeout now applies to any
+# policy naming none, so the timeout layer is at work in these runs and demands one, and the
+# real lock is a C product this suite does not build.
+cp "$WORK/passthrough-landlock" "$WORK/passthrough-pgroup-lock"
 SPECS="$WORK/specs"
 mkdir -p "$SPECS"
 
@@ -35,13 +39,13 @@ mkdir -p "$SPECS"
 # RC. The assignment is in this shell, so RC survives, which a command-substitution call
 # would not allow.
 run_phobos() {
-  OUT="$(bash "$CORE_X/phobos.sh" --spec-parent "$1" --landlock-bin "$WORK/passthrough-landlock" "${@:2}" 2>&1)"
+  OUT="$(bash "$CORE_X/phobos.sh" --spec-parent "$1" --landlock-bin "$WORK/passthrough-landlock" --pgroup-lock-bin "$WORK/passthrough-pgroup-lock" "${@:2}" 2>&1)"
   RC=$?
 }
 
 echo "== the renamed restriction flags and their short forms run the command =="
-run_phobos "$SPECS" --no-runtime-restriction --no-networksystem-restriction \
-  --no-resources-restriction --no-filesystem-restriction --config "$BASE" -- /bin/echo flags-ok
+run_phobos "$SPECS" --no-timeoutsystem-restriction --no-networksystem-restriction \
+  --no-resourcesystem-restriction --no-filesystem-restriction --config "$BASE" -- /bin/echo flags-ok
 if [[ "$RC" -eq 0 && "$OUT" == *"flags-ok"* ]]; then
   ok "the four --no-*-restriction flags run the command"
 else
@@ -68,7 +72,10 @@ fi
 
 echo
 echo "== an unknown or obsolete option is refused before anything runs =="
-for opt in --no-timeout --no-fs --bogus -x; do
+# The three names renamed in the flag rework are in this list deliberately: the break is
+# meant to be hard, so an old caller has to fail loudly rather than run under a flag that
+# no longer means what it says.
+for opt in --no-timeout --no-fs --bogus -x --no-runtime-restriction --no-resources-restriction --allow-unsandboxed; do
   run_phobos "$SPECS" "$opt" --config "$BASE" -- /bin/echo should-not-run
   if [[ "$RC" -eq "$PHB_EXIT_USAGE" && "$OUT" == *"Unknown option: $opt"* && "$OUT" != *"should-not-run"* ]]; then
     ok "refuses '$opt' and runs nothing"
@@ -95,22 +102,38 @@ else
 fi
 
 echo
-# The layers a run has, each of which --allow-unsandboxed reports as disabled: the timeout,
+# The layers a run has, each of which --no-restriction reports as disabled: the timeout,
 # the network, the resource limits and the filesystem.
 LAYER_COUNT=4
-echo "== --allow-unsandboxed runs raw even with a base, warns, and leaves no specification =="
+echo "== --no-restriction runs raw even with a base, warns, and leaves no specification =="
 RAWSPECS="$WORK/rawspecs"
 mkdir -p "$RAWSPECS"
-run_phobos "$RAWSPECS" --allow-unsandboxed --config "$BASE" -- /bin/echo raw-ran
+run_phobos "$RAWSPECS" --no-restriction -- /bin/echo raw-ran
 disabled=$(grep -c 'DISABLED' <<<"$OUT")
 left="$(find "$RAWSPECS" -mindepth 1 -maxdepth 1 -name 'phobos-spec.*' 2>/dev/null | wc -l | tr -d ' ')"
-if [[ "$RC" -eq 0 && "$OUT" == *"raw-ran"* && "$OUT" == *"running the command RAW"* \
+if [[ "$RC" -eq 0 && "$OUT" == *"raw-ran"* && "$OUT" == *"RUNS COMPLETELY UNCONFINED"* \
       && "$disabled" -eq "$LAYER_COUNT" && "$left" -eq 0 ]]; then
-  ok "--allow-unsandboxed with a base runs raw, warns, names four disabled layers, leaves no spec"
+  ok "--no-restriction runs raw, warns, names four disabled layers, leaves no spec"
 else
-  bad "--allow-unsandboxed with a base runs raw, warns, names four disabled layers, leaves no spec" \
-      "exit 0, raw-ran, a RAW warning, four DISABLED lines, no specification left" \
+  bad "--no-restriction runs raw, warns, names four disabled layers, leaves no spec" \
+      "exit 0, raw-ran, an UNCONFINED warning, four DISABLED lines, no specification left" \
       "exit ${RC}, disabled=${disabled}, specs=${left}: $OUT"
+fi
+
+# The short form is one character from -nrr, which switches off only the resource limits, so a
+# policy beside it is read as the typo it almost certainly is and the run is refused.
+run_phobos "$RAWSPECS" -nr --config "$BASE" -- /bin/echo must-not-run
+if [[ "$RC" -eq "$PHB_EXIT_USAGE" && "$OUT" != *"must-not-run"* && "$OUT" == *"Did you mean -nrr"* ]]; then
+  ok "-nr beside --config is refused rather than run unconfined"
+else
+  bad "-nr beside --config is refused rather than run unconfined" \
+      "exit ${PHB_EXIT_USAGE}, no command output, a message naming -nrr" "exit ${RC}: $OUT"
+fi
+run_phobos "$RAWSPECS" -nr -- /bin/echo short-raw
+if [[ "$RC" -eq 0 && "$OUT" == *"short-raw"* && "$OUT" == *"RUNS COMPLETELY UNCONFINED"* ]]; then
+  ok "the short form -nr runs the command raw"
+else
+  bad "the short form -nr runs the command raw" "exit 0, short-raw, an UNCONFINED warning" "exit ${RC}: $OUT"
 fi
 
 echo
@@ -263,6 +286,130 @@ if [[ ! -s "$DBG_OUT" ]] && grep -q 'PHB-EPOLICY' "$DBG_ERR"; then
 else
   bad "the PHB-EPOLICY refusal is on stderr and stdout stays empty" \
     "empty stdout, PHB-EPOLICY on stderr" "stdout '$(cat "$DBG_OUT")', stderr '$(cat "$DBG_ERR")'"
+fi
+
+echo
+echo "== every script prints its own manual with --help and -h =="
+# The manual is the only documentation an operator has inside the image, so each script must
+# print one, end successfully and name the flags it actually parses.
+for script in phobos phobos-policysystem phobos-filesystem phobos-networksystem phobos-timeoutsystem phobos-resourcesystem; do
+  for flag in --help -h; do
+    manual="$(bash "$CORE_X/${script}.sh" "$flag" 2>/dev/null)"
+    rc=$?
+    if [[ "$rc" -eq 0 && "$manual" == *"${script}.sh"* && "$manual" == *"EXIT STATUS"* && "$manual" == *"--help, -h"* ]]; then
+      ok "${script}.sh ${flag} prints its manual and ends with 0"
+    else
+      bad "${script}.sh ${flag} prints its manual and ends with 0" "exit 0 and a manual naming the script" "exit ${rc}: $(printf '%s' "$manual" | head -1)"
+    fi
+  done
+done
+
+# A manual has to name every flag its own parser accepts, or it teaches an operator a surface
+# that is smaller than the real one.
+for pair in "phobos:--no-timeoutsystem-restriction --no-networksystem-restriction --no-resourcesystem-restriction --no-filesystem-restriction --no-restriction --config --debug --landlock-bin --timeout-bin --pgroup-lock-bin --connect-guard-bin --haproxy-bin --resolver --tail-flags-file --spec-parent" \
+            "phobos-policysystem:--spec-dir --tail-flags-file --config --debug" \
+            "phobos-filesystem:--no-landlock --landlock-bin --resources-layer --config --spec-parent --tail-flags-file --debug" \
+            "phobos-networksystem:--connect-guard-bin --haproxy-bin --resolver --landlock-bin --config --spec-parent --tail-flags-file --debug" \
+            "phobos-timeoutsystem:--timeout-bin --pgroup-lock-bin --config --spec-parent --tail-flags-file --debug" \
+            "phobos-resourcesystem:--config --spec-parent --tail-flags-file --debug"; do
+  script="${pair%%:*}"
+  manual="$(bash "$CORE_X/${script}.sh" --help 2>/dev/null)"
+  missing=""
+  for flag in ${pair#*:}; do
+    [[ "$manual" == *"$flag"* ]] || missing="${missing} ${flag}"
+  done
+  if [[ -z "$missing" ]]; then
+    ok "${script}.sh names every flag it parses in its manual"
+  else
+    bad "${script}.sh names every flag it parses in its manual" "no missing flag" "missing:${missing}"
+  fi
+done
+
+# A manual that documents a short form the parser does not accept teaches an operator a flag
+# that fails. The resource layer is the one that needs no compiled enforcer, so it is where
+# this is checked end to end.
+short_cfg="$(bash "$CORE_X/phobos-resourcesystem.sh" -c "$BASE" -- /bin/echo short-config-ok 2>&1)"
+if [[ "$short_cfg" == *"short-config-ok"* ]]; then
+  ok "a layer accepts the -c short form its manual documents"
+else
+  bad "a layer accepts the -c short form its manual documents" "short-config-ok" "$short_cfg"
+fi
+
+echo
+echo "== a run given no --config takes its most restrictive shape =="
+# Containment: the base policy grants loopback, and a run with no exercise configuration must
+# drop it, so the command reaches no network at all.
+NETBASE="$WORK/core-net"
+cp -R "$CORE" "$NETBASE"
+chmod +x "$NETBASE"/*.sh
+printf '[read]\n/usr\n[execute]\n/bin\n[connect]\nallow 127.0.0.1:*\n[bind]\nallow 8080\n' > "$NETBASE/BaseTest.cfg"
+BARESPECS="$WORK/barespecs"
+mkdir -p "$BARESPECS"
+BARE_SPEC="$WORK/bare-spec"
+mkdir -p "$BARE_SPEC"
+bash "$NETBASE/phobos-policysystem.sh" --spec-dir "$BARE_SPEC" 2>/dev/null
+if [[ ! -s "$BARE_SPEC/net.rules" && ! -s "$BARE_SPEC/bind.rules" && ! -s "$BARE_SPEC/accept.rules" ]]; then
+  ok "no --config drops every [connect], [bind] and [accept] rule the base granted"
+else
+  bad "no --config drops every [connect], [bind] and [accept] rule the base granted" "three empty rule files" \
+    "net '$(tr '\n' ' ' < "$BARE_SPEC/net.rules")', bind '$(tr '\n' ' ' < "$BARE_SPEC/bind.rules")', accept '$(tr '\n' ' ' < "$BARE_SPEC/accept.rules")'"
+fi
+
+# Usability, the other direction: the filesystem sections survive, or the command could not
+# be executed at all and there would be nothing left to contain.
+if [[ -s "$BARE_SPEC/read.paths" ]]; then
+  ok "no --config keeps the filesystem the base granted"
+else
+  bad "no --config keeps the filesystem the base granted" "a non-empty read.paths" "empty"
+fi
+
+# The same base with an exercise configuration keeps its network rules, so the drop above is
+# the absence of a configuration and not a policy that stopped working.
+WITH_SPEC="$WORK/with-spec"
+mkdir -p "$WITH_SPEC"
+printf '[read]\n/usr\n' > "$WORK/plain.cfg"
+bash "$NETBASE/phobos-policysystem.sh" --spec-dir "$WITH_SPEC" --config "$WORK/plain.cfg" 2>/dev/null
+if [[ -s "$WITH_SPEC/net.rules" && -s "$WITH_SPEC/bind.rules" ]]; then
+  ok "an exercise configuration keeps the base's [connect] and [bind] rules"
+else
+  bad "an exercise configuration keeps the base's [connect] and [bind] rules" "both rule files non-empty" \
+    "net '$(tr '\n' ' ' < "$WITH_SPEC/net.rules")', bind '$(tr '\n' ' ' < "$WITH_SPEC/bind.rules")'"
+fi
+
+echo
+echo "== a policy naming no timeout or limit falls back to the defaults =="
+# Before this, a policy without a [limits] section ran unbounded, and no shipped base carries
+# one. The fallback is a floor, never a cap: a larger value and an explicit zero both beat it.
+if [[ "$(cat "$BARE_SPEC/timeout.sec")" == "$PHB_DEFAULT_TIMEOUT_SECONDS" ]]; then
+  ok "a run no configuration bounded takes the default timeout"
+else
+  bad "a run no configuration bounded takes the default timeout" "$PHB_DEFAULT_TIMEOUT_SECONDS" "$(cat "$BARE_SPEC/timeout.sec")"
+fi
+missing_default=""
+for pair in "mem_mb=$PHB_DEFAULT_LIMIT_MEM_MB" "nproc=$PHB_DEFAULT_LIMIT_NPROC" "nofile=$PHB_DEFAULT_LIMIT_NOFILE" \
+            "fsize_mb=$PHB_DEFAULT_LIMIT_FSIZE_MB" "cpu=$PHB_DEFAULT_LIMIT_CPU"; do
+  grep -qx "$pair" "$BARE_SPEC/limits.conf" || missing_default="${missing_default} ${pair}"
+done
+if [[ -z "$missing_default" ]]; then
+  ok "every resource limit no configuration named takes its default"
+else
+  bad "every resource limit no configuration named takes its default" "every default in limits.conf" "missing:${missing_default}"
+fi
+
+# A configuration that names a larger value wins over the default, and one that names zero
+# switches that limit off and wins over it too.
+LARGER_MEM_MB=$(( PHB_DEFAULT_LIMIT_MEM_MB + 1 ))
+OVER_SPEC="$WORK/over-spec"
+mkdir -p "$OVER_SPEC"
+printf '[limits]\nmem_mb=%s\ntimeout=0\ncpu=0\n' "$LARGER_MEM_MB" > "$WORK/over.cfg"
+bash "$NETBASE/phobos-policysystem.sh" --spec-dir "$OVER_SPEC" --config "$WORK/over.cfg" 2>/dev/null
+if grep -qx "mem_mb=${LARGER_MEM_MB}" "$OVER_SPEC/limits.conf" && [[ ! -s "$OVER_SPEC/timeout.sec" ]] \
+     && ! grep -q '^cpu=' "$OVER_SPEC/limits.conf"; then
+  ok "a larger value beats the default and an explicit zero still switches a limit off"
+else
+  bad "a larger value beats the default and an explicit zero still switches a limit off" \
+    "mem_mb=${LARGER_MEM_MB}, an empty timeout.sec, no cpu line" \
+    "limits '$(tr '\n' ' ' < "$OVER_SPEC/limits.conf")', timeout '$(cat "$OVER_SPEC/timeout.sec")'"
 fi
 
 finish

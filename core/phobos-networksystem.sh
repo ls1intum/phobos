@@ -11,6 +11,90 @@ source "${HERE}/phobos-tools-networksystem/phobos-haproxy.sh"
 # layer only when the network filter is enabled, so there is no enable flag to read. Run on its
 # own with one or more --config files instead of a specification directory, it builds its own
 # specification through phobos-policysystem.sh and enforces only the network.
+
+# Prints the whole manual on the file descriptor named by $1, which is stdout when the
+# manual was asked for and stderr when the call is refused because it was wrong.
+help_text() {
+  cat >&"$1" <<PHOBOS_HELP
+phobos-networksystem.sh - the network layer: supervise what the command may connect to.
+
+It enforces the whole network boundary and then hands the rest of the chain on. That
+boundary has three parts: the connect guard, which supervises every connect() from outside
+the process; the Landlock port rules, on a network-only ruleset of its own; and, when a
+[connect] rule names a host, an egress broker that checks the TLS host name the guard cannot
+see. An [accept] rule additionally fronts a listener with an inbound filter.
+
+USAGE
+  phobos-networksystem.sh [options] <SPEC_DIR> -- <command> [args...]
+  phobos-networksystem.sh [options] --config <file> [--config <file>]... -- <command> [args...]
+  phobos-networksystem.sh --help
+
+  Two modes. Given a specification directory it enforces what is written there, which is how
+  phobos.sh calls it. Given one or more --config files instead it builds a specification of
+  its own through phobos-policysystem.sh, enforces only the network and removes that
+  specification again. Everything after -- is the command.
+
+OPTIONS
+  --connect-guard-bin <path>  The connect guard
+                              (default: "${HERE}/phobos-seccomp-networksystem"). It is
+                              refused when missing rather than skipped, so a run cannot lose
+                              connect supervision unnoticed.
+  --landlock-bin <path>       The enforcer that applies the port rules
+                              (default: "${HERE}/phobos-landlock-filesystem-and-networksystem").
+  --haproxy-bin <path>        The egress broker and the inbound filter (default: haproxy).
+  --resolver <ip[:port]>      The resolver the broker resolves an exact [connect] host name
+                              through, the default DNS port being used when none is given.
+                              An exact-name rule without a resolver is refused rather than
+                              run without host-name enforcement.
+  --config <file>, -c <file>  Standalone mode: an exercise configuration to build a
+                              specification from. May be given repeatedly.
+  --spec-parent <dir>         Standalone mode only: where that specification directory is
+                              made (default: /var/tmp).
+  --tail-flags-file <file>    Standalone mode only: the tail flags to build it with.
+  --debug, -d                 Report on stderr what this layer runs, and have the guard
+                              report verbosely too.
+  --help, -h                  Print this manual and end with status 0.
+
+WHAT IT READS FROM THE SPECIFICATION DIRECTORY
+  net.rules     the [connect] allow-list, by host, port and transport
+  bind.rules    the local ports the command may listen on
+  accept.rules  the public ports an inbound filter fronts
+
+  An empty net.rules is a policy, not a gap: it denies every outbound connection.
+
+WHEN A CONTAINER MUST HAVE A NETWORK
+  Both the egress broker and the inbound filter need one, so a [connect] rule that names a
+  host, or any [accept] rule, removes the --network none posture the rest of the sandbox
+  relies on. The layer says so loudly before it starts either. In that posture the outer
+  network isolation the operator provides, not Phobos, keeps the backend reachable only
+  through the filter.
+
+EXIT STATUS
+  0 to 255  the command's own status, passed through unchanged
+  2         phobos-networksystem.sh was called the wrong way (PHB_EXIT_USAGE)
+  11        the policy is invalid (PHB-EPOLICY)
+  15        the guard, the broker or the inbound filter could not be started (PHB-ERUNTIME)
+
+EXAMPLES
+  phobos-networksystem.sh --config exercise.cfg -- ./gradlew test
+        Enforce only the network, building the policy from one configuration.
+  phobos-networksystem.sh --resolver 10.0.0.53 --config exercise.cfg -- ./gradlew test
+        The same where a [connect] rule names an exact host, which the broker must resolve.
+PHOBOS_HELP
+}
+
+# Prints the manual on stdout and ends successfully, for an explicit --help.
+show_help() {
+  help_text 1
+  exit 0
+}
+
+# Prints the manual on stderr and ends with PHB_EXIT_USAGE, for a call that was wrong.
+usage() {
+  help_text 2
+  exit "${PHB_EXIT_USAGE}"
+}
+
 GUARD_BIN_OPT=""
 HAPROXY_BIN_OPT=""
 RESOLVER_OPT=""
@@ -19,14 +103,15 @@ CONFIGS=()
 SPEC_PARENT="/var/tmp"
 TAIL_FLAGS_FILE_OPT=""
 LAYER_FLAGS=()
-while [[ "${1:-}" == --* ]]; do
+while [[ "${1:-}" == -* ]]; do
   case "$1" in
-    --debug) enable_debug_log; LAYER_FLAGS+=( --debug ); shift ;;
+    --help|-h) show_help ;;
+    --debug|-d) enable_debug_log; LAYER_FLAGS+=( --debug ); shift ;;
     --connect-guard-bin) shift; GUARD_BIN_OPT="${1:-}"; LAYER_FLAGS+=( --connect-guard-bin "${1:-}" ); shift ;;
     --haproxy-bin) shift; HAPROXY_BIN_OPT="${1:-}"; LAYER_FLAGS+=( --haproxy-bin "${1:-}" ); shift ;;
     --resolver) shift; RESOLVER_OPT="${1:-}"; LAYER_FLAGS+=( --resolver "${1:-}" ); shift ;;
     --landlock-bin) shift; LANDLOCK_BIN_OPT="${1:-}"; LAYER_FLAGS+=( --landlock-bin "${1:-}" ); shift ;;
-    --config) shift; CONFIGS+=( "${1:-}" ); shift ;;
+    --config|-c) shift; CONFIGS+=( "${1:-}" ); shift ;;
     --spec-parent) shift; SPEC_PARENT="${1:-}"; shift ;;
     --tail-flags-file) shift; TAIL_FLAGS_FILE_OPT="${1:-}"; shift ;;
     *) break ;;
@@ -39,7 +124,7 @@ done
 # and removed by this outer shell, because the specification-directory run execs the guard and so
 # leaves no waiter of its own to remove it.
 if (( ${#CONFIGS[@]} > 0 )); then
-  [[ "${1:-}" == "--" && $# -ge 2 ]] || { echo "Usage: phobos-networksystem.sh [flags] --config <file> [--config <file>]... [--spec-parent <dir>] [--tail-flags-file <file>] -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+  [[ "${1:-}" == "--" && $# -ge 2 ]] || usage
   shift
   build_owned_spec_from_configs "$HERE" "$SPEC_PARENT" "$TAIL_FLAGS_FILE_OPT" "${CONFIGS[@]}"
   set +e
@@ -49,7 +134,7 @@ if (( ${#CONFIGS[@]} > 0 )); then
   exit "$rc"
 fi
 
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-networksystem.sh [--debug] [--connect-guard-bin <path>] [--haproxy-bin <path>] [--resolver <ip[:port]>] [--landlock-bin <path>] (<SPEC_DIR> | --config <file>...) -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+[[ $# -ge 3 && "$2" == "--" ]] || usage
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created if this layer ends before it hands over,
@@ -77,8 +162,12 @@ if (( ${#name_rules[@]} > 0 )); then want_broker=1; fi
 # over. It is refused when missing rather than skipped, so a run cannot lose connect
 # supervision unnoticed. When the egress broker is on, the guard is told to hand every allowed
 # connection to it, so the broker can enforce by the TLS host name the guard cannot see.
+#
+# A regular file is required, not merely a name the shell calls executable: this program's C
+# sources live in a directory of the same name beside the script, and a directory satisfies -x,
+# so a bare checkout would otherwise pass this check and then fail obscurely on the exec.
 GUARD_BIN="${GUARD_BIN_OPT:-${HERE}/phobos-seccomp-networksystem}"
-if [[ ! -x "$GUARD_BIN" ]]; then
+if [[ ! -f "$GUARD_BIN" || ! -x "$GUARD_BIN" ]]; then
   report "The connect guard '${GUARD_BIN}' is missing or not executable; refusing to run without connect supervision. (PHB-ERUNTIME)"
   exit "${PHB_ERUNTIME}"
 fi
@@ -148,7 +237,7 @@ add_udp_ephemeral_bind_if_needed port_args
 if (( ${#port_args[@]} > 0 )); then
   # Refused when missing rather than left to fail obscurely inside the guard's child, so a run
   # that names a TCP port cannot lose its kernel-enforced port rules without a clear message.
-  if [[ ! -x "$LANDLOCK_BIN" ]]; then
+  if [[ ! -f "$LANDLOCK_BIN" || ! -x "$LANDLOCK_BIN" ]]; then
     report "The Landlock binary '${LANDLOCK_BIN}' is missing or not executable; refusing to run without the TCP-port rules the [connect]/[bind] policy names. (PHB-ERUNTIME)"
     exit "${PHB_ERUNTIME}"
   fi

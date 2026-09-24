@@ -51,7 +51,9 @@ check "the base read path is carried through"    "/usr" "$(cat "$SPEC/read.paths
 check "the base execute path is carried through" "/usr" "$(cat "$SPEC/execute.paths")"
 check "the base write path is carried through"   "$WRITABLE" "$(cat "$SPEC/write.paths")"
 check "the base create path is carried through"  "$WRITABLE" "$(cat "$SPEC/create.paths")"
-check "the largest memory limit wins in the merge" "mem_mb=128" "$(cat "$SPEC/limits.conf")"
+# limits.conf also carries the default for every key no cfg named, so this reads the one line
+# the merge is about rather than the whole file.
+check "the largest memory limit wins in the merge" "mem_mb=128" "$(grep '^mem_mb=' "$SPEC/limits.conf")"
 check "a path no config named is absent from the spec" "" "$(grep -F /never/granted "$SPEC/read.paths")"
 
 echo

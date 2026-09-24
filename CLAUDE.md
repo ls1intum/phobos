@@ -78,15 +78,23 @@ with `PHB-EPOLICY` rather than run unconfined.
 
 ```
 # Apply the sandbox to a command
-${PHOBOS_HOME}/phobos.sh -- ./gradlew test
+${PHOBOS_HOME}/phobos.sh --config <exercise.cfg> -- ./gradlew test
+
+# Every script prints its own manual, naming each flag it takes
+${PHOBOS_HOME}/phobos.sh --help
 
 # Layer switches, for isolating which layer a failure belongs to
-${PHOBOS_HOME}/phobos.sh --no-runtime-restriction -- <command>
+${PHOBOS_HOME}/phobos.sh --no-timeoutsystem-restriction --config <exercise.cfg> -- <command>
 
 # A single layer on its own, which builds its own specification from a config through
 # phobos-policysystem.sh and enforces only that layer's concern
 ${PHOBOS_HOME}/phobos-networksystem.sh --config <exercise.cfg> -- <command>
 ```
+
+A run given no `--config` is not a grading run. Phobos then takes its most restrictive shape
+and drops every `[connect]`, `[bind]` and `[accept]` rule the base granted, loopback
+included, so a Gradle build cannot reach its own daemon. The filesystem keeps what the base
+granted, because a command whose binary and libraries were denied could not start at all.
 
 ### The linters, which are the gate
 

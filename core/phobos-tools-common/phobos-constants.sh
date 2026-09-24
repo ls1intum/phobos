@@ -36,6 +36,28 @@ PHB_DENIAL_COUNT_GRACE_SECONDS=2
 PHB_DENIAL_COUNTER_MEMORY_KB=65536
 PHB_DENIAL_COUNTER_CPU_SECONDS=60
 
+# What a run is bounded by when no cfg names a value. They are a fallback, never a cap: a cfg
+# that names a larger value wins, and a cfg that names zero switches that limit off and wins
+# over any of these. Before them, a policy without a [limits] section ran unbounded, and no
+# shipped Base*.cfg carries one.
+#
+# The wall-clock bound on a run, in seconds.
+PHB_DEFAULT_TIMEOUT_SECONDS=600
+# Applied as `ulimit -v`, which is the virtual address space rather than the resident set. A
+# 64-bit JVM reserves far more address space at startup than it ever makes resident, so a
+# value near the real memory of the machine would stop every Java run before main().
+PHB_DEFAULT_LIMIT_MEM_MB=8192
+# Applied as `ulimit -u`, which the kernel counts per real user id rather than per process
+# tree, so this bounds the grading user rather than the command alone.
+PHB_DEFAULT_LIMIT_NPROC=256
+PHB_DEFAULT_LIMIT_NOFILE=1024
+# Applied as `ulimit -f`, so it truncates any single file the command writes, build output
+# included, rather than bounding the total it writes.
+PHB_DEFAULT_LIMIT_FSIZE_MB=256
+# Applied as `ulimit -t`, which is cumulative CPU seconds across every thread, so a parallel
+# build spends it several times faster than the wall-clock timeout above.
+PHB_DEFAULT_LIMIT_CPU=600
+
 # Units. ulimit takes memory in kilobytes and file sizes in 1024-byte blocks, while a policy
 # names both in megabytes.
 PHB_MILLISECONDS_PER_SECOND=1000

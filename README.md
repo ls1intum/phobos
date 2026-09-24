@@ -116,13 +116,15 @@ Build the run-phase image (it compiles both C products and bakes in the scripts 
 docker compose -f docker/run_phase/java/docker-compose.yaml up --build
 ```
 
-Then, inside that image, wrap the exercise's build command with `phobos.sh`. The shipped base policy is the `Base*.cfg` the image put beside `phobos-policysystem.sh`, so it is applied without being named:
+Then, inside that image, wrap the exercise's build command with `phobos.sh`, giving the exercise's own configuration:
 
 ```
-${PHOBOS_HOME}/phobos.sh -- ./gradlew test
+${PHOBOS_HOME}/phobos.sh --config exercise.cfg -- ./gradlew test
 ```
 
-`PHOBOS_HOME` is `/var/tmp/opt/core` in the image, and `phobos` on `PATH` is a symbolic link to the same script. `--config` is for an exercise configuration applied **on top of** that base, never for the base itself: naming a base file there applies it a second time.
+`PHOBOS_HOME` is `/var/tmp/opt/core` in the image, and `phobos` on `PATH` is a symbolic link to the same script. The shipped base policy is the `Base*.cfg` the image put beside `phobos-policysystem.sh`, so it is applied without being named. `--config` is for an exercise configuration applied **on top of** that base, never for the base itself: naming a base file there applies it a second time.
+
+**A run given no `--config` is not a grading run.** Without one, Phobos takes its most restrictive shape: every `[connect]`, `[bind]` and `[accept]` rule the base granted is dropped, so the command reaches no network at all, loopback included. The filesystem keeps what the base granted, because a command whose own binary and libraries were denied could not start. A Gradle build talks to its daemon over loopback and therefore fails such a run. A bare `phobos.sh -- <command>` is a containment posture for showing what is denied, not a way to grade.
 
 A bare checkout cannot run this. `phobos-policysystem.sh` finds the base policy by globbing `Base*.cfg` beside itself, and a checkout keeps those files in `core/config/` rather than in `core/`, so a run from one is refused with `PHB-EPOLICY` instead of running unconfined. The image is the delivery vehicle, as it is for the three C products.
 
@@ -133,10 +135,12 @@ stdout carries the command's own output and nothing else. Every message of Phobo
 To isolate which layer a failure belongs to, each layer can be turned off on its own:
 
 ```
-${PHOBOS_HOME}/phobos.sh --no-runtime-restriction -- <command>
+${PHOBOS_HOME}/phobos.sh --no-timeoutsystem-restriction --config exercise.cfg -- <command>
 ```
 
-`--debug` makes every layer say on stderr what it does and what it runs, and has `phobos-landlock-filesystem-and-networksystem` and the connect guard report verbosely too; stdout stays the command's own. It prints the whole effective policy, so it is meant for diagnosing a run, not for grading logs. It can only be switched on by the flag, never through the environment.
+Every script here, `phobos.sh` and each layer alike, prints its own manual with `--help` (`-h`), which names every flag it takes, what it reads and which exit statuses it can end with.
+
+`--debug` (`-d`) makes every layer say on stderr what it does and what it runs, and has `phobos-landlock-filesystem-and-networksystem` and the connect guard report verbosely too; stdout stays the command's own. It prints the whole effective policy, so it is meant for diagnosing a run, not for grading logs. It can only be switched on by the flag, never through the environment.
 
 ## Configuration format
 
