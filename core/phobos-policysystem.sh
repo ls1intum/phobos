@@ -20,9 +20,92 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=phobos-tools-common/phobos-common.sh
 source "${HERE}/phobos-tools-common/phobos-common.sh"
 
-# Prints how to call the policy program and ends with PHB_EXIT_USAGE.
+# Prints the whole manual on the file descriptor named by $1, which is stdout when the
+# manual was asked for and stderr when the call is refused because it was wrong.
+help_text() {
+  cat >&"$1" <<PHOBOS_HELP
+phobos-policysystem.sh - turn the base and exercise configuration into a run's specification.
+
+This is the one place that discovers the base policy, parses every configuration file,
+merges them and writes the specification the layers read. It applies nothing itself and
+runs no command: it only writes files into a directory the caller owns.
+
+USAGE
+  phobos-policysystem.sh [--debug] --spec-dir <dir> [--tail-flags-file <file>] [--config <file>]...
+  phobos-policysystem.sh --help
+
+  There is no -- and no command. Every argument is an option.
+
+OPTIONS
+  --spec-dir <dir>            REQUIRED. The directory the specification is written into. It
+                              must already exist. The caller creates it, owns it and removes
+                              it when the run ends; this program only writes into it and
+                              keeps its own temporary files in a scratch subdirectory of it.
+  --config <file>, -c <file>  An exercise configuration, applied on top of the base. May be
+                              given repeatedly and is applied in the order given. A file
+                              that does not exist ends the run with PHB-EPOLICY.
+  --tail-flags-file <file>    The tail flags, applied last
+                              (default: "${HERE}/TailPhobos.cfg").
+  --debug, -d                 Print the effective specification on stderr, one line per file.
+  --help, -h                  Print this manual and end with status 0.
+
+WHAT IT READS
+  Every "${HERE}/Base*.cfg", in the order the shell sorts them, then each --config file. A
+  name that matches Base*.cfg but is not a readable file ends the run with PHB-EPOLICY
+  rather than being skipped, because skipping it would build a narrower policy and report it
+  as a working one. With no Base*.cfg at all there is no sandbox to build, which is likewise
+  refused.
+
+WHAT IT WRITES INTO --spec-dir
+  read.paths execute.paths write.paths create.paths delete.paths ipc.paths symlink.paths
+  refer.paths   the filesystem allow-list, one path per line per right
+  net.rules bind.rules accept.rules   the [connect], [bind] and [accept] rules
+  timeout.sec   the wall-clock bound, empty when the run is not bounded
+  limits.conf   one "key=value" line per resource limit that applies
+  tail.flags    the flags handed to the Landlock enforcer last
+
+HOW CONFIGURATIONS ARE MERGED
+  Additively, in every dimension. Everything is denied first, and the platform, language and
+  exercise configurations each only widen: filesystem paths and network rules are unioned,
+  and for the timeout and for each resource limit the largest value any configuration names
+  wins, where a zero switches that limit off and beats every finite value. An exercise
+  configuration therefore cannot narrow below the base, which is why it is trusted input
+  that the graded code must not be able to write; see SECURITY.md.
+
+WITH NO --config AT ALL
+  The run takes its most restrictive shape: every [connect], [bind] and [accept] rule the
+  base granted is dropped, so the command reaches no network, not even loopback. The
+  filesystem sections keep what the base granted, because a command whose own binary and
+  libraries were denied could not start at all.
+
+DEFAULTS WHEN NO CONFIGURATION NAMES A VALUE
+    timeout   600 s wall-clock        mem_mb    8192  (ulimit -v, address space)
+    cpu       600 s CPU time          nofile    1024
+    nproc     256                     fsize_mb  256
+  A configuration naming a larger value wins over the default, and one naming 0 switches
+  that limit off and wins over it too.
+
+EXIT STATUS
+  0   the specification was written
+  2   phobos-policysystem.sh was called the wrong way (PHB_EXIT_USAGE)
+  11  the policy is invalid, missing, or names something that cannot be enforced (PHB-EPOLICY)
+
+EXAMPLE
+  mkdir -p /var/tmp/my-spec
+  phobos-policysystem.sh --spec-dir /var/tmp/my-spec --config exercise.cfg
+  cat /var/tmp/my-spec/read.paths
+PHOBOS_HELP
+}
+
+# Prints the manual on stdout and ends successfully, for an explicit --help.
+show_help() {
+  help_text 1
+  exit 0
+}
+
+# Prints the manual on stderr and ends with PHB_EXIT_USAGE, for a call that was wrong.
 usage() {
-  echo "Usage: phobos-policysystem.sh [--debug] --spec-dir <dir> [--tail-flags-file <file>] [--config <file>]..." >&2
+  help_text 2
   exit "${PHB_EXIT_USAGE}"
 }
 
@@ -34,7 +117,8 @@ while (( "$#" )); do
     --spec-dir)        shift; [[ $# -gt 0 ]] || usage; SPEC_DIR="$1"; shift;;
     --tail-flags-file) shift; [[ $# -gt 0 ]] || usage; tail_flags_file="$1"; shift;;
     --config|-c)       shift; [[ $# -gt 0 ]] || usage; cfgs+=("$1"); shift;;
-    --debug)           enable_debug_log; shift;;
+    --debug|-d)        enable_debug_log; shift;;
+    --help|-h)         show_help;;
     *) usage;;
   esac
 done
@@ -114,15 +198,26 @@ merge_limits() {
   done
 }
 
+# What each limit falls back to when no cfg named it. A fallback, never a cap: the merge
+# above has already taken the largest value any cfg named, and a cfg naming zero has already
+# set limit_disabled, so both beat the value here.
+declare -A limit_default=( [mem_mb]="${PHB_DEFAULT_LIMIT_MEM_MB}" [nproc]="${PHB_DEFAULT_LIMIT_NPROC}" [nofile]="${PHB_DEFAULT_LIMIT_NOFILE}" [fsize_mb]="${PHB_DEFAULT_LIMIT_FSIZE_MB}" [cpu]="${PHB_DEFAULT_LIMIT_CPU}" )
+
 # Resolves the pooled state into one effective value: a disabled limit prints nothing, so it
-# is left out of the specification and not applied, and otherwise the largest value prints.
-# A limit no cfg named prints nothing either. The explicit success matters: this runs in a
-# command substitution under set -e, where a final test that answered false would end the run.
+# is left out of the specification and not applied; otherwise the largest value any cfg named
+# prints, and where no cfg named one the default above prints instead. The explicit success
+# matters: this runs in a command substitution under set -e, where a final test that answered
+# false would end the run.
 effective_limit() {
   local key="$1"
-  if (( limit_disabled[$key] == 0 && limit_max[$key] >= 0 )); then
-    printf '%s' "${limit_max[$key]}"
+  if (( limit_disabled[$key] )); then
+    return 0
   fi
+  if (( limit_max[$key] >= 0 )); then
+    printf '%s' "${limit_max[$key]}"
+    return 0
+  fi
+  printf '%s' "${limit_default[$key]}"
   return 0
 }
 
@@ -153,6 +248,18 @@ fold_cfg_into() {
   merge_limits
 }
 
+# Empties the three network rule files named by the arguments, for a run that was given no
+# exercise configuration. Such a run is a containment posture rather than a working grading
+# run, so it reaches no network at all, loopback included, although the base policy grants
+# it. The filesystem sections are deliberately left alone: a command whose own binary and
+# libraries were denied could not start, so there would be nothing to contain. Assumes every
+# configuration has already been folded into these files.
+drop_every_network_rule() {
+  : > "$1"
+  : > "$2"
+  : > "$3"
+}
+
 # Build the base policy: every Base*.cfg folded in, in sorted order.
 for b in "${base_cfgs[@]}"; do
   fold_cfg_into "$b" "$base_dir" "$base_net" "$base_bind" "$base_accept"
@@ -177,11 +284,22 @@ for c in "${cfgs[@]}"; do
   fold_cfg_into "$c" "$eff_dir" "$eff_net" "$eff_bind" "$eff_accept"
 done
 
-# Resolve the pooled timeout. A disabled one is written as none, and a finite one is
-# canonicalised so 2 and 2.000 produce the same specification. The resource limits are
-# resolved where they are written, below.
+# A run given no exercise configuration reaches no network at all. Done here, after the base
+# has been folded in and before the two refusals below, so they judge the emptied set rather
+# than rules that are about to be dropped.
+if [[ ${#cfgs[@]} -eq 0 ]]; then
+  _log "No --config was given, so this run takes its most restrictive shape: every [connect], [bind] and [accept] rule the base policy granted is dropped and the command reaches no network at all, loopback included. Anything that talks over loopback, a Gradle daemon among it, will fail. Give the exercise's own configuration with --config for a run that may use the network."
+  drop_every_network_rule "$eff_net" "$eff_bind" "$eff_accept"
+fi
+
+# Resolve the pooled timeout. A disabled one is written as none, a finite one is canonicalised
+# so 2 and 2.000 produce the same specification, and a run no cfg bounded takes the default
+# rather than running unbounded. The resource limits are resolved where they are written, below.
 timeout_eff=""
-if (( ! timeout_disabled )) && (( timeout_max_ms >= 0 )); then
+if (( ! timeout_disabled )); then
+  if (( timeout_max_ms < 0 )); then
+    timeout_max_ms="$(timeout_to_ms "$PHB_DEFAULT_TIMEOUT_SECONDS")"
+  fi
   timeout_eff="$(ms_to_timeout "$timeout_max_ms")"
 fi
 

@@ -12,6 +12,8 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../harness.sh
 source "${HERE}/../harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../../core"
+# shellcheck source=../../core/phobos-tools-common/phobos-constants.sh
+source "${CORE}/phobos-tools-common/phobos-constants.sh"
 WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
 cleanup() { rm -rf "$WORK"; }
@@ -89,7 +91,9 @@ echo "== a resource limit follows the same rule, and a zero is not applied =="
 check "the larger memory limit wins (256 MB is 262144 KB)" "262144" "$(eff_memkb '[limits]
 mem_mb=128' '[limits]
 mem_mb=256')"
-check "no memory limit leaves it unlimited" "unlimited" "$(eff_memkb '[read]
+# A memory limit no cfg names is no longer unbounded: it falls back to the default, which is
+# a floor rather than a cap, so the larger-value and explicit-zero rules above still decide.
+check "no memory limit falls back to the default" "$(( PHB_DEFAULT_LIMIT_MEM_MB * PHB_KILOBYTES_PER_MEGABYTE ))" "$(eff_memkb '[read]
 /usr' '')"
 check "a memory limit of zero is not applied" "unlimited" "$(eff_memkb '[limits]
 mem_mb=256' '[limits]

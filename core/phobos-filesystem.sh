@@ -8,6 +8,86 @@ source "${HERE}/phobos-tools-common/phobos-common.sh"
 # The filesystem layer: it applies the Landlock policy and runs the command. phobos.sh hands it a
 # specification directory; run on its own with one or more --config files instead, it builds its
 # own through phobos-policysystem.sh and enforces only the filesystem.
+
+# Prints the whole manual on the file descriptor named by $1, which is stdout when the
+# manual was asked for and stderr when the call is refused because it was wrong.
+help_text() {
+  cat >&"$1" <<PHOBOS_HELP
+phobos-filesystem.sh - the filesystem layer: apply the Landlock policy and run the command.
+
+This is the last layer of a Phobos run and the one that actually starts the command. It
+turns the specification's path sets into one Landlock rule per path, applies them, runs the
+command as its child and afterwards reports how many accesses were denied.
+
+USAGE
+  phobos-filesystem.sh [options] <SPEC_DIR> -- <command> [args...]
+  phobos-filesystem.sh [options] --config <file> [--config <file>]... -- <command> [args...]
+  phobos-filesystem.sh --help
+
+  Two modes. Given a specification directory, it enforces what is already written there,
+  which is how phobos.sh calls it. Given one or more --config files instead, it builds a
+  specification of its own through phobos-policysystem.sh, enforces only the filesystem and
+  removes that specification again when the command ends. Everything after -- is the command.
+
+OPTIONS
+  --no-landlock               Run the command without applying Landlock at all. The layer
+                              still runs the command and still counts the denials.
+  --landlock-bin <path>       The Landlock enforcer
+                              (default: "${HERE}/phobos-landlock-filesystem-and-networksystem").
+  --resources-layer <path>    Apply the specification's resource limits by starting that
+                              layer as the very last step before the enforcer, so the limits
+                              bind the command and none of the helpers around it. Without
+                              this option no rlimit is set.
+  --config <file>, -c <file>  Standalone mode: an exercise configuration to build a
+                              specification from. May be given repeatedly.
+  --spec-parent <dir>         Standalone mode only: where that specification directory is
+                              made (default: /var/tmp).
+  --tail-flags-file <file>    Standalone mode only: the tail flags to build it with.
+  --debug, -d                 Report on stderr what this layer runs, and have the enforcer
+                              report verbosely too.
+  --help, -h                  Print this manual and end with status 0.
+
+WHAT IT READS FROM THE SPECIFICATION DIRECTORY
+  read.paths execute.paths write.paths create.paths delete.paths ipc.paths symlink.paths
+  refer.paths   one Landlock rule per line, the rights being exactly the sections a path
+                appears in
+  tail.flags    flags handed to the enforcer last
+  limits.conf   only with --resources-layer
+
+  A path named in no section at all is simply not listed and stays denied by Landlock's own
+  default. Creating device nodes is never granted.
+
+WHAT IT REPORTS
+  When the command's stderr carried lines that look like a refusal, the layer prints
+  "Sandbox denials: network=N, filesystem=N. (PHB-EDENY)" after the command has ended. That
+  is a report, never a status: the command's own exit status is always passed through
+  unchanged.
+
+EXIT STATUS
+  0 to 255  the command's own status, passed through unchanged
+  2         phobos-filesystem.sh was called the wrong way (PHB_EXIT_USAGE)
+  11        the policy is invalid (PHB-EPOLICY)
+
+EXAMPLES
+  phobos-filesystem.sh --config exercise.cfg -- ./gradlew test
+        Enforce only the filesystem, building the policy from one configuration.
+  phobos-filesystem.sh -d /var/tmp/phobos-spec.ab12cd -- /bin/ls /etc
+        Enforce a specification another program has already written.
+PHOBOS_HELP
+}
+
+# Prints the manual on stdout and ends successfully, for an explicit --help.
+show_help() {
+  help_text 1
+  exit 0
+}
+
+# Prints the manual on stderr and ends with PHB_EXIT_USAGE, for a call that was wrong.
+usage() {
+  help_text 2
+  exit "${PHB_EXIT_USAGE}"
+}
+
 NO_LANDLOCK=0
 LANDLOCK_BIN_OPT=""
 RESOURCES_LAYER_OPT=""
@@ -15,13 +95,14 @@ CONFIGS=()
 SPEC_PARENT="/var/tmp"
 TAIL_FLAGS_FILE_OPT=""
 LAYER_FLAGS=()
-while [[ "${1:-}" == --* ]]; do
+while [[ "${1:-}" == -* ]]; do
   case "$1" in
-    --debug) enable_debug_log; LAYER_FLAGS+=( --debug ); shift ;;
+    --help|-h) show_help ;;
+    --debug|-d) enable_debug_log; LAYER_FLAGS+=( --debug ); shift ;;
     --no-landlock) NO_LANDLOCK=1; LAYER_FLAGS+=( --no-landlock ); shift ;;
     --landlock-bin) shift; LANDLOCK_BIN_OPT="${1:-}"; LAYER_FLAGS+=( --landlock-bin "${1:-}" ); shift ;;
     --resources-layer) shift; RESOURCES_LAYER_OPT="${1:-}"; LAYER_FLAGS+=( --resources-layer "${1:-}" ); shift ;;
-    --config) shift; CONFIGS+=( "${1:-}" ); shift ;;
+    --config|-c) shift; CONFIGS+=( "${1:-}" ); shift ;;
     --spec-parent) shift; SPEC_PARENT="${1:-}"; shift ;;
     --tail-flags-file) shift; TAIL_FLAGS_FILE_OPT="${1:-}"; shift ;;
     *) break ;;
@@ -34,7 +115,7 @@ done
 # directory through its own trap, so the outer shell's trap then finds it already gone; the outer
 # owner still matters for the layers that exec, and is kept here for one contract across them all.
 if (( ${#CONFIGS[@]} > 0 )); then
-  [[ "${1:-}" == "--" && $# -ge 2 ]] || { echo "Usage: phobos-filesystem.sh [flags] --config <file> [--config <file>]... [--spec-parent <dir>] [--tail-flags-file <file>] -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+  [[ "${1:-}" == "--" && $# -ge 2 ]] || usage
   shift
   build_owned_spec_from_configs "$HERE" "$SPEC_PARENT" "$TAIL_FLAGS_FILE_OPT" "${CONFIGS[@]}"
   set +e
@@ -44,7 +125,7 @@ if (( ${#CONFIGS[@]} > 0 )); then
   exit "$rc"
 fi
 
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-filesystem.sh [--debug] [--no-landlock] [--landlock-bin <path>] [--resources-layer <path>] (<SPEC_DIR> | --config <file>...) -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+[[ $# -ge 3 && "$2" == "--" ]] || usage
 SPEC_DIR="$1"; shift 2
 CMD=("$@")
 

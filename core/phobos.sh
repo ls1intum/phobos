@@ -5,60 +5,131 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=phobos-tools-common/phobos-common.sh
 source "${HERE}/phobos-tools-common/phobos-common.sh"
 
-# Prints how to call phobos.sh and ends with PHB_EXIT_USAGE.
-usage() {
-  cat >&2 <<USAGE
-Usage:
-  phobos.sh [layer options] [--config <file>]... -- <build_command> [args...]
-  phobos.sh [layer options] [--config <file>]... <build_command> [args...]
+# Prints the whole manual on the file descriptor named by $1, which is stdout when the
+# manual was asked for and stderr when the run is refused because the call was wrong.
+help_text() {
+  cat >&"$1" <<PHOBOS_HELP
+phobos.sh - run a command under the Phobos sandbox.
 
-Restriction options (every restriction is applied by default):
-  --no-runtime-restriction, -ntr     Disable the timeout (phobos-timeoutsystem.sh).
-  --no-networksystem-restriction, -nnr
-                                     Disable the whole network restriction: the
-                                     connect guard and the Landlock TCP-port rules.
-  --no-resources-restriction, -nrr   Disable the resource limits (rlimits /
-                                     phobos-resourcesystem.sh).
-  --no-filesystem-restriction, -nfr  Disable the filesystem sandbox (Landlock). The
-                                     TCP-port rules are unaffected: they are a separate
-                                     network-only ruleset the network layer applies.
-  --allow-unsandboxed                Debug switch: run the command raw, with every
-                                     layer disabled, EVEN when a base policy is
-                                     present. For deliberate unconfined runs only.
-  --debug                            Print on stderr what each layer does and runs, and
-                                     have phobos-landlock-filesystem-and-networksystem and the connect guard report
-                                     verbosely too. It prints the whole effective policy,
-                                     so it is for diagnosis, not for grading logs.
+Phobos confines a command to the files, the network and the resources its policy names.
+Everything the policy does not name is denied. The policy is built once, from the shipped
+base configuration plus any exercise configuration given, and is then applied by four
+layers: the timeout, the network, the resources and the filesystem.
 
-Override options (taken only from the command line, never from the environment):
-  --landlock-bin <path>              The phobos-landlock-filesystem-and-networksystem binary (default: beside this script).
-  --timeout-bin <path>              The timeout tool (default: timeout).
-  --pgroup-lock-bin <path>          The group lock the timeout applies (default: beside this script).
-  --connect-guard-bin <path>        The connect guard (default: beside this script).
-  --tail-flags-file <path>          The tail flags file (default: TailPhobos.cfg beside this script).
-  --spec-parent <path>              Where the run's specification directory is made (default: /var/tmp).
-  --resolver <ip[:port]>            The DNS resolver the egress broker resolves an exact [connect]
-                                    host name through (default DNS port when no port is given). The
-                                    broker starts automatically when a [connect] rule names a host;
-                                    an exact-name rule is then refused without a resolver.
-
-Notes:
-- Base config: any "${HERE}/Base*.cfg" (INI-like) is applied first (sorted).
-- Exercise configs: only files passed via --config/-c are applied in order. The
-  model is additive: filesystem paths and network rules are unioned with the base,
-  and for the timeout and each resource limit the largest value any cfg names wins,
-  where a zero switches that limit off and wins over every finite value.
-- Tail config: "${HERE}/TailPhobos.cfg" (flags only) is applied last.
-- If no Base*.cfg is present, Phobos refuses to run (PHB-EPOLICY) rather than run
-  the command unconfined. --allow-unsandboxed opts into a raw run on purpose.
-- An unknown option is refused rather than treated as the command. The first
-  non-option word is the command; everything after it is its arguments.
-- The run's policy is written to a directory under --spec-parent (default
-  /var/tmp), which must lie outside every write path, and removed when the run
-  ends, together with the scratch subdirectory this script keeps inside it. The layer that
-  waits for the command removes it: the timeout layer when a timeout bounds the run, since the
-  filesystem layer is then group-killed with the command, and the filesystem layer otherwise.
 USAGE
+  phobos.sh [options] [--config <file>]... -- <command> [args...]
+  phobos.sh [options] [--config <file>]... <command> [args...]
+  phobos.sh --help
+
+  Everything after -- is the command and its arguments. Without --, the first word that is
+  not an option starts the command, and every word after it belongs to the command, its own
+  options included. An option phobos.sh does not know is refused rather than run as the
+  command, so a mistyped flag fails clearly instead of ending up as argv.
+
+POLICY
+  Base configuration      every "${HERE}/Base*.cfg", applied first, in sorted order. With
+                          none present Phobos refuses to run (PHB-EPOLICY) rather than run
+                          the command unconfined.
+  Exercise configuration  only the files given with --config, applied in that order.
+  Tail configuration      "${HERE}/TailPhobos.cfg", flags only, applied last.
+
+  The model is additive: filesystem paths and network rules are unioned, and for the timeout
+  and for each resource limit the largest value any configuration names wins, where a zero
+  switches that limit off and beats every finite value.
+
+  WITHOUT --config the run takes its most restrictive shape. Every [connect], [bind] and
+  [accept] rule the base granted is dropped, so the command reaches no network at all, not
+  even loopback. The base still grants the filesystem, because a command whose own binary
+  and libraries were denied could not start at all. A bare run is therefore a containment
+  posture rather than a working grading run: anything that talks over loopback, a Gradle
+  daemon among it, fails. Give the exercise's own policy with --config for a real run.
+
+DEFAULTS WHEN NO CONFIGURATION NAMES A VALUE
+    timeout   600 s wall-clock        mem_mb    8192  (ulimit -v, address space)
+    cpu       600 s CPU time          nofile    1024
+    nproc     256                     fsize_mb  256
+  A configuration naming a larger value wins over the default, and one naming 0 switches
+  that limit off and wins over it too.
+
+RESTRICTION OPTIONS (every restriction is applied by default)
+  --no-timeoutsystem-restriction, -ntr
+        Disable the timeout (phobos-timeoutsystem.sh). The command may then run forever.
+  --no-networksystem-restriction, -nnr
+        Disable the whole network restriction: the connect guard and the Landlock port
+        rules. An [accept] rule then starts no inbound filter either and the listener's
+        port is not locked, so the listener runs fully exposed.
+  --no-resourcesystem-restriction, -nrr
+        Disable the resource limits (rlimits, phobos-resourcesystem.sh).
+  --no-filesystem-restriction, -nfr
+        Disable the filesystem sandbox (Landlock). The port rules are unaffected: they are
+        a separate network-only ruleset the network layer applies.
+  --no-restriction, -nr
+        DANGER: runs the command COMPLETELY UNCONFINED, even when a base policy is present.
+        Not one layer is applied: no Landlock, no connect guard, no timeout, no rlimits.
+        A debugging switch, never a grading mode. It is refused together with --config,
+        because giving a policy says a confined run was meant, and that refusal is what
+        catches -nr typed where -nrr was meant. Note how close the two are:
+          -nrr  disables ONLY the resource limits
+          -nr   disables THE ENTIRE SANDBOX
+
+OTHER OPTIONS
+  --config <file>, -c <file>
+        An exercise configuration, applied on top of the base. May be given repeatedly.
+  --debug, -d
+        Report on stderr what each layer does and runs, and have the enforcers report
+        verbosely too. It prints the whole effective policy, so it is meant for diagnosis
+        rather than for a grading log.
+  --help, -h
+        Print this manual and end with status 0.
+
+OVERRIDE OPTIONS (read from the command line only, never from the environment, so a value
+left in the environment cannot change which binary applies the sandbox)
+  --landlock-bin <path>       the Landlock enforcer            (default: beside this script)
+  --connect-guard-bin <path>  the connect guard                (default: beside this script)
+  --pgroup-lock-bin <path>    the timeout's group lock         (default: beside this script)
+  --timeout-bin <path>        the timeout tool                 (default: timeout)
+  --haproxy-bin <path>        the egress broker and the inbound filter  (default: haproxy)
+  --resolver <ip[:port]>      the DNS resolver the egress broker resolves an exact [connect]
+                              host name through, the default DNS port being used when none
+                              is given. The broker starts by itself whenever a [connect]
+                              rule names a host, and an exact-name rule is refused when no
+                              resolver was given.
+  --tail-flags-file <path>    the tail flags   (default: TailPhobos.cfg beside this script)
+  --spec-parent <path>        where the run's specification directory is made (default:
+                              /var/tmp). It must lie outside every write path, and it is
+                              removed together with its scratch subdirectory when the run
+                              ends. The layer that waits for the command removes it: the
+                              timeout layer when a timeout bounds the run, since the
+                              filesystem layer is then group-killed with the command, and
+                              the filesystem layer otherwise.
+
+EXIT STATUS
+  0 to 255  the command's own status, passed through unchanged
+  2         phobos.sh was called the wrong way (PHB_EXIT_USAGE)
+  11        the policy is invalid or missing (PHB-EPOLICY)
+  14        the command ran past its timeout (PHB-ETIMEOUT)
+  15        something the run needs could not be started (PHB-ERUNTIME)
+
+EXAMPLES
+  phobos.sh --config exercise.cfg -- ./gradlew test
+        Grade an exercise under its own policy.
+  phobos.sh -d --config exercise.cfg -- ./gradlew test
+        The same, reporting what each layer does and what the effective policy is.
+  phobos.sh -nnr --config exercise.cfg -- ./gradlew test
+        The same with the network restriction off, to find out which layer a failure
+        belongs to.
+PHOBOS_HELP
+}
+
+# Prints the manual on stdout and ends successfully, for an explicit --help.
+show_help() {
+  help_text 1
+  exit 0
+}
+
+# Prints the manual on stderr and ends with PHB_EXIT_USAGE, for a call that was wrong.
+usage() {
+  help_text 2
   exit "${PHB_EXIT_USAGE}"
 }
 
@@ -94,21 +165,23 @@ while (( "$#" )); do
       shift
       [[ $# -gt 0 ]] || usage
       cfgs+=("$1"); shift;;
-    --no-runtime-restriction|-ntr)
+    --no-timeoutsystem-restriction|-ntr)
       enable_timeout=0; shift;;
     --no-networksystem-restriction|-nnr)
       enable_network=0; shift;;
-    --no-resources-restriction|-nrr)
+    --no-resourcesystem-restriction|-nrr)
       enable_resources=0; shift;;
     --no-filesystem-restriction|-nfr)
       enable_filesystem=0; shift;;
-    --allow-unsandboxed)
+    --no-restriction|-nr)
       allow_unsandboxed=1; shift;;
+    --help|-h)
+      show_help;;
     --haproxy-bin)
       shift; [[ $# -gt 0 ]] || usage; opt_haproxy_bin="$1"; shift;;
     --resolver)
       shift; [[ $# -gt 0 ]] || usage; opt_resolver="$1"; shift;;
-    --debug)
+    --debug|-d)
       enable_debug=1; enable_debug_log; shift;;
     --landlock-bin)
       shift; [[ $# -gt 0 ]] || usage; opt_landlock_bin="$1"; shift;;
@@ -139,25 +212,35 @@ while (( "$#" )); do
 done
 [[ ${#cmd[@]} -eq 0 ]] && usage
 
-# --allow-unsandboxed is a debug switch: it runs the command with no layer at all, even
-# when a base policy is present. Handled here, before any specification directory is
-# created, so a raw run leaves nothing behind, and before the configs are read, since
-# there is no sandbox to build from them.
+# --no-restriction is a debug switch: it runs the command with no layer at all, even when a
+# base policy is present. Handled here, before any specification directory is created, so a
+# raw run leaves nothing behind, and before the configs are read, since there is no sandbox
+# to build from them. A --config beside it is refused rather than ignored: giving a policy
+# says a confined run was meant, which is what catches -nr typed where -nrr was meant, the
+# two being one character apart and worlds apart in what they switch off.
+if (( allow_unsandboxed )) && (( ${#cfgs[@]} )); then
+  echo "--no-restriction runs the command with no sandbox at all, so the ${#cfgs[@]} --config file(s) given could not be applied to anything. Giving a policy says a confined run was meant, so this combination is refused rather than run unconfined. Did you mean -nrr (only the resource limits) rather than -nr (the entire sandbox)?" >&2
+  usage
+fi
+
 if (( allow_unsandboxed )); then
-  _log "WARNING: --allow-unsandboxed given; running the command RAW, with NO sandbox."
-  _log "runtime restriction (timeout) DISABLED"
-  _log "network-system restriction (connect guard) DISABLED"
-  _log "resources restriction (rlimits) DISABLED"
+  _log "############################################################"
+  _log "#  WARNING: --no-restriction (-nr) given.                  #"
+  _log "#  THE COMMAND RUNS COMPLETELY UNCONFINED.                 #"
+  _log "############################################################"
   _log "filesystem restriction (Landlock) DISABLED"
-  (( ${#cfgs[@]} )) && _log "--allow-unsandboxed ignores the ${#cfgs[@]} --config file(s) given: there is no sandbox to apply them to."
+  _log "network-system restriction (connect guard and port rules) DISABLED"
+  _log "timeout-system restriction (timeout) DISABLED"
+  _log "resource-system restriction (rlimits) DISABLED"
+  _log "Nothing below this line is contained by Phobos."
   exec "${cmd[@]}"
 fi
 
 # Loudly record every restriction the caller switched off, so a run with a layer
 # disabled cannot look like an ordinary one in a log.
-(( enable_timeout ))    || _log "runtime restriction (timeout) DISABLED by --no-runtime-restriction"
+(( enable_timeout ))    || _log "timeout-system restriction (timeout) DISABLED by --no-timeoutsystem-restriction"
 (( enable_network ))    || _log "network-system restriction (connect guard) DISABLED by --no-networksystem-restriction"
-(( enable_resources ))  || _log "resources restriction (rlimits) DISABLED by --no-resources-restriction"
+(( enable_resources ))  || _log "resource-system restriction (rlimits) DISABLED by --no-resourcesystem-restriction"
 (( enable_filesystem )) || _log "filesystem restriction (Landlock) DISABLED by --no-filesystem-restriction"
 
 # Resolve the startup overrides from the flags, with the built-in defaults. The environment

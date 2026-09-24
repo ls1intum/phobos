@@ -141,6 +141,10 @@ echo "== the full phobos.sh chain applies and clears the limits =="
 printf '%s\n' '#!/usr/bin/env bash' \
   'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift; exec "$@"' > "$WORK/passthrough-landlock"
 chmod +x "$WORK/passthrough-landlock"
+# The same stand-in serves as the timeout's group lock: with a default timeout now applying to
+# any policy that names none, the timeout layer is at work in these runs and demands one, and
+# the real lock is a C product this suite does not build.
+cp "$WORK/passthrough-landlock" "$WORK/passthrough-pgroup-lock"
 # A memory limit, not a process limit: nproc is per-user and a low absolute value would
 # strangle the sandbox setup's own forks on a busy machine, which is a property of nproc
 # rather than of this layer.
@@ -148,21 +152,21 @@ printf '[read]\n/usr\n[limits]\nmem_mb=256\nnofile=256\n' > "$CORE_X/BaseTest.cf
 parent="$WORK/specs"
 mkdir -p "$parent"
 e2e="$(bash "$CORE_X/phobos.sh" --spec-parent "$parent" --landlock-bin "$WORK/passthrough-landlock" \
-  --no-networksystem-restriction -- bash -c 'ulimit -v; ulimit -n' 2>/dev/null | paste -sd, -)"
+  --pgroup-lock-bin "$WORK/passthrough-pgroup-lock" --no-networksystem-restriction -- bash -c 'ulimit -v; ulimit -n' 2>/dev/null | paste -sd, -)"
 check "a [limits] policy reaches the command through the whole chain" "262144,256" "$e2e"
 left="$(find "$parent" -mindepth 1 -maxdepth 1 -name 'phobos-spec.*' 2>/dev/null | wc -l | tr -d ' ')"
 check "the run leaves no specification behind" "0" "$left"
 
 e2e_off="$(bash "$CORE_X/phobos.sh" --spec-parent "$parent" --landlock-bin "$WORK/passthrough-landlock" \
-  --no-networksystem-restriction --no-resources-restriction -- bash -c 'ulimit -v' 2>/dev/null)"
+  --pgroup-lock-bin "$WORK/passthrough-pgroup-lock" --no-networksystem-restriction --no-resourcesystem-restriction -- bash -c 'ulimit -v' 2>/dev/null)"
 if [[ "$e2e_off" != "262144" ]]; then
-  ok "--no-resources-restriction skips the resource layer end to end"
+  ok "--no-resourcesystem-restriction skips the resource layer end to end"
 else
-  bad "--no-resources-restriction skips the resource layer end to end" "a memory limit other than 262144" "$e2e_off"
+  bad "--no-resourcesystem-restriction skips the resource layer end to end" "a memory limit other than 262144" "$e2e_off"
 fi
 
 e2e_nfr="$(bash "$CORE_X/phobos.sh" --spec-parent "$parent" --no-networksystem-restriction \
-  --no-filesystem-restriction -- bash -c 'ulimit -v; ulimit -n' 2>/dev/null | paste -sd, -)"
+  --pgroup-lock-bin "$WORK/passthrough-pgroup-lock" --no-filesystem-restriction -- bash -c 'ulimit -v; ulimit -n' 2>/dev/null | paste -sd, -)"
 check "with the filesystem restriction off the limits still reach the command" "262144,256" "$e2e_nfr"
 
 echo
@@ -182,7 +186,7 @@ chmod +x "$CORE_F"/*.sh
 printf '[read]\n/usr\n[limits]\nfsize_mb=%s\nmem_mb=256\n' "$FSIZE_MB" > "$CORE_F/BaseTest.cfg"
 {
   bash "$CORE_F/phobos.sh" --spec-parent "$parent" --landlock-bin "$WORK/passthrough-landlock" \
-    --no-networksystem-restriction --no-runtime-restriction -- \
+    --no-networksystem-restriction --no-timeoutsystem-restriction -- \
     bash -c "head -c ${OUTPUT_BYTES} /dev/zero; head -c ${OUTPUT_BYTES} /dev/zero >&2" \
     2>&1 1>&3 3>&- | tr -cd '\0' | wc -c > "$WORK/stderr-bytes"
   printf '%s' "${PIPESTATUS[0]}" > "$WORK/fsize-rc"
@@ -193,11 +197,11 @@ check "output beyond fsize_mb on stderr arrives whole" "$OUTPUT_BYTES" "$(tr -d 
 check "a run with output beyond fsize_mb exits normally" "0" "$fsize_rc"
 
 command_fsize="$(bash "$CORE_F/phobos.sh" --spec-parent "$parent" --landlock-bin "$WORK/passthrough-landlock" \
-  --no-networksystem-restriction --no-runtime-restriction -- bash -c 'ulimit -f' 2>/dev/null)"
+  --pgroup-lock-bin "$WORK/passthrough-pgroup-lock" --no-networksystem-restriction --no-timeoutsystem-restriction -- bash -c 'ulimit -f' 2>/dev/null)"
 check "the command itself still runs under the file-size limit" "$FSIZE_BLOCKS" "$command_fsize"
 
 bash "$CORE_F/phobos.sh" --spec-parent "$parent" --landlock-bin "$WORK/passthrough-landlock" \
-  --no-networksystem-restriction --no-runtime-restriction -- \
+  --pgroup-lock-bin "$WORK/passthrough-pgroup-lock" --no-networksystem-restriction --no-timeoutsystem-restriction -- \
   bash -c "head -c ${LONG_LINE_BYTES} /dev/zero | tr '\\0' q >&2" > /dev/null 2> >(cat > /dev/null)
 long_line_rc=$?
 if [[ "$long_line_rc" -ne "$SIGPIPE_EXIT" && "$long_line_rc" -eq 0 ]]; then
