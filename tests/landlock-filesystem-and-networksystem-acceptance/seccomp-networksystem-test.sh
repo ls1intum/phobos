@@ -225,7 +225,11 @@ start_listener() {
   for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do grep -q LISTENING "$WORK/listener.out" 2>/dev/null && break; sleep "$LISTENER_WAIT_SECONDS"; done
 }
 
+# Two allow-lists, because the guard judges the two transports apart: a row with no third word
+# is tcp, and a datagram is admitted only by a row that says udp. The stream assertions read the
+# first file and the datagram ones the second, so each names the destination it is about.
 printf '127.0.0.1 %s\n' "$PORT" > "$WORK/rules"
+printf '127.0.0.1 %s udp\n' "$PORT" > "$WORK/rules-udp"
 : > "$WORK/empty"
 
 lp=$(start_listener "$PORT")
@@ -266,20 +270,20 @@ else
   bad "an ordinary send on a connected socket still works" "rc=$rc out=$out"
 fi
 
-out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" udp 127.0.0.1 "$PORT" 2>&1)"
+out="$("$GUARD" --rules "$WORK/rules-udp" -- "$WORK/probe" udp 127.0.0.1 "$PORT" 2>&1)"
 rc=$?
 if [[ $rc -eq 0 && "$out" == *UDP-OK* ]]; then
-  ok "a datagram to a listed destination is allowed"
+  ok "a datagram to a destination the udp list names is allowed"
 else
-  bad "a datagram to a listed destination is allowed" "rc=$rc out=$out"
+  bad "a datagram to a destination the udp list names is allowed" "rc=$rc out=$out"
 fi
 
-out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" udp 127.0.0.1 "$OTHER" 2>&1)"
+out="$("$GUARD" --rules "$WORK/rules-udp" -- "$WORK/probe" udp 127.0.0.1 "$OTHER" 2>&1)"
 rc=$?
 if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
-  ok "a datagram to a destination the list does not name is refused"
+  ok "a datagram to a destination the udp list does not name is refused"
 else
-  bad "a datagram to a destination the list does not name is refused" "rc=$rc out=$out"
+  bad "a datagram to a destination the udp list does not name is refused" "rc=$rc out=$out"
 fi
 
 out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" tfo 127.0.0.1 "$PORT" 2>&1)"
@@ -328,7 +332,7 @@ fi
 
 # No listener runs on $PORT here, so a datagram socket's connect (which only sets a default
 # peer) succeeds while the old TCP-injection would fail with a refused connection.
-out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" cudp 127.0.0.1 "$PORT" 2>&1)"
+out="$("$GUARD" --rules "$WORK/rules-udp" -- "$WORK/probe" cudp 127.0.0.1 "$PORT" 2>&1)"
 rc=$?
 if [[ $rc -eq 0 && "$out" == *CUDP-OK* ]]; then
   ok "a connected datagram socket stays a datagram, not turned into TCP"
@@ -336,12 +340,36 @@ else
   bad "a connected datagram socket stays a datagram, not turned into TCP" "rc=$rc out=$out"
 fi
 
-out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" cudp 127.0.0.1 "$OTHER" 2>&1)"
+out="$("$GUARD" --rules "$WORK/rules-udp" -- "$WORK/probe" cudp 127.0.0.1 "$OTHER" 2>&1)"
 rc=$?
 if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "a connected datagram socket to an unlisted destination is refused at connect"
 else
   bad "a connected datagram socket to an unlisted destination is refused at connect" "rc=$rc out=$out"
+fi
+
+# The two directions of what #121 bought. Every other datagram assertion here passes on a guard
+# that ignored the transport altogether, because each names a destination the list carries;
+# these two are the only ones that fail on such a guard.
+out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" udp 127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
+  ok "a tcp rule does not admit a datagram to the same host and port"
+else
+  bad "a tcp rule does not admit a datagram to the same host and port" "rc=$rc out=$out"
+fi
+
+# A listener does run here, so an unguarded connect to this port would succeed. The refusal is
+# therefore the guard's and not a connection nobody answered.
+lp=$(start_listener "$PORT")
+out="$("$GUARD" --rules "$WORK/rules-udp" -- "$WORK/probe" inet 127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+kill "$lp" 2>/dev/null
+wait "$lp" 2>/dev/null
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
+  ok "a udp rule does not admit a stream connect to the same host and port"
+else
+  bad "a udp rule does not admit a stream connect to the same host and port" "rc=$rc out=$out"
 fi
 
 printf '127.0.0.0/8 %s\n' "$PORT" > "$WORK/rules"

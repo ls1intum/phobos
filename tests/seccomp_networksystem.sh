@@ -443,7 +443,13 @@ fi
 
 echo
 echo "== the guard covers the other egress paths, not connect alone =="
+# Two allow-lists, because the guard judges the two transports apart: a row with no third word
+# is tcp, and a datagram is admitted only by a row that says udp. The stream assertions below
+# read the first file and the datagram ones the second, so each names the destination it is
+# about. One file naming both would let every assertion here pass whether or not the transport
+# were checked, which is what the section further down exists to catch.
 printf '127.0.0.1 %s\n' "$PORT" > "$WORK/rules"
+printf '127.0.0.1 %s udp\n' "$PORT" > "$WORK/rules-udp"
 
 lp=$(start_listener "$PORT")
 out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" csend 127.0.0.1 "$PORT" 2>&1)"
@@ -456,39 +462,39 @@ else
   bad "an ordinary send on a connected socket still works" "rc=$rc out=$out"
 fi
 
-out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" udp 127.0.0.1 "$PORT" 2>&1)"
+out="$("$WORK/guard" --rules "$WORK/rules-udp" -- "$WORK/probe" udp 127.0.0.1 "$PORT" 2>&1)"
 rc=$?
 if [[ $rc -eq 0 && "$out" == *UDP-OK* ]]; then
-  ok "a datagram to a listed destination is allowed"
+  ok "a datagram to a destination the udp list names is allowed"
 else
-  bad "a datagram to a listed destination is allowed" "rc=$rc out=$out"
+  bad "a datagram to a destination the udp list names is allowed" "rc=$rc out=$out"
 fi
 
-out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" udp 127.0.0.1 "$OTHER" 2>&1)"
+out="$("$WORK/guard" --rules "$WORK/rules-udp" -- "$WORK/probe" udp 127.0.0.1 "$OTHER" 2>&1)"
 rc=$?
 if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
-  ok "a datagram to a destination the list does not name is refused"
+  ok "a datagram to a destination the udp list does not name is refused"
 else
-  bad "a datagram to a destination the list does not name is refused" "rc=$rc out=$out"
+  bad "a datagram to a destination the udp list does not name is refused" "rc=$rc out=$out"
 fi
 
-out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" msg 127.0.0.1 "$PORT" 2>&1)"
+out="$("$WORK/guard" --rules "$WORK/rules-udp" -- "$WORK/probe" msg 127.0.0.1 "$PORT" 2>&1)"
 rc=$?
 if [[ $rc -eq 0 && "$out" == *MSG-OK* ]]; then
-  ok "a sendmsg datagram to a listed destination is allowed, so the handoff survived trapping sendmsg"
+  ok "a sendmsg datagram to a destination the udp list names is allowed, so the handoff survived trapping sendmsg"
 else
-  bad "a sendmsg datagram to a listed destination is allowed" "rc=$rc out=$out"
+  bad "a sendmsg datagram to a destination the udp list names is allowed" "rc=$rc out=$out"
 fi
 
-out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" msg 127.0.0.1 "$OTHER" 2>&1)"
+out="$("$WORK/guard" --rules "$WORK/rules-udp" -- "$WORK/probe" msg 127.0.0.1 "$OTHER" 2>&1)"
 rc=$?
 if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
-  ok "a sendmsg datagram to a destination the list does not name is refused"
+  ok "a sendmsg datagram to a destination the udp list does not name is refused"
 else
-  bad "a sendmsg datagram to a destination the list does not name is refused" "rc=$rc out=$out"
+  bad "a sendmsg datagram to a destination the udp list does not name is refused" "rc=$rc out=$out"
 fi
 
-out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" msg2 127.0.0.1 "$PORT" 2>&1)"
+out="$("$WORK/guard" --rules "$WORK/rules-udp" -- "$WORK/probe" msg2 127.0.0.1 "$PORT" 2>&1)"
 rc=$?
 if [[ $rc -eq 0 && "$out" == *MSG2-OK* ]]; then
   ok "a sendmsg on a low reused descriptor is still allowed, so the lockout does not over-deny"
@@ -507,7 +513,7 @@ fi
 # No listener runs on $PORT here. A datagram socket's connect only sets the default peer, so it
 # succeeds; the old behaviour turned it into a TCP socket, whose connect to a port with no
 # listener would fail with a refused connection. So CUDP-OK proves the socket stayed a datagram.
-out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" cudp 127.0.0.1 "$PORT" 2>&1)"
+out="$("$WORK/guard" --rules "$WORK/rules-udp" -- "$WORK/probe" cudp 127.0.0.1 "$PORT" 2>&1)"
 rc=$?
 if [[ $rc -eq 0 && "$out" == *CUDP-OK* ]]; then
   ok "a connected datagram socket stays a datagram, not turned into TCP"
@@ -515,7 +521,7 @@ else
   bad "a connected datagram socket stays a datagram, not turned into TCP" "rc=$rc out=$out"
 fi
 
-out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" cudp 127.0.0.1 "$OTHER" 2>&1)"
+out="$("$WORK/guard" --rules "$WORK/rules-udp" -- "$WORK/probe" cudp 127.0.0.1 "$OTHER" 2>&1)"
 rc=$?
 if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "a connected datagram socket to an unlisted destination is refused at connect"
@@ -523,6 +529,39 @@ else
   bad "a connected datagram socket to an unlisted destination is refused at connect" "rc=$rc out=$out"
 fi
 
+echo
+echo "== a rule for one transport does not admit the other =="
+# The two directions of what #121 bought. Every other datagram assertion in this suite passes
+# on a guard that ignored the transport altogether, because each names a destination the list
+# carries; these two are the only ones that fail on such a guard.
+printf '127.0.0.1 %s\n' "$PORT" > "$WORK/rules-tcp-only"
+printf '127.0.0.1 %s udp\n' "$PORT" > "$WORK/rules-udp-only"
+
+# No listener is needed: a datagram to a port nothing listens on is sent regardless, so a
+# refusal here is the guard's rather than the absence of a peer.
+out="$("$WORK/guard" --rules "$WORK/rules-tcp-only" -- "$WORK/probe" udp 127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
+  ok "a tcp rule does not admit a datagram to the same host and port"
+else
+  bad "a tcp rule does not admit a datagram to the same host and port" "rc=$rc out=$out"
+fi
+
+# A listener does run here, so an unguarded connect to this port would succeed. The refusal is
+# therefore the guard's and not a connection nobody answered.
+lp=$(start_listener "$PORT")
+out="$("$WORK/guard" --rules "$WORK/rules-udp-only" -- "$WORK/probe" inet 127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+kill "$lp" 2>/dev/null
+wait "$lp" 2>/dev/null
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
+  ok "a udp rule does not admit a stream connect to the same host and port"
+else
+  bad "a udp rule does not admit a stream connect to the same host and port" "rc=$rc out=$out"
+fi
+
+echo
+echo "== the guard refuses what the environment would otherwise allow =="
 # Prove the guard's own refusal, not the environment's. Each of these calls can also fail
 # because the host lacks the capability or setting (a raw socket without CAP_NET_RAW, say). So
 # run the probe once WITHOUT the guard: if the environment already refuses it, skip rather than
