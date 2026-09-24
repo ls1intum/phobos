@@ -35,13 +35,13 @@
  * here under another name. The modules beside it are linked in the normal way,
  * so their functions are reached through their headers rather than an include. */
 #define main sut_main
-#include "../../core/phobos-landlock-filesystem-and-networksystem.c"
+#include "../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem.c"
 #undef main
 
-#include "../../core/phobos-landlock-filesystem-and-networksystem-diagnostics.h"
-#include "../../core/phobos-landlock-filesystem-and-networksystem-options.h"
-#include "../../core/phobos-landlock-filesystem-and-networksystem-path-rule.h"
-#include "../../core/phobos-landlock-filesystem-and-networksystem-ruleset.h"
+#include "../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-diagnostics.h"
+#include "../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-options.h"
+#include "../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-path-rule.h"
+#include "../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-ruleset.h"
 
 #include <sys/wait.h>
 

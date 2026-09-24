@@ -42,16 +42,20 @@ CORE_X="$WORK/core-x"
 cp -R "$CORE" "$CORE_X"
 chmod +x "$CORE_X"/*.sh
 rm -f "$CORE_X"/Base*.cfg
-for c in landlock connect-guard pgroup-lock; do
+for c in landlock-filesystem-and-networksystem seccomp-networksystem seccomp-timeoutsystem; do
   case "$c" in
-    landlock) src=("$CORE_X"/phobos-landlock-filesystem-and-networksystem*.c) ;;
-    connect-guard) src=("$CORE_X"/phobos-seccomp-networksystem*.c) ;;
-    pgroup-lock) src=("$CORE_X"/phobos-seccomp-timeoutsystem.c) ;;
+    landlock-filesystem-and-networksystem) src=("$CORE_X"/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem*.c) ;;
+    seccomp-networksystem) src=("$CORE_X"/phobos-seccomp-networksystem/phobos-seccomp-networksystem*.c) ;;
+    seccomp-timeoutsystem) src=("$CORE_X"/phobos-seccomp-timeoutsystem/phobos-seccomp-timeoutsystem.c) ;;
   esac
-  if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$CORE_X/phobos-$c" "${src[@]}" 2>"$WORK/cc.log"; then
+  if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/phobos-$c" "${src[@]}" 2>"$WORK/cc.log"; then
     skip "standalone layers" "phobos-$c did not build: $(cat "$WORK/cc.log")"
     finish
   fi
+  # The compiled binary takes the place of its source folder, so $CORE_X holds the enforcers flat
+  # beside the scripts, as the run-phase image ships them, and the runs below find them by name.
+  rm -rf "$CORE_X/phobos-$c"
+  mv "$WORK/phobos-$c" "$CORE_X/phobos-$c"
 done
 printf '[read]\n/usr\n/bin\n/lib\n/etc\n[execute]\n/usr\n/bin\n/lib\n/etc\n[connect]\nallow 127.0.0.1:*\n' \
   > "$CORE_X/BaseTest.cfg"
