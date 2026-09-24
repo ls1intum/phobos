@@ -1,7 +1,7 @@
 # shellcheck's own configuration, read from the root of the repository.
 #
 # Every `source` directive here is written relative to the file that carries it, for
-# example `# shellcheck source=../core/phobos-constants.sh` in a suite under tests/.
+# example `# shellcheck source=../core/phobos-tools-common/phobos-constants.sh` in a suite under tests/.
 # Without this line shellcheck resolves such a path against its working directory, which
 # in CI is the repository root, finds nothing, and falls back to analysing each file in
 # isolation. It then knows none of the PHB_* constants the sourced files define, so a

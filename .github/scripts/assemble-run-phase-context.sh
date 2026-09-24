@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Assembles the build context the run-phase image expects.
 #
-# The Dockerfile copies flat names: *.sh, phobos-landlock-filesystem-and-networksystem*.c and .h, phobos-seccomp-networksystem*.c and .h,
-# phobos-seccomp-timeoutsystem.c, and config/*.cfg. Those files live in two directories of
-# this repository, so the context has to be put together before docker build can
-# see it, and no compose file or plain `docker build .` can express that.
+# The Dockerfile copies the layer scripts flat (*.sh), the phobos-tools-* helper folders whole,
+# the enforcer sources flattened (phobos-landlock-filesystem-and-networksystem*.c and .h,
+# phobos-seccomp-networksystem*.c and .h, phobos-seccomp-timeoutsystem.c) for its build stage, and
+# config/*.cfg. Those files live across several directories of this repository, so the context has
+# to be put together before docker build can see it, and no compose file or plain `docker build .`
+# can express that.
 #
 # It exists so that the recipe is written once. The acceptance README used to
 # carry its own copy, and the two drifted apart the moment the wrapper was split
@@ -40,6 +42,11 @@ fi
 
 mkdir -p "${DESTINATION}/config"
 cp "${REPOSITORY}"/core/*.sh "${DESTINATION}/"
+# The per-subsystem and shared helpers keep their folders, which the layer scripts source by
+# name, so the context mirrors the repository layout. config_doc.txt is documentation, not
+# runtime, so it is dropped rather than shipped in the image.
+cp -R "${REPOSITORY}"/core/phobos-tools-* "${DESTINATION}/"
+rm -f "${DESTINATION}/phobos-tools-policysystem/config_doc.txt"
 cp "${REPOSITORY}"/core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem*.c "${DESTINATION}/"
 cp "${REPOSITORY}"/core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem*.h "${DESTINATION}/"
 cp "${REPOSITORY}"/core/phobos-seccomp-networksystem/phobos-seccomp-networksystem*.c "${DESTINATION}/"

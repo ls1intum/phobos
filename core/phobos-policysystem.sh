@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 #
-# phobos-policy.sh -- turn the base and exercise configuration into a run's specification.
+# phobos-policysystem.sh -- turn the base and exercise configuration into a run's specification.
 #
 # The one place that discovers the base policy, parses every cfg, merges them and writes the
 # specification files (read/execute/write/create/delete.paths, net.rules, bind.rules, timeout.sec, tail.flags,
@@ -11,18 +11,18 @@
 # each layer's own --config option does through this program, so no layer ever parses a config.
 #
 # Usage:
-#   phobos-policy.sh [--debug] --spec-dir <dir> [--tail-flags-file <file>] [--config <file>]...
+#   phobos-policysystem.sh [--debug] --spec-dir <dir> [--tail-flags-file <file>] [--config <file>]...
 #
 # The caller creates and owns --spec-dir and removes it when the run ends. This script only
 # writes into it, using a scratch subdirectory of it for its own temporary files.
 set -euo pipefail
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=phobos-common.sh
-source "${HERE}/phobos-common.sh"
+# shellcheck source=phobos-tools-common/phobos-common.sh
+source "${HERE}/phobos-tools-common/phobos-common.sh"
 
 # Prints how to call the policy program and ends with PHB_EXIT_USAGE.
 usage() {
-  echo "Usage: phobos-policy.sh [--debug] --spec-dir <dir> [--tail-flags-file <file>] [--config <file>]..." >&2
+  echo "Usage: phobos-policysystem.sh [--debug] --spec-dir <dir> [--tail-flags-file <file>] [--config <file>]..." >&2
   exit "${PHB_EXIT_USAGE}"
 }
 
@@ -38,7 +38,7 @@ while (( "$#" )); do
     *) usage;;
   esac
 done
-[[ -n "$SPEC_DIR" && -d "$SPEC_DIR" ]] || { echo "phobos-policy.sh: --spec-dir must name an existing directory" >&2; exit "${PHB_EXIT_USAGE}"; }
+[[ -n "$SPEC_DIR" && -d "$SPEC_DIR" ]] || { echo "phobos-policysystem.sh: --spec-dir must name an existing directory" >&2; exit "${PHB_EXIT_USAGE}"; }
 
 # Scratch for the temporary files parse_cfg_policy and the merge make: a subdirectory of the
 # specification directory, so they are removed with it rather than left in /tmp. Passed to
@@ -73,7 +73,7 @@ for candidate in "${base_cfgs[@]}"; do
   exit "${PHB_EPOLICY}"
 done
 if [[ ${#base_cfgs[@]} -eq 0 ]]; then
-  report "Policy invalid: no Base*.cfg beside phobos-policy.sh, so there is no sandbox to apply; refusing to build a policy. (PHB-EPOLICY)"
+  report "Policy invalid: no Base*.cfg beside phobos-policysystem.sh, so there is no sandbox to apply; refusing to build a policy. (PHB-EPOLICY)"
   exit "${PHB_EPOLICY}"
 fi
 
@@ -210,7 +210,7 @@ cat "${SPEC_DIR}/write.paths" "${SPEC_DIR}/create.paths" "${SPEC_DIR}/delete.pat
 refuse_spec_dir_under_write_path "$SPEC_DIR" "$writable_union"
 
 # The resource limits go into the specification, one "key=value" per line for each limit a
-# [limits] section named. phobos-resources.sh reads them and sets them with rlimits right
+# [limits] section named. phobos-resourcesystem.sh reads them and sets them with rlimits right
 # before phobos-landlock-filesystem-and-networksystem, so phobos-landlock-filesystem-and-networksystem and the command inherit them, rather than this
 # shell setting them and the whole layer chain, with its helpers, running under them.
 : > "${SPEC_DIR}/limits.conf"

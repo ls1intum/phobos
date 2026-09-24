@@ -11,8 +11,8 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=harness.sh
 source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
-# shellcheck source=../core/phobos-constants.sh
-source "${CORE}/phobos-constants.sh"
+# shellcheck source=../core/phobos-tools-common/phobos-constants.sh
+source "${CORE}/phobos-tools-common/phobos-constants.sh"
 WORK="$(mktemp -d)"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -24,8 +24,8 @@ run_rules() {
   printf '%s\n' "$body" > "$WORK/net.rules"
   local out
   out="$(
-    # shellcheck source=../core/phobos-common.sh
-    source "${CORE}/phobos-common.sh"
+    # shellcheck source=../core/phobos-tools-common/phobos-common.sh
+    source "${CORE}/phobos-tools-common/phobos-common.sh"
     args=()
     build_network_args args "$WORK/net.rules" 2>"$WORK/log"
     printf '%s' "${args[*]}"
@@ -90,8 +90,8 @@ run_bind() {
   printf '%s\n' "$body" > "$WORK/bind.rules"
   local out
   out="$(
-    # shellcheck source=../core/phobos-common.sh
-    source "${CORE}/phobos-common.sh"
+    # shellcheck source=../core/phobos-tools-common/phobos-common.sh
+    source "${CORE}/phobos-tools-common/phobos-common.sh"
     args=()
     build_bind_args args "$WORK/bind.rules" 2>"$WORK/blog"
     printf '%s' "${args[*]}"
@@ -136,8 +136,8 @@ r="$(run_bind "* 8080
 run_ephemeral() {
   local body=$1
   (
-    # shellcheck source=../core/phobos-common.sh
-    source "${CORE}/phobos-common.sh"
+    # shellcheck source=../core/phobos-tools-common/phobos-common.sh
+    source "${CORE}/phobos-tools-common/phobos-common.sh"
     # Word-splitting the body into an argument array is intended here.
     # shellcheck disable=SC2206
     args=( $body )
@@ -168,7 +168,7 @@ printf '#!/bin/sh\nexit 0\n' > "$stub_guard"
 chmod +x "$stub_guard"
 name_spec="$(mktemp -d "$WORK/name-spec.XXXXXX")"
 printf 'example.test 443\n' > "$name_spec/net.rules"
-name_out="$(bash "$CORE/phobos-network.sh" --connect-guard-bin "$stub_guard" "$name_spec" -- true 2>&1)"
+name_out="$(bash "$CORE/phobos-networksystem.sh" --connect-guard-bin "$stub_guard" "$name_spec" -- true 2>&1)"
 name_rc=$?
 if [[ "$name_rc" -eq "$PHB_ERUNTIME" && "$name_out" == *"resolver"* && "$name_out" != *"--egress-broker"* ]]; then
   ok "an exact [connect] name without a resolver is refused fail-closed (PHB-ERUNTIME)"
@@ -181,7 +181,7 @@ fi
 # fail-closed, but the NOTICE that precedes the start proves the suffix rule entered the broker path.
 suffix_spec="$(mktemp -d "$WORK/suffix-spec.XXXXXX")"
 printf '*.example.test 443\n' > "$suffix_spec/net.rules"
-suffix_out="$(bash "$CORE/phobos-network.sh" --connect-guard-bin "$stub_guard" --haproxy-bin /nonexistent-haproxy "$suffix_spec" -- true 2>&1)"
+suffix_out="$(bash "$CORE/phobos-networksystem.sh" --connect-guard-bin "$stub_guard" --haproxy-bin /nonexistent-haproxy "$suffix_spec" -- true 2>&1)"
 suffix_rc=$?
 if [[ "$suffix_rc" -eq "$PHB_ERUNTIME" && "$suffix_out" == *"egress broker is started"* ]]; then
   ok "a [connect] suffix rule auto-starts the broker and needs no resolver"
@@ -191,7 +191,7 @@ fi
 
 addr_spec="$(mktemp -d "$WORK/addr-spec.XXXXXX")"
 printf '127.0.0.1 443\n' > "$addr_spec/net.rules"
-addr_out="$(bash "$CORE/phobos-network.sh" --connect-guard-bin /nonexistent-guard "$addr_spec" -- true 2>&1)"
+addr_out="$(bash "$CORE/phobos-networksystem.sh" --connect-guard-bin /nonexistent-guard "$addr_spec" -- true 2>&1)"
 addr_rc=$?
 if [[ "$addr_rc" -eq "$PHB_ERUNTIME" && "$addr_out" == *"connect guard"* && "$addr_out" != *"--egress-broker"* ]]; then
   ok "an address [connect] rule needs no broker and is left to the guard"

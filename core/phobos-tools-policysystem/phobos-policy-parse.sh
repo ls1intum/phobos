@@ -459,7 +459,7 @@ write_spec() {
 }
 # Unions the per-right file sets of in_dir into out_dir, canonicalising and de-duplicating
 # each right's paths. This is the one additive merge: it builds the base policy from several
-# base cfgs, and phobos-policy.sh then folds each exercise cfg in the same way, so the policy
+# base cfgs, and phobos-policysystem.sh then folds each exercise cfg in the same way, so the policy
 # only ever widens from a deny-all baseline.
 fs_union_dir() {
   local out_dir="$1"

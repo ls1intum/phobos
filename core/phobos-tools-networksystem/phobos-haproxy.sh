@@ -2,7 +2,7 @@
 # shellcheck shell=bash
 # phobos-haproxy.sh -- turn the [connect] allow-list into an haproxy.cfg the egress broker enforces.
 #
-# Sourced by phobos-network.sh, which starts the broker from a generated config, and by the tests.
+# Sourced by phobos-networksystem.sh, which starts the broker from a generated config, and by the tests.
 # It sets no shell option and sources nothing, so sourcing it more than once keeps doing what it
 # did before.
 #
@@ -13,7 +13,7 @@
 # resolver, and connects to that address, so a command that presents an allowed name but aims at
 # some other address is still sent only to where the name resolves. A rule that names an address,
 # a name suffix, or "*" is enforced by the destination the header carried, unchanged. net.rules
-# holds one "host port" per line, as phobos-policy.sh wrote it. The port was already enforced by
+# holds one "host port" per line, as phobos-policysystem.sh wrote it. The port was already enforced by
 # the guard before the redirect, so the broker decides the host alone.
 
 # Classifies one [connect] host into the four kinds the broker treats apart: "any" for "*",
@@ -41,7 +41,7 @@ classify_connect_host() {
 # Prints, one per line and sorted, the exact host names a net.rules file names in [connect]: the
 # hosts classify_connect_host calls "exact". These are the names the broker resolves itself and the
 # ones the network layer maps to a placeholder in /etc/hosts. Assumes the file is the "host port"
-# form phobos-policy.sh writes; a missing file names nothing.
+# form phobos-policysystem.sh writes; a missing file names nothing.
 exact_connect_names() {
   local rules="$1"
   local host
@@ -59,7 +59,7 @@ exact_connect_names() {
 # host unless the broker checks the TLS host name; the network layer uses this to refuse a name rule
 # when the broker is off, rather than run with a rule the guard would widen to any address on the
 # port. An address, "localhost" or "*" rule stays guard-enforced and is not listed. Assumes the file
-# is the "host port" form phobos-policy.sh writes; a missing file names nothing.
+# is the "host port" form phobos-policysystem.sh writes; a missing file names nothing.
 name_connect_rules() {
   local rules="$1"
   local host

@@ -18,7 +18,7 @@ source "${HERE}/../harness.sh" || { echo "cannot source the harness beside ${HER
 CORE=/var/tmp/opt/core
 # The image carries the constants beside the scripts under test.
 # shellcheck source=/dev/null
-source "${CORE}/phobos-constants.sh"
+source "${CORE}/phobos-tools-common/phobos-constants.sh"
 # How many lines of a failing command's output a failure shows, the uid of the unprivileged
 # user the non-root checks run as, the loopback ports of the network checks (the policy allows
 # the first and not the second), and how often and how far apart the server's start is awaited.

@@ -39,7 +39,7 @@ intention.
 
 The policy itself is additive by design, and that is not a hole to close. Everything is denied
 first, and the platform, language and exercise configurations each only widen the allow-list;
-`phobos-policy.sh` folds every config, base and exercise alike, through `fs_union_dir`, so an
+`phobos-policysystem.sh` folds every config, base and exercise alike, through `fs_union_dir`, so an
 exercise config may add a path or a right the base did not grant. This rests on the exercise
 configuration being trusted input that the graded code cannot write, which SECURITY.md states
 as an integration requirement. Do not "fix" the union back to a narrow-only exercise merge:
@@ -271,9 +271,10 @@ it is for, in the comment syntax the file has.
 **Rule:**
 
 - One field, variable or function declaration per line, in every language.
-- Every function in `core/*.sh` carries a comment saying what it does and what it assumes
-  about the environment it runs in. A sandbox wrapper that assumes a mount, a capability or
-  an environment variable and does not say so is a trap for the next reader.
+- Every function in the core shell scripts (`core/*.sh` and `core/phobos-tools-*/*.sh`)
+  carries a comment saying what it does and what it assumes about the environment it runs in.
+  A sandbox wrapper that assumes a mount, a capability or an environment variable and does not
+  say so is a trap for the next reader.
 - No comments inside a function body. A function that needs one is a function that should be
   two, each named after the question it answers. A comment beside a constant is allowed.
 - Say why, not what, wherever the why could be broken unknowingly. `--ro-bind` is obvious;

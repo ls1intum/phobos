@@ -2,8 +2,8 @@
 # shellcheck shell=bash
 set -euo pipefail
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=phobos-common.sh
-source "${HERE}/phobos-common.sh"
+# shellcheck source=phobos-tools-common/phobos-common.sh
+source "${HERE}/phobos-tools-common/phobos-common.sh"
 
 # Prints how to call phobos.sh and ends with PHB_EXIT_USAGE.
 usage() {
@@ -13,12 +13,12 @@ Usage:
   phobos.sh [layer options] [--config <file>]... <build_command> [args...]
 
 Restriction options (every restriction is applied by default):
-  --no-runtime-restriction, -ntr     Disable the timeout (phobos-timeout.sh).
+  --no-runtime-restriction, -ntr     Disable the timeout (phobos-timeoutsystem.sh).
   --no-networksystem-restriction, -nnr
                                      Disable the whole network restriction: the
                                      connect guard and the Landlock TCP-port rules.
   --no-resources-restriction, -nrr   Disable the resource limits (rlimits /
-                                     phobos-resources.sh).
+                                     phobos-resourcesystem.sh).
   --no-filesystem-restriction, -nfr  Disable the filesystem sandbox (Landlock). The
                                      TCP-port rules are unaffected: they are a separate
                                      network-only ruleset the network layer applies.
@@ -189,7 +189,7 @@ trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 policy_flags=( --spec-dir "$SPEC_DIR" --tail-flags-file "$tail_flags_file" )
 if (( enable_debug )); then policy_flags+=( --debug ); fi
 for c in "${cfgs[@]}"; do policy_flags+=( --config "$c" ); done
-"${HERE}/phobos-policy.sh" "${policy_flags[@]}"
+"${HERE}/phobos-policysystem.sh" "${policy_flags[@]}"
 
 # The inbound filter and the bind-port lock both live in the network layer now: the filter is the
 # inbound haproxy and the lock is the network-only Landlock ruleset the network layer applies. With
@@ -209,7 +209,7 @@ fi
 # phobos-landlock-filesystem-and-networksystem, so the command's limits bind the command and none of the helpers around it.
 dbg=(); (( enable_debug )) && dbg=(--debug)
 chain=()
-if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeout.sh"   "${dbg[@]}" --timeout-bin "$timeout_bin" --pgroup-lock-bin "$pgroup_lock_bin" "$SPEC_DIR" -- ); fi
+if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeoutsystem.sh"   "${dbg[@]}" --timeout-bin "$timeout_bin" --pgroup-lock-bin "$pgroup_lock_bin" "$SPEC_DIR" -- ); fi
 network_flags=( "${dbg[@]}" --connect-guard-bin "$connect_guard_bin" --haproxy-bin "$haproxy_bin" --landlock-bin "$landlock_bin" )
 # The network layer starts the broker itself when a [connect] rule names a host, so no flag
 # selects it here; the resolver it needs for an exact name is passed through when given. It also
@@ -217,9 +217,9 @@ network_flags=( "${dbg[@]}" --connect-guard-bin "$connect_guard_bin" --haproxy-b
 # whole network restriction, the connect guard and the port rules alike, lives in this one layer
 # and is simply left out of the chain when the network restriction is disabled.
 if [[ -n "$resolver" ]]; then network_flags+=( --resolver "$resolver" ); fi
-if (( enable_network ));   then chain+=( "${HERE}/phobos-network.sh"   "${network_flags[@]}" "$SPEC_DIR" -- ); fi
+if (( enable_network ));   then chain+=( "${HERE}/phobos-networksystem.sh"   "${network_flags[@]}" "$SPEC_DIR" -- ); fi
 fs_flags=( "${dbg[@]}" --landlock-bin "$landlock_bin" )
-if (( enable_resources )); then fs_flags+=( --resources-layer "${HERE}/phobos-resources.sh" ); fi
+if (( enable_resources )); then fs_flags+=( --resources-layer "${HERE}/phobos-resourcesystem.sh" ); fi
 if (( ! enable_filesystem )); then fs_flags+=( --no-landlock ); fi
 chain+=( "${HERE}/phobos-filesystem.sh" "${fs_flags[@]}" "$SPEC_DIR" -- )
 debug_log phobos "run the layer chain" "${chain[@]}" "${cmd[@]}"

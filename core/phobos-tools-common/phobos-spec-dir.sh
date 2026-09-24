@@ -95,15 +95,15 @@ mark_owned_spec_dir() {
 
 # Builds a specification directory a single layer owns, for a standalone run from one or more
 # exercise configs, and leaves its path in BUILT_SPEC_DIR. It creates and marks the directory
-# under the parent, sets an EXIT trap that removes it, and fills it through phobos-policy.sh, the
+# under the parent, sets an EXIT trap that removes it, and fills it through phobos-policysystem.sh, the
 # one parser, so a layer never parses a config itself. The caller then runs the layer over
 # BUILT_SPEC_DIR in specification-directory mode as a child and exits with the child's status, so
 # the trap removes the directory once the run ends; a layer that execs its way to the command
 # leaves no waiter of its own, which is why the owner is this outer shell rather than the layer.
-# The trap is set before phobos-policy.sh runs, so a policy refusal removes the half-built
+# The trap is set before phobos-policysystem.sh runs, so a policy refusal removes the half-built
 # directory too. Assumes it is called plainly, not in a command substitution, so that a refusal
-# ends the run and phobos-policy.sh's messages reach the caller's own streams. Takes the directory
-# holding phobos-policy.sh, the spec parent, the tail flags file (empty for phobos-policy.sh's own
+# ends the run and phobos-policysystem.sh's messages reach the caller's own streams. Takes the directory
+# holding phobos-policysystem.sh, the spec parent, the tail flags file (empty for phobos-policysystem.sh's own
 # default), then the configs.
 build_owned_spec_from_configs() {
   local policy_dir="$1"
@@ -122,7 +122,7 @@ build_owned_spec_from_configs() {
   [[ -n "$tail_flags_file" ]] && policy_args+=( --tail-flags-file "$tail_flags_file" )
   local cfg
   for cfg in "$@"; do policy_args+=( --config "$cfg" ); done
-  "${policy_dir}/phobos-policy.sh" "${policy_args[@]}"
+  "${policy_dir}/phobos-policysystem.sh" "${policy_args[@]}"
 }
 
 # Stops the egress broker whose process id the network layer recorded in the specification

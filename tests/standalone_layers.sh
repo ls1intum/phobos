@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Each layer runs on its own from one or more --config files: it builds a specification of its
-# own through the one parser, phobos-policy.sh, enforces only its own concern, and removes the
+# own through the one parser, phobos-policysystem.sh, enforces only its own concern, and removes the
 # specification directory afterwards rather than leaking it.
 #
 # Both directions per layer: the network layer denies a forbidden connect and leaves the
@@ -18,8 +18,8 @@ HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=harness.sh
 source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
-# shellcheck source=../core/phobos-constants.sh
-source "${CORE}/phobos-constants.sh"
+# shellcheck source=../core/phobos-tools-common/phobos-constants.sh
+source "${CORE}/phobos-tools-common/phobos-constants.sh"
 WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
 cleanup() { rm -rf "$WORK"; }
@@ -36,7 +36,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   finish
 fi
 
-# The core, with the three enforcers built beside phobos-policy.sh and a minimal base policy that
+# The core, with the three enforcers built beside phobos-policysystem.sh and a minimal base policy that
 # names only paths that exist here, so phobos-landlock-filesystem-and-networksystem does not refuse a base path that is absent.
 CORE_X="$WORK/core-x"
 cp -R "$CORE" "$CORE_X"
@@ -122,14 +122,14 @@ run_layer() {
 }
 
 echo "== the network layer alone enforces the network and leaves the filesystem =="
-net_out="$(run_layer phobos-network.sh --connect-guard-bin "$CORE_X/phobos-seccomp-networksystem" \
+net_out="$(run_layer phobos-networksystem.sh --connect-guard-bin "$CORE_X/phobos-seccomp-networksystem" \
   --landlock-bin "$CORE_X/phobos-landlock-filesystem-and-networksystem" --config "$WORK/probe.cfg" -- "$WORK/connect-probe" 8.8.8.8 53)"
 if [[ "$net_out" == *"connect-errno=13"* ]]; then
   ok "the network layer alone denies a forbidden connect"
 else
   bad "the network layer alone denies a forbidden connect" "connect-errno=13" "$(printf '%s' "$net_out" | tail -1)"
 fi
-net_fs="$(run_layer phobos-network.sh --connect-guard-bin "$CORE_X/phobos-seccomp-networksystem" \
+net_fs="$(run_layer phobos-networksystem.sh --connect-guard-bin "$CORE_X/phobos-seccomp-networksystem" \
   --landlock-bin "$CORE_X/phobos-landlock-filesystem-and-networksystem" --config "$WORK/probe.cfg" -- /bin/sh -c "cat $WORK/secret.txt")"
 if [[ "$net_fs" == *"SECRET"* ]]; then
   ok "the network layer alone leaves the filesystem unrestricted"
@@ -170,14 +170,14 @@ fi
 echo
 echo "== the timeout layer alone stops an overrun and lets a quick command finish =="
 printf '[read]\n/usr\n[limits]\ntimeout=1\n' > "$WORK/t1.cfg"
-to_out="$(run_layer phobos-timeout.sh --pgroup-lock-bin "$CORE_X/phobos-seccomp-timeoutsystem" \
+to_out="$(run_layer phobos-timeoutsystem.sh --pgroup-lock-bin "$CORE_X/phobos-seccomp-timeoutsystem" \
   --config "$WORK/t1.cfg" -- sleep 10)"
 if [[ "$to_out" == *"Timed out after 1s"* ]]; then
   ok "the timeout layer alone stops a command that overruns"
 else
   bad "the timeout layer alone stops a command that overruns" "a PHB-ETIMEOUT message" "$(printf '%s' "$to_out" | tail -1)"
 fi
-quick="$(run_layer phobos-timeout.sh --pgroup-lock-bin "$CORE_X/phobos-seccomp-timeoutsystem" \
+quick="$(run_layer phobos-timeoutsystem.sh --pgroup-lock-bin "$CORE_X/phobos-seccomp-timeoutsystem" \
   --config "$WORK/t1.cfg" -- /bin/echo quick-ok)"
 if [[ "$quick" == *"quick-ok"* ]]; then
   ok "the timeout layer alone lets a quick command finish"
@@ -188,13 +188,13 @@ fi
 echo
 echo "== the resources layer alone applies a configured limit and none without one =="
 printf '[read]\n/usr\n[limits]\nmem_mb=256\n' > "$WORK/mem.cfg"
-mem="$(run_layer phobos-resources.sh --config "$WORK/mem.cfg" -- /bin/bash -c 'echo mem=$(ulimit -v)')"
+mem="$(run_layer phobos-resourcesystem.sh --config "$WORK/mem.cfg" -- /bin/bash -c 'echo mem=$(ulimit -v)')"
 if [[ "$mem" == *"mem=262144"* ]]; then
   ok "the resources layer alone applies the configured memory limit"
 else
   bad "the resources layer alone applies the configured memory limit" "mem=262144" "$(printf '%s' "$mem" | tail -1)"
 fi
-nomem="$(run_layer phobos-resources.sh --config "$CORE_X/BaseTest.cfg" -- /bin/bash -c 'echo mem=$(ulimit -v)')"
+nomem="$(run_layer phobos-resourcesystem.sh --config "$CORE_X/BaseTest.cfg" -- /bin/bash -c 'echo mem=$(ulimit -v)')"
 if [[ "$nomem" == *"mem=unlimited"* ]]; then
   ok "the resources layer alone applies no limit when none is named"
 else
@@ -204,7 +204,7 @@ fi
 echo
 echo "== a standalone layer still refuses a specification directory beneath a write path =="
 printf '[read]\n/usr\n[write]\n%s\n[create]\n%s\n' "$SPECS" "$SPECS" > "$WORK/writespec.cfg"
-under_out="$(run_layer phobos-resources.sh --config "$WORK/writespec.cfg" -- /bin/true)"
+under_out="$(run_layer phobos-resourcesystem.sh --config "$WORK/writespec.cfg" -- /bin/true)"
 under_rc=$?
 if [[ "$under_out" == *"lies beneath the write path"* ]]; then
   ok "a standalone layer refuses a specification beneath a write path (via the one parser)"

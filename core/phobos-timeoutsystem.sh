@@ -2,14 +2,14 @@
 # shellcheck shell=bash
 set -euo pipefail
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=phobos-common.sh
-source "${HERE}/phobos-common.sh"
+# shellcheck source=phobos-tools-common/phobos-common.sh
+source "${HERE}/phobos-tools-common/phobos-common.sh"
 
 # A self-contained layer: it reads the timeout from the specification and, when one is set,
 # runs the rest of the chain under GNU timeout itself, rather than passing a value down for a
-# deeper layer to apply. So phobos-timeout.sh SPEC -- CMD is a usable timeout on its own, and with
+# deeper layer to apply. So phobos-timeoutsystem.sh SPEC -- CMD is a usable timeout on its own, and with
 # one or more --config files instead of a specification directory it builds its own through
-# phobos-policy.sh. phobos.sh includes this layer only when the timeout is enabled, so there is no
+# phobos-policysystem.sh. phobos.sh includes this layer only when the timeout is enabled, so there is no
 # enable flag to read.
 TIMEOUT_BIN_OPT=""
 PGROUP_LOCK_BIN_OPT=""
@@ -34,7 +34,7 @@ done
 # specification-directory mode as a child, so the directory is owned and removed by this outer
 # shell rather than leaked when the layer execs the command on the no-timeout path.
 if (( ${#CONFIGS[@]} > 0 )); then
-  [[ "${1:-}" == "--" && $# -ge 2 ]] || { echo "Usage: phobos-timeout.sh [flags] --config <file> [--config <file>]... [--spec-parent <dir>] [--tail-flags-file <file>] -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+  [[ "${1:-}" == "--" && $# -ge 2 ]] || { echo "Usage: phobos-timeoutsystem.sh [flags] --config <file> [--config <file>]... [--spec-parent <dir>] [--tail-flags-file <file>] -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
   shift
   build_owned_spec_from_configs "$HERE" "$SPEC_PARENT" "$TAIL_FLAGS_FILE_OPT" "${CONFIGS[@]}"
   set +e
@@ -44,7 +44,7 @@ if (( ${#CONFIGS[@]} > 0 )); then
   exit "$rc"
 fi
 
-[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-timeout.sh [--debug] [--timeout-bin <path>] [--pgroup-lock-bin <path>] (<SPEC_DIR> | --config <file>...) -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
+[[ $# -ge 3 && "$2" == "--" ]] || { echo "Usage: phobos-timeoutsystem.sh [--debug] [--timeout-bin <path>] [--pgroup-lock-bin <path>] (<SPEC_DIR> | --config <file>...) -- <cmd...>" >&2; exit "${PHB_EXIT_USAGE}"; }
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created. When a timeout is set this layer waits, so this

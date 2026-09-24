@@ -24,8 +24,8 @@ set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE="${HERE}/../core"
-# shellcheck source=../core/phobos-common.sh
-source "${CORE}/phobos-common.sh"
+# shellcheck source=../core/phobos-tools-common/phobos-common.sh
+source "${CORE}/phobos-tools-common/phobos-common.sh"
 
 # The exit status this probe ends with when it was called the wrong way.
 readonly PROBE_EXIT_USAGE=2

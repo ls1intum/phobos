@@ -71,9 +71,9 @@ directories while it measures; the sandbox an exercise runs in does not.
 There is no build system. The shell runs as it is, and the C is compiled inside the image.
 
 Both of these run **inside the run-phase image**, where `PHOBOS_HOME` is `/var/tmp/opt/core`. The
-shipped base policy is the `Base*.cfg` the image put beside `phobos-policy.sh`, so it is applied
+shipped base policy is the `Base*.cfg` the image put beside `phobos-policysystem.sh`, so it is applied
 without being named; `--config` is for an exercise configuration on top of it. A bare checkout keeps
-those files in `core/config/` rather than beside `phobos-policy.sh`, so a run from one is refused
+those files in `core/config/` rather than beside `phobos-policysystem.sh`, so a run from one is refused
 with `PHB-EPOLICY` rather than run unconfined.
 
 ```
@@ -84,8 +84,8 @@ ${PHOBOS_HOME}/phobos.sh -- ./gradlew test
 ${PHOBOS_HOME}/phobos.sh --no-runtime-restriction -- <command>
 
 # A single layer on its own, which builds its own specification from a config through
-# phobos-policy.sh and enforces only that layer's concern
-${PHOBOS_HOME}/phobos-network.sh --config <exercise.cfg> -- <command>
+# phobos-policysystem.sh and enforces only that layer's concern
+${PHOBOS_HOME}/phobos-networksystem.sh --config <exercise.cfg> -- <command>
 ```
 
 ### The linters, which are the gate
@@ -109,7 +109,7 @@ yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 actionlint
 ec --no-color                      # editorconfig-checker, configured by .editorconfig-checker.json
-awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print FILENAME":"FNR; e=1}} {p=$0} END{exit e}' core/*.sh
+awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print FILENAME":"FNR; e=1}} {p=$0} END{exit e}' core/*.sh core/phobos-tools-*/*.sh
 ```
 
 One of those is narrower than it looks: `bandit` runs over exactly two directories, not the
@@ -145,24 +145,29 @@ outside is `--network none` and cgroup limits, which Phobos cannot set for itsel
 ```
 core/                      the sandbox itself
   phobos.sh                entry point: parses the configuration, applies the layers
+  phobos-policysystem.sh   turns the base and exercise configuration into a run's specification
   phobos-filesystem.sh     the filesystem layer, reads the path sets and applies Landlock
+  phobos-networksystem.sh  the network layer, runs the connect guard and the egress/inbound HAProxy
+  phobos-timeoutsystem.sh  the timeout layer, which applies the group lock when a timeout is set
+  phobos-resourcesystem.sh the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
   phobos-landlock-filesystem-and-networksystem/  its *.c/.h: the C program that applies the Landlock policy, then exec's
   phobos-seccomp-networksystem/  its *.c/.h: the connect guard, supervises connect() and enforces [connect] by host and port
-  phobos-policy.sh         turns the base and exercise configuration into a run's specification
-  phobos-network.sh        the network layer, runs the connect guard and the egress/inbound HAProxy
-  phobos-haproxy.sh        the egress broker and inbound filter: turns [connect]/[accept] into an haproxy.cfg
-  phobos-resources.sh      the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
-  phobos-timeout.sh        the timeout layer, which applies the group lock below when a timeout is set
   phobos-seccomp-timeoutsystem/  its *.c: the group lock, a seccomp filter refusing setsid and setpgid, then exec's
-  phobos-common.sh         the shared helpers, sourced by the others; it sources the seven below
-  phobos-log.sh            reporting, and counting what a run was denied
-  phobos-paths.sh          the two canonical forms a path is compared in
-  phobos-time.sh           the timeout contract: how a value is spelled and compared
-  phobos-spec-dir.sh       the specification directory and its lifetime
-  phobos-policy-parse.sh   one cfg in, the parsed state and the specification files out
-  phobos-rights.sh         a parsed policy to the --rights= arguments phobos-landlock-filesystem-and-networksystem takes
-  phobos-network-args.sh   [connect] and [bind] to the TCP and UDP port rules Landlock enforces
-  phobos-constants.sh      the numbers the scripts share, named once, the exit statuses among them
+  phobos-tools-common/     sourced by every layer through phobos-common.sh, which sources the rest here and the three per-subsystem helpers
+    phobos-common.sh       the shared entry the layers source; it sources the others
+    phobos-constants.sh    the numbers the scripts share, named once, the exit statuses among them
+    phobos-log.sh          reporting, and counting what a run was denied
+    phobos-paths.sh        the two canonical forms a path is compared in
+    phobos-time.sh         the timeout contract: how a value is spelled and compared
+    phobos-spec-dir.sh     the specification directory and its lifetime
+  phobos-tools-policysystem/
+    phobos-policy-parse.sh one cfg in, the parsed state and the specification files out
+    config_doc.txt         the configuration format, documented
+  phobos-tools-filesystem/
+    phobos-rights.sh       a parsed policy to the --rights= arguments phobos-landlock-filesystem-and-networksystem takes
+  phobos-tools-networksystem/
+    phobos-haproxy.sh      the egress broker and inbound filter: turns [connect]/[accept] into an haproxy.cfg
+    phobos-network-args.sh [connect] and [bind] to the TCP and UDP port rules Landlock enforces
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
 docker/prune_phase/        one image per language, plus the orchestrator
 docker/run_phase/          the image an exercise actually runs in
@@ -174,7 +179,7 @@ var/tmp/                   prune inputs, helpers and example outputs
 
 - One variable or function declaration per line, in every language.
 - British English in all prose, comments and messages.
-- Every function in `core/*.sh` says what it does and what it assumes about its environment.
+- Every function in the core shell scripts (`core/*.sh` and `core/phobos-tools-*/*.sh`) says what it does and what it assumes about its environment.
   AGENTS.md states this in full.
 - Shell is POSIX where it can be and bash where it must be; say which at the top of a file.
 - A `shellcheck` directive carries a comment on the line above saying why the finding is

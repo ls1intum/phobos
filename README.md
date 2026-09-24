@@ -28,26 +28,30 @@ Phobos needs **no privileges, no capabilities and no container flags**: Landlock
 ```
 core/                      the sandbox itself
   phobos.sh                entry point: parses the configuration, applies the layers
-  phobos-policy.sh         turns the base and exercise configuration into a run's specification
+  phobos-policysystem.sh   turns the base and exercise configuration into a run's specification
   phobos-filesystem.sh     the filesystem layer, reads the path sets and applies Landlock
-  phobos-network.sh        the network layer, runs the connect guard and the egress/inbound HAProxy
-  phobos-haproxy.sh        the egress broker and inbound filter: turns [connect]/[accept] into an haproxy.cfg
-  phobos-resources.sh      the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
-  phobos-timeout.sh        the timeout layer
-  phobos-common.sh         the shared helpers, sourced by the others; it sources the seven below
-  phobos-log.sh            reporting, and counting what a run was denied
-  phobos-paths.sh          the two canonical forms a path is compared in
-  phobos-time.sh           the timeout contract: how a value is spelled and compared
-  phobos-spec-dir.sh       the specification directory and its lifetime
-  phobos-policy-parse.sh   one cfg in, the parsed state and the specification files out
-  phobos-rights.sh         a parsed policy to the --rights= arguments phobos-landlock-filesystem-and-networksystem takes
-  phobos-network-args.sh   [connect] and [bind] to the TCP port rules Landlock enforces
-  phobos-constants.sh      the numbers the scripts share, named once, the exit statuses among them
-  phobos-landlock-filesystem-and-networksystem*.c/.h    the C program that applies the Landlock policy, then exec's the command
-  phobos-seccomp-networksystem*.c/.h  the connect guard: supervises the egress a command makes and enforces [connect] by host and port;
-                           phobos-seccomp-networksystem.c is the sequence of stages, the modules beside it do the work
+  phobos-networksystem.sh  the network layer, runs the connect guard and the egress/inbound HAProxy
+  phobos-timeoutsystem.sh  the timeout layer, which applies the group lock when a timeout is set
+  phobos-resourcesystem.sh the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
+  phobos-landlock-filesystem-and-networksystem/  its *.c/.h: the C program that applies the Landlock policy, then exec's the command
+  phobos-seccomp-networksystem/  its *.c/.h: the connect guard, supervises the egress a command makes and enforces [connect] by host and port
+  phobos-seccomp-timeoutsystem/  its *.c: the group lock, a seccomp filter refusing setsid and setpgid, then exec's
+  phobos-tools-common/     sourced by every layer through phobos-common.sh, which sources the rest here and the three per-subsystem helpers
+    phobos-common.sh       the shared entry the layers source; it sources the others
+    phobos-constants.sh    the numbers the scripts share, named once, the exit statuses among them
+    phobos-log.sh          reporting, and counting what a run was denied
+    phobos-paths.sh        the two canonical forms a path is compared in
+    phobos-time.sh         the timeout contract: how a value is spelled and compared
+    phobos-spec-dir.sh     the specification directory and its lifetime
+  phobos-tools-policysystem/
+    phobos-policy-parse.sh one cfg in, the parsed state and the specification files out
+    config_doc.txt         the [connect] and [bind] sections in full: what enforces what
+  phobos-tools-filesystem/
+    phobos-rights.sh       a parsed policy to the --rights= arguments phobos-landlock-filesystem-and-networksystem takes
+  phobos-tools-networksystem/
+    phobos-haproxy.sh      the egress broker and inbound filter: turns [connect]/[accept] into an haproxy.cfg
+    phobos-network-args.sh [connect] and [bind] to the TCP and UDP port rules Landlock enforces
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
-  config_doc.txt           the [connect] and [bind] sections in full: what enforces what
 docker/prune_phase/        one image per language, plus the orchestrator
 docker/run_phase/          the image an exercise actually runs in
 tests/                     the acceptance and probe suites; tests/README.md maps each one to its CI step
@@ -74,18 +78,18 @@ Landlock enforces **TCP ports**, so a policy that names a concrete port has that
 
 ## How a run is put together
 
-`phobos.sh` builds the run's specification with `phobos-policy.sh`, then hands the command down a chain of layers, each of which does its part and starts the rest of the chain: most with `exec`, while the timeout layer runs it under GNU timeout and waits, the connect guard forks it as the child it supervises, and the filesystem layer runs it as a child so it can report the denials afterwards:
+`phobos.sh` builds the run's specification with `phobos-policysystem.sh`, then hands the command down a chain of layers, each of which does its part and starts the rest of the chain: most with `exec`, while the timeout layer runs it under GNU timeout and waits, the connect guard forks it as the child it supervises, and the filesystem layer runs it as a child so it can report the denials afterwards:
 
 ```
-phobos.sh -> phobos-timeout.sh -> phobos-network.sh (connect guard) -> phobos-filesystem.sh
-          -> phobos-resources.sh -> phobos-landlock-filesystem-and-networksystem -> the command
+phobos.sh -> phobos-timeoutsystem.sh -> phobos-networksystem.sh (connect guard) -> phobos-filesystem.sh
+          -> phobos-resourcesystem.sh -> phobos-landlock-filesystem-and-networksystem -> the command
 ```
 
-The base policy is every `Base*.cfg` sitting beside `phobos-policy.sh`, applied in sorted order, and the exercise configurations named with `--config` are applied on top. **Ship exactly one `Base*.cfg` per runtime environment.** They are found by a glob and unioned, so a `BasePhobos.cfg` left beside a `BaseLanguage-java.cfg` gives a Java run the paths of every other language as well, which is a wider sandbox that looks like a working one. The prune phase does not prevent that: it writes every applied policy into one directory, the cross-language `BasePhobos.cfg` beside the per-language files, because they are **alternatives** rather than parts of one policy, and choosing between them is the packaging step. `docker/run_phase/java/Dockerfile` does the choosing by naming `BaseLanguage-java.cfg` explicitly, and an image that copied the directory wholesale would ship the union of every alternative. A `BasePhobos.cfg` a run left behind earlier is the same hazard from the other direction, so check what is in that directory rather than what this run wrote. The files meant only for reading go to `debug/` and are never applied at all. With no `Base*.cfg` at all, a run is refused (`PHB-EPOLICY`) rather than run unconfined.
+The base policy is every `Base*.cfg` sitting beside `phobos-policysystem.sh`, applied in sorted order, and the exercise configurations named with `--config` are applied on top. **Ship exactly one `Base*.cfg` per runtime environment.** They are found by a glob and unioned, so a `BasePhobos.cfg` left beside a `BaseLanguage-java.cfg` gives a Java run the paths of every other language as well, which is a wider sandbox that looks like a working one. The prune phase does not prevent that: it writes every applied policy into one directory, the cross-language `BasePhobos.cfg` beside the per-language files, because they are **alternatives** rather than parts of one policy, and choosing between them is the packaging step. `docker/run_phase/java/Dockerfile` does the choosing by naming `BaseLanguage-java.cfg` explicitly, and an image that copied the directory wholesale would ship the union of every alternative. A `BasePhobos.cfg` a run left behind earlier is the same hazard from the other direction, so check what is in that directory rather than what this run wrote. The files meant only for reading go to `debug/` and are never applied at all. With no `Base*.cfg` at all, a run is refused (`PHB-EPOLICY`) rather than run unconfined.
 
 A layer switched off is left out of the chain rather than entered and skipped. Three properties of the chain are relied on and easy to break:
 
-- The resource limits bind the command and nothing beside it. `phobos-resources.sh` is started by the filesystem layer as the last step before `phobos-landlock-filesystem-and-networksystem`, so the helpers around the command (the filesystem layer's shell, the stderr pass-through and denial counter, the connect guard's supervisor) never run under the command's rlimits. A helper that met the command's file-size, memory or CPU limit would otherwise take the command's output with it.
+- The resource limits bind the command and nothing beside it. `phobos-resourcesystem.sh` is started by the filesystem layer as the last step before `phobos-landlock-filesystem-and-networksystem`, so the helpers around the command (the filesystem layer's shell, the stderr pass-through and denial counter, the connect guard's supervisor) never run under the command's rlimits. A helper that met the command's file-size, memory or CPU limit would otherwise take the command's output with it.
 - The timeout layer waits on the rest of the chain, and the layers below it ignore SIGTERM while their command keeps the default disposition, so the `--kill-after` escalation reaches a command that ignores SIGTERM. The filesystem layer's bounded wait for the denial counts stays below that escalation.
 - A run is reported as `PHB-ETIMEOUT` only when GNU timeout's status says so and the run lasted at least its timeout; a command's own 124 or 137, the OOM killer's SIGKILL among them, passes through unchanged.
 
@@ -112,7 +116,7 @@ Build the run-phase image (it compiles both C products and bakes in the scripts 
 docker compose -f docker/run_phase/java/docker-compose.yaml up --build
 ```
 
-Then, inside that image, wrap the exercise's build command with `phobos.sh`. The shipped base policy is the `Base*.cfg` the image put beside `phobos-policy.sh`, so it is applied without being named:
+Then, inside that image, wrap the exercise's build command with `phobos.sh`. The shipped base policy is the `Base*.cfg` the image put beside `phobos-policysystem.sh`, so it is applied without being named:
 
 ```
 ${PHOBOS_HOME}/phobos.sh -- ./gradlew test
@@ -120,7 +124,7 @@ ${PHOBOS_HOME}/phobos.sh -- ./gradlew test
 
 `PHOBOS_HOME` is `/var/tmp/opt/core` in the image, and `phobos` on `PATH` is a symbolic link to the same script. `--config` is for an exercise configuration applied **on top of** that base, never for the base itself: naming a base file there applies it a second time.
 
-A bare checkout cannot run this. `phobos-policy.sh` finds the base policy by globbing `Base*.cfg` beside itself, and a checkout keeps those files in `core/config/` rather than in `core/`, so a run from one is refused with `PHB-EPOLICY` instead of running unconfined. The image is the delivery vehicle, as it is for the three C products.
+A bare checkout cannot run this. `phobos-policysystem.sh` finds the base policy by globbing `Base*.cfg` beside itself, and a checkout keeps those files in `core/config/` rather than in `core/`, so a run from one is refused with `PHB-EPOLICY` instead of running unconfined. The image is the delivery vehicle, as it is for the three C products.
 
 Run the grading container with **`--network none`** and with cgroup limits (`--memory`, `--pids-limit`, `--cpus`, and a size-bounded `--tmpfs` for scratch). Those are the outer wall Phobos relies on and cannot set for itself.
 

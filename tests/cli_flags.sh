@@ -10,8 +10,8 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=harness.sh
 source "${HERE}/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../core"
-# shellcheck source=../core/phobos-constants.sh
-source "${CORE}/phobos-constants.sh"
+# shellcheck source=../core/phobos-tools-common/phobos-constants.sh
+source "${CORE}/phobos-tools-common/phobos-constants.sh"
 WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
 cleanup() { rm -rf "$WORK"; }
@@ -130,7 +130,7 @@ for f in read.paths execute.paths write.paths create.paths delete.paths tail.fla
 printf '1.2.3.4 443\n' > "$PORTSPEC/net.rules"
 
 rm -f "$WORK/ll-record"
-LL_RECORD="$WORK/ll-record" bash "$CORE_X/phobos-network.sh" \
+LL_RECORD="$WORK/ll-record" bash "$CORE_X/phobos-networksystem.sh" \
   --connect-guard-bin "$WORK/passthrough-landlock" --landlock-bin "$WORK/record-landlock" \
   "$PORTSPEC" -- /bin/true >/dev/null 2>&1
 net_rules="$(cat "$WORK/ll-record" 2>/dev/null)"
