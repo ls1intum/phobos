@@ -150,6 +150,35 @@ this step only packages and publishes. An image that embeds Phobos, such as a gr
 then pulls it with `COPY --from=<namespace>/phobos:latest`.
 - `.gitignore` covers `*.o` and `*.a`, not `*.so`, for that reason.
 
+## harden-runner is in audit mode, which records rather than prevents
+
+Every job runs `step-security/harden-runner` with `egress-policy: audit`. It is worth being
+exact about what that does, because the action's name suggests more than audit mode delivers.
+
+**What it does:** it records the hosts each job connects to and reports them, so the
+allow-list for a later `egress-policy: block` can be measured from real runs instead of
+guessed. A guessed allow-list is the thing that breaks CI for an unrelated reason, and this repository has a
+specific reason to care: the prune phase reads a failed run as "this path was needed", so a
+build that fails because a host was missing from an allow-list produces a weaker sandbox.
+
+**What it does not do:** it blocks nothing. A job that reaches a host it should not reach
+still reaches it, and the run is still green. Audit mode is a measurement, not a boundary,
+and nothing may be described as protected by it.
+
+**Rule:**
+
+- Do not describe the egress allow-list as a containment boundary while the policy is
+  `audit`. That is the claim this section exists to prevent.
+- Moving a workflow to `block` is its own pull request, built on endpoints observed from
+  runs on `main` rather than on a list someone wrote out. Until such a run has happened
+  there is nothing to build the list from.
+- Even under `block`, the community tier is bypassable through DNS over HTTPS
+  (GHSA-46g3-37rh-v698), so it raises the cost of exfiltration rather than preventing it.
+- Every job here runs on a GitHub-hosted runner, which is what the community tier covers. On
+  a self-hosted runner the action registers the endpoint list and enforces nothing unless
+  `deploy-on-self-hosted-vm: true` is set, which installs a network filter on that machine.
+  Do not copy these steps to a self-hosted job and assume they carry over.
+
 ## Opening a pull request
 
 Every pull request body must follow `.github/PULL_REQUEST_TEMPLATE.md`. **Read that file
