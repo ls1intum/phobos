@@ -90,13 +90,15 @@ ${PHOBOS_HOME}/phobos-network.sh --config <exercise.cfg> -- <command>
 
 ### The linters, which are the gate
 
-`lint.yml` runs eight lint jobs. It is not the whole of CI: `test.yml` runs the shell and
+`lint.yml` runs seven lint jobs, and `actionlint.yml` lints the workflows beside it, weekly
+as well as on a change under `.github`. Neither is the whole of CI: `test.yml` runs the shell and
 Python suites, `build.yml` builds the images and holds the run-phase image to the Landlock
 acceptance suites inside it, `codeql.yml` scans, and `pullrequest-template.yml` checks the
 body. The lint jobs are the ones you can run in full by hand before opening a pull request.
 
 ```
-# Same file sets and same flags as CI. Together these are all eight jobs, and the C job is two
+# Same file sets and same flags as CI. Together these are the seven lint.yml jobs plus
+# actionlint, and the C job is two
 # steps rather than one: the compiler gate runs before cppcheck and fails on any warning.
 find . -name '*.sh'  -type f -print0 | xargs -0 shellcheck -x -S warning
 ( failed=0; while IFS= read -r f; do gcc-14 -std=gnu23 -fsyntax-only -Wall -Wextra -Werror -fanalyzer "$f" || failed=1; done < <(find . -name '*.c' -type f); exit "$failed" )
