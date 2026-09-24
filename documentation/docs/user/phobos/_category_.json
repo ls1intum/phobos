@@ -1,0 +1,8 @@
+{
+    "label": "Phobos",
+    "position": 1,
+    "link": {
+        "type": "generated-index",
+        "description": "What Phobos is, what it protects against, and where its boundary ends."
+    }
+}
