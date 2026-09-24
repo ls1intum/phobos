@@ -1,0 +1,8 @@
+{
+    "label": "How to protect anything with Phobos",
+    "position": 2,
+    "link": {
+        "type": "generated-index",
+        "description": "The entry point and the four layers, and how to run each of them over a policy."
+    }
+}
