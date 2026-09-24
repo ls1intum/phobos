@@ -44,6 +44,11 @@ mkdir -p /root && echo "home-secret" > /root/secret-home.txt
 javac -d "$TD/probe" ${HERE}/PhobosProbe.java ${HERE}/NetServers.java || exit 1
 cp ${HERE}/BaseLanguage-java.cfg "$CORE/BaseLanguage-java.cfg"
 
+# A run given no exercise configuration reaches no network at all, loopback included, so the
+# [connect] rule these probes rely on is given as one rather than left to the base. The base
+# still carries it, which is what the bare-run check below proves is dropped.
+printf '[connect]\nallow 127.0.0.1:%s\n' "$ALLOWED_PORT" > "$TD/network.cfg"
+
 # --- Servers outside the sandbox ----------------------------------------
 java -cp "$TD/probe" NetServers "$ALLOWED_PORT" "$DENIED_PORT" > /tmp/servers.log 2>&1 &
 SRV=$!
@@ -57,7 +62,7 @@ probe() {
   local want="$1"; shift
   local desc="$1"; shift
   local out
-  out=$(phobos.sh -- java -cp probe PhobosProbe "$@" 2>&1)
+  out=$(phobos.sh --config "$TD/network.cfg" -- java -cp probe PhobosProbe "$@" 2>&1)
   local line
   line=$(printf '%s\n' "$out" | grep '^RESULT ' | head -1)
   local got
@@ -86,7 +91,20 @@ probe DENIED "connect 127.0.0.1:${DENIED_PORT}"       connect 127.0.0.1 "$DENIED
 hdr "4. Network endpoint the policy allows (neither filter may interfere)"
 probe OK "connect 127.0.0.1:${ALLOWED_PORT}"           connect 127.0.0.1 "$ALLOWED_PORT"
 
-hdr "5. Timeout (the JVM actively tries to block it with a shutdown hook)"
+hdr "5. A run given no exercise configuration reaches no network at all"
+# The base grants this very port, so a bare run being denied it is the base's own rule being
+# dropped rather than a port that was never allowed. The check above, with the configuration
+# given, is the other direction: the same port is reachable when a configuration names it.
+bare_out=$(phobos.sh -- java -cp probe PhobosProbe connect 127.0.0.1 "$ALLOWED_PORT" 2>&1)
+bare_got=$(printf '%s\n' "$bare_out" | grep '^RESULT ' | head -1 | awk '{print $2}')
+if [[ "$bare_got" == "DENIED" ]]; then
+  ok "connect 127.0.0.1:${ALLOWED_PORT} without --config -> DENIED"
+else
+  bad "connect 127.0.0.1:${ALLOWED_PORT} without --config -> expected DENIED, got ${bare_got:-<no RESULT line>}"
+  printf '%s\n' "$bare_out" | sed 's/^/       | /' | tail -n "$LOG_EXCERPT_LINES"
+fi
+
+hdr "6. Timeout (the JVM actively tries to block it with a shutdown hook)"
 START=$(date +%s)
 phobos.sh --config ${HERE}/spin-timeout.cfg -- java -cp probe PhobosProbe spin > /tmp/spin.log 2>&1
 RC=$?
