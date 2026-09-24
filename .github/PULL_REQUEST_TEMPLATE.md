@@ -246,7 +246,7 @@
 
   This section is always required. If this pull request changes no behaviour that the
   suites cover (documentation, CI or build configuration only), replace the table with
-  "No behaviour covered by the suites changed".
+  "No production code changed".
 -->
 
 | Suite | Passed | Failed | Skipped | What it covers regarding this PR |
@@ -294,6 +294,7 @@ No breaking changes or migration.
 -->
 
 - [ ] The title of this pull request describes the change, not the implementation.
+- [ ] I followed the [guidelines for inclusive, diversity-sensitive and appreciative language](https://docs.artemis.tum.de/developer/guidelines/language).
 - [ ] I have self-reviewed the diff of this pull request.
 - [ ] Tests were added or updated for the behaviour changed here, in both directions: the forbidden case stays denied and the permitted case still works.
 - [ ] Any weakening of the sandbox boundary is stated explicitly above, including what it now permits that it did not permit before.

@@ -167,13 +167,13 @@ contribution arrives unreviewable.
 - Build the body from the template. Fill in a copy and pass that as `--body-file`.
 - Fill in every section. Use that section's documented phrase rather than deleting the
   section: `No linked issues`, `No Improvement from the user's perspective`, `No Improvement
-  from the maintainer's perspective`, `No breaking changes or migration`, `No behaviour
-  covered by the suites changed`, `Not reproducible from a run`, `No layer-specific
-  behaviour changed`. Each phrase belongs to the section that documents it, so the wrong one
-  does not answer a section, and neither does a shortened one.
+  from the maintainer's perspective`, `No breaking changes or migration`, `No production code
+  changed`, `Not reproducible from a run`, `No layer-specific behaviour changed`. Each phrase
+  belongs to the section that documents it, so the wrong one does not answer a section, and
+  neither does a shortened one.
 - Five of those answer a whole section: `No linked issues`, the two `No Improvement from the
-  ...'s perspective` phrases, `No breaking changes or migration` and `No behaviour covered by
-  the suites changed`.
+  ...'s perspective` phrases, `No breaking changes or migration` and `No production code
+  changed`.
 - Two answer a part of section 4 rather than the section: `Not reproducible from a run`
   belongs under Steps, and `No layer-specific behaviour changed` belongs to the layers. They
   do not finish section 4, and its limit and its stubs are checked either way.
