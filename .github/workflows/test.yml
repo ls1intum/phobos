@@ -84,7 +84,7 @@ jobs:
 
       - name: The timeout's group lock refuses setsid and setpgid
         if: ${{ !cancelled() }}
-        run: bash tests/pgroup_lock.sh
+        run: bash tests/seccomp_timeoutsystem.sh
 
       - name: Each layer runs on its own from a config
         if: ${{ !cancelled() }}
@@ -103,7 +103,7 @@ jobs:
 
       - name: The connect guard enforces the allow-list by host and port
         if: ${{ !cancelled() }}
-        run: bash tests/connect_guard.sh
+        run: bash tests/seccomp_networksystem.sh
 
       - name: The allow-list becomes an egress-broker config
         if: ${{ !cancelled() }}

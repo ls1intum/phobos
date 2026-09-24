@@ -1,5 +1,5 @@
 #define _GNU_SOURCE
-#include "phobos-connect-guard-diagnostics.h"
+#include "phobos-seccomp-networksystem-diagnostics.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -13,7 +13,7 @@ void set_verbose(bool enabled) {
 /* Both printers share this, so every line of the guard carries the same prefix no matter
  * which one produced it. */
 static void print_prefixed(const char *format, va_list arguments) {
-    fputs("[phobos-connect-guard] ", stderr);
+    fputs("[phobos-seccomp-networksystem] ", stderr);
     vfprintf(stderr, format, arguments);
     fputc('\n', stderr);
 }

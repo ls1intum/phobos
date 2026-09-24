@@ -1,7 +1,7 @@
-#include "phobos-landlock-options.h"
+#include "phobos-landlock-filesystem-and-networksystem-options.h"
 
-#include "phobos-landlock-diagnostics.h"
-#include "phobos-landlock-ruleset.h"
+#include "phobos-landlock-filesystem-and-networksystem-diagnostics.h"
+#include "phobos-landlock-filesystem-and-networksystem-ruleset.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -25,7 +25,7 @@ static constexpr int OPTION_AND_VALUE_WORDS = 2;
 
 [[noreturn]] void print_usage_and_exit(void) {
     fprintf(stderr,
-            "Usage: phobos-landlock --rights=LETTERS PATH [--rights=LETTERS PATH ...]\n"
+            "Usage: phobos-landlock-filesystem-and-networksystem --rights=LETTERS PATH [--rights=LETTERS PATH ...]\n"
             "                       [--connect-tcp PORT] [--bind-tcp PORT]\n"
             "                       [--connect-udp PORT] [--bind-udp PORT]\n"
             "                       [--chdir DIRECTORY] [--no-filesystem]\n"

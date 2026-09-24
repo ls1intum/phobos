@@ -17,7 +17,7 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/../harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 
 CORE="${PHOBOS_HOME:-/var/tmp/opt/core}"
-LANDLOCK="${CORE}/phobos-landlock"
+LANDLOCK="${CORE}/phobos-landlock-filesystem-and-networksystem"
 
 # The Landlock version that brings scoping, and how long the processes the checks signal live:
 # long enough to outlast the checks, and killed when they are done.

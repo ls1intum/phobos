@@ -5,9 +5,9 @@
 # process group and, with --kill-after, escalates to SIGKILL. That escalation only fires while
 # GNU timeout's own child is still alive, so the layers between the timeout and the command
 # ignore SIGTERM and stay, and it is the SIGKILL that stops a command which ignores SIGTERM.
-# This proves that end to end through the real chain, with a stand-in for phobos-landlock so no
+# This proves that end to end through the real chain, with a stand-in for phobos-landlock-filesystem-and-networksystem so no
 # Landlock kernel is needed, a stand-in for the timeout's group lock so no seccomp is needed here
-# (the lock's own behaviour is tests/pgroup_lock.sh), and the network layer off to spare its
+# (the lock's own behaviour is tests/seccomp_timeoutsystem.sh), and the network layer off to spare its
 # readelf dependency.
 #
 # It needs GNU timeout (the real one, not a stand-in) and a C compiler. Where either is
@@ -54,7 +54,7 @@ if ! "$compiler" -O2 -o "$WORK/ignorer" "$WORK/ignorer.c" 2>"$WORK/cc.log"; then
   finish
 fi
 
-# A stand-in for phobos-landlock: it drops its own options up to the "--" and exec's the
+# A stand-in for phobos-landlock-filesystem-and-networksystem: it drops its own options up to the "--" and exec's the
 # command, so the real filesystem layer runs its Landlock branch without a Landlock kernel.
 printf '%s\n' '#!/usr/bin/env bash' \
   'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift; exec "$@"' > "$WORK/passthrough-landlock"

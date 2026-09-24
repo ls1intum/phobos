@@ -1,8 +1,8 @@
 /*
- * Unit tests for phobos-connect-guard.
+ * Unit tests for phobos-seccomp-networksystem.
  *
- * The integration suite tests/connect_guard.sh and the acceptance suite
- * tests/landlock-acceptance/connect-guard-test.sh exercise the guard against a real
+ * The integration suite tests/seccomp_networksystem.sh and the acceptance suite
+ * tests/landlock-filesystem-and-networksystem-acceptance/seccomp-networksystem-test.sh exercise the guard against a real
  * kernel, which is what proves it works. They cannot reach the failure paths,
  * though: a filter that will not install, a memory read that fails, a connection
  * that times out, a descriptor handoff that breaks. Those decide whether the guard
@@ -47,11 +47,11 @@
 #define PHOBOS_CONNECT_GUARD_UNIT_TEST
 #endif
 #define main sut_main
-#include "../../core/phobos-connect-guard.c"
+#include "../../core/phobos-seccomp-networksystem.c"
 #undef main
-#include "../../core/phobos-connect-guard-child.h"
-#include "../../core/phobos-connect-guard-destination.h"
-#include "../../core/phobos-connect-guard-socket-types.h"
+#include "../../core/phobos-seccomp-networksystem-child.h"
+#include "../../core/phobos-seccomp-networksystem-destination.h"
+#include "../../core/phobos-seccomp-networksystem-socket-types.h"
 
 #include <linux/filter.h>
 #include <linux/seccomp.h>

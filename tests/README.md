@@ -13,7 +13,7 @@ Every suite reports through `harness.sh`, which it sources and which owns `ok`, 
 `skip`, `check`, the three counters and `finish`. A suite keeps everything else of its own:
 its shell options, its fixtures and its cleanup trap. The acceptance suites reach it as
 `../harness.sh`, which is why their CI step mounts `tests/` rather than
-`tests/landlock-acceptance/`.
+`tests/landlock-filesystem-and-networksystem-acceptance/`.
 
 ## Host suites, run by the `Shell suites` job of `test.yml`
 
@@ -30,7 +30,7 @@ and no elevated permission.
 | `policy_program.sh` | `phobos-policy.sh` writes the specification, the model is additive, a run without a base policy is refused, and an unenforceable network rule is refused before anything is written | never |
 | `network_policy.sh` | how a `[connect]` and a `[bind]` section become Landlock port rules, including the cases that are refused, and that the network layer refuses a `[connect]` name rule when the egress broker is off | never |
 | `filesystem_policy.sh` | how the filesystem sections become Landlock path rules: a nested entry narrower than its ancestor is refused as unenforceable, a redundant one and a merely different one are allowed, and the redundant one is what lets an exercise config name that path with fewer rights | never |
-| `connect_guard.sh` | the connect guard enforces the allow-list by host and port, and refuses what it cannot carry | the kernel has no seccomp user-notification, or no C compiler is installed at all; `gcc-14` is preferred and plain `gcc` is used when it is absent |
+| `seccomp_networksystem.sh` | the connect guard enforces the allow-list by host and port, and refuses what it cannot carry | the kernel has no seccomp user-notification, or no C compiler is installed at all; `gcc-14` is preferred and plain `gcc` is used when it is absent |
 | `haproxy_conf.sh` | how a `[connect]` section becomes the egress broker's config: a host name becomes a TLS-name allow, an address becomes a destination allow, and everything else is refused; where `haproxy` is installed it also checks a generated config parses | never |
 | `haproxy_broker.sh` | the egress broker enforces the allow-list by the TLS host name: a connection whose ClientHello names an allowed host reaches the destination, a forbidden one does not | a C compiler, `haproxy`, `openssl` or a kernel with seccomp user-notification is absent |
 | `denial_report.sh` | the denial report, both directions, and that neither it nor its helpers cost the command its output or its exit status | never |
@@ -59,14 +59,14 @@ test makes is interposed.
 
 | Suite | What it covers | Coverage gate |
 | --- | --- | --- |
-| `unit/run.sh` | `phobos-landlock`: the options, the path rules, the ruleset | none; `unit/mutation.sh` measures this suite weekly instead, because the coverage runtime disturbs the calls it interposes |
-| `unit/connect_guard_run.sh` | the connect guard: the filter, the supervisor, the socket types, the rules | every line, with `--coverage` |
+| `unit/run.sh` | `phobos-landlock-filesystem-and-networksystem`: the options, the path rules, the ruleset | none; `unit/mutation.sh` measures this suite weekly instead, because the coverage runtime disturbs the calls it interposes |
+| `unit/seccomp_networksystem_run.sh` | the connect guard: the filter, the supervisor, the socket types, the rules | every line, with `--coverage` |
 | `unit/mutation.sh` | mutation testing of the Landlock suite, weekly | reports a score; it is not a gate |
 
 ## Acceptance suites, run by `build.yml` inside the run-phase image
 
 Each runs in an **ordinary** container: no `--privileged`, no `--cap-add`, no
-`--security-opt`, and `--network none`. `tests/landlock-acceptance/README.md` says how to
+`--security-opt`, and `--network none`. `tests/landlock-filesystem-and-networksystem-acceptance/README.md` says how to
 run them by hand.
 
 | Suite | What it proves |
@@ -77,7 +77,7 @@ run them by hand.
 | `shipped-policy-test.sh` | the policy the image actually ships runs a real build |
 | `network-port-test.sh` | a raw `connect()` syscall is still refused by Landlock's port rule |
 | `scoping-test.sh` | Landlock scoping: a sandboxed process can neither signal a process outside its domain nor reach an abstract UNIX socket there |
-| `connect-guard-test.sh` | the connect guard inside the image: an allowed destination connects, a forbidden one is refused, and neither can be redirected |
+| `seccomp-networksystem-test.sh` | the connect guard inside the image: an allowed destination connects, a forbidden one is refused, and neither can be redirected |
 
 ## The environment variables the suites read
 

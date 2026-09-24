@@ -116,7 +116,7 @@ reviews:
         documented meaning, and that every path reaching a command line is quoted.
     - path: "core/*.c"
       instructions: >-
-        These are phobos-landlock, which applies the kernel-side policy and then
+        These are phobos-landlock-filesystem-and-networksystem, which applies the kernel-side policy and then
         execs the build command, and the connect guard, which supervises egress from
         outside the sandboxed process. Check that the restriction is applied before the exec
         and can no longer be relaxed afterwards, that a kernel unable to enforce the
@@ -129,7 +129,7 @@ reviews:
         an entry here grants a whole subtree. Check that a write path is not granted
         execute permission unless it must be, and that nothing outside the run needs
         is listed.
-    - path: "core/phobos-connect-guard*.c"
+    - path: "core/phobos-seccomp-networksystem*.c"
       instructions: >-
         This is the connect guard, which supervises connect() from outside the process with a
         seccomp user-notification. Check that its guarantees are not overstated: it enforces by

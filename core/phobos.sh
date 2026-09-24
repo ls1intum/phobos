@@ -26,12 +26,12 @@ Restriction options (every restriction is applied by default):
                                      layer disabled, EVEN when a base policy is
                                      present. For deliberate unconfined runs only.
   --debug                            Print on stderr what each layer does and runs, and
-                                     have phobos-landlock and the connect guard report
+                                     have phobos-landlock-filesystem-and-networksystem and the connect guard report
                                      verbosely too. It prints the whole effective policy,
                                      so it is for diagnosis, not for grading logs.
 
 Override options (taken only from the command line, never from the environment):
-  --landlock-bin <path>              The phobos-landlock binary (default: beside this script).
+  --landlock-bin <path>              The phobos-landlock-filesystem-and-networksystem binary (default: beside this script).
   --timeout-bin <path>              The timeout tool (default: timeout).
   --pgroup-lock-bin <path>          The group lock the timeout applies (default: beside this script).
   --connect-guard-bin <path>        The connect guard (default: beside this script).
@@ -163,10 +163,10 @@ fi
 # Resolve the startup overrides from the flags, with the built-in defaults. The environment
 # is deliberately not consulted for any of them.
 tail_flags_file="${opt_tail_flags_file:-${HERE}/TailPhobos.cfg}"
-landlock_bin="${opt_landlock_bin:-${HERE}/phobos-landlock}"
+landlock_bin="${opt_landlock_bin:-${HERE}/phobos-landlock-filesystem-and-networksystem}"
 timeout_bin="${opt_timeout_bin:-timeout}"
-pgroup_lock_bin="${opt_pgroup_lock_bin:-${HERE}/phobos-pgroup-lock}"
-connect_guard_bin="${opt_connect_guard_bin:-${HERE}/phobos-connect-guard}"
+pgroup_lock_bin="${opt_pgroup_lock_bin:-${HERE}/phobos-seccomp-timeoutsystem}"
+connect_guard_bin="${opt_connect_guard_bin:-${HERE}/phobos-seccomp-networksystem}"
 haproxy_bin="${opt_haproxy_bin:-haproxy}"
 resolver="${opt_resolver:-}"
 
@@ -206,7 +206,7 @@ fi
 # the rest under GNU timeout and waits on it, and the filesystem layer is always last and runs
 # the command, applying Landlock unless --no-landlock tells it not to. The resource layer is
 # not a link of this chain: the filesystem layer starts it as the last step before
-# phobos-landlock, so the command's limits bind the command and none of the helpers around it.
+# phobos-landlock-filesystem-and-networksystem, so the command's limits bind the command and none of the helpers around it.
 dbg=(); (( enable_debug )) && dbg=(--debug)
 chain=()
 if (( enable_timeout ));   then chain+=( "${HERE}/phobos-timeout.sh"   "${dbg[@]}" --timeout-bin "$timeout_bin" --pgroup-lock-bin "$pgroup_lock_bin" "$SPEC_DIR" -- ); fi

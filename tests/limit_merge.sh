@@ -4,7 +4,7 @@
 # across files, and the order of the cfgs does not matter. The effective timeout is read from
 # what the timeout layer invokes GNU timeout with, captured by a recording stand-in, and the
 # effective limits as the rlimits the command inherits, so a pass-through stand-in for
-# phobos-landlock is enough and no Landlock kernel is needed. The network layer is switched
+# phobos-landlock-filesystem-and-networksystem is enough and no Landlock kernel is needed. The network layer is switched
 # off only to spare the checks its readelf dependency.
 set -uo pipefail
 

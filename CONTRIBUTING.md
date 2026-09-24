@@ -72,7 +72,7 @@ pull request, not only in a commit message.
    nothing about Python, and a change that touches the shared configuration affects both.
 3. **State the negative case.** A change is not verified by a passing exercise alone. Say
    what must still be blocked and how you confirmed it is.
-4. **Do not commit the compiled C products.** `phobos-landlock`, the connect guard and the
+4. **Do not commit the compiled C products.** `phobos-landlock-filesystem-and-networksystem`, the connect guard and the
    timeout's group lock are built from the source under `core/`, once per architecture, inside the run-phase image, and
    CI checks the copies the image ships are hardened. If you change the source, say so; the
    command to rebuild and check the image locally is in AGENTS.md.

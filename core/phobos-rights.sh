@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# Turning a parsed policy into the --rights= arguments phobos-landlock takes.
+# Turning a parsed policy into the --rights= arguments phobos-landlock-filesystem-and-networksystem takes.
 #
 # A component of phobos-common.sh, which sources this file after phobos-constants.sh
 # and is what every caller sources. It sets no shell option and sources nothing, so
@@ -10,7 +10,7 @@
 # shellcheck disable=SC2034
 
 # --------------------------------------------------------------------------
-# Translating a parsed policy into phobos-landlock arguments.
+# Translating a parsed policy into phobos-landlock-filesystem-and-networksystem arguments.
 #
 # The filesystem layer builds these arguments, and the tests read them back. They live
 # here rather than in the layer so that the translation is stated once: it drifted apart
@@ -48,7 +48,7 @@ rights_normalise() {
 # Refuses a path that is a symbolic link with no target. Assumes it is about to
 # be materialised: the redirection that creates a missing write path follows such
 # a link and writes wherever it points, outside anything the policy named, and
-# phobos-landlock only refuses it afterwards.
+# phobos-landlock-filesystem-and-networksystem only refuses it afterwards.
 refuse_dangling_symlink() {
   local candidate="$1"
   [[ -L "$candidate" && ! -e "$candidate" ]] || return 0
@@ -77,7 +77,7 @@ materialise_write_path() {
 # The changeable paths (write, create, delete) are materialised first, so a path that is also
 # read or executed exists by the time its read/execute row is built and keeps that right. A
 # non-existent read/execute path is then dropped as a system path absent from this image; a
-# non-existent changeable path is kept, so phobos-landlock refuses it with a clear policy
+# non-existent changeable path is kept, so phobos-landlock-filesystem-and-networksystem refuses it with a clear policy
 # error rather than the run failing later with EACCES.
 collect_rights_table() {
   local table="$1"

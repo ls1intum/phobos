@@ -112,7 +112,7 @@ as a dependency.
 
 ## The compiled binaries
 
-None of the C products is committed. `phobos-landlock`, the connect guard and the timeout's
+None of the C products is committed. `phobos-landlock-filesystem-and-networksystem`, the connect guard and the timeout's
 group lock are built from the source under `core/`, once per architecture, inside the run-phase
 image. `.gitattributes` marks `*.so` binary so that a stray shared object is never normalised,
 though none is shipped.

@@ -1,11 +1,11 @@
 #define _GNU_SOURCE
-#include "phobos-connect-guard-supervisor.h"
+#include "phobos-seccomp-networksystem-supervisor.h"
 
-#include "phobos-connect-guard-destination.h"
-#include "phobos-connect-guard-diagnostics.h"
-#include "phobos-connect-guard-rules.h"
-#include "phobos-connect-guard-seccomp-compat.h"
-#include "phobos-connect-guard-socket-types.h"
+#include "phobos-seccomp-networksystem-destination.h"
+#include "phobos-seccomp-networksystem-diagnostics.h"
+#include "phobos-seccomp-networksystem-rules.h"
+#include "phobos-seccomp-networksystem-seccomp-compat.h"
+#include "phobos-seccomp-networksystem-socket-types.h"
 
 #include <errno.h>
 #include <fcntl.h>

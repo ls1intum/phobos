@@ -8,7 +8,7 @@ the same rules, with an optional third for host names:
 - Concrete TCP ports are handed to Landlock as `--connect-tcp`. This is the
   kernel-enforced half: a connect to a port no rule names is refused by Landlock
   itself, and it cannot be stepped around from inside the process.
-- The host/address rules are read by the connect guard (phobos-connect-guard),
+- The host/address rules are read by the connect guard (phobos-seccomp-networksystem),
   which supervises every connect() with a seccomp user-notification and makes an
   allowed connection itself. Where it runs it is the whole connect boundary, host
   and port, from outside the process, which a raw system call cannot step around.

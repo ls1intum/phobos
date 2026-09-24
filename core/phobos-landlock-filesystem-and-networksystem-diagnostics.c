@@ -1,4 +1,4 @@
-#include "phobos-landlock-diagnostics.h"
+#include "phobos-landlock-filesystem-and-networksystem-diagnostics.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -11,7 +11,7 @@ bool verbose = false;
 /* Both printers share this, so every line of this tool is recognisable by the
  * same prefix no matter which one produced it. */
 static void print_prefixed(const char *format, va_list argument_list) {
-    fprintf(stderr, "[phobos-landlock] ");
+    fprintf(stderr, "[phobos-landlock-filesystem-and-networksystem] ");
     vfprintf(stderr, format, argument_list);
     fprintf(stderr, "\n");
 }
@@ -34,12 +34,12 @@ void warn_always(const char *format, ...) {
 }
 
 [[noreturn]] void exit_with_system_error(const char *message) {
-    fprintf(stderr, "[phobos-landlock] %s: %s\n", message, strerror(errno));
+    fprintf(stderr, "[phobos-landlock-filesystem-and-networksystem] %s: %s\n", message, strerror(errno));
     exit(EXIT_CODE_POLICY_ERROR);
 }
 
 [[noreturn]] void exit_with_message(const char *message) {
-    fprintf(stderr, "[phobos-landlock] %s\n", message);
+    fprintf(stderr, "[phobos-landlock-filesystem-and-networksystem] %s\n", message);
     exit(EXIT_CODE_POLICY_ERROR);
 }
 

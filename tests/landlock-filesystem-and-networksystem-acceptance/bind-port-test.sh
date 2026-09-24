@@ -16,7 +16,7 @@ HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/../harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 
 CORE="${PHOBOS_HOME:-/var/tmp/opt/core}"
-LANDLOCK="${CORE}/phobos-landlock"
+LANDLOCK="${CORE}/phobos-landlock-filesystem-and-networksystem"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -62,7 +62,7 @@ command -v "$compiler" >/dev/null 2>&1 || compiler=gcc
 "$compiler" -O2 -o "$WORK/bind_probe" "$WORK/bind_probe.c" 2>"$WORK/cc.log" \
   || { bad "compile the bind probe" "$(cat "$WORK/cc.log")"; finish; }
 
-# Runs the raw-bind probe under phobos-landlock. Arguments: port to bind, then any landlock args.
+# Runs the raw-bind probe under phobos-landlock-filesystem-and-networksystem. Arguments: port to bind, then any landlock args.
 run() {
   local port=$1
   shift

@@ -54,7 +54,7 @@ SPEC_DIR="$1"; shift 2
 trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 
 TIMEOUT_BIN="${TIMEOUT_BIN_OPT:-timeout}"
-PGROUP_LOCK_BIN="${PGROUP_LOCK_BIN_OPT:-${HERE}/phobos-pgroup-lock}"
+PGROUP_LOCK_BIN="${PGROUP_LOCK_BIN_OPT:-${HERE}/phobos-seccomp-timeoutsystem}"
 
 # An empty timeout.sec, or none, means no timeout: hand the chain straight on. Without a timeout
 # there is no group-kill to escape, so the group lock is not applied either.

@@ -1,5 +1,5 @@
 /*
- * phobos-connect-guard -- supervise the egress a sandboxed command makes, so it can be
+ * phobos-seccomp-networksystem -- supervise the egress a sandboxed command makes, so it can be
  * allowed or refused by host address, which Landlock, enforcing by port alone, cannot do.
  *
  * The name is narrower than the program. connect() is what it decides against the
@@ -9,11 +9,11 @@
  * own destination is judged like a connect and TCP Fast Open cannot open a connection past
  * one; io_uring, a second syscall interface that would reach connect unseen; and
  * setsid/setpgid, which would take the command out of the group an outer timeout kills.
- * phobos-connect-guard-child.h holds the filter and says how sendmsg is trapped without
+ * phobos-seccomp-networksystem-child.h holds the filter and says how sendmsg is trapped without
  * parking the child's own handoff of the notification descriptor.
  *
  * Usage:
- *   phobos-connect-guard [--verbose] [--rules FILE] -- COMMAND [ARGUMENTS...]
+ *   phobos-seccomp-networksystem [--verbose] [--rules FILE] -- COMMAND [ARGUMENTS...]
  *
  * It is one process that becomes two. It forks: the child is the sandboxed
  * lineage and the parent is the supervisor beside it.
@@ -58,14 +58,14 @@
  * This file is the sequence of stages and nothing else. What each stage works with lives
  * beside it:
  *
- *   phobos-connect-guard-options.h         the command line, read into one object
- *   phobos-connect-guard-rules.h           the allow-list and the decision on a destination
- *   phobos-connect-guard-child.h           the sandboxed half: install the filter, hand over
- *   phobos-connect-guard-supervisor.h      the supervising half: decide every trapped call
- *   phobos-connect-guard-destination.h     a destination read out of the command's memory
- *   phobos-connect-guard-socket-types.h    the type of every socket, remembered by inode
- *   phobos-connect-guard-seccomp-compat.h  the seccomp names older headers lack
- *   phobos-connect-guard-diagnostics.h     the setup exit status and the --verbose lines
+ *   phobos-seccomp-networksystem-options.h         the command line, read into one object
+ *   phobos-seccomp-networksystem-rules.h           the allow-list and the decision on a destination
+ *   phobos-seccomp-networksystem-child.h           the sandboxed half: install the filter, hand over
+ *   phobos-seccomp-networksystem-supervisor.h      the supervising half: decide every trapped call
+ *   phobos-seccomp-networksystem-destination.h     a destination read out of the command's memory
+ *   phobos-seccomp-networksystem-socket-types.h    the type of every socket, remembered by inode
+ *   phobos-seccomp-networksystem-seccomp-compat.h  the seccomp names older headers lack
+ *   phobos-seccomp-networksystem-diagnostics.h     the setup exit status and the --verbose lines
  *
  * It fails closed. If the filter cannot be installed, or the supervisor cannot be
  * handed the notification descriptor, the run is refused rather than left to run
@@ -75,11 +75,11 @@
  */
 
 #define _GNU_SOURCE
-#include "phobos-connect-guard-child.h"
-#include "phobos-connect-guard-diagnostics.h"
-#include "phobos-connect-guard-options.h"
-#include "phobos-connect-guard-rules.h"
-#include "phobos-connect-guard-supervisor.h"
+#include "phobos-seccomp-networksystem-child.h"
+#include "phobos-seccomp-networksystem-diagnostics.h"
+#include "phobos-seccomp-networksystem-options.h"
+#include "phobos-seccomp-networksystem-rules.h"
+#include "phobos-seccomp-networksystem-supervisor.h"
 
 #include <errno.h>
 #include <signal.h>

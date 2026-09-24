@@ -21,7 +21,7 @@ source "${HERE}/../harness.sh" || { echo "cannot source the harness beside ${HER
 CORE=/var/tmp/opt/core
 # How many lines of a failing build's log a failure shows.
 LOG_EXCERPT_LINES=5
-LL=$CORE/phobos-landlock
+LL=$CORE/phobos-landlock-filesystem-and-networksystem
 P=/var/tmp/project
 hdr(){ printf '\n\033[1m%s\033[0m\n' "$*"; }
 

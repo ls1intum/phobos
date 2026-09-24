@@ -17,7 +17,7 @@
 #elif defined(__aarch64__)
 #define GUARD_NATIVE_AUDIT_ARCH AUDIT_ARCH_AARCH64
 #else
-#error "phobos-connect-guard supports x86-64 and aarch64 only"
+#error "phobos-seccomp-networksystem supports x86-64 and aarch64 only"
 #endif
 
 /* The child. Installs the filter, sends its notification descriptor up, then

@@ -40,12 +40,12 @@ core/                      the sandbox itself
   phobos-time.sh           the timeout contract: how a value is spelled and compared
   phobos-spec-dir.sh       the specification directory and its lifetime
   phobos-policy-parse.sh   one cfg in, the parsed state and the specification files out
-  phobos-rights.sh         a parsed policy to the --rights= arguments phobos-landlock takes
+  phobos-rights.sh         a parsed policy to the --rights= arguments phobos-landlock-filesystem-and-networksystem takes
   phobos-network-args.sh   [connect] and [bind] to the TCP port rules Landlock enforces
   phobos-constants.sh      the numbers the scripts share, named once, the exit statuses among them
-  phobos-landlock*.c/.h    the C program that applies the Landlock policy, then exec's the command
-  phobos-connect-guard*.c/.h  the connect guard: supervises the egress a command makes and enforces [connect] by host and port;
-                           phobos-connect-guard.c is the sequence of stages, the modules beside it do the work
+  phobos-landlock-filesystem-and-networksystem*.c/.h    the C program that applies the Landlock policy, then exec's the command
+  phobos-seccomp-networksystem*.c/.h  the connect guard: supervises the egress a command makes and enforces [connect] by host and port;
+                           phobos-seccomp-networksystem.c is the sequence of stages, the modules beside it do the work
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
   config_doc.txt           the [connect] and [bind] sections in full: what enforces what
 docker/prune_phase/        one image per language, plus the orchestrator
@@ -57,18 +57,18 @@ var/tmp/                   prune inputs, helpers and example outputs
 
 ## The filesystem layer: Landlock
 
-`phobos-landlock` is a small C program that reads the path set and, for each path, adds a Landlock rule granting exactly the access the policy allows: read, write, execute, create, delete, ioctl, each as its own right. It then calls `landlock_restrict_self`, after which the process and everything it starts can only lose access, never regain it. There is no mount namespace and no privilege involved; Landlock withholds access to the existing filesystem rather than building a new view of it.
+`phobos-landlock-filesystem-and-networksystem` is a small C program that reads the path set and, for each path, adds a Landlock rule granting exactly the access the policy allows: read, write, execute, create, delete, ioctl, each as its own right. It then calls `landlock_restrict_self`, after which the process and everything it starts can only lose access, never regain it. There is no mount namespace and no privilege involved; Landlock withholds access to the existing filesystem rather than building a new view of it.
 
 Two consequences of using Landlock rather than a mount sandbox are worth knowing:
 
 - Landlock grants a whole subtree and cannot carve an exception inside it, so a path is either granted, with everything beneath it, or simply not granted. A path that is not granted is denied, but it stays visible by name; there is no way to blank it out.
-- A right the running kernel is too old to know is not enforced at all. `phobos-landlock` reports every such gap before the run, and `--minimum-landlock-version` refuses a kernel too old for the guarantee an exercise needs.
+- A right the running kernel is too old to know is not enforced at all. `phobos-landlock-filesystem-and-networksystem` reports every such gap before the run, and `--minimum-landlock-version` refuses a kernel too old for the guarantee an exercise needs.
 
 ## The network layer
 
 Landlock enforces **TCP ports**, so a policy that names a concrete port has that port enforced by the kernel, below anything a submission can do in user space. It covers **UDP ports** only from Landlock version 10 (a udp rule is refused on an older kernel), and it does not know hosts, so:
 
-- the **connect guard** (`phobos-connect-guard`) supervises every `connect()` with a seccomp user-notification and makes an allowed connection itself, so it enforces the `[connect]` allow-list by host and port from outside the process, which a raw system call cannot step around. It holds an IP-literal rule (and the name `localhost`) to that exact address; a rule naming a DNS hostname it cannot tie to an address is held to its port alone, with the host left to the egress broker. A `connect` of another family, such as a UNIX-domain socket, is refused rather than made outside the sandbox.
+- the **connect guard** (`phobos-seccomp-networksystem`) supervises every `connect()` with a seccomp user-notification and makes an allowed connection itself, so it enforces the `[connect]` allow-list by host and port from outside the process, which a raw system call cannot step around. It holds an IP-literal rule (and the name `localhost`) to that exact address; a rule naming a DNS hostname it cannot tie to an address is held to its port alone, with the host left to the egress broker. A `connect` of another family, such as a UNIX-domain socket, is refused rather than made outside the sandbox.
 - the **egress broker** (an HAProxy the network layer starts automatically whenever a `[connect]` rule names a host) enforces that rule by reading the TLS host name from the ClientHello the guard cannot see and, for an exact name, resolving it itself and connecting only to that address. An exact-name rule is refused when no resolver is given, rather than run with a name the broker cannot pin to an address.
 - The boundary for external egress, and for UDP and DNS, is the container started with `--network none`. Under it, only loopback exists, and a loopback-only policy needs no port rules; an external host, if one is ever allowed, should name a concrete port so that Landlock can enforce it alongside the guard.
 
@@ -78,14 +78,14 @@ Landlock enforces **TCP ports**, so a policy that names a concrete port has that
 
 ```
 phobos.sh -> phobos-timeout.sh -> phobos-network.sh (connect guard) -> phobos-filesystem.sh
-          -> phobos-resources.sh -> phobos-landlock -> the command
+          -> phobos-resources.sh -> phobos-landlock-filesystem-and-networksystem -> the command
 ```
 
 The base policy is every `Base*.cfg` sitting beside `phobos-policy.sh`, applied in sorted order, and the exercise configurations named with `--config` are applied on top. **Ship exactly one `Base*.cfg` per runtime environment.** They are found by a glob and unioned, so a `BasePhobos.cfg` left beside a `BaseLanguage-java.cfg` gives a Java run the paths of every other language as well, which is a wider sandbox that looks like a working one. The prune phase does not prevent that: it writes every applied policy into one directory, the cross-language `BasePhobos.cfg` beside the per-language files, because they are **alternatives** rather than parts of one policy, and choosing between them is the packaging step. `docker/run_phase/java/Dockerfile` does the choosing by naming `BaseLanguage-java.cfg` explicitly, and an image that copied the directory wholesale would ship the union of every alternative. A `BasePhobos.cfg` a run left behind earlier is the same hazard from the other direction, so check what is in that directory rather than what this run wrote. The files meant only for reading go to `debug/` and are never applied at all. With no `Base*.cfg` at all, a run is refused (`PHB-EPOLICY`) rather than run unconfined.
 
 A layer switched off is left out of the chain rather than entered and skipped. Three properties of the chain are relied on and easy to break:
 
-- The resource limits bind the command and nothing beside it. `phobos-resources.sh` is started by the filesystem layer as the last step before `phobos-landlock`, so the helpers around the command (the filesystem layer's shell, the stderr pass-through and denial counter, the connect guard's supervisor) never run under the command's rlimits. A helper that met the command's file-size, memory or CPU limit would otherwise take the command's output with it.
+- The resource limits bind the command and nothing beside it. `phobos-resources.sh` is started by the filesystem layer as the last step before `phobos-landlock-filesystem-and-networksystem`, so the helpers around the command (the filesystem layer's shell, the stderr pass-through and denial counter, the connect guard's supervisor) never run under the command's rlimits. A helper that met the command's file-size, memory or CPU limit would otherwise take the command's output with it.
 - The timeout layer waits on the rest of the chain, and the layers below it ignore SIGTERM while their command keeps the default disposition, so the `--kill-after` escalation reaches a command that ignores SIGTERM. The filesystem layer's bounded wait for the denial counts stays below that escalation.
 - A run is reported as `PHB-ETIMEOUT` only when GNU timeout's status says so and the run lasted at least its timeout; a command's own 124 or 137, the OOM killer's SIGKILL among them, passes through unchanged.
 
@@ -132,7 +132,7 @@ To isolate which layer a failure belongs to, each layer can be turned off on its
 ${PHOBOS_HOME}/phobos.sh --no-runtime-restriction -- <command>
 ```
 
-`--debug` makes every layer say on stderr what it does and what it runs, and has `phobos-landlock` and the connect guard report verbosely too; stdout stays the command's own. It prints the whole effective policy, so it is meant for diagnosing a run, not for grading logs. It can only be switched on by the flag, never through the environment.
+`--debug` makes every layer say on stderr what it does and what it runs, and has `phobos-landlock-filesystem-and-networksystem` and the connect guard report verbosely too; stdout stays the command's own. It prints the whole effective policy, so it is meant for diagnosing a run, not for grading logs. It can only be switched on by the flag, never through the environment.
 
 ## Configuration format
 
@@ -168,7 +168,7 @@ Every text file is stored with LF line endings: the path sets are read line by l
 There is no build system; the shell runs as it is and the C is compiled inside the image. The suites under `tests/` are the checks:
 
 - `tests/unit/`: the Landlock program, the connect guard and the network filter. CI holds the network filter to every line and branch and the connect guard to every line; the Landlock program's suite is measured by weekly mutation testing instead, since coverage instrumentation disturbs the calls it interposes.
-- `tests/landlock-acceptance/`: the sandbox applied to real commands in an ordinary container (no `--privileged`, `--cap-add` or `--security-opt`), proving both that a permitted action works and that a forbidden one is denied, and that the shipped policy runs.
+- `tests/landlock-filesystem-and-networksystem-acceptance/`: the sandbox applied to real commands in an ordinary container (no `--privileged`, `--cap-add` or `--security-opt`), proving both that a permitted action works and that a forbidden one is denied, and that the shipped policy runs.
 - the shell suites under `tests/`: the address cache's port restrictions, the timeout contract, and the prune phase.
 
 `CONTRIBUTING.md` lists the linters, which are the gate, and `AGENTS.md` records the conventions a change here is held to.

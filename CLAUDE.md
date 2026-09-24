@@ -56,13 +56,13 @@ environment, offline, and grading itself only applies a fixed configuration.
 ## Tech Stack
 
 - POSIX shell for the wrapper and the layers, which is the bulk of the repository
-- C for `phobos-landlock`, the connect guard and the timeout's group lock, all compiled inside the run-phase image
+- C for `phobos-landlock-filesystem-and-networksystem`, the connect guard and the timeout's group lock, all compiled inside the run-phase image
 - Python for the prune orchestrator and the artefact helpers
 - Docker for both phases, one image per language environment
 - Java for exactly one file, `.github/scripts/CheckPullRequestTemplate.java`
 
 The filesystem layer is enforced by Landlock, an unprivileged Linux kernel sandbox, applied
-by `phobos-landlock` (the C program under `core/`). The run phase needs no privileges, no
+by `phobos-landlock-filesystem-and-networksystem` (the C program under `core/`). The run phase needs no privileges, no
 capabilities and no container flags. The discovery phase still uses Bubblewrap to hide
 directories while it measures; the sandbox an exercise runs in does not.
 
@@ -144,21 +144,21 @@ outside is `--network none` and cgroup limits, which Phobos cannot set for itsel
 core/                      the sandbox itself
   phobos.sh                entry point: parses the configuration, applies the layers
   phobos-filesystem.sh     the filesystem layer, reads the path sets and applies Landlock
-  phobos-landlock*.c/.h    the C program that applies the Landlock policy, then exec's
-  phobos-connect-guard*.c/.h  the connect guard: supervises connect() and enforces [connect] by host and port
+  phobos-landlock-filesystem-and-networksystem*.c/.h    the C program that applies the Landlock policy, then exec's
+  phobos-seccomp-networksystem*.c/.h  the connect guard: supervises connect() and enforces [connect] by host and port
   phobos-policy.sh         turns the base and exercise configuration into a run's specification
   phobos-network.sh        the network layer, runs the connect guard and the egress/inbound HAProxy
   phobos-haproxy.sh        the egress broker and inbound filter: turns [connect]/[accept] into an haproxy.cfg
   phobos-resources.sh      the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
   phobos-timeout.sh        the timeout layer, which applies the group lock below when a timeout is set
-  phobos-pgroup-lock.c     the group lock: a seccomp filter refusing setsid and setpgid, then exec's
+  phobos-seccomp-timeoutsystem.c     the group lock: a seccomp filter refusing setsid and setpgid, then exec's
   phobos-common.sh         the shared helpers, sourced by the others; it sources the seven below
   phobos-log.sh            reporting, and counting what a run was denied
   phobos-paths.sh          the two canonical forms a path is compared in
   phobos-time.sh           the timeout contract: how a value is spelled and compared
   phobos-spec-dir.sh       the specification directory and its lifetime
   phobos-policy-parse.sh   one cfg in, the parsed state and the specification files out
-  phobos-rights.sh         a parsed policy to the --rights= arguments phobos-landlock takes
+  phobos-rights.sh         a parsed policy to the --rights= arguments phobos-landlock-filesystem-and-networksystem takes
   phobos-network-args.sh   [connect] and [bind] to the TCP and UDP port rules Landlock enforces
   phobos-constants.sh      the numbers the scripts share, named once, the exit statuses among them
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy

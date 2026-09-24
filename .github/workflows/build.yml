@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   unit:
-    name: Unit tests for phobos-landlock, the connect guard and the network filter
+    name: Unit tests for phobos-landlock-filesystem-and-networksystem, the connect guard and the network filter
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -51,7 +51,7 @@ jobs:
 
       - name: Run the connect guard unit tests
         if: ${{ !cancelled() }}
-        run: bash tests/unit/connect_guard_run.sh
+        run: bash tests/unit/seccomp_networksystem_run.sh
 
       # The guard installs a real seccomp filter and forks only when run for real; the unit
       # suite wraps every syscall and fork instead, so it needs no kernel, and its interposed
@@ -60,7 +60,7 @@ jobs:
       # states.
       - name: Every line of the connect guard ran
         if: ${{ !cancelled() }}
-        run: bash tests/unit/connect_guard_run.sh --coverage
+        run: bash tests/unit/seccomp_networksystem_run.sh --coverage
 
       # No coverage step, deliberately. The suite interposes open and close, which is
       # also how the gcov runtime writes its .gcda files, so an instrumented run has
@@ -179,13 +179,13 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
-            phobos-run-phase:ci bash /tests/landlock-acceptance/run-tests.sh
+            phobos-run-phase:ci bash /tests/landlock-filesystem-and-networksystem-acceptance/run-tests.sh
 
       - name: Inheritance, non-root and the control probe
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
-            phobos-run-phase:ci bash /tests/landlock-acceptance/extra-tests.sh
+            phobos-run-phase:ci bash /tests/landlock-filesystem-and-networksystem-acceptance/extra-tests.sh
 
       # Its own step because it is the one suite that resolves Maven plugins, and a
       # failure here is a dependency problem rather than a Landlock regression. It still
@@ -194,7 +194,7 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
-            phobos-run-phase:ci bash /tests/landlock-acceptance/phase-test.sh
+            phobos-run-phase:ci bash /tests/landlock-filesystem-and-networksystem-acceptance/phase-test.sh
 
       # The one suite that runs the shipped policy an exercise actually gets, rather than a
       # tight test policy, so a regression that breaks an ordinary run under it, or widens it,
@@ -203,7 +203,7 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
-            phobos-run-phase:ci bash /tests/landlock-acceptance/shipped-policy-test.sh
+            phobos-run-phase:ci bash /tests/landlock-filesystem-and-networksystem-acceptance/shipped-policy-test.sh
 
       # The kernel-enforced network boundary holds against a raw connect() syscall, which is
       # what makes concrete Landlock ports the network boundary alongside the connect guard.
@@ -211,7 +211,7 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
-            phobos-run-phase:ci bash /tests/landlock-acceptance/network-port-test.sh
+            phobos-run-phase:ci bash /tests/landlock-filesystem-and-networksystem-acceptance/network-port-test.sh
 
       # The Landlock bind-port rule keeps a submission off every port but the ones a [bind] rule
       # names, the public port an [accept] rule fronts included, against a raw bind and a
@@ -220,7 +220,7 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
-            phobos-run-phase:ci bash /tests/landlock-acceptance/bind-port-test.sh
+            phobos-run-phase:ci bash /tests/landlock-filesystem-and-networksystem-acceptance/bind-port-test.sh
 
       # Scoping keeps a submission from signalling the grading process beside it or reaching
       # an abstract UNIX socket outside the sandbox, which the path and port rules do not
@@ -230,7 +230,7 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
-            phobos-run-phase:ci bash /tests/landlock-acceptance/scoping-test.sh
+            phobos-run-phase:ci bash /tests/landlock-filesystem-and-networksystem-acceptance/scoping-test.sh
 
       # The connect guard the image compiled installs its seccomp user-notification filter under
       # the image's default seccomp profile in an ordinary container, and enforces the [connect]
@@ -240,7 +240,8 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
-            phobos-run-phase:ci bash /tests/landlock-acceptance/connect-guard-test.sh
+            phobos-run-phase:ci \
+            bash /tests/landlock-filesystem-and-networksystem-acceptance/seccomp-networksystem-test.sh
 
   # Mutation testing installs clang and mull into a container and then runs the suite
   # once per mutant, which is minutes rather than seconds. Weekly and on request, so it

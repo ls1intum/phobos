@@ -7,7 +7,7 @@
 #ifndef PHOBOS_LANDLOCK_OPTIONS_H
 #define PHOBOS_LANDLOCK_OPTIONS_H
 
-#include "phobos-landlock-path-rule.h"
+#include "phobos-landlock-filesystem-and-networksystem-path-rule.h"
 
 #include <stddef.h>
 #include <stdint.h>

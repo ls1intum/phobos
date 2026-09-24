@@ -1,7 +1,7 @@
 /*
- * Unit tests for phobos-landlock.
+ * Unit tests for phobos-landlock-filesystem-and-networksystem.
  *
- * The integration suites under tests/landlock-acceptance exercise the sandbox
+ * The integration suites under tests/landlock-filesystem-and-networksystem-acceptance exercise the sandbox
  * against a real kernel, which is what proves it works. They cannot reach the
  * failure paths, though: a kernel that refuses a rule, an version older than the
  * one this machine has, an exec that fails. Those decide whether the tool
@@ -35,13 +35,13 @@
  * here under another name. The modules beside it are linked in the normal way,
  * so their functions are reached through their headers rather than an include. */
 #define main sut_main
-#include "../../core/phobos-landlock.c"
+#include "../../core/phobos-landlock-filesystem-and-networksystem.c"
 #undef main
 
-#include "../../core/phobos-landlock-diagnostics.h"
-#include "../../core/phobos-landlock-options.h"
-#include "../../core/phobos-landlock-path-rule.h"
-#include "../../core/phobos-landlock-ruleset.h"
+#include "../../core/phobos-landlock-filesystem-and-networksystem-diagnostics.h"
+#include "../../core/phobos-landlock-filesystem-and-networksystem-options.h"
+#include "../../core/phobos-landlock-filesystem-and-networksystem-path-rule.h"
+#include "../../core/phobos-landlock-filesystem-and-networksystem-ruleset.h"
 
 #include <sys/wait.h>
 
@@ -523,23 +523,23 @@ static void test_rights_tables(void) {
  * keeps an option that reads its value from reading past the end of them. */
 static void test_usage_errors(void) {
     printf("\nCalls that are refused before anything is applied\n");
-    char *no_args[] = {"phobos-landlock", NULL};
+    char *no_args[] = {"phobos-landlock-filesystem-and-networksystem", NULL};
     expect_exit("no arguments at all", EXIT_CODE_USAGE, no_args);
-    check("a call with no arguments says how to call it", stderr_says("Usage: phobos-landlock"));
+    check("a call with no arguments says how to call it", stderr_says("Usage: phobos-landlock-filesystem-and-networksystem"));
 
-    char *unknown[] = {"phobos-landlock", "--nonsense", "x", "--", "/bin/true", NULL};
+    char *unknown[] = {"phobos-landlock-filesystem-and-networksystem", "--nonsense", "x", "--", "/bin/true", NULL};
     expect_exit("an unknown option", EXIT_CODE_USAGE, unknown);
 
-    char *dangling[] = {"phobos-landlock", "--rights=r", NULL};
+    char *dangling[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=r", NULL};
     expect_exit("an option whose value is missing", EXIT_CODE_USAGE, dangling);
 
-    char *dangling_port[] = {"phobos-landlock", "--rights=r", "/usr", "--connect-tcp", NULL};
+    char *dangling_port[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=r", "/usr", "--connect-tcp", NULL};
     expect_exit("an option that reads a value, with nothing after it", EXIT_CODE_USAGE, dangling_port);
 
-    char *no_cmd[] = {"phobos-landlock", "--rights=r", "/usr", "--", NULL};
+    char *no_cmd[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=r", "/usr", "--", NULL};
     expect_exit("nothing to run after --", EXIT_CODE_USAGE, no_cmd);
 
-    char *only_verbose[] = {"phobos-landlock", "--verbose", NULL};
+    char *only_verbose[] = {"phobos-landlock-filesystem-and-networksystem", "--verbose", NULL};
     expect_exit("--verbose but no command", EXIT_CODE_USAGE, only_verbose);
 }
 
@@ -562,7 +562,7 @@ static void test_limits(void) {
     printf("\nLimits of the fixed-size tables\n");
     static char *many[MAXIMUM_PATH_RULES * WORDS_PER_RULE + ARGUMENT_HEADROOM];
     size_t n = 0;
-    many[n++] = "phobos-landlock";
+    many[n++] = "phobos-landlock-filesystem-and-networksystem";
     for (size_t r = 0; r <= MAXIMUM_PATH_RULES; r++) {
         many[n++] = "--rights=r";
         many[n++] = "/usr";
@@ -575,7 +575,7 @@ static void test_limits(void) {
 
     static char *ports[MAXIMUM_PORT_RULES * WORDS_PER_RULE + ARGUMENT_HEADROOM];
     n = 0;
-    ports[n++] = "phobos-landlock";
+    ports[n++] = "phobos-landlock-filesystem-and-networksystem";
     for (size_t p = 0; p <= MAXIMUM_PORT_RULES; p++) {
         ports[n++] = "--connect-tcp";
         ports[n++] = "443";
@@ -587,7 +587,7 @@ static void test_limits(void) {
 
     static char *binds[MAXIMUM_PORT_RULES * WORDS_PER_RULE + ARGUMENT_HEADROOM];
     n = 0;
-    binds[n++] = "phobos-landlock";
+    binds[n++] = "phobos-landlock-filesystem-and-networksystem";
     for (size_t p = 0; p <= MAXIMUM_PORT_RULES; p++) {
         binds[n++] = "--bind-tcp";
         binds[n++] = "8080";
@@ -597,7 +597,7 @@ static void test_limits(void) {
     binds[n] = NULL;
     expect_exit("one bind port more than the table holds", EXIT_CODE_POLICY_ERROR, binds);
 
-    char *no_fs_with_path[] = {"phobos-landlock", "--no-filesystem", "--rights=r", "/usr",
+    char *no_fs_with_path[] = {"phobos-landlock-filesystem-and-networksystem", "--no-filesystem", "--rights=r", "/usr",
                                "--",              "/bin/true",       NULL};
     expect_exit("--no-filesystem with a path rule is refused", EXIT_CODE_POLICY_ERROR,
                 no_fs_with_path);
@@ -614,19 +614,19 @@ static void test_limits(void) {
  * reached. */
 static void test_version_gate(void) {
     printf("\nWhat the kernel can enforce\n");
-    char *plain[] = {"phobos-landlock", "--rights=r", "/usr", "--", "/bin/true", NULL};
+    char *plain[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=r", "/usr", "--", "/bin/true", NULL};
 
     mock_landlock_version = -1;
     expect_exit("no Landlock at all refuses to run", EXIT_CODE_POLICY_ERROR, plain);
     check("a kernel without Landlock is named as the reason",
-          stderr_says("[phobos-landlock] Landlock is not available on this kernel"));
+          stderr_says("[phobos-landlock-filesystem-and-networksystem] Landlock is not available on this kernel"));
 
     mock_landlock_version = 0;
     expect_exit("a kernel offering version 0 refuses to run", EXIT_CODE_POLICY_ERROR, plain);
     check("version 0 is reported as too old rather than as absent",
           stderr_says("kernel offers Landlock version 0 but version 1 is required"));
 
-    char *demanding[] = {"phobos-landlock",
+    char *demanding[] = {"phobos-landlock-filesystem-and-networksystem",
                          "--minimum-landlock-version",
                          "5",
                          "--rights=r",
@@ -640,7 +640,7 @@ static void test_version_gate(void) {
     check("the refusal names both the version there is and the one that was asked for",
           stderr_says("kernel offers Landlock version 3 but version 5 is required"));
 
-    char *lenient[] = {"phobos-landlock",
+    char *lenient[] = {"phobos-landlock-filesystem-and-networksystem",
                        "--minimum-landlock-version",
                        "1",
                        "--rights=r",
@@ -657,7 +657,7 @@ static void test_version_gate(void) {
           stderr_says("warning: kernel offers Landlock version 99"));
 
     char *net[] = {
-        "phobos-landlock", "--connect-tcp", "443", "--rights=r", "/usr", "--", "/bin/true", NULL};
+        "phobos-landlock-filesystem-and-networksystem", "--connect-tcp", "443", "--rights=r", "/usr", "--", "/bin/true", NULL};
     mock_landlock_version = 3;
     expect_exit("network rules on an version below 4 refuse to run", EXIT_CODE_POLICY_ERROR,
                 net);
@@ -674,40 +674,40 @@ static void test_version_gate(void) {
  * input a second time and as something else. */
 static void test_number_parsing(void) {
     printf("\nValues that are not usable numbers\n");
-    char *not_a_number[] = {"phobos-landlock", "--connect-tcp", "https", "--rights=r",
+    char *not_a_number[] = {"phobos-landlock-filesystem-and-networksystem", "--connect-tcp", "https", "--rights=r",
                             "/usr", "--", "/bin/true", NULL};
     expect_exit("a port that is not a number", EXIT_CODE_POLICY_ERROR, not_a_number);
     check("the refusal quotes what was given", stderr_says("not a TCP port: 'https'"));
 
-    char *empty[] = {"phobos-landlock", "--connect-tcp", "", "--rights=r",
+    char *empty[] = {"phobos-landlock-filesystem-and-networksystem", "--connect-tcp", "", "--rights=r",
                      "/usr", "--", "/bin/true", NULL};
     expect_exit("an empty port value", EXIT_CODE_POLICY_ERROR, empty);
     check("an empty value is named as empty, and only that",
           stderr_says("not a TCP port: empty value") && !stderr_says("not a TCP port: ''"));
 
-    char *trailing[] = {"phobos-landlock", "--connect-tcp", "443x", "--rights=r",
+    char *trailing[] = {"phobos-landlock-filesystem-and-networksystem", "--connect-tcp", "443x", "--rights=r",
                         "/usr", "--", "/bin/true", NULL};
     expect_exit("a port with something after the digits", EXIT_CODE_POLICY_ERROR, trailing);
 
-    char *too_low[] = {"phobos-landlock", "--connect-tcp", "0", "--rights=r",
+    char *too_low[] = {"phobos-landlock-filesystem-and-networksystem", "--connect-tcp", "0", "--rights=r",
                        "/usr", "--", "/bin/true", NULL};
     expect_exit("port zero", EXIT_CODE_POLICY_ERROR, too_low);
 
-    char *too_high[] = {"phobos-landlock", "--connect-tcp", "65536", "--rights=r",
+    char *too_high[] = {"phobos-landlock-filesystem-and-networksystem", "--connect-tcp", "65536", "--rights=r",
                         "/usr", "--", "/bin/true", NULL};
     expect_exit("a port above 65535", EXIT_CODE_POLICY_ERROR, too_high);
 
-    char *overflowing[] = {"phobos-landlock", "--connect-tcp", "99999999999999999999",
+    char *overflowing[] = {"phobos-landlock-filesystem-and-networksystem", "--connect-tcp", "99999999999999999999",
                            "--rights=r", "/usr", "--", "/bin/true", NULL};
     expect_exit("a port that overflows the conversion", EXIT_CODE_POLICY_ERROR, overflowing);
 
-    char *bad_version[] = {"phobos-landlock", "--minimum-landlock-version", "none",
+    char *bad_version[] = {"phobos-landlock-filesystem-and-networksystem", "--minimum-landlock-version", "none",
                            "--rights=r", "/usr", "--", "/bin/true", NULL};
     expect_exit("a version that is not a number", EXIT_CODE_POLICY_ERROR, bad_version);
     check("the refusal names the option it came from",
           stderr_says("not a usable Landlock version: 'none'"));
 
-    char *unknown_version[] = {"phobos-landlock", "--minimum-landlock-version", "99",
+    char *unknown_version[] = {"phobos-landlock-filesystem-and-networksystem", "--minimum-landlock-version", "99",
                                "--rights=r", "/usr", "--", "/bin/true", NULL};
     expect_exit("a version this build does not know", EXIT_CODE_POLICY_ERROR, unknown_version);
 }
@@ -984,9 +984,9 @@ static void test_unenforceable_report(void) {
 
 static void test_syscall_failures(void) {
     printf("\nEvery syscall that can fail, failing\n");
-    char *plain[] = {"phobos-landlock", "--rights=r", "/usr", "--", "/bin/true", NULL};
-    char *writable[] = {"phobos-landlock", "--rights=rwmd", "/tmp", "--", "/bin/true", NULL};
-    char *net[] = {"phobos-landlock",
+    char *plain[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=r", "/usr", "--", "/bin/true", NULL};
+    char *writable[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=rwmd", "/tmp", "--", "/bin/true", NULL};
+    char *net[] = {"phobos-landlock-filesystem-and-networksystem",
                    "--connect-tcp",
                    "443",
                    "--bind-tcp",
@@ -996,15 +996,15 @@ static void test_syscall_failures(void) {
                    "--",
                    "/bin/true",
                    NULL};
-    char *moving[] = {"phobos-landlock", "--chdir", "/tmp", "--rights=r", "/usr", "--",
+    char *moving[] = {"phobos-landlock-filesystem-and-networksystem", "--chdir", "/tmp", "--rights=r", "/usr", "--",
                       "/bin/true",       NULL};
 
     fail_create = 1;
     expect_exit("creating the ruleset fails", EXIT_CODE_POLICY_ERROR, plain);
     check("the failing call and the reason are both named",
-          stderr_says("[phobos-landlock] landlock_create_ruleset: Invalid argument"));
+          stderr_says("[phobos-landlock-filesystem-and-networksystem] landlock_create_ruleset: Invalid argument"));
 
-    char *missing[] = {"phobos-landlock", "--rights=r", "/no/such/path/at/all", "--",
+    char *missing[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=r", "/no/such/path/at/all", "--",
                        "/bin/true",       NULL};
     expect_exit("a path on the allow-list does not exist", EXIT_CODE_POLICY_ERROR, missing);
     check("the path that could not be opened is named",
@@ -1012,7 +1012,7 @@ static void test_syscall_failures(void) {
 
     fail_fstat = 1;
     expect_exit("stat on an opened path fails", EXIT_CODE_POLICY_ERROR, plain);
-    check("a failing fstat is named", stderr_says("[phobos-landlock] fstat: Input/output error"));
+    check("a failing fstat is named", stderr_says("[phobos-landlock-filesystem-and-networksystem] fstat: Input/output error"));
 
     force_symlink = 1;
     expect_exit("a writable path that is a symlink is refused", EXIT_CODE_POLICY_ERROR,
@@ -1028,7 +1028,7 @@ static void test_syscall_failures(void) {
     fail_add_port = 1;
     expect_exit("the kernel rejects a port rule", EXIT_CODE_POLICY_ERROR, net);
     check("the rejected port rule is named by its direction",
-          stderr_says("[phobos-landlock] connect: Invalid argument"));
+          stderr_says("[phobos-landlock-filesystem-and-networksystem] connect: Invalid argument"));
 
     fail_chdir = 1;
     expect_exit("--chdir names a directory that cannot be entered", EXIT_CODE_POLICY_ERROR,
@@ -1070,20 +1070,20 @@ static void test_syscall_failures(void) {
  * rejects it. */
 static void test_success_paths(void) {
     printf("\nCalls that go all the way through\n");
-    char *ro[] = {"phobos-landlock", "--rights=r", "/usr", "--", "/bin/true", NULL};
+    char *ro[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=r", "/usr", "--", "/bin/true", NULL};
     expect_exit("a read-only rule", 0, ro);
     check("a run that goes through says nothing", captured_stderr_text[0] == '\0');
 
-    char *rox[] = {"phobos-landlock", "--rights=rx", "/usr", "--", "/bin/true", NULL};
+    char *rox[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=rx", "/usr", "--", "/bin/true", NULL};
     expect_exit("a read-and-execute rule", 0, rox);
 
-    char *rw[] = {"phobos-landlock", "--rights=rwmd", "/tmp", "--", "/bin/true", NULL};
+    char *rw[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=rwmd", "/tmp", "--", "/bin/true", NULL};
     expect_exit("a writable rule", 0, rw);
 
-    char *rwx[] = {"phobos-landlock", "--rights=rwmdx", "/tmp", "--", "/bin/true", NULL};
+    char *rwx[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=rwmdx", "/tmp", "--", "/bin/true", NULL};
     expect_exit("a writable-and-executable rule", 0, rwx);
 
-    char *ports[] = {"phobos-landlock",
+    char *ports[] = {"phobos-landlock-filesystem-and-networksystem",
                      "--connect-tcp",
                      "443",
                      "--bind-tcp",
@@ -1095,15 +1095,15 @@ static void test_success_paths(void) {
                      NULL};
     expect_exit("both kinds of port rule", 0, ports);
 
-    char *bind_only[] = {"phobos-landlock", "--bind-tcp", "8080", "--rights=r", "/usr", "--",
+    char *bind_only[] = {"phobos-landlock-filesystem-and-networksystem", "--bind-tcp", "8080", "--rights=r", "/usr", "--",
                          "/bin/true",       NULL};
     expect_exit("a bind rule on its own", 0, bind_only);
 
-    char *chdir_ok[] = {"phobos-landlock", "--chdir", "/tmp", "--rights=r", "/usr", "--",
+    char *chdir_ok[] = {"phobos-landlock-filesystem-and-networksystem", "--chdir", "/tmp", "--rights=r", "/usr", "--",
                         "/bin/true",       NULL};
     expect_exit("a working directory that can be entered", 0, chdir_ok);
 
-    char *loud[] = {"phobos-landlock",
+    char *loud[] = {"phobos-landlock-filesystem-and-networksystem",
                     "--verbose",
                     "--rights=r",
                     "/usr",
@@ -1123,28 +1123,28 @@ static void test_success_paths(void) {
     check("--verbose names each port rule with its direction",
           stderr_says("allow connect tcp/443") && stderr_says("allow bind tcp/8080"));
 
-    char *write_only[] = {"phobos-landlock", "--verbose", "--rights=w", "/tmp", "--",
+    char *write_only[] = {"phobos-landlock-filesystem-and-networksystem", "--verbose", "--rights=w", "/tmp", "--",
                           "/bin/true",       NULL};
     expect_exit("a rule that grants writing but not reading runs", 0, write_only);
     check("--verbose leaves out the rights that were not granted",
           stderr_says("allow /tmp +w") && !stderr_says("allow /tmp +r"));
 
-    char *with_ioctl_flag[] = {"phobos-landlock", "--verbose", "--rights=ri", "/dev/null", "--",
+    char *with_ioctl_flag[] = {"phobos-landlock-filesystem-and-networksystem", "--verbose", "--rights=ri", "/dev/null", "--",
                                "/bin/true",       NULL};
     expect_exit("a rule that grants ioctl on a device runs", 0, with_ioctl_flag);
     check("--verbose names the ioctl right too", stderr_says("allow /dev/null +r +i"));
 
-    char *make_extra[] = {"phobos-landlock", "--verbose", "--rights=plf", "/tmp", "--",
+    char *make_extra[] = {"phobos-landlock-filesystem-and-networksystem", "--verbose", "--rights=plf", "/tmp", "--",
                           "/bin/true",       NULL};
     expect_exit("a rule that grants ipc, symlink and refer runs", 0, make_extra);
     check("--verbose names the ipc, symlink and refer rights",
           stderr_says("allow /tmp +p +l +f"));
 
-    char *bare[] = {"phobos-landlock", "--", "/bin/true", NULL};
+    char *bare[] = {"phobos-landlock-filesystem-and-networksystem", "--", "/bin/true", NULL};
     expect_exit("no rules at all, only a command", 0, bare);
 
     force_regular_file = 1;
-    char *on_file[] = {"phobos-landlock", "--rights=r", "/etc/hostname", "--", "/bin/true", NULL};
+    char *on_file[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=r", "/etc/hostname", "--", "/bin/true", NULL};
     expect_exit("a rule on a file rather than a directory", 0, on_file);
 }
 
@@ -1154,7 +1154,7 @@ static void test_success_paths(void) {
  * prohibition nobody wrote down, and it would break any exercise whose tests start a
  * local server. */
 static void check_an_unnamed_direction_is_left_alone(void) {
-    char *connect_only[] = {"phobos-landlock", "--rights=r", "/usr", "--connect-tcp", "443",
+    char *connect_only[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=r", "/usr", "--connect-tcp", "443",
                             "--",              "/bin/true",  NULL};
     expect_exit("a policy that only names connect ports runs", 0, connect_only);
     check("connecting is handled", (record->handled_access_network &
@@ -1162,7 +1162,7 @@ static void check_an_unnamed_direction_is_left_alone(void) {
     check("listening is left alone when the policy never mentioned it",
           (record->handled_access_network & LANDLOCK_ACCESS_NETWORK_BIND_TCP) == 0);
 
-    char *bind_only[] = {"phobos-landlock", "--rights=r", "/usr", "--bind-tcp", "8080",
+    char *bind_only[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=r", "/usr", "--bind-tcp", "8080",
                          "--",              "/bin/true",  NULL};
     expect_exit("a policy that only names bind ports runs", 0, bind_only);
     check("listening is handled", (record->handled_access_network &
@@ -1177,7 +1177,7 @@ static void check_an_unnamed_direction_is_left_alone(void) {
  * turn, and every case stayed green. */
 static void test_what_reaches_the_kernel(void) {
     printf("\nWhat the kernel is actually handed\n");
-    char *read_only[] = {"phobos-landlock", "--rights=r", "/usr", "--", "/bin/true", NULL};
+    char *read_only[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=r", "/usr", "--", "/bin/true", NULL};
     struct path_rule read_only_rule = {.path = "/usr", .readable = true};
 
     expect_exit("a read-only rule runs", 0, read_only);
@@ -1198,7 +1198,7 @@ static void test_what_reaches_the_kernel(void) {
           record->rule_ruleset_descriptor == FAKE_RULESET_DESCRIPTOR &&
               record->restricted_ruleset_descriptor == FAKE_RULESET_DESCRIPTOR);
 
-    char *three[] = {"phobos-landlock", "--rights=r", "/usr",       "--rights=rwmd", "/tmp", "--rights=rx",
+    char *three[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=r", "/usr",       "--rights=rwmd", "/tmp", "--rights=rx",
                      "/bin",            "--",   "/bin/true",  NULL};
     struct path_rule writable_rule = {.path = "/tmp", .readable = true, .writable = true,
                                       .makeable = true, .removable = true};
@@ -1211,7 +1211,7 @@ static void test_what_reaches_the_kernel(void) {
               record->path_rule_allowed_access[2] == rights_granted_for(&executable_rule, MOCK_KERNEL_LANDLOCK_VERSION));
 
     force_regular_file = 1;
-    char *on_file[] = {"phobos-landlock", "--rights=rwmdx", "/etc/hostname", "--", "/bin/true", NULL};
+    char *on_file[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=rwmdx", "/etc/hostname", "--", "/bin/true", NULL};
     struct path_rule file_rule = {.path = "/etc/hostname", .readable = true, .writable = true,
                                   .makeable = true, .removable = true, .executable = true};
     expect_exit("a rule on a file runs", 0, on_file);
@@ -1223,7 +1223,7 @@ static void test_what_reaches_the_kernel(void) {
     check("a file still keeps the rights it can use",
           (record->path_rule_allowed_access[0] & LANDLOCK_ACCESS_FILESYSTEM_READ_FILE) != 0);
 
-    char *ports[] = {"phobos-landlock", "--connect-tcp", "443", "--bind-tcp", "8080",
+    char *ports[] = {"phobos-landlock-filesystem-and-networksystem", "--connect-tcp", "443", "--bind-tcp", "8080",
                      "--rights=r",            "/usr",          "--",  "/bin/true",  NULL};
     expect_exit("a connect and a bind rule run", 0, ports);
     check("both port rules reach the kernel", record->port_rule_count == 2);
@@ -1239,7 +1239,7 @@ static void test_what_reaches_the_kernel(void) {
 
     check_an_unnamed_direction_is_left_alone();
 
-    char *two_connects[] = {"phobos-landlock", "--connect-tcp", "443", "--connect-tcp",
+    char *two_connects[] = {"phobos-landlock-filesystem-and-networksystem", "--connect-tcp", "443", "--connect-tcp",
                             "8443",            "--rights=r",          "/usr", "--",
                             "/bin/true",       NULL};
     expect_exit("two connect rules run", 0, two_connects);
@@ -1247,7 +1247,7 @@ static void test_what_reaches_the_kernel(void) {
           record->port_rule_count == 2 && record->port_rule_port[0] == 443 &&
               record->port_rule_port[1] == 8443);
 
-    char *two_binds[] = {"phobos-landlock", "--bind-tcp", "8080", "--bind-tcp",
+    char *two_binds[] = {"phobos-landlock-filesystem-and-networksystem", "--bind-tcp", "8080", "--bind-tcp",
                          "9090",            "--rights=r",       "/usr", "--",
                          "/bin/true",       NULL};
     expect_exit("two bind rules run", 0, two_binds);
@@ -1255,7 +1255,7 @@ static void test_what_reaches_the_kernel(void) {
           record->port_rule_count == 2 && record->port_rule_port[0] == 8080 &&
               record->port_rule_port[1] == 9090);
 
-    char *net_only[] = {"phobos-landlock", "--no-filesystem", "--connect-tcp", "443", "--",
+    char *net_only[] = {"phobos-landlock-filesystem-and-networksystem", "--no-filesystem", "--connect-tcp", "443", "--",
                         "/bin/true",       NULL};
     expect_exit("a network-only ruleset runs", 0, net_only);
     check("a network-only ruleset handles no filesystem access",
@@ -1278,7 +1278,7 @@ static void test_what_reaches_the_kernel(void) {
           record->path_rule_allowed_access[0] == rights_granted_for(&read_only_rule, 3));
 
     mock_landlock_version = 10;
-    char *udp_ports[] = {"phobos-landlock", "--connect-udp", "53", "--bind-udp", "5353",
+    char *udp_ports[] = {"phobos-landlock-filesystem-and-networksystem", "--connect-udp", "53", "--bind-udp", "5353",
                          "--rights=r",      "/usr",          "--", "/bin/true",  NULL};
     expect_exit("a connect-udp and a bind-udp rule run on a version 10 kernel", 0, udp_ports);
     check("both udp port rules reach the kernel", record->port_rule_count == 2);
@@ -1294,7 +1294,7 @@ static void test_what_reaches_the_kernel(void) {
               (LANDLOCK_ACCESS_NETWORK_BIND_UDP | LANDLOCK_ACCESS_NETWORK_CONNECT_SEND_UDP));
 
     mock_landlock_version = 10;
-    char *bind_udp_any[] = {"phobos-landlock", "--bind-udp", "0",         "--rights=r",
+    char *bind_udp_any[] = {"phobos-landlock-filesystem-and-networksystem", "--bind-udp", "0",         "--rights=r",
                             "/usr",            "--",         "/bin/true", NULL};
     expect_exit("a bind-udp rule on port 0 (any local port) is accepted", 0, bind_udp_any);
     check("the port-0 udp bind reaches the kernel",
@@ -1302,7 +1302,7 @@ static void test_what_reaches_the_kernel(void) {
               record->port_rule_allowed_access[0] == LANDLOCK_ACCESS_NETWORK_BIND_UDP);
 
     mock_landlock_version = 9;
-    char *udp_too_old[] = {"phobos-landlock", "--connect-udp", "53",        "--rights=r",
+    char *udp_too_old[] = {"phobos-landlock-filesystem-and-networksystem", "--connect-udp", "53",        "--rights=r",
                            "/usr",            "--",            "/bin/true", NULL};
     expect_exit("a udp rule on a kernel below version 10 is refused", EXIT_CODE_POLICY_ERROR,
                 udp_too_old);
@@ -1314,7 +1314,7 @@ static void test_what_reaches_the_kernel(void) {
     check("version 8 does not know RESOLVE_UNIX, so a version-8 kernel leaves it unhandled",
           (filesystem_rights_for_version(8) & LANDLOCK_ACCESS_FILESYSTEM_RESOLVE_UNIX) == 0);
 
-    char *moving[] = {"phobos-landlock", "--chdir", "/tmp", "--rights=r", "/usr", "--",
+    char *moving[] = {"phobos-landlock-filesystem-and-networksystem", "--chdir", "/tmp", "--rights=r", "/usr", "--",
                       "/bin/true",       NULL};
     expect_exit("a working directory is entered", 0, moving);
     check("the directory that was asked for is the one entered",
@@ -1329,7 +1329,7 @@ static constexpr size_t VERSION_TEXT_LENGTH = 16;
 static void check_a_full_path_table_is_accepted(void) {
     static char *full[MAXIMUM_PATH_RULES * WORDS_PER_RULE + FULL_TABLE_HEADROOM];
     size_t word_count = 0;
-    full[word_count++] = "phobos-landlock";
+    full[word_count++] = "phobos-landlock-filesystem-and-networksystem";
     for (size_t rule_index = 0; rule_index < MAXIMUM_PATH_RULES; rule_index++) {
         full[word_count++] = "--rights=r";
         full[word_count++] = "/usr";
@@ -1350,9 +1350,9 @@ static void check_a_full_path_table_is_accepted(void) {
  * rather than a number that has fallen below it. */
 static void test_boundaries(void) {
     printf("\nValues that sit exactly on a limit\n");
-    char *read_only[] = {"phobos-landlock", "--rights=r", "/usr", "--", "/bin/true", NULL};
+    char *read_only[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=r", "/usr", "--", "/bin/true", NULL};
 
-    char *highest_port[] = {"phobos-landlock", "--connect-tcp", "65535",     "--rights=r",
+    char *highest_port[] = {"phobos-landlock-filesystem-and-networksystem", "--connect-tcp", "65535",     "--rights=r",
                             "/usr",            "--",            "/bin/true", NULL};
     expect_exit("the highest port there is", 0, highest_port);
     check("the highest port reaches the kernel unchanged",
@@ -1361,14 +1361,14 @@ static void test_boundaries(void) {
     static char highest_version_text[VERSION_TEXT_LENGTH];
     snprintf(highest_version_text, sizeof(highest_version_text), "%d",
              HIGHEST_KNOWN_LANDLOCK_VERSION);
-    char *highest_version[] = {"phobos-landlock",     "--minimum-landlock-version",
+    char *highest_version[] = {"phobos-landlock-filesystem-and-networksystem",     "--minimum-landlock-version",
                                highest_version_text,  "--rights=r",
                                "/usr",                "--",
                                "/bin/true",           NULL};
     mock_landlock_version = HIGHEST_KNOWN_LANDLOCK_VERSION;
     expect_exit("a kernel exactly at the demanded version", 0, highest_version);
 
-    char *network[] = {"phobos-landlock", "--connect-tcp", "443",       "--rights=r",
+    char *network[] = {"phobos-landlock-filesystem-and-networksystem", "--connect-tcp", "443",       "--rights=r",
                        "/usr",            "--",            "/bin/true", NULL};
     mock_landlock_version = 4;
     expect_exit("version 4 is new enough for network rules", 0, network);
@@ -1415,7 +1415,7 @@ int main(void) {
         perror("tmpfile");
         return 1;
     }
-    printf("phobos-landlock unit tests\n");
+    printf("phobos-landlock-filesystem-and-networksystem unit tests\n");
     test_rights_tables();
     test_file_versus_directory();
     test_usage_errors();

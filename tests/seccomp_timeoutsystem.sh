@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# phobos-pgroup-lock refuses setsid and setpgid, so a command the timeout layer bounds cannot
+# phobos-seccomp-timeoutsystem refuses setsid and setpgid, so a command the timeout layer bounds cannot
 # start a new session or process group and step out of the group GNU timeout kills.
 #
 # Two directions. Directly: setsid and setpgid are refused with EACCES under the lock and are
@@ -43,8 +43,8 @@ if ! command -v setsid >/dev/null 2>&1; then
   finish
 fi
 
-LOCK="$WORK/phobos-pgroup-lock"
-if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$LOCK" "${CORE}/phobos-pgroup-lock.c" 2>"$WORK/cc.log"; then
+LOCK="$WORK/phobos-seccomp-timeoutsystem"
+if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$LOCK" "${CORE}/phobos-seccomp-timeoutsystem.c" 2>"$WORK/cc.log"; then
   skip "the group lock" "it did not build, so the kernel or compiler is too old: $(cat "$WORK/cc.log")"
   finish
 fi
@@ -99,12 +99,12 @@ fi
 
 echo
 echo "== a missing lock binary is refused fail-closed when a timeout is set =="
-# The whole chain, with a stand-in for phobos-landlock so no Landlock kernel is needed and the
+# The whole chain, with a stand-in for phobos-landlock-filesystem-and-networksystem so no Landlock kernel is needed and the
 # network restriction off so the connect guard is absent, over a base policy that sets a timeout.
 CORE_X="$WORK/core-x"
 cp -R "$CORE" "$CORE_X"
 chmod +x "$CORE_X"/*.sh
-cp "$LOCK" "$CORE_X/phobos-pgroup-lock"
+cp "$LOCK" "$CORE_X/phobos-seccomp-timeoutsystem"
 printf '[read]\n/usr\n[limits]\ntimeout=3\n' > "$CORE_X/BaseTest.cfg"
 printf '%s\n' '#!/usr/bin/env bash' \
   'while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift; exec "$@"' > "$WORK/passthrough-landlock"
@@ -154,8 +154,8 @@ echo "== with the network on, the connect guard still traps a forbidden connect 
 # guard still decides every connect although the lock is in force. This exercises both layers on,
 # with a timeout set, over a loopback-only policy so no broker is needed and the network layer's
 # own Landlock is not invoked. It needs the connect guard, so it is built here.
-if "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/guard" "${CORE}"/phobos-connect-guard*.c 2>"$WORK/guard-cc.log"; then
-  cp "$WORK/guard" "$CORE_X/phobos-connect-guard"
+if "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/guard" "${CORE}"/phobos-seccomp-networksystem*.c 2>"$WORK/guard-cc.log"; then
+  cp "$WORK/guard" "$CORE_X/phobos-seccomp-networksystem"
   cat > "$WORK/connect-probe.c" <<'C'
 #define _GNU_SOURCE
 #include <arpa/inet.h>

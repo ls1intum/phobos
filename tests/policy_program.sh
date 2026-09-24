@@ -3,7 +3,7 @@
 # is the one program that discovers the base policy, parses, merges and writes the spec files,
 # and it is callable on its own, so a single layer can be run standalone over a directory it
 # fills. No Landlock kernel is needed: this only checks the files it writes and that a layer
-# can then be run over them with a pass-through stand-in for phobos-landlock.
+# can then be run over them with a pass-through stand-in for phobos-landlock-filesystem-and-networksystem.
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

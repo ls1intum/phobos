@@ -13,7 +13,7 @@ It consumes the per-exercise artefacts (.paths and .json) that
   used when the runtime cannot tell which language is running.
 * **BaseLanguage-<lang>.cfg**   - full binding set for that language (duplicates ok).
 * **TailPhobos.cfg**            - the runtime chdir, the only tail option the
-  phobos-landlock runtime accepts. (The pruning run's Bubblewrap mount and
+  phobos-landlock-filesystem-and-networksystem runtime accepts. (The pruning run's Bubblewrap mount and
   namespace flags and its per-exercise `--chdir` are dropped; the runtime chdir
   is injected via the `--runtime-chdir` CLI argument.)
 
@@ -313,9 +313,9 @@ def build_runtime_tail(runtime_chdir: str, core_dir: Path) -> None:
 
     A pruning run measures under Bubblewrap mount and namespace flags (--proc, --dev,
     --share-net, --unshare-*, --new-session) and a per-exercise --chdir. The runtime is
-    phobos-landlock, and it accepts none of those Bubblewrap flags: they are not Landlock
+    phobos-landlock-filesystem-and-networksystem, and it accepts none of those Bubblewrap flags: they are not Landlock
     concepts, and it exits on an option it does not know. phobos.sh appends every tail
-    token to phobos-landlock, so a tail carrying a Bubblewrap flag would fail every run.
+    token to phobos-landlock-filesystem-and-networksystem, so a tail carrying a Bubblewrap flag would fail every run.
 
     Network intent reaches the runtime through the [connect] section rather than the tail,
     and a namespace is the container's boundary rather than Landlock's. So the runtime

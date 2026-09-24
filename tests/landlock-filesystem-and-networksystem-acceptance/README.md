@@ -12,11 +12,11 @@ from the one an exercise gets.
 .github/scripts/assemble-run-phase-context.sh /tmp/ctx
 
 # 2. image
-docker build -f docker/run_phase/java/Dockerfile -t phobos-landlock:test /tmp/ctx
+docker build -f docker/run_phase/java/Dockerfile -t phobos-landlock-filesystem-and-networksystem:test /tmp/ctx
 
 # 3. one suite, with no security flags of any kind and no network
 docker run --rm --network none -v "$PWD/tests:/tests:ro" \
-  phobos-landlock:test bash /tests/landlock-acceptance/run-tests.sh
+  phobos-landlock-filesystem-and-networksystem:test bash /tests/landlock-filesystem-and-networksystem-acceptance/run-tests.sh
 ```
 
 Replace the last word with any of the suites below. Nothing is mounted over `/root/.m2`:
@@ -32,7 +32,7 @@ and is not one.
 | `shipped-policy-test.sh` | the policy the image actually ships, rather than a policy written for the test, runs a real build |
 | `network-port-test.sh` | a raw `connect()` syscall reaches the network below libc, and Landlock's `--connect-tcp` rule refuses it anyway |
 | `scoping-test.sh` | Landlock scoping: a sandboxed process can neither signal a process outside its domain nor reach an abstract UNIX socket there. Skipped below Landlock version 6 |
-| `connect-guard-test.sh` | the connect guard in the image: an allowed destination connects, a forbidden one is refused, and a destination cannot be swapped after the check |
+| `seccomp-networksystem-test.sh` | the connect guard in the image: an allowed destination connects, a forbidden one is refused, and a destination cannot be swapped after the check |
 
 `PHOBOS_HOME` names where Phobos is installed in the image, `/var/tmp/opt/core` by
 default. `tests/README.md` lists every suite of this repository, including the ones that

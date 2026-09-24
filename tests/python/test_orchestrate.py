@@ -194,7 +194,7 @@ def test_a_language_whose_result_names_nothing_stops_the_merge(tmp_path):
 
 
 def test_the_runtime_tail_drops_the_bubblewrap_flags(tmp_path):
-    """The runtime is phobos-landlock, which accepts no Bubblewrap mount or namespace
+    """The runtime is phobos-landlock-filesystem-and-networksystem, which accepts no Bubblewrap mount or namespace
     flag and exits on an option it does not know. A pruning run's tail carries those
     flags, so the orchestrator has to drop every one of them rather than pass it on."""
     path_dir = tmp_path / "path_sets"

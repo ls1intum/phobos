@@ -5,9 +5,9 @@
 # IP and port is reached and works, a port the list does not name is refused, and a
 # UNIX-domain connect is refused rather than made outside the sandbox.
 #
-# This exercises the guard binary the image ships (/var/tmp/opt/core/phobos-connect-guard),
+# This exercises the guard binary the image ships (/var/tmp/opt/core/phobos-seccomp-networksystem),
 # which is what the network layer runs, so it is the in-container counterpart of the
-# host-side tests/connect_guard.sh. It needs the run-phase image and an ordinary container:
+# host-side tests/seccomp_networksystem.sh. It needs the run-phase image and an ordinary container:
 # no --privileged, no --cap-add, no --security-opt.
 set -uo pipefail
 
@@ -16,7 +16,7 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/../harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 
 CORE="${PHOBOS_HOME:-/var/tmp/opt/core}"
-GUARD="${CORE}/phobos-connect-guard"
+GUARD="${CORE}/phobos-seccomp-networksystem"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 

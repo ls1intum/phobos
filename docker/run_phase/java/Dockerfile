@@ -13,22 +13,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc-14 \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
-COPY phobos-landlock*.c           /build/
-COPY phobos-landlock*.h           /build/
-COPY phobos-connect-guard*.c      /build/
-COPY phobos-connect-guard*.h      /build/
-COPY phobos-pgroup-lock.c         /build/
+COPY phobos-landlock-filesystem-and-networksystem*.c           /build/
+COPY phobos-landlock-filesystem-and-networksystem*.h           /build/
+COPY phobos-seccomp-networksystem*.c      /build/
+COPY phobos-seccomp-networksystem*.h      /build/
+COPY phobos-seccomp-timeoutsystem.c         /build/
 # -static-pie rather than -static: plain -static overrides the -fPIE default and
 # produces a fixed-address executable, so the binary that applies the sandbox
 # would be the one part of the image without address randomisation.
 RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
-    -o /build/phobos-landlock /build/phobos-landlock*.c
+    -o /build/phobos-landlock-filesystem-and-networksystem /build/phobos-landlock-filesystem-and-networksystem*.c
 # The connect guard is built the same way and held to the same hardening below.
 RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
-    -o /build/phobos-connect-guard /build/phobos-connect-guard*.c
+    -o /build/phobos-seccomp-networksystem /build/phobos-seccomp-networksystem*.c
 # The timeout's group lock is built the same way and held to the same hardening below.
 RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
-    -o /build/phobos-pgroup-lock /build/phobos-pgroup-lock.c
+    -o /build/phobos-seccomp-timeoutsystem /build/phobos-seccomp-timeoutsystem.c
 
 # No bubblewrap: the filesystem layer is enforced by Landlock now, which needs no
 # privileges, no capabilities and no container flags, so the tool that needed all
@@ -55,9 +55,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PHOBOS_HOME=/var/tmp/opt/core
 RUN mkdir -p "${PHOBOS_HOME}"
 COPY *.sh                ${PHOBOS_HOME}/
-COPY --from=enforcers /build/phobos-landlock ${PHOBOS_HOME}/
-COPY --from=enforcers /build/phobos-connect-guard ${PHOBOS_HOME}/
-COPY --from=enforcers /build/phobos-pgroup-lock ${PHOBOS_HOME}/
+COPY --from=enforcers /build/phobos-landlock-filesystem-and-networksystem ${PHOBOS_HOME}/
+COPY --from=enforcers /build/phobos-seccomp-networksystem ${PHOBOS_HOME}/
+COPY --from=enforcers /build/phobos-seccomp-timeoutsystem ${PHOBOS_HOME}/
 COPY config/BaseLanguage-java.cfg                     ${PHOBOS_HOME}/
 COPY config/TailPhobos.cfg                     ${PHOBOS_HOME}/
 # The hardening is measured, not assumed: a DYN type proves -static-pie kept the
@@ -65,12 +65,12 @@ COPY config/TailPhobos.cfg                     ${PHOBOS_HOME}/
 # measured here, on the copies the image actually ships, rather than in the stage that
 # produced them. Written to files rather than piped into grep, because a pipe here would
 # need pipefail to report a failing readelf and hadolint rejects one without it.
-RUN readelf -h ${PHOBOS_HOME}/phobos-landlock > /tmp/wrapper-header.txt \
- && readelf -d ${PHOBOS_HOME}/phobos-landlock > /tmp/wrapper-dynamic.txt \
- && readelf -h ${PHOBOS_HOME}/phobos-connect-guard > /tmp/guard-header.txt \
- && readelf -d ${PHOBOS_HOME}/phobos-connect-guard > /tmp/guard-dynamic.txt \
- && readelf -h ${PHOBOS_HOME}/phobos-pgroup-lock > /tmp/lock-header.txt \
- && readelf -d ${PHOBOS_HOME}/phobos-pgroup-lock > /tmp/lock-dynamic.txt \
+RUN readelf -h ${PHOBOS_HOME}/phobos-landlock-filesystem-and-networksystem > /tmp/wrapper-header.txt \
+ && readelf -d ${PHOBOS_HOME}/phobos-landlock-filesystem-and-networksystem > /tmp/wrapper-dynamic.txt \
+ && readelf -h ${PHOBOS_HOME}/phobos-seccomp-networksystem > /tmp/guard-header.txt \
+ && readelf -d ${PHOBOS_HOME}/phobos-seccomp-networksystem > /tmp/guard-dynamic.txt \
+ && readelf -h ${PHOBOS_HOME}/phobos-seccomp-timeoutsystem > /tmp/lock-header.txt \
+ && readelf -d ${PHOBOS_HOME}/phobos-seccomp-timeoutsystem > /tmp/lock-dynamic.txt \
  && grep -q 'Type:[[:space:]]*DYN' /tmp/wrapper-header.txt \
  && grep -q 'BIND_NOW' /tmp/wrapper-dynamic.txt \
  && grep -q 'Type:[[:space:]]*DYN' /tmp/guard-header.txt \

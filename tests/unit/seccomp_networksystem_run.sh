@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Builds and runs the phobos-connect-guard unit tests. With --coverage the build is
+# Builds and runs the phobos-seccomp-networksystem unit tests. With --coverage the build is
 # instrumented, and the run fails unless every line of every guard source ran.
 # Needs gcc-14, and gcov-14 for --coverage. Every syscall the guard makes is interposed
 # through the linker, and fork is wrapped so the parent and child halves are each driven,
 # so neither a kernel nor a real fork is involved.
 #
-#   tests/unit/connect_guard_run.sh               build with -Werror and run
-#   tests/unit/connect_guard_run.sh --coverage    build instrumented, run, hold lines to 100 %
+#   tests/unit/seccomp_networksystem_run.sh               build with -Werror and run
+#   tests/unit/seccomp_networksystem_run.sh --coverage    build instrumented, run, hold lines to 100 %
 #
 # Lines are gated, by counting gcov's uncovered markers rather than trusting its summary
 # percentage, which mis-counts the denominator for these files. Branches are reported but not
@@ -33,13 +33,13 @@ trap 'rm -rf "$WORK"' EXIT
 # built with the define that gives them their per-case reset functions.
 CORE="${HERE}/../../core"
 MODULES=(
-  "${CORE}/phobos-connect-guard-child.c"
-  "${CORE}/phobos-connect-guard-destination.c"
-  "${CORE}/phobos-connect-guard-diagnostics.c"
-  "${CORE}/phobos-connect-guard-options.c"
-  "${CORE}/phobos-connect-guard-rules.c"
-  "${CORE}/phobos-connect-guard-socket-types.c"
-  "${CORE}/phobos-connect-guard-supervisor.c"
+  "${CORE}/phobos-seccomp-networksystem-child.c"
+  "${CORE}/phobos-seccomp-networksystem-destination.c"
+  "${CORE}/phobos-seccomp-networksystem-diagnostics.c"
+  "${CORE}/phobos-seccomp-networksystem-options.c"
+  "${CORE}/phobos-seccomp-networksystem-rules.c"
+  "${CORE}/phobos-seccomp-networksystem-socket-types.c"
+  "${CORE}/phobos-seccomp-networksystem-supervisor.c"
 )
 UNIT_TEST_DEFINE=-DPHOBOS_CONNECT_GUARD_UNIT_TEST
 
@@ -72,13 +72,13 @@ WRAPS=(
 
 if [[ "${1:-}" == "--coverage" ]]; then
   "$COMPILER" -std=gnu23 -O0 -g --coverage "$UNIT_TEST_DEFINE" -o "$WORK/unit" \
-    "${HERE}/connect_guard_unit.c" "${MODULES[@]}" "${WRAPS[@]}"
+    "${HERE}/seccomp_networksystem_unit.c" "${MODULES[@]}" "${WRAPS[@]}"
   ( cd "$WORK" && ./unit )
   ( cd "$WORK" && for notes in unit-*.gcno; do
       "$COVERAGE_TOOL" -b -o "$notes" "${notes%.gcno}" >/dev/null 2>&1
     done )
   uncovered_total=0
-  for source in phobos-connect-guard.c "${MODULES[@]##*/}"; do
+  for source in phobos-seccomp-networksystem.c "${MODULES[@]##*/}"; do
     gcov_file="$WORK/${source}.gcov"
     if [[ ! -f "$gcov_file" ]]; then
       echo "no coverage was produced for core/${source}" >&2
@@ -106,6 +106,6 @@ if [[ "${1:-}" == "--coverage" ]]; then
   printf 'every line of the connect guard ran\n'
 else
   "$COMPILER" -std=gnu23 -O0 -g -Wall -Wextra -Werror "$UNIT_TEST_DEFINE" -o "$WORK/unit" \
-    "${HERE}/connect_guard_unit.c" "${MODULES[@]}" "${WRAPS[@]}"
+    "${HERE}/seccomp_networksystem_unit.c" "${MODULES[@]}" "${WRAPS[@]}"
   "$WORK/unit"
 fi

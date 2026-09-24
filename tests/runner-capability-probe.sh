@@ -25,7 +25,7 @@ EXIT_UNAVAILABLE=1
 EXIT_INDETERMINATE=3
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PROBE_SOURCE="${HERE}/landlock-capability-probe.c"
+PROBE_SOURCE="${HERE}/landlock-filesystem-and-networksystem-capability-probe.c"
 CONTAINER_IMAGE="${PROBE_CONTAINER_IMAGE:-ubuntu:26.04}"
 
 WORK="$(mktemp -d)" || { printf 'cannot create a working directory\n' >&2; exit "${EXIT_INDETERMINATE}"; }

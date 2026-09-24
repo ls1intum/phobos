@@ -3,7 +3,7 @@
 # forms, the refusal of an unknown or obsolete option, where the command's own arguments
 # begin, and the --allow-unsandboxed debug bypass. None of this needs a Landlock kernel:
 # the flags decide which layers assemble, and the bypass runs the command raw. A
-# pass-through stand-in for phobos-landlock lets an ordinary run reach the command.
+# pass-through stand-in for phobos-landlock-filesystem-and-networksystem lets an ordinary run reach the command.
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,7 +18,7 @@ cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
 
 # A copy of core with a minimal base policy beside it, so phobos.sh has a sandbox to build,
-# and a pass-through stand-in for phobos-landlock so a run reaches the command with no real
+# and a pass-through stand-in for phobos-landlock-filesystem-and-networksystem so a run reaches the command with no real
 # Landlock kernel.
 CORE_X="$WORK/core-x"
 cp -R "$CORE" "$CORE_X"
@@ -117,11 +117,11 @@ echo
 echo "== the network layer builds the Landlock TCP-port rules, the filesystem layer does not =="
 # The kernel-enforced TCP-port rules moved from the filesystem layer to the network layer, which
 # applies them on a network-only Landlock ruleset (--no-filesystem) inside the connect guard's
-# child lineage. A recording stand-in for phobos-landlock captures the arguments; a spec naming a
+# child lineage. A recording stand-in for phobos-landlock-filesystem-and-networksystem captures the arguments; a spec naming a
 # concrete external port produces a --connect-tcp rule on the network layer's invocation and none
 # on the filesystem layer's. The passthrough stand-in stands in for the connect guard: it skips
 # its own arguments to the first -- and execs the command tail, which is the network layer's
-# phobos-landlock invocation.
+# phobos-landlock-filesystem-and-networksystem invocation.
 printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" > "$LL_RECORD"; exit 0' > "$WORK/record-landlock"
 chmod +x "$WORK/record-landlock"
 PORTSPEC="$WORK/portspec"
@@ -152,7 +152,7 @@ fi
 
 echo "== --debug writes its trace to stderr, so the command's own stdout stays clean =="
 # The filesystem layer runs the command under the pass-through stand-in, and --debug prints the
-# phobos-landlock invocation. That trace must not land on stdout, where it would corrupt output
+# phobos-landlock-filesystem-and-networksystem invocation. That trace must not land on stdout, where it would corrupt output
 # a caller captures. stdout must carry only the command's own bytes.
 DBG_OUT="$WORK/dbg.out"
 DBG_ERR="$WORK/dbg.err"
@@ -177,7 +177,7 @@ fi
 
 echo "== --debug speaks for every layer on stderr and turns on the helpers' verbosity =="
 # A base with a timeout and a resource limit, so the timeout and resource layers have work to
-# report, and a stand-in for phobos-landlock that records its arguments and then runs the
+# report, and a stand-in for phobos-landlock-filesystem-and-networksystem that records its arguments and then runs the
 # command, so the --verbose the filesystem layer hands on can be read back.
 DEBUG_CORE="$WORK/core-debug"
 cp -R "$CORE" "$DEBUG_CORE"
@@ -201,9 +201,9 @@ for layer in phobos policy timeout resources filesystem; do
   fi
 done
 if grep -qx -- '--verbose' "$WORK/ll-debug"; then
-  ok "phobos-landlock is handed --verbose under --debug"
+  ok "phobos-landlock-filesystem-and-networksystem is handed --verbose under --debug"
 else
-  bad "phobos-landlock is handed --verbose under --debug" "a --verbose argument" "$(tr '\n' ' ' < "$WORK/ll-debug")"
+  bad "phobos-landlock-filesystem-and-networksystem is handed --verbose under --debug" "a --verbose argument" "$(tr '\n' ' ' < "$WORK/ll-debug")"
 fi
 
 PHB_DEBUG_ENABLED=1 LL_RECORD="$WORK/ll-env" bash "$DEBUG_CORE/phobos.sh" --spec-parent "$SPECS" \
