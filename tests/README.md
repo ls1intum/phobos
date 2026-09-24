@@ -9,11 +9,18 @@ Each shell suite is run by a step of its own in CI, so one run names every suite
 rather than only the first. The Python suites are the exception: pytest runs them together in
 one step and reports each failure itself.
 
+The unit suites live under `tests/unit/` in the same folder structure as `core/`, one folder
+per core component they test, and the integration suites live under `tests/integration/`,
+with the acceptance suites in `tests/integration/landlock-filesystem-and-networksystem-acceptance/`.
+The shared harness and the diagnostics stay at the `tests/` root.
+
 Every suite reports through `harness.sh`, which it sources and which owns `ok`, `bad`,
 `skip`, `check`, the three counters and `finish`. A suite keeps everything else of its own:
-its shell options, its fixtures and its cleanup trap. The acceptance suites reach it as
-`../harness.sh`, which is why their CI step mounts `tests/` rather than
-`tests/landlock-filesystem-and-networksystem-acceptance/`.
+its shell options, its fixtures and its cleanup trap. `harness.sh` sits at the `tests/` root,
+so a suite reaches it relative to its own depth: `../harness.sh` from `tests/integration/`,
+`../../harness.sh` from a unit folder or the acceptance folder. The acceptance CI step
+therefore mounts `tests/` rather than
+`tests/integration/landlock-filesystem-and-networksystem-acceptance/`.
 
 ## Host suites, run by the `Shell suites` job of `test.yml`
 
@@ -66,7 +73,7 @@ test makes is interposed.
 ## Acceptance suites, run by `build.yml` inside the run-phase image
 
 Each runs in an **ordinary** container: no `--privileged`, no `--cap-add`, no
-`--security-opt`, and `--network none`. `tests/landlock-filesystem-and-networksystem-acceptance/README.md` says how to
+`--security-opt`, and `--network none`. `tests/integration/landlock-filesystem-and-networksystem-acceptance/README.md` says how to
 run them by hand.
 
 | Suite | What it proves |

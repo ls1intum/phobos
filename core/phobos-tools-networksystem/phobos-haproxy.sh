@@ -23,7 +23,7 @@
 # destination rather than resolve it, and it is never mapped to a placeholder. This is the one
 # classifier the config generator and the network layer share, so the two never disagree on what an
 # exact name is. It differs by design from the guard's inet_pton test only for a nonsensical
-# all-digits token such as "1234", which is an address here and a name there; tests/haproxy_conf.sh
+# all-digits token such as "1234", which is an address here and a name there; tests/unit/phobos-tools-networksystem/haproxy_conf.sh
 # pins that so the divergence cannot drift.
 classify_connect_host() {
   local host="$1"

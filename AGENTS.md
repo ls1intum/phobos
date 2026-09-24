@@ -70,7 +70,7 @@ so in the pull request body and proves both directions.
 What those entries do **not** do is make an arbitrary narrower subpath acceptable. They
 preserve acceptance for exercise configurations that name exactly the paths they name, and
 nothing else; a config naming some other path beneath a wider rule with fewer rights is still
-refused. `tests/filesystem_policy.sh` pins both directions of this, and
+refused. `tests/integration/filesystem_policy.sh` pins both directions of this, and
 `tests/policy-redundancy-probe.sh` reports which entries of a policy are in this position,
 which is worth reading when judging a freshly pruned one.
 

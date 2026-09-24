@@ -8,7 +8,7 @@
 # can be a handful of wide grants with decoration beneath them.
 #
 # It is a report and not a gate, and the distinction matters: these entries are not dead.
-# AGENTS.md records what they do, and tests/filesystem_policy.sh pins it: a base entry an
+# AGENTS.md records what they do, and tests/integration/filesystem_policy.sh pins it: a base entry an
 # ancestor already covers is what lets an exercise configuration name that same path with
 # fewer rights, so deleting one changes which configurations Phobos accepts. Read the output,
 # do not act on it mechanically.
