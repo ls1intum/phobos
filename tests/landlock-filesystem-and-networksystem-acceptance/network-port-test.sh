@@ -18,7 +18,7 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/../harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 
 CORE="${PHOBOS_HOME:-/var/tmp/opt/core}"
-LANDLOCK="${CORE}/phobos-landlock"
+LANDLOCK="${CORE}/phobos-landlock-filesystem-and-networksystem"
 # How long the listeners are given to bind their ports before the probes connect.
 LISTENER_START_SECONDS=1
 # The errno a Landlock denial answers a connect with, as the probe prints it.
@@ -83,7 +83,7 @@ listener "$DENIED_PORT" &
 denied_pid=$!
 sleep "$LISTENER_START_SECONDS"
 
-# Runs the raw-connect probe under phobos-landlock. Arguments: port, extra landlock args...
+# Runs the raw-connect probe under phobos-landlock-filesystem-and-networksystem. Arguments: port, extra landlock args...
 run() {
   local port=$1; shift
   "$LANDLOCK" --rights=rx /opt --rights=rx /usr --rights=rx /lib --rights=rx "$WORK" "$@" \

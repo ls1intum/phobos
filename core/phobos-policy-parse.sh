@@ -8,7 +8,7 @@
 # Every variable here is read by the scripts that source the aggregate, never in
 # this file, so SC2034 would fire on all of them by design.
 # shellcheck disable=SC2034
-# The filesystem buckets, one per phobos-landlock right letter: read (r), execute (x),
+# The filesystem buckets, one per phobos-landlock-filesystem-and-networksystem right letter: read (r), execute (x),
 # write (w), create (m: regular files and directories), delete (d), ipc (p: sockets and
 # named pipes), symlink (l), refer (f: move or rename across directories). The cfg section
 # [create-ipc] feeds ipc, [create-symlink] feeds symlink, and [restructure] feeds create,

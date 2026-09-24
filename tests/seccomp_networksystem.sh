@@ -24,7 +24,7 @@ if ! command -v "$compiler" >/dev/null 2>&1; then
   finish
 fi
 
-if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/guard" "${CORE}"/phobos-connect-guard*.c 2>"$WORK/cc.log"; then
+if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/guard" "${CORE}"/phobos-seccomp-networksystem*.c 2>"$WORK/cc.log"; then
   bad "the connect guard builds" "$(cat "$WORK/cc.log")"
   finish
 fi

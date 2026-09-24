@@ -90,7 +90,7 @@ hdr "F. Redirectable write paths are rejected"
 ln -sfn /var/tmp/secret $TD/redirect 2>/dev/null
 # Collect the output first: under "set -o pipefail" the wrapper's exit code (125,
 # intended) would make the pipeline fail even though grep finds a match.
-SYM_OUT=$($CORE/phobos-landlock --rights=rx /usr --rights=rwmd $TD/redirect -- /bin/true 2>&1)
+SYM_OUT=$($CORE/phobos-landlock-filesystem-and-networksystem --rights=rx /usr --rights=rwmd $TD/redirect -- /bin/true 2>&1)
 if printf '%s' "$SYM_OUT" | grep -q "symbolic link"; then
   ok "A symbolic write path is rejected (no redirection of the rule)"
 else
@@ -102,7 +102,7 @@ ABOVE_EVERY_LANDLOCK_VERSION=99
 # The first Landlock version there is, which every kernel that has Landlock offers.
 FIRST_LANDLOCK_VERSION=1
 hdr "G. Wrapper options that no policy file reaches"
-LL=$CORE/phobos-landlock
+LL=$CORE/phobos-landlock-filesystem-and-networksystem
 $LL --minimum-landlock-version "$ABOVE_EVERY_LANDLOCK_VERSION" --rights=rx /usr -- /bin/true >/dev/null 2>&1
 [[ $? -eq "$PHB_ENFORCER_REFUSED_EXIT" ]] && ok "--minimum-landlock-version above the kernel version aborts instead of running unprotected" \
                  || bad "--minimum-landlock-version ${ABOVE_EVERY_LANDLOCK_VERSION} ran to completion"
@@ -185,7 +185,7 @@ fi
 # --------------------------------------------------------------------------
 # F. What the finer-grained set of rights changes
 # --------------------------------------------------------------------------
-LL="$CORE/phobos-landlock"
+LL="$CORE/phobos-landlock-filesystem-and-networksystem"
 BASE="--rights=rx /usr --rights=rx /lib --rights=rx /bin --rights=r /etc"
 mkdir -p "$TD/fine"; chmod 777 "$TD/fine"
 

@@ -1,7 +1,7 @@
 #define _GNU_SOURCE
-#include "phobos-connect-guard-rules.h"
+#include "phobos-seccomp-networksystem-rules.h"
 
-#include "phobos-connect-guard-diagnostics.h"
+#include "phobos-seccomp-networksystem-diagnostics.h"
 
 #include <arpa/inet.h>
 #include <errno.h>

@@ -1,12 +1,12 @@
 /*
- * phobos-landlock -- apply a Landlock filesystem policy, then exec a command.
+ * phobos-landlock-filesystem-and-networksystem -- apply a Landlock filesystem policy, then exec a command.
  *
  * Replaces bubblewrap as the enforcement mechanism of the Phobos filesystem
  * layer. Needs no privileges, no capabilities and no container flags: a task
  * may always restrict itself further.
  *
  * Usage:
- *   phobos-landlock --rights=LETTERS PATH [--rights=LETTERS PATH ...]
+ *   phobos-landlock-filesystem-and-networksystem --rights=LETTERS PATH [--rights=LETTERS PATH ...]
  *                   [--connect-tcp PORT] [--bind-tcp PORT]
  *                   [--connect-udp PORT] [--bind-udp PORT]
  *                   [--chdir DIRECTORY] [--minimum-landlock-version NUMBER]
@@ -20,10 +20,10 @@
  * This file is the sequence of stages and nothing else. What each stage works
  * with lives beside it:
  *
- *   phobos-landlock-options.h      the command line, read into one object
- *   phobos-landlock-path-rule.h    one allow-listed path and its rights
- *   phobos-landlock-ruleset.h      the kernel object and the operations on it
- *   phobos-landlock-diagnostics.h  reporting and giving up
+ *   phobos-landlock-filesystem-and-networksystem-options.h      the command line, read into one object
+ *   phobos-landlock-filesystem-and-networksystem-path-rule.h    one allow-listed path and its rights
+ *   phobos-landlock-filesystem-and-networksystem-ruleset.h      the kernel object and the operations on it
+ *   phobos-landlock-filesystem-and-networksystem-diagnostics.h  reporting and giving up
  *
  * Exits 125 on any policy error. It never degrades silently: if the running
  * kernel cannot enforce the requested minimum, it refuses to run the command,
@@ -32,10 +32,10 @@
  */
 
 #define _GNU_SOURCE
-#include "phobos-landlock-diagnostics.h"
-#include "phobos-landlock-options.h"
-#include "phobos-landlock-path-rule.h"
-#include "phobos-landlock-ruleset.h"
+#include "phobos-landlock-filesystem-and-networksystem-diagnostics.h"
+#include "phobos-landlock-filesystem-and-networksystem-options.h"
+#include "phobos-landlock-filesystem-and-networksystem-path-rule.h"
+#include "phobos-landlock-filesystem-and-networksystem-ruleset.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -90,7 +90,7 @@ static void enter_working_directory(const struct options *options) {
 
 [[noreturn]] static void exec_command(const struct options *options) {
     execvp(options->command[0], options->command);
-    fprintf(stderr, "[phobos-landlock] exec %s: %s\n", options->command[0], strerror(errno));
+    fprintf(stderr, "[phobos-landlock-filesystem-and-networksystem] exec %s: %s\n", options->command[0], strerror(errno));
     exit(EXIT_CODE_COMMAND_NOT_EXECUTABLE);
 }
 

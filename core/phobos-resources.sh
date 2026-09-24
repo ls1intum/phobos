@@ -43,7 +43,7 @@ fi
 SPEC_DIR="$1"; shift 2
 
 # Removes the specification phobos.sh created if this layer ends before it hands over. The
-# filesystem layer starts this one right before phobos-landlock, so the trap only fires when a
+# filesystem layer starts this one right before phobos-landlock-filesystem-and-networksystem, so the trap only fires when a
 # limit cannot be set, or when a SIGTERM arrives in the short moment before the exec below: the
 # run is ending then anyway, and the filesystem layer's own trap finds the directory gone,
 # which remove_owned_spec_dir treats as done.
@@ -54,9 +54,9 @@ trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 declare -A limits
 read_limits_conf "${SPEC_DIR}/limits.conf" limits
 
-# Set the limits in this shell, then exec on, so phobos-landlock and the command it finally
+# Set the limits in this shell, then exec on, so phobos-landlock-filesystem-and-networksystem and the command it finally
 # runs inherit them, and nothing else does: the filesystem layer starts this layer as the last
-# step before phobos-landlock, so the helpers around the command (the layer shell, the stderr
+# step before phobos-landlock-filesystem-and-networksystem, so the helpers around the command (the layer shell, the stderr
 # pass-through and the denial counter, the connect guard's supervisor) never run under the
 # command's limits. rlimits are self-imposed and unprivileged, exactly as Landlock is, so they
 # hold inside the ordinary container an exercise runs in. The hard caps a machine needs against

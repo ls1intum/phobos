@@ -1,7 +1,7 @@
 #define _GNU_SOURCE
-#include "phobos-connect-guard-child.h"
+#include "phobos-seccomp-networksystem-child.h"
 
-#include "phobos-connect-guard-diagnostics.h"
+#include "phobos-seccomp-networksystem-diagnostics.h"
 
 #include <errno.h>
 #include <stddef.h>

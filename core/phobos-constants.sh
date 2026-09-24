@@ -13,7 +13,7 @@ PHB_ETIMEOUT=14
 PHB_ERUNTIME=15
 # The status a script ends with when it was called the wrong way.
 PHB_EXIT_USAGE=2
-# The status phobos-landlock and the connect guard end with when they refuse to set up the
+# The status phobos-landlock-filesystem-and-networksystem and the connect guard end with when they refuse to set up the
 # sandbox; the C sources name it EXIT_CODE_POLICY_ERROR and EXIT_CODE_SETUP_ERROR.
 PHB_ENFORCER_REFUSED_EXIT=125
 

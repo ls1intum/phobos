@@ -12,12 +12,12 @@ Phobos is a sandbox, so parts of it exist to do things a normal project would av
 rest exists to take privileges away. None of the following is a vulnerability.
 
 - `core/` applies the sandbox. `phobos.sh` and the scripts beside it, and the
-  `phobos-landlock` program they run, build a Landlock policy from an allow-list and grant
+  `phobos-landlock-filesystem-and-networksystem` program they run, build a Landlock policy from an allow-list and grant
   back only what the allow-list names, then restrict the process so it and everything it
   starts can only lose access. Code that assembles access rules from a configuration file
   looks like path injection, and is the mechanism. It needs no privilege: a task may always
   restrict itself further.
-- `core/phobos-connect-guard.c` is the connect guard. When the network layer is on it
+- `core/phobos-seccomp-networksystem.c` is the connect guard. When the network layer is on it
   supervises every `connect()` with a seccomp user-notification and makes an allowed
   connection itself from outside the sandboxed process, so for `connect` it is a boundary a
   raw system call cannot step around, enforcing the `[connect]` allow-list by host and port.
@@ -50,7 +50,7 @@ rest exists to take privileges away. None of the following is a vulnerability.
   unprivileged process. The container the grader starts should add `--network none` and
   cgroup limits, which are the outer boundary Phobos cannot set from inside itself.
 
-The three C products, `phobos-landlock`, the connect guard and the timeout's group lock, are not
+The three C products, `phobos-landlock-filesystem-and-networksystem`, the connect guard and the timeout's group lock, are not
 committed. They are compiled inside the run-phase image from the source under `core/`, and CI
 checks the copies the image ships are position-independent with full RELRO. Where the connect guard binary is missing
 the network layer refuses to start rather than run the command without connect supervision, so a

@@ -77,7 +77,7 @@ if (( ${#name_rules[@]} > 0 )); then want_broker=1; fi
 # over. It is refused when missing rather than skipped, so a run cannot lose connect
 # supervision unnoticed. When the egress broker is on, the guard is told to hand every allowed
 # connection to it, so the broker can enforce by the TLS host name the guard cannot see.
-GUARD_BIN="${GUARD_BIN_OPT:-${HERE}/phobos-connect-guard}"
+GUARD_BIN="${GUARD_BIN_OPT:-${HERE}/phobos-seccomp-networksystem}"
 if [[ ! -x "$GUARD_BIN" ]]; then
   report "The connect guard '${GUARD_BIN}' is missing or not executable; refusing to run without connect supervision. (PHB-ERUNTIME)"
   exit "${PHB_ERUNTIME}"
@@ -136,7 +136,7 @@ guard_command+=( --rules "$RULES" -- )
 # supervisor has forked, so the supervisor that connects on the command's behalf stays
 # unrestricted. When the policy names no TCP port, no ruleset is needed here and the guard alone
 # filters the run.
-LANDLOCK_BIN="${LANDLOCK_BIN_OPT:-${HERE}/phobos-landlock}"
+LANDLOCK_BIN="${LANDLOCK_BIN_OPT:-${HERE}/phobos-landlock-filesystem-and-networksystem}"
 command_tail=( "$@" )
 port_args=()
 build_network_args port_args "$RULES"

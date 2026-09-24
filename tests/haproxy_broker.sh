@@ -53,14 +53,14 @@ if ! command -v openssl >/dev/null 2>&1; then
   skip "the egress broker" "openssl is not installed here, so no ClientHello can be sent"
   finish
 fi
-if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/guard" "${CORE}"/phobos-connect-guard*.c 2>"$WORK/cc.log"; then
+if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/guard" "${CORE}"/phobos-seccomp-networksystem*.c 2>"$WORK/cc.log"; then
   bad "the connect guard builds" "$(cat "$WORK/cc.log")"
   finish
 fi
 # The network layer applies the Landlock TCP-port rules itself now, so the end-to-end case below,
-# whose [connect] rule names a port, needs the phobos-landlock binary too.
-if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/phobos-landlock" "${CORE}"/phobos-landlock*.c 2>"$WORK/cc.log"; then
-  bad "phobos-landlock builds" "$(cat "$WORK/cc.log")"
+# whose [connect] rule names a port, needs the phobos-landlock-filesystem-and-networksystem binary too.
+if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/phobos-landlock-filesystem-and-networksystem" "${CORE}"/phobos-landlock-filesystem-and-networksystem*.c 2>"$WORK/cc.log"; then
+  bad "phobos-landlock-filesystem-and-networksystem builds" "$(cat "$WORK/cc.log")"
   finish
 fi
 
@@ -371,7 +371,7 @@ fi
 # localhost is loopback, not a name to resolve: a plain connection to a loopback address is
 # forwarded to it under a localhost rule, which the slice-2 broker refused for want of the SNI
 # "localhost". The forbidden direction, a non-loopback destination, is refused by the guard, which
-# tests/unit/connect_guard_unit.c pins, and by the config carrying no exact-name path for localhost,
+# tests/unit/seccomp_networksystem_unit.c pins, and by the config carrying no exact-name path for localhost,
 # which tests/haproxy_conf.sh pins.
 LOOPBACK_IP=127.0.0.5
 spec_lh="$WORK/spec-lh"
@@ -404,7 +404,7 @@ if [[ -w /etc/hosts ]]; then
   mkdir -p "$spec_e2e"
   printf 'allowed.example %s\n' "$UPORT" > "$spec_e2e/net.rules"
   rm -f "$WORK/real.marker"
-  "${CORE}/phobos-network.sh" --connect-guard-bin "$WORK/guard" --landlock-bin "$WORK/phobos-landlock" \
+  "${CORE}/phobos-network.sh" --connect-guard-bin "$WORK/guard" --landlock-bin "$WORK/phobos-landlock-filesystem-and-networksystem" \
     --resolver "127.0.0.1:${DNSPORT}" "$spec_e2e" -- \
     timeout 4 openssl s_client -connect "allowed.example:${UPORT}" -servername allowed.example -quiet < /dev/null \
     > "$WORK/e2e.out" 2>&1 || true

@@ -1,5 +1,5 @@
 /*
- * phobos-pgroup-lock -- deny setsid and setpgid, then exec a command.
+ * phobos-seccomp-timeoutsystem -- deny setsid and setpgid, then exec a command.
  *
  * The timeout layer bounds a run by putting the command in its own process group and, on
  * expiry, signalling the whole group (GNU timeout without --foreground, escalating to SIGKILL).
@@ -19,7 +19,7 @@
  * rather than run outside the group lock.
  *
  * Usage:
- *   phobos-pgroup-lock [--] COMMAND [ARGUMENTS...]
+ *   phobos-seccomp-timeoutsystem [--] COMMAND [ARGUMENTS...]
  */
 
 #define _GNU_SOURCE
@@ -45,11 +45,11 @@
 #elif defined(__aarch64__)
 #define NATIVE_AUDIT_ARCH AUDIT_ARCH_AARCH64
 #else
-#error "phobos-pgroup-lock supports x86-64 and aarch64 only"
+#error "phobos-seccomp-timeoutsystem supports x86-64 and aarch64 only"
 #endif
 
 /* The setup exit status, and the status for a command that cannot be executed. They match the
- * connect guard and phobos-landlock, so a caller reads one meaning across the enforcers. */
+ * connect guard and phobos-landlock-filesystem-and-networksystem, so a caller reads one meaning across the enforcers. */
 static constexpr int EXIT_CODE_SETUP_ERROR = 125;
 static constexpr int EXIT_CODE_COMMAND_NOT_EXECUTABLE = 127;
 
@@ -89,18 +89,18 @@ int main(int argument_count, char *arguments[]) {
         command = &arguments[2];
     }
     if (command[0] == nullptr) {
-        fprintf(stderr, "Usage: phobos-pgroup-lock [--] COMMAND [ARGUMENTS...]\n");
+        fprintf(stderr, "Usage: phobos-seccomp-timeoutsystem [--] COMMAND [ARGUMENTS...]\n");
         return EXIT_CODE_SETUP_ERROR;
     }
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
-        fprintf(stderr, "[phobos-pgroup-lock] prctl(NO_NEW_PRIVS): %s\n", strerror(errno));
+        fprintf(stderr, "[phobos-seccomp-timeoutsystem] prctl(NO_NEW_PRIVS): %s\n", strerror(errno));
         return EXIT_CODE_SETUP_ERROR;
     }
     if (install_pgroup_lock_filter() != 0) {
-        fprintf(stderr, "[phobos-pgroup-lock] seccomp: %s\n", strerror(errno));
+        fprintf(stderr, "[phobos-seccomp-timeoutsystem] seccomp: %s\n", strerror(errno));
         return EXIT_CODE_SETUP_ERROR;
     }
     execvp(command[0], command);
-    fprintf(stderr, "[phobos-pgroup-lock] exec %s: %s\n", command[0], strerror(errno));
+    fprintf(stderr, "[phobos-seccomp-timeoutsystem] exec %s: %s\n", command[0], strerror(errno));
     return EXIT_CODE_COMMAND_NOT_EXECUTABLE;
 }

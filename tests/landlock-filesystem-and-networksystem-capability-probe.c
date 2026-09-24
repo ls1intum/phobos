@@ -227,8 +227,8 @@ static int probe_enforcement(const char *permitted_directory, const char *permit
 }
 
 static void print_usage(void) {
-    fprintf(stderr, "usage: landlock-capability-probe --version\n");
-    fprintf(stderr, "       landlock-capability-probe --enforce DIR PERMITTED_FILE FORBIDDEN_FILE\n");
+    fprintf(stderr, "usage: landlock-filesystem-and-networksystem-capability-probe --version\n");
+    fprintf(stderr, "       landlock-filesystem-and-networksystem-capability-probe --enforce DIR PERMITTED_FILE FORBIDDEN_FILE\n");
 }
 
 int main(int argc, char **argv) {

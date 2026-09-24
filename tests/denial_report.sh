@@ -4,7 +4,7 @@
 # counts. Both directions: a denial is counted and reported, and a clean run reports nothing.
 # The report must never cost the command its output or change its exit status, whether the
 # counter finishes, dies at its own limits, or is kept waiting by a process the command left
-# behind. Every run goes through phobos.sh with a pass-through stand-in for phobos-landlock,
+# behind. Every run goes through phobos.sh with a pass-through stand-in for phobos-landlock-filesystem-and-networksystem,
 # so no Landlock kernel is needed, and captures stdout and stderr together, so the checks do
 # not depend on which of the two a refusal is printed to.
 set -uo pipefail

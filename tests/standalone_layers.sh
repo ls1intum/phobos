@@ -37,16 +37,16 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 # The core, with the three enforcers built beside phobos-policy.sh and a minimal base policy that
-# names only paths that exist here, so phobos-landlock does not refuse a base path that is absent.
+# names only paths that exist here, so phobos-landlock-filesystem-and-networksystem does not refuse a base path that is absent.
 CORE_X="$WORK/core-x"
 cp -R "$CORE" "$CORE_X"
 chmod +x "$CORE_X"/*.sh
 rm -f "$CORE_X"/Base*.cfg
 for c in landlock connect-guard pgroup-lock; do
   case "$c" in
-    landlock) src=("$CORE_X"/phobos-landlock*.c) ;;
-    connect-guard) src=("$CORE_X"/phobos-connect-guard*.c) ;;
-    pgroup-lock) src=("$CORE_X"/phobos-pgroup-lock.c) ;;
+    landlock) src=("$CORE_X"/phobos-landlock-filesystem-and-networksystem*.c) ;;
+    connect-guard) src=("$CORE_X"/phobos-seccomp-networksystem*.c) ;;
+    pgroup-lock) src=("$CORE_X"/phobos-seccomp-timeoutsystem.c) ;;
   esac
   if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$CORE_X/phobos-$c" "${src[@]}" 2>"$WORK/cc.log"; then
     skip "standalone layers" "phobos-$c did not build: $(cat "$WORK/cc.log")"
@@ -103,7 +103,7 @@ fi
 
 # Skip whole where Landlock cannot be applied here (an old kernel or a restrictive container),
 # the same way the other enforcement suites do.
-if ! "$CORE_X/phobos-landlock" --rights=rx /usr -- /bin/true 2>"$WORK/ll.log"; then
+if ! "$CORE_X/phobos-landlock-filesystem-and-networksystem" --rights=rx /usr -- /bin/true 2>"$WORK/ll.log"; then
   skip "standalone layers" "Landlock could not be applied here: $(cat "$WORK/ll.log")"
   finish
 fi
@@ -118,15 +118,15 @@ run_layer() {
 }
 
 echo "== the network layer alone enforces the network and leaves the filesystem =="
-net_out="$(run_layer phobos-network.sh --connect-guard-bin "$CORE_X/phobos-connect-guard" \
-  --landlock-bin "$CORE_X/phobos-landlock" --config "$WORK/probe.cfg" -- "$WORK/connect-probe" 8.8.8.8 53)"
+net_out="$(run_layer phobos-network.sh --connect-guard-bin "$CORE_X/phobos-seccomp-networksystem" \
+  --landlock-bin "$CORE_X/phobos-landlock-filesystem-and-networksystem" --config "$WORK/probe.cfg" -- "$WORK/connect-probe" 8.8.8.8 53)"
 if [[ "$net_out" == *"connect-errno=13"* ]]; then
   ok "the network layer alone denies a forbidden connect"
 else
   bad "the network layer alone denies a forbidden connect" "connect-errno=13" "$(printf '%s' "$net_out" | tail -1)"
 fi
-net_fs="$(run_layer phobos-network.sh --connect-guard-bin "$CORE_X/phobos-connect-guard" \
-  --landlock-bin "$CORE_X/phobos-landlock" --config "$WORK/probe.cfg" -- /bin/sh -c "cat $WORK/secret.txt")"
+net_fs="$(run_layer phobos-network.sh --connect-guard-bin "$CORE_X/phobos-seccomp-networksystem" \
+  --landlock-bin "$CORE_X/phobos-landlock-filesystem-and-networksystem" --config "$WORK/probe.cfg" -- /bin/sh -c "cat $WORK/secret.txt")"
 if [[ "$net_fs" == *"SECRET"* ]]; then
   ok "the network layer alone leaves the filesystem unrestricted"
 else
@@ -135,7 +135,7 @@ fi
 
 echo
 echo "== the filesystem layer alone enforces the filesystem and leaves the network =="
-fs_deny="$(run_layer phobos-filesystem.sh --landlock-bin "$CORE_X/phobos-landlock" \
+fs_deny="$(run_layer phobos-filesystem.sh --landlock-bin "$CORE_X/phobos-landlock-filesystem-and-networksystem" \
   --config "$WORK/probe.cfg" -- /bin/sh -c "cat $WORK/secret.txt 2>&1")"
 if [[ "$fs_deny" == *"Permission denied"* ]]; then
   ok "the filesystem layer alone denies a path the policy does not name"
@@ -147,7 +147,7 @@ fi
 # there is no guard, so a connect to a host the base policy does not name returns an ordinary
 # network error (or succeeds), never the guard's EACCES; a present network layer would return
 # EACCES here, so "not EACCES" distinguishes the two. python3 is under /usr, which the base grants.
-fs_net="$(run_layer phobos-filesystem.sh --landlock-bin "$CORE_X/phobos-landlock" \
+fs_net="$(run_layer phobos-filesystem.sh --landlock-bin "$CORE_X/phobos-landlock-filesystem-and-networksystem" \
   --config "$WORK/probe.cfg" -- python3 -c '
 import socket
 s = socket.socket()
@@ -166,14 +166,14 @@ fi
 echo
 echo "== the timeout layer alone stops an overrun and lets a quick command finish =="
 printf '[read]\n/usr\n[limits]\ntimeout=1\n' > "$WORK/t1.cfg"
-to_out="$(run_layer phobos-timeout.sh --pgroup-lock-bin "$CORE_X/phobos-pgroup-lock" \
+to_out="$(run_layer phobos-timeout.sh --pgroup-lock-bin "$CORE_X/phobos-seccomp-timeoutsystem" \
   --config "$WORK/t1.cfg" -- sleep 10)"
 if [[ "$to_out" == *"Timed out after 1s"* ]]; then
   ok "the timeout layer alone stops a command that overruns"
 else
   bad "the timeout layer alone stops a command that overruns" "a PHB-ETIMEOUT message" "$(printf '%s' "$to_out" | tail -1)"
 fi
-quick="$(run_layer phobos-timeout.sh --pgroup-lock-bin "$CORE_X/phobos-pgroup-lock" \
+quick="$(run_layer phobos-timeout.sh --pgroup-lock-bin "$CORE_X/phobos-seccomp-timeoutsystem" \
   --config "$WORK/t1.cfg" -- /bin/echo quick-ok)"
 if [[ "$quick" == *"quick-ok"* ]]; then
   ok "the timeout layer alone lets a quick command finish"

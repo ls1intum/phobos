@@ -1,8 +1,8 @@
 /* O_PATH and the other GNU extensions used below need this first. */
 #define _GNU_SOURCE
-#include "phobos-landlock-path-rule.h"
+#include "phobos-landlock-filesystem-and-networksystem-path-rule.h"
 
-#include "phobos-landlock-ruleset.h"
+#include "phobos-landlock-filesystem-and-networksystem-ruleset.h"
 
 #include <fcntl.h>
 

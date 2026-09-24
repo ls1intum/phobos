@@ -79,10 +79,10 @@ IPC="${SPEC_DIR}/ipc.paths"
 SYMLINK="${SPEC_DIR}/symlink.paths"
 REFER="${SPEC_DIR}/refer.paths"
 TAIL="${SPEC_DIR}/tail.flags"
-LANDLOCK="${LANDLOCK_BIN_OPT:-${HERE}/phobos-landlock}"
+LANDLOCK="${LANDLOCK_BIN_OPT:-${HERE}/phobos-landlock-filesystem-and-networksystem}"
 
 # With --resources-layer the command's resource limits are set by that layer, started as the
-# very last step before phobos-landlock (or the command), so they reach phobos-landlock and the
+# very last step before phobos-landlock-filesystem-and-networksystem (or the command), so they reach phobos-landlock-filesystem-and-networksystem and the
 # command and nothing else: this layer's shell, the stderr pass-through and the denial counter
 # below run without them. A limit set any earlier would also bind those helpers, and a helper
 # that dies of the command's file-size, memory or CPU limit takes the command's output with it.
@@ -151,7 +151,7 @@ exec {denial_counts}<> <(:)
 exec {filtered_stderr}> >(tee -p >(count_denials >&"$denial_counts") >&2)
 
 # The command runs in a subshell that restores the default SIGTERM disposition and exec's the
-# resource layer, when there is one, and phobos-landlock, so phobos-landlock and the command it
+# resource layer, when there is one, and phobos-landlock-filesystem-and-networksystem, so phobos-landlock-filesystem-and-networksystem and the command it
 # runs are one process an outer timeout's kill escalation reaches directly, while this layer
 # ignores SIGTERM and waits so it can report the denials. The timeout itself, when set, is
 # phobos-timeout.sh's.

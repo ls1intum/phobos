@@ -211,7 +211,7 @@ refuse_spec_dir_under_write_path "$SPEC_DIR" "$writable_union"
 
 # The resource limits go into the specification, one "key=value" per line for each limit a
 # [limits] section named. phobos-resources.sh reads them and sets them with rlimits right
-# before phobos-landlock, so phobos-landlock and the command inherit them, rather than this
+# before phobos-landlock-filesystem-and-networksystem, so phobos-landlock-filesystem-and-networksystem and the command inherit them, rather than this
 # shell setting them and the whole layer chain, with its helpers, running under them.
 : > "${SPEC_DIR}/limits.conf"
 for key in mem_mb nproc nofile fsize_mb cpu; do

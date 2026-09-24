@@ -1,7 +1,7 @@
 #define _GNU_SOURCE
-#include "phobos-connect-guard-options.h"
+#include "phobos-seccomp-networksystem-options.h"
 
-#include "phobos-connect-guard-diagnostics.h"
+#include "phobos-seccomp-networksystem-diagnostics.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,7 +9,7 @@
 
 [[noreturn]] void print_usage_and_exit(void) {
     fprintf(stderr,
-            "Usage: phobos-connect-guard [--verbose] [--rules FILE] [--broker ADDRESS:PORT] "
+            "Usage: phobos-seccomp-networksystem [--verbose] [--rules FILE] [--broker ADDRESS:PORT] "
             "-- COMMAND [ARGUMENTS...]\n");
     exit(EXIT_CODE_USAGE);
 }

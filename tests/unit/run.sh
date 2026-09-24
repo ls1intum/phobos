@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds and runs the phobos-landlock unit tests, and optionally reports
+# Builds and runs the phobos-landlock-filesystem-and-networksystem unit tests, and optionally reports
 # coverage. Needs gcc-14 only: the syscalls are interposed through the linker, so
 # no Landlock-capable kernel is required and no container flags are involved.
 # gcc-14 rather than gcc, because the sources are C23 and Ubuntu 24.04 ships
@@ -42,10 +42,10 @@ fi
 
 # The stage sequence is included by the test file; its modules are linked.
 MODULES=(
-  "${HERE}/../../core/phobos-landlock-diagnostics.c"
-  "${HERE}/../../core/phobos-landlock-path-rule.c"
-  "${HERE}/../../core/phobos-landlock-options.c"
-  "${HERE}/../../core/phobos-landlock-ruleset.c"
+  "${HERE}/../../core/phobos-landlock-filesystem-and-networksystem-diagnostics.c"
+  "${HERE}/../../core/phobos-landlock-filesystem-and-networksystem-path-rule.c"
+  "${HERE}/../../core/phobos-landlock-filesystem-and-networksystem-options.c"
+  "${HERE}/../../core/phobos-landlock-filesystem-and-networksystem-ruleset.c"
 )
 
 # Every syscall the tool makes is wrapped so a failure can be injected.
@@ -62,18 +62,18 @@ WRAPS=(
 )
 
 if [[ "${1:-}" == "--coverage" ]]; then
-  "$COMPILER" -std=gnu23 -O0 -g --coverage -o "$WORK/unit" "${HERE}/landlock_unit.c" "${MODULES[@]}" "${WRAPS[@]}"
+  "$COMPILER" -std=gnu23 -O0 -g --coverage -o "$WORK/unit" "${HERE}/landlock_filesystem_and_networksystem_unit.c" "${MODULES[@]}" "${WRAPS[@]}"
   ( cd "$WORK" && ./unit )
   # One gcov run per compiled module. gcov also knows the test file itself,
   # which is not what is under test here, so only the modules are reported.
   ( cd "$WORK" && for notes in unit-*.gcno; do
       "$COVERAGE_TOOL" -b -o "$notes" "${notes%.gcno}" 2>/dev/null
     done ) \
-    | awk '/^File .*phobos-landlock/ { show = 1; print; next }
+    | awk '/^File .*phobos-landlock-filesystem-and-networksystem/ { show = 1; print; next }
            /^File / { show = 0 }
            show && /^(Lines|Branches|Taken)/ { print }
            show && /^Taken/ { show = 0 }'
 else
-  "$COMPILER" -std=gnu23 -O0 -g -Wall -Wextra -Werror -o "$WORK/unit" "${HERE}/landlock_unit.c" "${MODULES[@]}" "${WRAPS[@]}"
+  "$COMPILER" -std=gnu23 -O0 -g -Wall -Wextra -Werror -o "$WORK/unit" "${HERE}/landlock_filesystem_and_networksystem_unit.c" "${MODULES[@]}" "${WRAPS[@]}"
   "$WORK/unit"
 fi

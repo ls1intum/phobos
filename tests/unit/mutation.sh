@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mutation testing for phobos-landlock.
+# Mutation testing for phobos-landlock-filesystem-and-networksystem.
 #
 # Coverage says a line ran. It does not say a test would notice if that line
 # were wrong. This introduces deliberate faults, one at a time, and reports how
@@ -30,7 +30,7 @@ cat > "$WORK/mull.yml" <<CONFIG
 mutators:
   - cxx_all
 includePaths:
-  - core/phobos-landlock.*
+  - core/phobos-landlock-filesystem-and-networksystem.*
 excludePaths:
   - tests/.*
 timeout: ${MUTANT_TIMEOUT_MILLISECONDS}
@@ -57,9 +57,9 @@ dpkg -i /tmp/mull.deb > /dev/null 2>&1 || apt-get install -f -y -qq > /dev/null
 mkdir -p /tmp/objects
 # -grecord-command-line is what lets mull re-run a single mutant, and it only
 # works with one source file per invocation.
-for source in tests/unit/landlock_unit.c core/phobos-landlock-diagnostics.c \
-              core/phobos-landlock-path-rule.c core/phobos-landlock-options.c \
-              core/phobos-landlock-ruleset.c; do
+for source in tests/unit/landlock_filesystem_and_networksystem_unit.c core/phobos-landlock-filesystem-and-networksystem-diagnostics.c \
+              core/phobos-landlock-filesystem-and-networksystem-path-rule.c core/phobos-landlock-filesystem-and-networksystem-options.c \
+              core/phobos-landlock-filesystem-and-networksystem-ruleset.c; do
   "clang-${LLVM_VERSION}" -std=gnu23 "-fpass-plugin=/usr/lib/mull-ir-frontend-${LLVM_VERSION}" \
     -g -grecord-command-line -O0 -c -o "/tmp/objects/$(basename "${source%.c}").o" "$source"
 done

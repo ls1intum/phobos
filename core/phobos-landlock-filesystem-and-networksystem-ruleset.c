@@ -1,9 +1,9 @@
 /* O_PATH and the other GNU extensions used below need this first. */
 #define _GNU_SOURCE
-#include "phobos-landlock-ruleset.h"
+#include "phobos-landlock-filesystem-and-networksystem-ruleset.h"
 
-#include "phobos-landlock-diagnostics.h"
-#include "phobos-landlock-path-rule.h"
+#include "phobos-landlock-filesystem-and-networksystem-diagnostics.h"
+#include "phobos-landlock-filesystem-and-networksystem-path-rule.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -62,7 +62,7 @@ int detect_landlock_version(int minimum_landlock_version, bool network_rules_wan
     log_verbose("Landlock version %ld", landlock_version);
     if (landlock_version > HIGHEST_KNOWN_LANDLOCK_VERSION) {
         fprintf(stderr,
-                "[phobos-landlock] warning: kernel offers Landlock version %ld but this build "
+                "[phobos-landlock-filesystem-and-networksystem] warning: kernel offers Landlock version %ld but this build "
                 "only enumerates rights up to version %d; rights added after that are NOT "
                 "restricted\n",
                 landlock_version, HIGHEST_KNOWN_LANDLOCK_VERSION);

@@ -11,7 +11,7 @@
 #
 # Sourced as "${HERE}/harness.sh" by the suites beside it and as "../harness.sh" by the
 # acceptance suites below, which is why the acceptance job mounts tests/ rather than
-# tests/landlock-acceptance/.
+# tests/landlock-filesystem-and-networksystem-acceptance/.
 #
 # The contract the suites depend on, which tests/harness_self_test.sh pins:
 #
