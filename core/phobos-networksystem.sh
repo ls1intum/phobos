@@ -7,10 +7,13 @@ source "${HERE}/phobos-tools-common/phobos-common.sh"
 # shellcheck source=phobos-tools-networksystem/phobos-haproxy.sh
 source "${HERE}/phobos-tools-networksystem/phobos-haproxy.sh"
 
-# A generic layer: it does its work and execs the rest of the chain. phobos.sh includes this
-# layer only when the network filter is enabled, so there is no enable flag to read. Run on its
-# own with one or more --config files instead of a specification directory, it builds its own
-# specification through phobos-policysystem.sh and enforces only the network.
+# A layer that runs the rest of the chain as a child and waits for it, rather than exec'ing it
+# like the others, because it starts HAProxy processes and maps names in /etc/hosts that must not
+# outlive the run, and only a process outside the Landlock domain it sets up can stop them.
+# phobos.sh includes this layer only when the network filter is enabled, so there is no enable
+# flag to read. Run on its own with one or more --config files instead of a specification
+# directory, it builds its own specification through phobos-policysystem.sh and enforces only the
+# network.
 
 # Prints the whole manual on the file descriptor named by $1, which is stdout when the
 # manual was asked for and stderr when the call is refused because it was wrong.
@@ -18,11 +21,15 @@ help_text() {
   cat >&"$1" <<PHOBOS_HELP
 phobos-networksystem.sh - the network layer: supervise what the command may connect to.
 
-It enforces the whole network boundary and then hands the rest of the chain on. That
+It enforces the whole network boundary, runs the rest of the chain and waits for it. That
 boundary has three parts: the connect guard, which supervises every connect() from outside
 the process; the Landlock port rules, on a network-only ruleset of its own; and, when a
 [connect] rule names a host, an egress broker that checks the TLS host name the guard cannot
 see. An [accept] rule additionally fronts a listener with an inbound filter.
+
+When the command has ended, it stops the egress broker and the inbound filter it started, and
+the lines it added to /etc/hosts for an exact [connect] name are removed with the specification
+directory, so a run leaves neither behind.
 
 USAGE
   phobos-networksystem.sh [options] <SPEC_DIR> -- <command> [args...]
@@ -95,6 +102,18 @@ usage() {
   exit "${PHB_EXIT_USAGE}"
 }
 
+# Ends the layer with the given status: stops the egress broker and the inbound filter this shell
+# started, if it started them, then removes the specification directory through
+# finish_owned_spec_dir, which also removes the run's /etc/hosts lines. Meant for the EXIT trap, so
+# it runs after the command, after a refusal, and after a timeout's TERM the layer outlived. Assumes
+# BROKER_PID and INBOUND_PID are empty or name this shell's own HAProxy children, and SPEC_DIR is set.
+end_network_layer() {
+  local status="$1"
+  stop_haproxy_child "$BROKER_PID"
+  stop_haproxy_child "$INBOUND_PID"
+  finish_owned_spec_dir "$status" "$SPEC_DIR"
+}
+
 GUARD_BIN_OPT=""
 HAPROXY_BIN_OPT=""
 RESOLVER_OPT=""
@@ -121,8 +140,8 @@ done
 # Standalone mode: given one or more --config files instead of a specification directory, this
 # layer builds a specification of its own through the one parser, phobos-policysystem.sh, then runs
 # itself over that directory in specification-directory mode as a child. The directory is owned
-# and removed by this outer shell, because the specification-directory run execs the guard and so
-# leaves no waiter of its own to remove it.
+# and removed by this outer shell as well, so it is removed even when the inner run is killed
+# before its own clean-up runs.
 if (( ${#CONFIGS[@]} > 0 )); then
   [[ "${1:-}" == "--" && $# -ge 2 ]] || usage
   shift
@@ -137,9 +156,17 @@ fi
 [[ $# -ge 3 && "$2" == "--" ]] || usage
 SPEC_DIR="$1"; shift 2
 
-# Removes the specification phobos.sh created if this layer ends before it hands over,
-# for instance because a required piece cannot be started.
-trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
+# The HAProxy children this layer starts, stopped by end_network_layer however the layer ends.
+BROKER_PID=""
+INBOUND_PID=""
+trap 'end_network_layer "$?"' EXIT
+
+# A timeout sends TERM to the whole process group, this layer included. Ignoring it lets the
+# layer outlive that TERM and still stop its HAProxy children and remove its /etc/hosts lines;
+# every process it starts gets TERM back at its default, so the guard's command, and HAProxy, are
+# still ended by it. A SIGKILL escalation ends this layer too, together with HAProxy in the same
+# group, and the timeout layer's own clean-up, outside the group, then removes the lines.
+trap '' TERM
 
 RULES="${SPEC_DIR}/net.rules"
 # The guard reads this by path; ensure it exists whether or not the policy named any [connect] rule.
@@ -184,7 +211,7 @@ if (( want_broker )); then
       report "The [connect] allow-list names an exact host, which the egress broker binds by resolving it, but no resolver was given; pass --resolver <ip[:port]>. Refusing rather than run without host-name enforcement. (PHB-ERUNTIME)"
       exit "${PHB_ERUNTIME}"
     fi
-    if ! write_broker_hosts /etc/hosts "${exact_names[@]}"; then
+    if ! write_broker_hosts /etc/hosts "$SPEC_DIR" "${exact_names[@]}"; then
       report "Could not write /etc/hosts to map the exact [connect] names for the egress broker; refusing rather than run with names the command cannot resolve. (PHB-ERUNTIME)"
       exit "${PHB_ERUNTIME}"
     fi
@@ -194,10 +221,11 @@ if (( want_broker )); then
   # started. In the default --network none grading container the broker's onward connection fails
   # at run time rather than being refused up front, so say loudly that this run assumes a network.
   _log "NOTICE: the [connect] allow-list names a host (${name_rules[*]}), so the egress broker is started to enforce it by the TLS host name the connect guard cannot see. This assumes a NETWORKED container; in a --network none container the onward connection cannot be made."
-  broker_endpoint="$(start_egress_broker "$SPEC_DIR" "$RULES" "${HAPROXY_BIN_OPT:-haproxy}" "$RESOLVER_OPT")" || {
+  broker_endpoint=""
+  if ! start_egress_broker "$SPEC_DIR" "$RULES" "${HAPROXY_BIN_OPT:-haproxy}" "$RESOLVER_OPT" broker_endpoint BROKER_PID; then
     report "The egress broker could not be started; refusing to run rather than lose the host-name enforcement it was asked for. (PHB-ERUNTIME)"
     exit "${PHB_ERUNTIME}"
-  }
+  fi
   guard_command+=( --broker "$broker_endpoint" )
 fi
 
@@ -205,12 +233,12 @@ fi
 # only works in a NETWORKED container, so turning it on removes the --network none default the
 # rest of the sandbox relies on, and the run is then contained only by the outer network
 # isolation the operator provides. Say so loudly, then start the filter, refusing the run if it
-# cannot start rather than leave the listener unfiltered. It is a sibling, so it is started here
-# and stopped by whichever layer ends the run, like the egress broker.
+# cannot start rather than leave the listener unfiltered. It is a sibling of the command, so it is
+# started here and stopped by end_network_layer, like the egress broker.
 ACCEPT_RULES="${SPEC_DIR}/accept.rules"
 if [[ -s "$ACCEPT_RULES" ]]; then
   _log "NOTICE: an [accept] rule is present, so this run fronts a listener on a public port and assumes a NETWORKED container with the required isolation (only the public port reachable from outside, no other path to the backend port). This removes the --network none default; the outer network isolation, not Phobos, keeps the backend reachable only through the filter."
-  if ! start_inbound_haproxy "$SPEC_DIR" "$ACCEPT_RULES" "${HAPROXY_BIN_OPT:-haproxy}"; then
+  if ! start_inbound_haproxy "$SPEC_DIR" "$ACCEPT_RULES" "${HAPROXY_BIN_OPT:-haproxy}" INBOUND_PID; then
     report "The inbound filter could not be started; refusing to run rather than expose the listener unfiltered. (PHB-ERUNTIME)"
     exit "${PHB_ERUNTIME}"
   fi
@@ -246,5 +274,11 @@ if (( ${#port_args[@]} > 0 )); then
   command_tail=( "${landlock_prefix[@]}" "${port_args[@]}" -- "${command_tail[@]}" )
 fi
 
+# The guard runs as a child rather than replacing this shell, so the EXIT trap is still here to
+# clean up once it ends; its status, the command's own, is passed through unchanged.
 debug_log network "run" "${guard_command[@]}" "${command_tail[@]}"
-exec "${guard_command[@]}" "${command_tail[@]}"
+set +e
+( trap - TERM; exec "${guard_command[@]}" "${command_tail[@]}" )
+rc=$?
+set -e
+exit "$rc"

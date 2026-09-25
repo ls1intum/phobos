@@ -247,6 +247,17 @@ jobs:
             phobos-run-phase:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/seccomp-networksystem-test.sh
 
+      # The network layer's HAProxy processes and its /etc/hosts lines last exactly as long as the
+      # run: present while the command runs, gone once it has ended, through phobos.sh and the
+      # layer on its own, after a timeout that escalates to SIGKILL, and between concurrent runs.
+      # It is the one step that runs HAProxy inside the image, the one an exercise gets.
+      - name: The network layer leaves nothing behind in the run-phase image
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+            phobos-run-phase:ci \
+            bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/network-cleanup-test.sh
+
   # Mutation testing installs clang and mull into a container and then runs the suite
   # once per mutant, which is minutes rather than seconds. Weekly and on request, so it
   # reports on the suite's strength without being in the way of a pull request.

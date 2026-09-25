@@ -5,7 +5,7 @@ These suites apply the sandbox to real commands inside the run-phase image, in a
 `--network none`. A suite that needed any of those would be measuring a different sandbox
 from the one an exercise gets.
 
-`build.yml` runs all eight on every change. To run them by hand:
+`build.yml` runs all nine on every change. To run them by hand:
 
 ```bash
 # 1. build context (the same script CI uses, so the two cannot drift apart)
@@ -33,6 +33,7 @@ and is not one.
 | `network-port-test.sh` | a raw `connect()` syscall reaches the network below libc, and Landlock's `--connect-tcp` rule refuses it anyway |
 | `scoping-test.sh` | Landlock scoping: a sandboxed process can neither signal a process outside its domain nor reach an abstract UNIX socket there. Skipped below Landlock version 6 |
 | `seccomp-networksystem-test.sh` | the connect guard in the image: an allowed destination connects, a forbidden one is refused, and a destination cannot be swapped after the check |
+| `network-cleanup-test.sh` | the network layer leaves nothing behind: the inbound filter answers and an exact name resolves while the command runs, and once the run has ended no HAProxy is left and `/etc/hosts` is byte-identical, through `phobos.sh`, the layer on its own, a timeout escalated to SIGKILL and two overlapping runs |
 
 `PHOBOS_HOME` names where Phobos is installed in the image, `/var/tmp/opt/core` by
 default. `tests/README.md` lists every suite of this repository, including the ones that

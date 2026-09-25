@@ -34,14 +34,28 @@ new_scratch_file() {
 # The file that marks a specification directory as one phobos.sh created.
 PHB_SPEC_MARKER=".phobos-owned-spec"
 
-# The file the network layer writes the egress broker's process id into, so the layer that ends
-# the run can stop the broker, which the network layer cannot do itself because it execs.
-PHB_SPEC_BROKER_PID="broker.pid"
+# The file the network layer writes before it maps an exact [connect] name in a hosts file, naming
+# that hosts file, so that whichever layer removes the specification directory also removes the
+# run's lines from it. It is written before the first line is, so a run that dies in between
+# leaves a record that finds nothing to remove rather than a line nothing will remove. A run that
+# maps no name writes none, and its clean-up never opens the hosts file.
+PHB_SPEC_HOSTS_RECORD="hosts.record"
 
-# The file the network layer writes the inbound filter's process id into, so the layer that ends
-# the run can stop it and free the fixed public port it holds, which the network layer cannot do
-# itself because it execs. It is separate from the broker's, so one is stopped without the other.
-PHB_SPEC_INBOUND_PID="inbound.pid"
+# The name, before a random suffix, of the copy remove_run_hosts_entries filters the hosts file into
+# inside the specification directory. A clean-up killed while the copy exists leaves it behind, so
+# remove_owned_spec_dir deletes any such copy rather than find the directory not empty for ever.
+PHB_SPEC_HOSTS_KEPT="hosts.kept"
+
+# The file every writer and remover of a run's hosts-file lines locks, rather than the hosts file
+# itself. The shipped policies grant the graded command read on /etc, and a process that can open a
+# file can hold its flock, so locking /etc/hosts would let a command stall its own clean-up and
+# other runs' start. No shipped policy grants /run. The lock is shared by every run in the
+# container, whatever specification parent it uses, because they all write the same hosts file.
+PHB_HOSTS_LOCK="/run/lock/phobos-hosts.lock"
+
+# How long a writer or remover waits for that lock, so a lock nothing lets go of ends in a refused
+# run or a kept specification directory rather than in a run that hangs.
+PHB_HOSTS_LOCK_WAIT_SECONDS=10
 
 # The files write_spec creates, the only ones remove_owned_spec_dir deletes.
 PHB_SPEC_FILES="read.paths execute.paths write.paths create.paths delete.paths ipc.paths symlink.paths refer.paths tail.flags net.rules bind.rules accept.rules timeout.sec limits.conf"
@@ -63,9 +77,9 @@ refuse_unusable_spec_parent() {
 
 # Refuses a policy whose write, create or delete paths would make the specification directory
 # writable by the graded command. The directory holds net.rules, which the connect guard reads
-# before Landlock is applied, and the broker's and inbound filter's process-id files, which the
-# trusted clean-up kills; a command that could write there could rewrite the connect policy or aim
-# the kill at any process. refuse_unusable_spec_parent only checks the parent is an absolute
+# before Landlock is applied, and the record of the hosts file whose lines the trusted clean-up
+# rewrites; a command that could write there could rewrite the connect policy or aim that rewrite
+# at another file. refuse_unusable_spec_parent only checks the parent is an absolute
 # existing directory, not the write paths, so this is the sole guarantor the directory lies outside
 # them. Both sides are resolved through their symbolic links, because Landlock anchors a rule on the
 # inode it opens. Takes the specification directory and a file holding the write paths, one per
@@ -81,7 +95,7 @@ refuse_spec_dir_under_write_path() {
     [[ -z "$write_path" ]] && continue
     resolved_write="$(printf '%s\n' "$write_path" | resolve_symlinks)"
     if [[ "$resolved" == "$resolved_write" || "$resolved" == "${resolved_write%/}/"* ]]; then
-      report "Policy unenforceable: the specification directory '${spec_dir}' lies beneath the write path '${write_path}', so the graded command could rewrite the connect policy or the clean-up's process-id files. (PHB-EPOLICY)"
+      report "Policy unenforceable: the specification directory '${spec_dir}' lies beneath the write path '${write_path}', so the graded command could rewrite the connect policy or the record the clean-up acts on. (PHB-EPOLICY)"
       exit "${PHB_EPOLICY}"
     fi
   done < "$write_file"
@@ -125,45 +139,127 @@ build_owned_spec_from_configs() {
   "${policy_dir}/phobos-policysystem.sh" "${policy_args[@]}"
 }
 
-# Stops the egress broker whose process id the network layer recorded in the specification
-# directory, if it recorded one, so the broker does not outlive the run it served. A pid file
-# that names nothing running is simply removed. Assumes the directory is one Phobos owns.
-stop_recorded_broker() {
-  local directory="$1"
-  local pid_file="$directory/${PHB_SPEC_BROKER_PID}"
-  local pid
-  [[ -f "$pid_file" && ! -L "$pid_file" ]] || return 0
-  pid="$(cat "$pid_file" 2>/dev/null || true)"
-  [[ "$pid" =~ ^[0-9]+$ ]] && kill "$pid" 2>/dev/null
-  rm -f -- "$pid_file"
+# Prints the tag that marks a hosts-file line as one this run added: the name of its
+# specification directory, which mktemp made unique among the runs that share a parent and which
+# holds no white space. The writer and every remover derive it the same way from the directory, so
+# nothing else has to be passed between them.
+run_hosts_tag() {
+  printf 'phobos-run %s' "$(basename -- "$1")"
 }
 
-# Stops the inbound filter whose process id the network layer recorded in the specification
-# directory, if it recorded one, so the filter does not outlive the run and its fixed public port
-# is freed. A pid file that names nothing running is simply removed. Assumes the directory is one
-# Phobos owns.
-stop_recorded_inbound() {
+# Runs the given command while holding an exclusive flock on PHB_HOSTS_LOCK, waiting for it at most
+# PHB_HOSTS_LOCK_WAIT_SECONDS, and answers the command's status, or failure when the lock could not
+# be had in time. Every writer and remover of a run's hosts-file lines goes through here, so one
+# run can neither add a line between another's read and write-back nor read a half-written file.
+# Assumes flock(1) from util-linux, and that the lock's directory exists or can be created.
+with_hosts_lock() {
+  mkdir -p -- "$(dirname -- "$PHB_HOSTS_LOCK")" 2>/dev/null || :
+  ( flock -x -w "$PHB_HOSTS_LOCK_WAIT_SECONDS" 9 && "$@" ) 9>> "$PHB_HOSTS_LOCK"
+}
+
+# Appends to the content file a comment line of exactly the given number of bytes, a bare newline
+# when that number is one, so the content grows to the hosts file's current length. Written over
+# the hosts file in one piece, it then leaves no byte of the old tail behind for a reader to parse,
+# and what a reader may see past the new end until the truncate is a comment, not a broken line.
+pad_with_comment() {
+  local content="$1"
+  local bytes="$2"
+  if (( bytes == 1 )); then
+    printf '\n' >> "$content"
+    return
+  fi
+  printf '#%*s\n' "$(( bytes - 2 ))" '' >> "$content"
+}
+
+# Writes the content file over the target file in place and then shortens the target to the given
+# length, without truncating it first. A hosts file is bind-mounted into a container, so it cannot
+# be replaced by a rename, and a reader resolving a name takes no lock, so an emptied file would
+# fail even localhost for the moment of the write; this way the unchanged beginning of the file is
+# rewritten with the same bytes and is never absent. Assumes GNU dd and truncate.
+overwrite_in_place() {
+  local content="$1"
+  local target="$2"
+  local final_size="$3"
+  local size
+  size="$(wc -c < "$content")"
+  if (( size > 0 )); then
+    dd if="$content" of="$target" bs="$size" count=1 iflag=fullblock conv=notrunc status=none || return 1
+  fi
+  truncate -s "$final_size" -- "$target"
+}
+
+# Writes the hosts file without the lines that end in this run's tag into the kept file and, only
+# when it removed any, writes that back over the hosts file, padded to the old length and then
+# shortened, so a run whose lines are already gone leaves the file untouched. Lines of other runs,
+# lines without a tag and every other byte stay as they were. Assumes the caller holds the hosts
+# lock, and that the kept file lies where the graded command cannot write.
+strip_run_hosts_entries() {
+  local hosts_file="$1"
+  local directory="$2"
+  local kept="$3"
+  local status=0
+  local before
+  local after
+  PHB_HOSTS_TAG=" # $(run_hosts_tag "$directory")" awk '
+    substr($0, length($0) - length(ENVIRON["PHB_HOSTS_TAG"]) + 1) == ENVIRON["PHB_HOSTS_TAG"] { removed++; next }
+    { print }
+    END { exit (removed > 0 ? 0 : 3) }
+  ' "$hosts_file" > "$kept" || status=$?
+  (( status == 3 )) && return 0
+  (( status == 0 )) || return 1
+  before="$(wc -c < "$hosts_file")"
+  after="$(wc -c < "$kept")"
+  pad_with_comment "$kept" "$(( before - after ))" || return 1
+  overwrite_in_place "$kept" "$hosts_file" "$after"
+}
+
+# Removes this run's lines from the hosts file under the hosts lock, working on a copy inside the
+# run's own specification directory, which the graded command cannot write, so nothing it controls
+# can change the bytes between the read and the write-back. Returns failure when the lock, the file
+# or the copy cannot be had, so the caller keeps the specification directory and an outer layer can
+# try again.
+remove_run_hosts_entries() {
+  local hosts_file="$1"
+  local directory="$2"
+  local kept
+  kept="$(mktemp "${directory}/${PHB_SPEC_HOSTS_KEPT}.XXXXXX")" || return 1
+  if with_hosts_lock strip_run_hosts_entries "$hosts_file" "$directory" "$kept"; then
+    rm -f -- "$kept"
+    return 0
+  fi
+  rm -f -- "$kept"
+  return 1
+}
+
+# Removes the run's lines from the hosts file its record names, when the network layer recorded
+# one, and then the record itself. Assumes the directory is one Phobos owns, so the record is one
+# the network layer wrote rather than one the graded command could have planted.
+remove_recorded_hosts_entries() {
   local directory="$1"
-  local pid_file="$directory/${PHB_SPEC_INBOUND_PID}"
-  local pid
-  [[ -f "$pid_file" && ! -L "$pid_file" ]] || return 0
-  pid="$(cat "$pid_file" 2>/dev/null || true)"
-  [[ "$pid" =~ ^[0-9]+$ ]] && kill "$pid" 2>/dev/null
-  rm -f -- "$pid_file"
+  local record="$directory/${PHB_SPEC_HOSTS_RECORD}"
+  local hosts_file
+  [[ -f "$record" && ! -L "$record" ]] || return 0
+  hosts_file="$(< "$record")"
+  if [[ -n "$hosts_file" ]]; then
+    remove_run_hosts_entries "$hosts_file" "$directory" || return 1
+  fi
+  rm -f -- "$record"
 }
 
 # Removes a specification directory phobos.sh created, and does nothing to any
-# other. Stops any egress broker it recorded, then deletes the scratch subdirectory phobos.sh
-# made, the files write_spec writes and the marker, then the directory itself, so a directory
-# that has gained anything else stays and the failure is returned rather than the contents
-# deleted. Assumes the path may be empty, missing or not a directory, all of which leave nothing to do.
+# other. Removes the run's hosts-file lines first, and keeps the directory when that fails, so an
+# outer layer's clean-up tries again rather than the record being lost with the lines still in
+# place. It then deletes any copy of the hosts file a killed clean-up left, the scratch
+# subdirectory phobos.sh made, the files write_spec writes and the marker, then the directory itself, so a directory that has gained anything else stays and
+# the failure is returned rather than the contents deleted. Assumes the path may be empty,
+# missing or not a directory, all of which leave nothing to do.
 remove_owned_spec_dir() {
   local directory="$1"
   local name
   [[ -n "$directory" && -d "$directory" && ! -L "$directory" ]] || return 0
   [[ -f "$directory/${PHB_SPEC_MARKER}" && ! -L "$directory/${PHB_SPEC_MARKER}" ]] || return 0
-  stop_recorded_broker "$directory"
-  stop_recorded_inbound "$directory"
+  remove_recorded_hosts_entries "$directory" || return 1
+  rm -f -- "$directory/${PHB_SPEC_HOSTS_KEPT}".* || return 1
   rm -rf -- "${directory:?}/${PHB_SPEC_SCRATCH}" || return 1
   for name in ${PHB_SPEC_FILES}; do
     rm -f -- "$directory/$name" || return 1

@@ -5,11 +5,11 @@
 # build_inbound_conf turns the "H P src" accept rules phobos-policysystem.sh writes into an haproxy.cfg
 # that binds each public port H dual-stack and rejects a connection whose source is not in H's
 # source file, forwarding an admitted one to the student's backend port P on loopback.
-# start_inbound_haproxy starts it and records its process id for the layer to stop later. This
+# start_inbound_haproxy starts it and hands back its process id for the layer to stop later. This
 # drives that path with a backend that counts the connections it accepts and a client that binds a
 # chosen loopback source before connecting: an admitted source reaches the backend, a rejected one
 # does not, a service with no source admits no one, a filter that cannot start refuses the run, and
-# stopping the recorded filter frees the port. It needs a C compiler and HAProxy, and skips itself
+# stopping the filter frees the port. It needs a C compiler and HAProxy, and skips itself
 # where either is absent. No guard or Landlock is involved, so no special kernel is needed.
 set -uo pipefail
 
@@ -24,7 +24,8 @@ source "${CORE}/phobos-tools-networksystem/phobos-haproxy.sh"
 
 WORK="$(mktemp -d)"
 cleanup() {
-  [[ -n "${inbound_pid:-}" ]] && kill "$inbound_pid" 2>/dev/null
+  stop_haproxy_child "${inbound_pid:-}"
+  stop_haproxy_child "${closed_pid:-}"
   [[ -n "${server_pid:-}" ]] && kill "$server_pid" 2>/dev/null
   rm -rf "$WORK"
 }
@@ -178,7 +179,7 @@ fi
 fail_spec="$WORK/fail"
 mkdir -p "$fail_spec/scratch"
 printf '%s %s %s\n' "$HPORT" "$BPORT" "$ALLOWED" > "$fail_spec/accept.rules"
-if start_inbound_haproxy "$fail_spec" "$fail_spec/accept.rules" "/nonexistent/haproxy" > /dev/null 2>&1; then
+if start_inbound_haproxy "$fail_spec" "$fail_spec/accept.rules" "/nonexistent/haproxy" fail_pid > /dev/null 2>&1; then
   bad "a filter whose binary is missing fails to start" "it reported success"
 else
   ok "a filter whose binary is missing fails to start rather than run without enforcement"
@@ -194,13 +195,13 @@ server_pid=$!
 : > "$WORK/accepts.log"
 for _ in $(seq 1 100); do grep -q BACKEND-LISTENING "$WORK/server.out" 2>/dev/null && break; sleep 0.05; done
 
-if start_inbound_haproxy "$spec" "$spec/accept.rules" "$haproxy_bin" && [[ -f "$spec/${PHB_SPEC_INBOUND_PID}" ]]; then
-  ok "the filter starts and records its process id"
+inbound_pid=""
+if start_inbound_haproxy "$spec" "$spec/accept.rules" "$haproxy_bin" inbound_pid && [[ -n "$inbound_pid" ]]; then
+  ok "the filter starts and hands back its process id"
 else
-  bad "the filter starts and records its process id" "start failed or pidfile missing; log: $(cat "$spec/scratch/inbound.log" 2>/dev/null)"
+  bad "the filter starts and hands back its process id" "start failed or no process id; log: $(cat "$spec/scratch/inbound.log" 2>/dev/null)"
   finish
 fi
-inbound_pid="$(cat "$spec/${PHB_SPEC_INBOUND_PID}")"
 
 # Counts how many connections the backend has accepted so far, as a single number.
 accepts() {
@@ -229,23 +230,24 @@ else
   bad "a connection from a source the filter does not name never reaches the backend" "the backend accepted a rejected source"
 fi
 
-stop_recorded_inbound "$spec"
-sleep 0.2
-if kill -0 "$inbound_pid" 2>/dev/null; then
-  bad "stopping the recorded filter ends it and frees the port" "the filter is still running"
+stopped_pid="$inbound_pid"
+stop_haproxy_child "$inbound_pid"
+inbound_pid=""
+if kill -0 "$stopped_pid" 2>/dev/null; then
+  bad "stopping the filter ends it" "the filter is still running"
+elif (exec 3<>"/dev/tcp/127.0.0.1/${HPORT}") 2>/dev/null; then
+  bad "stopping the filter frees its public port" "the port still answers"
 else
-  ok "stopping the recorded filter ends it and frees the port"
-  inbound_pid=""
+  ok "stopping the filter ends it and frees its public port"
 fi
-[[ -f "$spec/${PHB_SPEC_INBOUND_PID}" ]] && bad "the filter record is removed" "it is still there" || ok "the filter record is removed with it"
 
 # A service with no source admits no one, the fail-closed default.
 closed_spec="$WORK/closed"
 mkdir -p "$closed_spec/scratch"
 CPORT=18899
 printf '%s %s\n' "$CPORT" "$BPORT" > "$closed_spec/accept.rules"
-if start_inbound_haproxy "$closed_spec" "$closed_spec/accept.rules" "$haproxy_bin"; then
-  closed_pid="$(cat "$closed_spec/${PHB_SPEC_INBOUND_PID}")"
+closed_pid=""
+if start_inbound_haproxy "$closed_spec" "$closed_spec/accept.rules" "$haproxy_bin" closed_pid; then
   before="$(accepts)"
   "$WORK/srcclient" "$ALLOWED" "$CPORT" || true
   sleep 1
@@ -254,7 +256,8 @@ if start_inbound_haproxy "$closed_spec" "$closed_spec/accept.rules" "$haproxy_bi
   else
     bad "a public port with no source admits no one" "the backend accepted a connection"
   fi
-  kill "$closed_pid" 2>/dev/null
+  stop_haproxy_child "$closed_pid"
+  closed_pid=""
 else
   bad "a public port with no source still starts a filter" "it failed to start"
 fi
