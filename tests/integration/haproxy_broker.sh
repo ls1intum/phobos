@@ -13,8 +13,9 @@
 # localhost rule, which is loopback rather than a name to resolve; a broker that cannot start, and
 # an exact-name rule with no resolver, each refuse the run; and, end to end through the network
 # layer, the name is mapped to a placeholder the command resolves with no DNS before it reaches the
-# resolved address. It needs a C compiler, HAProxy, openssl and a kernel with seccomp
-# user-notification, and skips itself where any is absent.
+# resolved address, and once the run has ended the mapping and the broker are both gone. It needs
+# a C compiler, HAProxy, openssl and a kernel with seccomp user-notification, and skips itself
+# where any is absent.
 set -uo pipefail
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,9 +29,8 @@ source "${CORE}/phobos-tools-networksystem/phobos-haproxy.sh"
 
 WORK="$(mktemp -d)"
 cleanup() {
-  [[ -n "${broker_pid:-}" ]] && kill "$broker_pid" 2>/dev/null
-  [[ -n "${lh_broker_pid:-}" ]] && kill "$lh_broker_pid" 2>/dev/null
-  [[ -n "${e2e_broker_pid:-}" ]] && kill "$e2e_broker_pid" 2>/dev/null
+  stop_haproxy_child "${broker_pid:-}"
+  stop_haproxy_child "${lh_broker_pid:-}"
   [[ -n "${real_pid:-}" ]] && kill "$real_pid" 2>/dev/null
   [[ -n "${decoy_pid:-}" ]] && kill "$decoy_pid" 2>/dev/null
   [[ -n "${loopback_pid:-}" ]] && kill "$loopback_pid" 2>/dev/null
@@ -261,24 +261,16 @@ LISTENER_WAIT_ATTEMPTS=100
 LISTENER_WAIT_SECONDS=0.05
 haproxy_bin="$(command -v haproxy)"
 
-# The map from an exact name to a loopback placeholder is what lets a command resolve the name with
-# no DNS. It is appended once, under a marker, and only when not already there.
-hosts_probe="$WORK/hosts"
-printf '127.0.0.1 localhost\n' > "$hosts_probe"
-write_broker_hosts "$hosts_probe" allowed.example
-write_broker_hosts "$hosts_probe" allowed.example
-if [[ "$(grep -c "^${PHB_BROKER_PLACEHOLDER_IP} allowed.example$" "$hosts_probe")" == "1" ]]; then
-  ok "an exact name is mapped to the placeholder once, so the command can resolve it with no DNS"
-else
-  bad "an exact name is mapped to the placeholder once" "$(cat "$hosts_probe")"
-fi
+# How the map from an exact name to the placeholder is written and removed again is pinned by
+# tests/unit/phobos-tools-common/hosts_entries.sh; the end-to-end case below proves it through
+# the network layer.
 
 # A broker that cannot even start refuses to be started, so a run that asked for one fails
 # rather than losing the enforcement quietly.
 spec_fail="$WORK/spec-fail"
 mkdir -p "$spec_fail"
 printf 'allowed.example %s\n' "$UPORT" > "$spec_fail/net.rules"
-if start_egress_broker "$spec_fail" "$spec_fail/net.rules" "/nonexistent/haproxy" "127.0.0.1:${DNSPORT}" > /dev/null 2>&1; then
+if start_egress_broker "$spec_fail" "$spec_fail/net.rules" "/nonexistent/haproxy" "127.0.0.1:${DNSPORT}" fail_endpoint fail_pid > /dev/null 2>&1; then
   bad "a broker whose binary is missing fails to start" "it reported success"
 else
   ok "a broker whose binary is missing fails to start rather than run without enforcement"
@@ -315,13 +307,14 @@ for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do grep -q UPSTREAM-LISTENING "$WOR
 for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do grep -q UPSTREAM-LISTENING "$WORK/decoy.out" 2>/dev/null && break; sleep "$LISTENER_WAIT_SECONDS"; done
 for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do grep -q DNS-LISTENING "$WORK/dns.out" 2>/dev/null && break; sleep "$LISTENER_WAIT_SECONDS"; done
 
-broker_endpoint="$(start_egress_broker "$spec" "$spec/net.rules" "$haproxy_bin" "127.0.0.1:${DNSPORT}")"
-if [[ -z "$broker_endpoint" || ! -f "$spec/${PHB_SPEC_BROKER_PID}" ]]; then
-  bad "the network layer starts the broker and records it" "endpoint=$broker_endpoint pidfile missing"
+broker_endpoint=""
+broker_pid=""
+start_egress_broker "$spec" "$spec/net.rules" "$haproxy_bin" "127.0.0.1:${DNSPORT}" broker_endpoint broker_pid
+if [[ -z "$broker_endpoint" || -z "$broker_pid" ]] || ! kill -0 "$broker_pid" 2>/dev/null; then
+  bad "the broker starts on a loopback port and hands back its endpoint and process id" "endpoint=${broker_endpoint} pid=${broker_pid}"
   finish
 fi
-ok "the network layer starts the broker on a loopback port and records its process id"
-broker_pid="$(cat "$spec/${PHB_SPEC_BROKER_PID}")"
+ok "the broker starts on a loopback port and hands back its endpoint and process id"
 
 # Runs one TLS client under the guard, pointed at the started broker, sending the given SNI and
 # aiming at the given address, then answers nothing: the caller reads the marker files to see which
@@ -380,8 +373,9 @@ printf 'localhost %s\n' "$UPORT" > "$spec_lh/net.rules"
 "$WORK/upstream" "$LOOPBACK_IP" "$UPORT" "$WORK/lh.marker" > "$WORK/lh.out" 2>&1 &
 loopback_pid=$!
 for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do grep -q UPSTREAM-LISTENING "$WORK/lh.out" 2>/dev/null && break; sleep "$LISTENER_WAIT_SECONDS"; done
-lh_endpoint="$(start_egress_broker "$spec_lh" "$spec_lh/net.rules" "$haproxy_bin")"
-lh_broker_pid="$(cat "$spec_lh/${PHB_SPEC_BROKER_PID}" 2>/dev/null)"
+lh_endpoint=""
+lh_broker_pid=""
+start_egress_broker "$spec_lh" "$spec_lh/net.rules" "$haproxy_bin" "" lh_endpoint lh_broker_pid
 rm -f "$WORK/lh.marker"
 "$WORK/guard" --rules "$spec_lh/net.rules" --broker "$lh_endpoint" -- \
   timeout 3 "$WORK/client" "$LOOPBACK_IP" "$UPORT" > "$WORK/lh.client.out" 2>&1 || true
@@ -394,39 +388,49 @@ fi
 
 # The whole network layer, end to end: it writes the placeholder to /etc/hosts, starts the broker
 # with the resolver, and the command then resolves the name with no DNS, connects, and reaches the
-# address the broker resolves. The rule names only the host and its port: mixing it with a
-# loopback wildcard rule (no port) is refused as unenforceable, because Landlock expresses ports,
-# not hosts, so a wildcard alongside a concrete port would be half-enforced. It writes /etc/hosts,
-# so it needs that file writable, as the run-phase image the acceptance suite uses gives; where it
-# is not, this one case is skipped.
+# address the broker resolves. Once the run has ended, the layer has stopped the broker and the
+# placeholder line is gone, leaving /etc/hosts as it found it. The rule names only the host and its
+# port: mixing it with a loopback wildcard rule (no port) is refused as unenforceable, because
+# Landlock expresses ports, not hosts, so a wildcard alongside a concrete port would be
+# half-enforced. The directory is marked as one Phobos owns, as phobos.sh marks its own, so the
+# layer's clean-up treats it as the run's. It writes /etc/hosts, so it needs that file writable, as
+# the run-phase image the acceptance suite uses gives; where it is not, this one case is skipped.
 if [[ -w /etc/hosts ]]; then
   spec_e2e="$WORK/spec-e2e"
   mkdir -p "$spec_e2e"
+  mark_owned_spec_dir "$spec_e2e"
   printf 'allowed.example %s\n' "$UPORT" > "$spec_e2e/net.rules"
+  hosts_before="$(cat /etc/hosts; printf 'x')"
   rm -f "$WORK/real.marker"
   "${CORE}/phobos-networksystem.sh" --connect-guard-bin "$WORK/guard" --landlock-bin "$WORK/phobos-landlock-filesystem-and-networksystem" \
     --resolver "127.0.0.1:${DNSPORT}" "$spec_e2e" -- \
     timeout 4 openssl s_client -connect "allowed.example:${UPORT}" -servername allowed.example -quiet < /dev/null \
     > "$WORK/e2e.out" 2>&1 || true
-  sleep 0.6
-  e2e_broker_pid="$(cat "$spec_e2e/${PHB_SPEC_BROKER_PID}" 2>/dev/null)"
-  if grep -qxF "${PHB_BROKER_PLACEHOLDER_IP} allowed.example" /etc/hosts && [[ -f "$WORK/real.marker" ]]; then
+  if [[ -f "$WORK/real.marker" ]]; then
     ok "the network layer maps the name, and the command resolves it with no DNS and reaches the resolved address"
   else
-    bad "the network layer maps the name, and the command resolves it with no DNS and reaches the resolved address" "hosts=$(grep allowed.example /etc/hosts || echo none) real=$([[ -f "$WORK/real.marker" ]] && echo yes || echo no); out=$(tail -2 "$WORK/e2e.out")"
+    bad "the network layer maps the name, and the command resolves it with no DNS and reaches the resolved address" "real=no; out=$(tail -2 "$WORK/e2e.out")"
   fi
+  [[ "$(cat /etc/hosts; printf 'x')" == "$hosts_before" ]] \
+    && ok "once the run has ended, /etc/hosts is byte-identical to what it was before" \
+    || bad "once the run has ended, /etc/hosts is byte-identical to what it was before" "$(grep allowed.example /etc/hosts)"
+  if pgrep -f "${spec_e2e}/${PHB_SPEC_SCRATCH}/broker.cfg" > /dev/null; then
+    bad "once the run has ended, the broker the layer started is gone" "$(pgrep -af "${spec_e2e}/${PHB_SPEC_SCRATCH}/broker.cfg")"
+  else
+    ok "once the run has ended, the broker the layer started is gone"
+  fi
+  [[ ! -e "$spec_e2e" ]] && ok "and so is the run's specification directory" || bad "and so is the run's specification directory" "$(ls -A "$spec_e2e")"
 else
   skip "the network layer maps the name end to end" "/etc/hosts is not writable here"
 fi
 
-stop_recorded_broker "$spec"
-sleep 0.2
-if kill -0 "$broker_pid" 2>/dev/null; then
-  bad "stopping the recorded broker ends it" "the broker is still running"
+stopped_pid="$broker_pid"
+stop_haproxy_child "$broker_pid"
+broker_pid=""
+if kill -0 "$stopped_pid" 2>/dev/null; then
+  bad "stopping the broker ends it" "the broker is still running"
 else
-  ok "stopping the recorded broker ends it, and removes the record"
-  broker_pid=""
+  ok "stopping the broker ends it and collects its status"
 fi
-[[ -f "$spec/${PHB_SPEC_BROKER_PID}" ]] && bad "the broker record is removed" "it is still there" || ok "the broker record is removed with it"
 
 finish

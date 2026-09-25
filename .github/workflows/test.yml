@@ -113,6 +113,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/integration/haproxy_broker.sh
 
+      # The lines a run adds to a hosts file carry its tag and leave with its specification
+      # directory, under a lock and in place. A scratch hosts file, so no root is needed.
+      - name: A run's hosts-file lines are removed with it
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/phobos-tools-common/hosts_entries.sh
+
       # The [limits] resource keys are parsed and, when applied, set the process's rlimits,
       # the in-process line against a fork bomb, a runaway allocation or a disk-filling file.
       - name: The resource limits

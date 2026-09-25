@@ -156,8 +156,8 @@ fi
 
 hdr "I. The network policy lies outside the reach of the sandbox"
 # The specification directory holds net.rules, which the connect guard reads before the fork,
-# and the broker/inbound process-id files the trusted clean-up kills. It must therefore lie
-# outside every write path, so the graded command cannot rewrite the policy or the pid files.
+# and the record of the hosts file the trusted clean-up rewrites. It must therefore lie outside
+# every write path, so the graded command cannot rewrite the policy or the record.
 # The guard reads net.rules in the unrestricted supervisor, so the command is never granted
 # read on it and cannot name the directory; the enforceable invariant is that a policy which
 # would place the specification beneath a write path is refused before the run starts.

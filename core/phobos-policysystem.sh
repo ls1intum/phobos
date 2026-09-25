@@ -317,8 +317,8 @@ refuse_unenforceable_accept_rules "$eff_accept" "$eff_bind"
 write_spec "$SPEC_DIR" "$eff_dir" "$eff_net" "$timeout_eff" "$tail_flags_file" "$eff_bind" "$eff_accept"
 
 # The specification directory must lie outside every path the command may write, or the command
-# could rewrite the connect policy the guard reads at run time, or the process-id files the
-# clean-up kills. Checked here, where the write union is known and which runs for every layer
+# could rewrite the connect policy the guard reads at run time, or the record of the hosts file
+# the clean-up rewrites. Checked here, where the write union is known and which runs for every layer
 # combination, rather than in the filesystem layer, which no longer sees the network runtime
 # state now that the port rules and the connect guard live in the network layer.
 writable_union="$(mktemp -p "$PHOBOS_SCRATCH")"
