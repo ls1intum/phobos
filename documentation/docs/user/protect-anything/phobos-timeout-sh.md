@@ -1,5 +1,5 @@
 ---
-title: "phobos-timeout.sh"
+title: "phobos-timeoutsystem.sh"
 sidebar_position: 4
 description: "The timeout layer: a wall-clock bound the command cannot step out of."
 ---
@@ -19,7 +19,7 @@ escape.
 ## Running it on its own
 
 ```bash
-${PHOBOS_HOME}/phobos-timeout.sh --config exercise.cfg -- ./slow-thing
+${PHOBOS_HOME}/phobos-timeoutsystem.sh --config exercise.cfg -- ./slow-thing
 ```
 
 | Option | What it is for |
@@ -34,7 +34,7 @@ ${PHOBOS_HOME}/phobos-timeout.sh --config exercise.cfg -- ./slow-thing
 ## How the bound is applied
 
 ```
-timeout --kill-after=5s <timeout>s phobos-pgroup-lock -- <the rest of the chain>
+timeout --kill-after=5s <timeout>s phobos-seccomp-timeoutsystem -- <the rest of the chain>
 ```
 
 Three parts of that line carry weight.
@@ -47,7 +47,7 @@ follows. That escalation only fires while the timeout's own child is still alive
 the layers below keep themselves alive across `SIGTERM` and put the command itself back to the
 default disposition before running it.
 
-**`phobos-pgroup-lock` first.** The lock installs a seccomp filter that refuses `setsid` and
+**`phobos-seccomp-timeoutsystem` first.** The lock installs a seccomp filter that refuses `setsid` and
 `setpgid` and then becomes the rest of the chain, so the filter is inherited by the whole group
 and nothing in it can leave the group the kill targets. Where the lock is missing or not
 executable, the layer ends the run with `PHB-ERUNTIME` rather than running a timed command that

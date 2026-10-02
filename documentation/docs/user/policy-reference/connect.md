@@ -133,8 +133,8 @@ connection to the same host and port, nor the reverse.
 
 Two limits come with it:
 
-- **It needs Landlock version 10.** On an older kernel `phobos-landlock` refuses the run with
-  `[phobos-landlock] UDP network rules require Landlock version 10` and exit status 125, rather
+- **It needs Landlock version 10.** On an older kernel `phobos-landlock-filesystem-and-networksystem` refuses the run with
+  `[phobos-landlock-filesystem-and-networksystem] UDP network rules require Landlock version 10` and exit status 125, rather
   than running with the transport left unenforced.
 - **It may not name a host name.** Host enforcement rests on the Transport Layer Security (TLS) host name, which is a
   stream concept, so a `udp` rule names an address, a range, a loopback name or `*`.
@@ -164,5 +164,5 @@ and a transport, or it does not.
 ## Further reading
 
 - [Allowing exactly one host](/user/policy-cookbook/allowing-exactly-one-host) — the recipe
-- [phobos-network.sh](/user/protect-anything/phobos-network-sh) — the layer that applies it
+- [phobos-networksystem.sh](/user/protect-anything/phobos-network-sh) — the layer that applies it
 - [HAProxy](/contributor/technologies/haproxy) — how the broker decides

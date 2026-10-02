@@ -14,7 +14,7 @@ stays behind to watch what the work was refused.
 ## What it does
 
 `phobos-filesystem.sh` is the end of the chain. It builds the `--rights=` arguments, starts the
-resource layer, runs `phobos-landlock`, and waits for the command so that it can report the
+resource layer, runs `phobos-landlock-filesystem-and-networksystem`, and waits for the command so that it can report the
 denials.
 
 It is the one layer that runs the command as a **child** rather than replacing itself with
@@ -26,11 +26,11 @@ it. Everything else in the chain hands over with `exec`.
 | --- | --- |
 | `phobos-filesystem.sh` | the layer: arguments, the resource-layer prefix, the run, the denial report |
 | `phobos-rights.sh` | the translation from path sets to `--rights=` arguments |
-| `phobos-landlock.c` | the sequence of stages, and nothing else |
-| `phobos-landlock-options.c` | the command line, read into one object |
-| `phobos-landlock-path-rule.c` | one allow-listed path, its rights and its open flags |
-| `phobos-landlock-ruleset.c` | the kernel object, the version detection and the operations |
-| `phobos-landlock-diagnostics.c` | reporting and giving up |
+| `phobos-landlock-filesystem-and-networksystem.c` | the sequence of stages, and nothing else |
+| `phobos-landlock-filesystem-and-networksystem-options.c` | the command line, read into one object |
+| `phobos-landlock-filesystem-and-networksystem-path-rule.c` | one allow-listed path, its rights and its open flags |
+| `phobos-landlock-filesystem-and-networksystem-ruleset.c` | the kernel object, the version detection and the operations |
+| `phobos-landlock-filesystem-and-networksystem-diagnostics.c` | reporting and giving up |
 
 ## The five stages of the translation
 
@@ -42,7 +42,7 @@ leave the run going with no rules at all.
    or executed as well exists by the time its read row is built and keeps that right. It then
    writes one `letter, resolved path, written path` row per entry. A non-existent read or
    execute path is dropped as a system path absent from this image; a non-existent changeable
-   path is kept, so `phobos-landlock` refuses it with a clear message.
+   path is kept, so `phobos-landlock-filesystem-and-networksystem` refuses it with a clear message.
 2. **`fold_table_by_target`** unions the letters of every row naming one resolved target.
    Folding first is what lets the hierarchy check see that two spellings are one tree; without
    it the two rows skip each other as "the same path" and a conflict between them is neither
@@ -57,7 +57,7 @@ leave the run going with no rules at all.
    one: folding is how two spellings are recognised as one tree, and each spelling still needs
    its own rule.
 
-## What `phobos-landlock` does with them
+## What `phobos-landlock-filesystem-and-networksystem` does with them
 
 The program is the sequence of stages and nothing else:
 
@@ -113,7 +113,7 @@ messages are the whole heuristic. A build that prints one of those phrases for i
 is counted, so the report is a hint rather than a verdict, which is why it never touches the
 exit status.
 
-**The `i` right has no section.** `phobos-landlock` accepts the letter, and no configuration
+**The `i` right has no section.** `phobos-landlock-filesystem-and-networksystem` accepts the letter, and no configuration
 file can produce it. A policy that needs `ioctl` on a device has no way to ask.
 
 ## Further reading

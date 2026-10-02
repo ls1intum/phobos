@@ -1,5 +1,5 @@
 ---
-title: "phobos-network.sh"
+title: "phobos-networksystem.sh"
 sidebar_position: 3
 description: "The network layer: the connect guard, the egress broker, the inbound filter and the Landlock port rules."
 ---
@@ -18,7 +18,7 @@ fronts a listener, and the Landlock port rules that express the same ports in th
 ## Running it on its own
 
 ```bash
-${PHOBOS_HOME}/phobos-network.sh --config exercise.cfg -- curl https://example.org
+${PHOBOS_HOME}/phobos-networksystem.sh --config exercise.cfg -- curl https://example.org
 ```
 
 | Option | What it is for |
@@ -29,7 +29,7 @@ ${PHOBOS_HOME}/phobos-network.sh --config exercise.cfg -- curl https://example.o
 | `--connect-guard-bin <path>` | The connect guard program to use. |
 | `--haproxy-bin <path>` | The HAProxy program the broker and the inbound filter run as. |
 | `--resolver <ip[:port]>` | The Domain Name System (DNS) resolver the broker resolves an exact host name through. |
-| `--landlock-bin <path>` | The `phobos-landlock` program that applies the port rules. |
+| `--landlock-bin <path>` | The `phobos-landlock-filesystem-and-networksystem` program that applies the port rules. |
 | `--debug` | Report what the layer builds and runs. |
 
 ## The connect guard
@@ -45,13 +45,24 @@ Letting the kernel continue the original call would re-run it against whatever i
 command's memory at that later moment, so a command could show one address to the check and
 connect to another once it passed.
 
-A **datagram** `connect()` only sets a default peer, which cannot be swapped that way, so it is
-checked and then let through to the kernel. The boundary for a datagram is the checked send
-that follows and the container's own isolation, rather than a connection the supervisor made.
+A **datagram** `connect()` and a datagram send are still checked and then let through to the
+kernel, and that is a known weakness: a second thread of the command can rewrite the address
+between the check and the kernel's own read. Measured in an ordinary container, about one send
+in six reached an address the allow-list never named. For a datagram, the address rule is
+therefore defence in depth. The port is held in the kernel by Landlock, and the boundary
+against a hostile command is the container's own isolation.
 
 The guard refuses a raw, packet or ICMP socket before the socket exists, and refuses
 `io_uring`, which would otherwise reach `connect` unseen. An ordinary datagram socket it
 creates and tracks, so that a send through it is judged later.
+
+The guard never lets the kernel run a command's own `listen()`. The kernel gives a socket that
+was never bound a port of its choosing when it listens, and Landlock has no check for that, so
+the guard creates and holds every stream socket of the command, runs `listen()` itself, and
+refuses a socket that is unbound unless a `[bind]` row names port 0. The guard only ever acts on
+a socket it made, so swapping another socket under the descriptor cannot create a listener. A
+repeated `listen()` on a socket that already listens is answered with success and changes
+nothing, including its backlog.
 
 The guard enforces a rule by the address and the port it can see:
 
@@ -116,6 +127,14 @@ own, created with `--no-filesystem`, which composes with the filesystem layer's 
 intersection. It is applied inside the guard's child lineage, after the supervisor has forked,
 so the supervisor that connects on the command's behalf stays unrestricted.
 
+The ruleset is applied on every run, including a run whose policy names no port, because it
+carries `--close-bind`: both bind directions are handled with nothing granted, so only a `[bind]`
+row opens a port. A row for port 0 becomes `--ephemeral-bind-tcp` or `--ephemeral-bind-udp`,
+which grants a port the kernel chooses and never one the command names. On a kernel below
+Landlock version 4 (TCP) or 10 (UDP) the direction cannot be closed: the layer's enforcer says
+so on every run and leaves it open, and `--minimum-landlock-version` in the tail flags makes that
+a refusal. A missing Landlock program ends the run with `PHB-ERUNTIME`.
+
 Two details are worth knowing before a policy surprises you:
 
 - **A rule that names no port cannot be expressed.** Only a loopback host may omit its port. A
@@ -124,9 +143,9 @@ Two details are worth knowing before a policy surprises you:
 - **A wildcard beside a concrete port is refused.** Mixing them would make one rule
   kernel-enforced and the other not, which reads stricter than it is.
 
-Where the policy handles both datagram directions, Phobos adds `--bind-udp 0` for the ephemeral
-source port the kernel auto-binds to an outgoing datagram. Without it, an allowed send would be
-denied its own source port.
+A `udp` `[connect]` rule brings `--ephemeral-bind-udp` with it, for the source port the kernel
+auto-binds to an outgoing datagram. Without it, an allowed send would be denied its own source
+port, now that UDP bind is always handled.
 
 ## Further reading
 

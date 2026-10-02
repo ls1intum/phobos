@@ -13,7 +13,7 @@ tidies up when the run ends.
 
 ## What it does
 
-`phobos-timeout.sh` reads `timeout.sec` from the specification. Where it is empty the layer
+`phobos-timeoutsystem.sh` reads `timeout.sec` from the specification. Where it is empty the layer
 hands the chain straight on with `exec` and applies no process-group lock, since there is no
 group kill to escape. Where a timeout is set it runs the rest under GNU `timeout` and waits.
 
@@ -21,8 +21,8 @@ group kill to escape. Where a timeout is set it runs the rest under GNU `timeout
 
 | File | Purpose |
 | --- | --- |
-| `phobos-timeout.sh` | the layer: the run, the wait, the timeout decision |
-| `phobos-pgroup-lock.c` | the seccomp filter refusing `setsid` and `setpgid`, then `execvp` |
+| `phobos-timeoutsystem.sh` | the layer: the run, the wait, the timeout decision |
+| `phobos-seccomp-timeoutsystem.c` | the seccomp filter refusing `setsid` and `setpgid`, then `execvp` |
 | `phobos-time.sh` | how a timeout is spelled, converted and compared |
 
 ## The contract for a timeout value
@@ -74,5 +74,5 @@ seconds and is kept below it deliberately.
 ## Further reading
 
 - [timeout and the process-group lock](../technologies/timeout-and-the-process-group-lock.md)
-- [phobos-timeout.sh](/user/protect-anything/phobos-timeout-sh) — the same layer, from the
+- [phobos-timeoutsystem.sh](/user/protect-anything/phobos-timeout-sh) — the same layer, from the
   outside

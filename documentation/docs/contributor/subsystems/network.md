@@ -12,24 +12,25 @@ Each of the three sees something the others cannot, which is why none of them is
 
 ## What it does
 
-`phobos-network.sh` owns the whole network restriction. `phobos.sh` includes the layer only
+`phobos-networksystem.sh` owns the whole network restriction. `phobos.sh` includes the layer only
 where the network restriction is enabled, so there is no enable flag to read inside it.
 
 ## What is in it
 
 | File | Purpose |
 | --- | --- |
-| `phobos-network.sh` | the layer: the broker, the inbound filter, the port rules, the guard |
-| `phobos-haproxy.sh` | classification, the two configurations, and starting each instance |
-| `phobos-network-args.sh` | `[connect]` and `[bind]` to the Landlock port arguments |
-| `phobos-connect-guard.c` | the sequence of stages: load, fork, supervise, wait |
-| `phobos-connect-guard-child.c` | the filter and the handover of the notification descriptor |
-| `phobos-connect-guard-supervisor.c` | the decision on every trapped call |
-| `phobos-connect-guard-rules.c` | the allow-list and the decision on a destination |
-| `phobos-connect-guard-destination.c` | a destination read out of the command's memory |
-| `phobos-connect-guard-socket-types.c` | the type of every socket, remembered by inode |
-| `phobos-connect-guard-options.c` | the command line |
-| `phobos-connect-guard-diagnostics.c` | the setup exit status and the verbose lines |
+| `phobos-networksystem.sh` | the layer: the broker, the inbound filter, the port rules, the guard, and the clean-up after the run |
+| `phobos-tools-networksystem/phobos-haproxy.sh` | classification, the two configurations, and starting each instance |
+| `phobos-tools-networksystem/phobos-network-args.sh` | `[connect]` and `[bind]` to the Landlock port arguments, and the refusals |
+| `phobos-seccomp-networksystem/phobos-seccomp-networksystem.c` | the sequence of stages: load, fork, supervise, wait |
+| `phobos-seccomp-networksystem/phobos-seccomp-networksystem-child.c` | the filter and the handover of the notification descriptor |
+| `phobos-seccomp-networksystem/phobos-seccomp-networksystem-supervisor.c` | the decision on every trapped call, including `listen` |
+| `phobos-seccomp-networksystem/phobos-seccomp-networksystem-rules.c` | the allow-list and the decision on a destination |
+| `phobos-seccomp-networksystem/phobos-seccomp-networksystem-destination.c` | a destination read out of the command's memory |
+| `phobos-seccomp-networksystem/phobos-seccomp-networksystem-socket-types.c` | the type of every socket, remembered by inode |
+| `phobos-seccomp-networksystem/phobos-seccomp-networksystem-held-sockets.c` | the sockets the supervisor created and still holds, and the ones it let listen |
+| `phobos-seccomp-networksystem/phobos-seccomp-networksystem-options.c` | the command line |
+| `phobos-seccomp-networksystem/phobos-seccomp-networksystem-diagnostics.c` | the setup exit status and the verbose lines |
 
 ## The three enforcers
 
@@ -73,10 +74,26 @@ properties follow:
 - It is applied **inside the guard's child lineage**, after the supervisor has forked, so the
   supervisor that connects on the command's behalf is never restricted by it.
 
-`add_udp_ephemeral_bind_if_needed` adds `--bind-udp 0` where the policy handles both datagram
-directions, because the kernel auto-binds an ephemeral source port for an outgoing datagram and
-gates that auto-bind by `BIND_UDP` once the right is handled. The rule is added in that one
-case alone, so a stream-only policy gains nothing.
+- Bind is closed by default. The layer always passes `--close-bind`, so a command with no
+  `[bind]` row cannot bind or listen on any port. A row for port 0 becomes
+  `--ephemeral-bind-tcp` or `--ephemeral-bind-udp`, which grants only a port the kernel chooses.
+  On a kernel that cannot close bind the program warns and carries on, because refusing there
+  would stop every run.
+- `add_udp_ephemeral_bind_if_needed` adds the ephemeral UDP grant where the policy handles
+  datagrams, because the kernel auto-binds an ephemeral source port for an outgoing datagram and
+  gates that auto-bind by `BIND_UDP` once the right is handled. A stream-only policy gains
+  nothing from it.
+
+## The listen guard
+
+Landlock closes `bind`, but a socket that was never bound can still be made to listen, and the
+kernel then picks a port nothing judged. The guard therefore traps `listen` as well. A stream
+socket the command creates is made by the supervisor and handed over, and the supervisor keeps
+its own descriptor for the same open file description in the held-socket table, keyed by inode.
+When the command calls `listen`, the supervisor runs it on that descriptor, and only where the
+socket is bound to a port `[bind]` named or is unbound and the policy allowed an ephemeral port.
+A socket the supervisor does not hold, such as an inherited or accepted descriptor, or one
+evicted from the full table, cannot listen. That fails closed.
 
 ## The guard, stage by stage
 
@@ -88,6 +105,11 @@ socketpair + fork
   parent: ignore SIGTERM, receive the descriptor, supervise, wait, exit with the child's status
 ```
 
+The network layer runs this guard as a child rather than replacing itself with it, so its `EXIT`
+trap is still there when the command ends. That trap stops the broker and the inbound filter and
+removes the run's own lines from `/etc/hosts`, after a normal exit, a refusal and a timeout alike.
+The command's status is passed through unchanged.
+
 `SIGTERM` is ignored only **after** the fork. The command keeps the default disposition, so an
 outer timeout's escalation reaches it rather than the supervisor.
 
@@ -97,19 +119,24 @@ child succeeded.
 
 ## Known gaps
 
-**Datagram egress is filtered by port and by the checked send, never by host name.** Host
-enforcement rests on the Transport Layer Security host name, which is a stream concept, so a
-datagram rule may not name a host. Datagram traffic beyond the allow-list is the container's
-boundary.
+**A datagram destination is checked, then re-read by the kernel.** Host enforcement rests on
+the Transport Layer Security host name, which is a stream concept, so a datagram rule may not
+name a host. The guard checks the address of a datagram `connect` or send and then lets the call
+continue, which re-reads the address from the command's memory. A command that flips the
+address between the check and the call can send a datagram to a destination the check never
+saw. Landlock's port rules narrow this on a version 10 kernel, and the container's
+`--network none` is the boundary beyond that.
 
 **The broker picks a loopback port at random and probes it.** It tries five candidates between
 20000 and 60000 and skips one that already answers. A probe that answers on a live broker is
 answering the broker, because the broker holds the port exclusively, but the window itself is a
 retry loop rather than a reservation.
 
-**The placeholder entry in `/etc/hosts` is appended, never removed.** It is written before the
-filesystem layer makes `/etc` read-only, under a marker line, and re-running skips a name that
-is already mapped.
+**The placeholder entry in `/etc/hosts` is removed only by the layer that wrote it.** It is
+written before the filesystem layer makes `/etc` read-only, under a marker line tagged with the
+run, and the layer's `EXIT` trap removes exactly those lines. A run that is killed with
+`SIGKILL` skips the trap and leaves them behind, and re-running skips a name that is already
+mapped.
 
 **`[accept]` is stream only.** There is no datagram inbound filter.
 
@@ -117,7 +144,7 @@ is already mapped.
 
 - [Seccomp](../technologies/seccomp.md) — how a call is trapped and answered
 - [HAProxy](../technologies/haproxy.md) — the two roles in detail
-- [phobos-network.sh](/user/protect-anything/phobos-network-sh) — the same layer, from the
+- [phobos-networksystem.sh](/user/protect-anything/phobos-network-sh) — the same layer, from the
   outside
 - [`[connect]`](/user/policy-reference/connect), [`[bind]`](/user/policy-reference/bind),
   [`[accept]`](/user/policy-reference/accept)

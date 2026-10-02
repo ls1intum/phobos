@@ -105,7 +105,7 @@ gaining it as a side effect. Both sides of a rename have to hold it.
 **Without REFER the kernel answers `EXDEV`.** On a kernel below Landlock version 2 the right
 does not exist at all, and every rename across directories is refused even where the policy
 permits both sides. That breaks a build loudly rather than weakening the sandbox quietly, so
-`phobos-landlock` reports it as a note rather than as a warning.
+`phobos-landlock-filesystem-and-networksystem` reports it as a note rather than as a warning.
 
 **A tool that moves a temporary file into place needs this.** Writing to `out.tmp` and renaming
 it to `out` is the common shape, and it fails with `EXDEV` under `[write]`, `[create]` and

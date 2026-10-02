@@ -1,5 +1,5 @@
 ---
-title: "phobos-resources.sh"
+title: "phobos-resourcesystem.sh"
 sidebar_position: 5
 description: "The resource layer: the rlimits the policy names, set for the command and nothing else."
 ---
@@ -12,12 +12,12 @@ ran out of budget halfway would drop what the work had produced.
 :::
 
 The resource layer sets the resource limits the policy named and then replaces itself with the
-rest of the chain, so `phobos-landlock` and the command inherit them.
+rest of the chain, so `phobos-landlock-filesystem-and-networksystem` and the command inherit them.
 
 ## Running it on its own
 
 ```bash
-${PHOBOS_HOME}/phobos-resources.sh --config exercise.cfg -- ./hungry-thing
+${PHOBOS_HOME}/phobos-resourcesystem.sh --config exercise.cfg -- ./hungry-thing
 ```
 
 | Option | What it is for |
@@ -48,7 +48,7 @@ unchecked text reaches the arithmetic.
 ## Why the layer sits where it does
 
 The resource layer is not a link of the chain the entry point assembles. The filesystem layer
-starts it as the last step before `phobos-landlock`, which is what keeps the limits on the
+starts it as the last step before `phobos-landlock-filesystem-and-networksystem`, which is what keeps the limits on the
 command alone.
 
 Everything Phobos runs beside the command stays outside them: the layer shells, the standard

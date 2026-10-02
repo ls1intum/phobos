@@ -8,7 +8,7 @@
 # can be a handful of wide grants with decoration beneath them.
 #
 # It is a report and not a gate, and the distinction matters: these entries are not dead.
-# AGENTS.md records what they do, and tests/filesystem_policy.sh pins it: a base entry an
+# AGENTS.md records what they do, and tests/integration/filesystem_policy.sh pins it: a base entry an
 # ancestor already covers is what lets an exercise configuration name that same path with
 # fewer rights, so deleting one changes which configurations Phobos accepts. Read the output,
 # do not act on it mechanically.
@@ -24,8 +24,8 @@ set -uo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE="${HERE}/../core"
-# shellcheck source=../core/phobos-common.sh
-source "${CORE}/phobos-common.sh"
+# shellcheck source=../core/phobos-tools-common/phobos-common.sh
+source "${CORE}/phobos-tools-common/phobos-common.sh"
 
 # The exit status this probe ends with when it was called the wrong way.
 readonly PROBE_EXIT_USAGE=2

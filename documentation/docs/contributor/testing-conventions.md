@@ -27,7 +27,7 @@ non-zero on a failure.
 | Host suites | `tests/*.sh` | a shell, a compiler, a Python and Bubblewrap | the `Shell suites` job of `test.yml`, in continuous integration (CI) |
 | Python suites | `tests/python/` | pytest | the `Python helpers` job of `test.yml` |
 | Unit suites | `tests/unit/` | `gcc-14`, no kernel feature | `build.yml` |
-| Acceptance suites | `tests/landlock-acceptance/` | the run-phase image, an ordinary container | `build.yml` |
+| Acceptance suites | `tests/integration/landlock-filesystem-and-networksystem-acceptance/` | the run-phase image, an ordinary container | `build.yml` |
 
 Each shell suite is a CI step of its own, so one run names every suite that broke rather than
 the first alone. `tests/README.md` is the table of every suite, what it proves and what makes it
@@ -77,7 +77,7 @@ A change to the sandbox needs two tests, not one:
 - the permitted case still works, which says the sandbox is usable;
 - the nearest forbidden neighbour is still denied, which says the boundary held.
 
-Either alone passes for the wrong reason. `tests/filesystem_policy.sh` is the worked example:
+Either alone passes for the wrong reason. `tests/integration/filesystem_policy.sh` is the worked example:
 it pins that a nested entry narrower than its ancestor is refused **and** that a merely
 different one is allowed, because a change that tightened the first would silently break the
 second.

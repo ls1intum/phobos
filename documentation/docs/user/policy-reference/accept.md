@@ -118,7 +118,9 @@ An `[accept]` rule changes the run's posture, and Phobos says so loudly on stand
 
 - **It removes `--network none`.** An external client cannot reach a container with no network.
 - **Phobos locks the port, not its reachability.** Landlock refuses the command a listener on
-  any other port, in the kernel and against raw system calls. The bind right is per port rather
+  any other port, in the kernel and against raw system calls, and the connect guard refuses a
+  `listen()` on a socket that was never bound, which the kernel would otherwise give a port of
+  its own choosing. The bind right is per port rather
   than per address, so the command may bind the backend port on every interface. That the
   backend is reachable only through the filter comes from the container's network isolation: a
   dedicated network with inter-container communication disabled, only the public port

@@ -30,7 +30,7 @@ time.
 
 ## How Phobos uses it
 
-`phobos-landlock` reads one `--rights=LETTERS PATH` pair per policy entry, opens each path with
+`phobos-landlock-filesystem-and-networksystem` reads one `--rights=LETTERS PATH` pair per policy entry, opens each path with
 `O_PATH`, and adds one `LANDLOCK_RULE_PATH_BENEATH` rule:
 
 | Letter | Rights granted |
@@ -53,7 +53,7 @@ to every ruleset from version 6.
 
 ## The version ladder
 
-`core/phobos-landlock-ruleset.h` names the first version that carries each right. A right the
+`core/phobos-landlock-filesystem-and-networksystem-ruleset.h` names the first version that carries each right. A right the
 running kernel does not know is **not handled at all**, so it is free on every path, including
 the ones the policy calls read-only.
 
@@ -77,7 +77,7 @@ The missing `REFER` is the one case that points the other way: without it the ke
 every rename across directories rather than leaving it free. That breaks a build loudly instead
 of weakening the sandbox quietly, so it is reported as a note.
 
-Where the kernel offers a version higher than the build enumerates, `phobos-landlock` warns
+Where the kernel offers a version higher than the build enumerates, `phobos-landlock-filesystem-and-networksystem` warns
 that rights added after that point are not restricted.
 
 ## Three properties worth knowing before writing a policy

@@ -59,7 +59,7 @@ configuration naming exactly that path is accepted, because a nested entry with 
 of an ancestor's rights is refused. Deleting one changes nothing about what Landlock enforces
 and changes which configurations Phobos accepts.
 
-`tests/filesystem_policy.sh` pins both directions of this, and `tests/policy-redundancy-probe.sh`
+`tests/integration/filesystem_policy.sh` pins both directions of this, and `tests/policy-redundancy-probe.sh`
 reports which entries of a policy are in this position.
 
 ## Line endings are load-bearing

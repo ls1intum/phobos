@@ -93,6 +93,25 @@ mem_mb=2048
 An unknown key is refused with `PHB-EPOLICY` rather than ignored, so a typo in a limit cannot
 leave the run unrestricted.
 
+## What a run is held to when no configuration names a limit
+
+A run is never unbounded by omission. Where no configuration names a value, a default applies:
+
+| Key | Default |
+| --- | --- |
+| `timeout` | 600 seconds |
+| `mem_mb` | 8192 |
+| `cpu` | 600 seconds |
+| `nproc` | 256 |
+| `nofile` | 1024 |
+| `fsize_mb` | 256 |
+
+The default is a floor, never a cap. A configuration that names a larger value wins over it, and
+one that names `0` switches that limit off and wins over it as well. `mem_mb` is 8192 because it
+is applied as `ulimit -v`, the virtual address space, which a 64-bit Java virtual machine
+reserves far more of than it makes resident. A value near the real memory of the machine would
+stop it before `main()`.
+
 ## How a value is written
 
 A timeout is a number of seconds, either whole or with exactly three decimal places: `120` and
@@ -107,12 +126,12 @@ configurations are read in does not matter.
 ## What enforces it
 
 The timeout is written into the specification and applied by
-[phobos-timeout.sh](/user/protect-anything/phobos-timeout-sh), which runs the rest of the chain
+[phobos-timeoutsystem.sh](/user/protect-anything/phobos-timeout-sh), which runs the rest of the chain
 under GNU `timeout` and waits.
 
 The five resource limits are written as one `key=value` per line and applied by
-[phobos-resources.sh](/user/protect-anything/phobos-resources-sh), which the filesystem layer
-starts as the last step before `phobos-landlock`. They therefore bind the command and
+[phobos-resourcesystem.sh](/user/protect-anything/phobos-resources-sh), which the filesystem layer
+starts as the last step before `phobos-landlock-filesystem-and-networksystem`. They therefore bind the command and
 everything it starts, and none of the helpers Phobos runs beside it.
 
 ## Notes

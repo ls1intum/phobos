@@ -25,7 +25,7 @@ the chain and have it hold all the way down to the command.
 
 ## Use one: the process-group lock
 
-`phobos-pgroup-lock` installs the smallest filter in the repository and then becomes the rest
+`phobos-seccomp-timeoutsystem` installs the smallest filter in the repository and then becomes the rest
 of the chain:
 
 ```
@@ -63,7 +63,8 @@ What the filter traps or refuses:
 | --- | --- | --- |
 | `connect` | notify | the decision the guard exists to make |
 | `sendto`, `sendmsg`, `sendmmsg` | notify | a datagram carries its own destination, and TCP Fast Open can open a connection past a `connect` |
-| `socket` | notify | a raw, packet or ICMP socket is refused before it exists |
+| `socket` | notify | a raw, packet or ICMP socket is refused before it exists, and a stream socket is created by the supervisor so it can be held |
+| `listen` | notify | the supervisor runs it on its own descriptor for a socket it holds, so a socket never bound cannot become a listener on a port nothing judged |
 | `io_uring_setup` and its siblings | refuse | a second syscall interface that would reach `connect` unseen |
 | `setsid`, `setpgid` | refuse | the same escape the process-group lock closes |
 
@@ -74,9 +75,10 @@ one address to the check and connect to another once it passed. Making the conne
 supervisor, from the address the check read, closes that window. The connected socket is handed
 back with `SECCOMP_IOCTL_NOTIF_ADDFD`.
 
-A datagram `connect` is different: it only sets a default peer, which cannot be injected the
-same way, so it is checked and then allowed through. The boundary for a datagram is the checked
-send that follows.
+A datagram `connect` or send is different: it sets a default peer or names one, which cannot
+be injected the same way, so it is checked and then allowed through with `CONTINUE`. That is the
+window the caveat above describes, and it is the one place the guard is weaker than for a
+stream.
 
 Reading the destination out of the child's memory uses `process_vm_readv`, which a parent may
 do to its own child in an ordinary container. No capability, no container flag.

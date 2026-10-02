@@ -12,25 +12,25 @@ Two lines of work, done at exactly the right moment.
 
 ## What it does
 
-`phobos-resources.sh` reads `limits.conf` from the specification, sets each limit in its own
-shell, and then replaces itself with the rest of the chain, so `phobos-landlock` and the
+`phobos-resourcesystem.sh` reads `limits.conf` from the specification, sets each limit in its own
+shell, and then replaces itself with the rest of the chain, so `phobos-landlock-filesystem-and-networksystem` and the
 command inherit them.
 
 ## What is in it
 
 | File | Purpose |
 | --- | --- |
-| `phobos-resources.sh` | the layer: read, validate, apply, `exec` |
+| `phobos-resourcesystem.sh` | the layer: read, validate, apply, `exec` |
 | `phobos-policy-parse.sh` | `read_limits_conf` and `apply_resource_limits`, shared with the parser |
 | `phobos-constants.sh` | the unit conversions and the largest safe megabyte value |
 
 ## Where it sits, and why
 
 It is **not** a link of the chain `phobos.sh` assembles. The filesystem layer starts it as the
-last step before `phobos-landlock`:
+last step before `phobos-landlock-filesystem-and-networksystem`:
 
 ```
-phobos-filesystem.sh -> phobos-resources.sh -> phobos-landlock -> the command
+phobos-filesystem.sh -> phobos-resourcesystem.sh -> phobos-landlock-filesystem-and-networksystem -> the command
 ```
 
 That is the whole design. A limit set any earlier would bind the helpers too: the layer shells,
@@ -74,6 +74,6 @@ hold: `RLIMIT_AS` bounds one address space at a time.
 ## Further reading
 
 - [rlimits](../technologies/rlimits.md) — the mechanism, the units and what they are not
-- [phobos-resources.sh](/user/protect-anything/phobos-resources-sh) — the same layer, from the
+- [phobos-resourcesystem.sh](/user/protect-anything/phobos-resources-sh) — the same layer, from the
   outside
 - [`[limits]`](/user/policy-reference/limits) — where the values are written

@@ -98,7 +98,7 @@ you may not read, you may not.
 ## What enforces it
 
 `phobos-filesystem.sh` collects the path, resolves it through its symbolic links and emits
-`--rights=r <path>` for `phobos-landlock`, which opens the path with `O_PATH` and adds one
+`--rights=r <path>` for `phobos-landlock-filesystem-and-networksystem`, which opens the path with `O_PATH` and adds one
 `LANDLOCK_RULE_PATH_BENEATH` rule. The kernel enforces it from `landlock_restrict_self`
 onwards, and neither the command nor anything it starts can regain the access.
 

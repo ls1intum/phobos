@@ -111,17 +111,17 @@ link and write wherever it points, outside anything the policy named, so the run
 `PHB-EPOLICY` before anything is created.
 
 **A changeable path that does not exist is kept, not dropped.** Where materialisation fails,
-`phobos-landlock` refuses the path with a clear message rather than the run failing later with
+`phobos-landlock-filesystem-and-networksystem` refuses the path with a clear message rather than the run failing later with
 `EACCES`.
 
-**A changeable rule never follows a final symbolic link.** `phobos-landlock` opens such a path
+**A changeable rule never follows a final symbolic link.** `phobos-landlock-filesystem-and-networksystem` opens such a path
 with `O_NOFOLLOW`, so a rule that may change something cannot be redirected by a link a
 command planted. Read-only rules still follow links, because system paths legitimately are
 links.
 
 **Without `TRUNCATE`, a read-only path is not safe from `truncate(2)`.** On a kernel below
 Landlock version 3 the right does not exist, so it is not handled at all.
-`phobos-landlock` says so before the run, and `--minimum-landlock-version 3` refuses such a
+`phobos-landlock-filesystem-and-networksystem` says so before the run, and `--minimum-landlock-version 3` refuses such a
 kernel instead.
 
 ## Further reading

@@ -18,7 +18,7 @@ from inside it.
 
 ## The filesystem
 
-`phobos-landlock` builds a Landlock ruleset from the policy and calls `landlock_restrict_self`,
+`phobos-landlock-filesystem-and-networksystem` builds a Landlock ruleset from the policy and calls `landlock_restrict_self`,
 after which the process and everything it starts can only lose access, never regain it. A path
 the policy does not name is refused with `EACCES`, and a path it names is granted exactly the
 rights the policy asked for, one right at a time.
@@ -49,12 +49,14 @@ allow-list in two places, with a third for host names:
   and port, and a raw system call cannot step around it. It refuses a raw, packet or ICMP
   socket before the socket exists, judges a datagram that carries its own destination the way
   it judges a connect, refuses `io_uring` as a second syscall interface that would reach
-  `connect` unseen, and refuses `setsid` and `setpgid`. A datagram `connect()` sets a default
-  peer alone, so the guard checks it and lets it through; the checked send that follows is the
-  boundary there.
+  `connect` unseen, and refuses `setsid` and `setpgid`. A datagram carries its destination in
+  the call, so the guard checks it and lets the call through; a command that changes the address
+  between the check and the call is the one known gap, described under
+  [what Phobos does not protect against](what-does-phobos-not-protect-against.md).
 - **Landlock port rules** are the kernel-enforced second expression of the same ports, through
   `--connect-tcp` and `--bind-tcp`, and, on a version 10 kernel, `--connect-udp` and
-  `--bind-udp`.
+  `--bind-udp`. Bind is closed unless a `[bind]` row opens it: the network layer always applies
+  these rules with `--close-bind`, and a row for port 0 grants only a port the kernel chooses.
 - **The egress broker** enforces a rule that names a host. The network layer starts it
   automatically for such a rule. It reads the Transport Layer Security (TLS) host name from the
   ClientHello, which the guard cannot see, and for an exact name it resolves the name itself and
@@ -62,7 +64,8 @@ allow-list in two places, with a third for host names:
 
 A listener is bounded from the other direction: `[bind]` names the local ports the command may
 listen on, and an `[accept]` rule fronts one of them with an inbound HAProxy that admits only
-the source addresses the rule names.
+the source addresses the rule names. The connect guard runs every `listen()` itself on a socket it
+created, so a socket that was never bound cannot become a listener on a port nothing judged.
 
 ## The clock
 

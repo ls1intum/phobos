@@ -56,13 +56,13 @@ environment, offline, and grading itself only applies a fixed configuration.
 ## Tech Stack
 
 - POSIX shell for the wrapper and the layers, which is the bulk of the repository
-- C for `phobos-landlock`, the connect guard and the timeout's group lock, all compiled inside the run-phase image
+- C for `phobos-landlock-filesystem-and-networksystem`, the connect guard and the timeout's group lock, all compiled inside the run-phase image
 - Python for the prune orchestrator and the artefact helpers
 - Docker for both phases, one image per language environment
 - Java for exactly one file, `.github/scripts/CheckPullRequestTemplate.java`
 
 The filesystem layer is enforced by Landlock, an unprivileged Linux kernel sandbox, applied
-by `phobos-landlock` (the C program under `core/`). The run phase needs no privileges, no
+by `phobos-landlock-filesystem-and-networksystem` (the C program under `core/`). The run phase needs no privileges, no
 capabilities and no container flags. The discovery phase still uses Bubblewrap to hide
 directories while it measures; the sandbox an exercise runs in does not.
 
@@ -71,32 +71,42 @@ directories while it measures; the sandbox an exercise runs in does not.
 There is no build system. The shell runs as it is, and the C is compiled inside the image.
 
 Both of these run **inside the run-phase image**, where `PHOBOS_HOME` is `/var/tmp/opt/core`. The
-shipped base policy is the `Base*.cfg` the image put beside `phobos-policy.sh`, so it is applied
+shipped base policy is the `Base*.cfg` the image put beside `phobos-policysystem.sh`, so it is applied
 without being named; `--config` is for an exercise configuration on top of it. A bare checkout keeps
-those files in `core/config/` rather than beside `phobos-policy.sh`, so a run from one is refused
+those files in `core/config/` rather than beside `phobos-policysystem.sh`, so a run from one is refused
 with `PHB-EPOLICY` rather than run unconfined.
 
 ```
 # Apply the sandbox to a command
-${PHOBOS_HOME}/phobos.sh -- ./gradlew test
+${PHOBOS_HOME}/phobos.sh --config <exercise.cfg> -- ./gradlew test
+
+# Every script prints its own manual, naming each flag it takes
+${PHOBOS_HOME}/phobos.sh --help
 
 # Layer switches, for isolating which layer a failure belongs to
-${PHOBOS_HOME}/phobos.sh --no-runtime-restriction -- <command>
+${PHOBOS_HOME}/phobos.sh --no-timeoutsystem-restriction --config <exercise.cfg> -- <command>
 
 # A single layer on its own, which builds its own specification from a config through
-# phobos-policy.sh and enforces only that layer's concern
-${PHOBOS_HOME}/phobos-network.sh --config <exercise.cfg> -- <command>
+# phobos-policysystem.sh and enforces only that layer's concern
+${PHOBOS_HOME}/phobos-networksystem.sh --config <exercise.cfg> -- <command>
 ```
+
+A run given no `--config` is not a grading run. Phobos then takes its most restrictive shape
+and drops every `[connect]`, `[bind]` and `[accept]` rule the base granted, loopback
+included, so a Gradle build cannot reach its own daemon. The filesystem keeps what the base
+granted, because a command whose binary and libraries were denied could not start at all.
 
 ### The linters, which are the gate
 
-`lint.yml` runs eight lint jobs. It is not the whole of CI: `test.yml` runs the shell and
+`lint.yml` runs seven lint jobs, and `actionlint.yml` lints the workflows beside it, weekly
+as well as on a change under `.github`. Neither is the whole of CI: `test.yml` runs the shell and
 Python suites, `build.yml` builds the images and holds the run-phase image to the Landlock
 acceptance suites inside it, `codeql.yml` scans, and `pullrequest-template.yml` checks the
 body. The lint jobs are the ones you can run in full by hand before opening a pull request.
 
 ```
-# Same file sets and same flags as CI. Together these are all eight jobs, and the C job is two
+# Same file sets and same flags as CI. Together these are the seven lint.yml jobs plus
+# actionlint, and the C job is two
 # steps rather than one: the compiler gate runs before cppcheck and fails on any warning.
 find . -name '*.sh'  -type f -print0 | xargs -0 shellcheck -x -S warning
 ( failed=0; while IFS= read -r f; do gcc-14 -std=gnu23 -fsyntax-only -Wall -Wextra -Werror -fanalyzer "$f" || failed=1; done < <(find . -name '*.c' -type f); exit "$failed" )
@@ -107,7 +117,7 @@ yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 actionlint
 ec --no-color                      # editorconfig-checker, configured by .editorconfig-checker.json
-awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print FILENAME":"FNR; e=1}} {p=$0} END{exit e}' core/*.sh
+awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print FILENAME":"FNR; e=1}} {p=$0} END{exit e}' core/*.sh core/phobos-tools-*/*.sh
 ```
 
 One of those is narrower than it looks: `bandit` runs over exactly two directories, not the
@@ -143,24 +153,28 @@ outside is `--network none` and cgroup limits, which Phobos cannot set for itsel
 ```
 core/                      the sandbox itself
   phobos.sh                entry point: parses the configuration, applies the layers
+  phobos-policysystem.sh   turns the base and exercise configuration into a run's specification
   phobos-filesystem.sh     the filesystem layer, reads the path sets and applies Landlock
-  phobos-landlock*.c/.h    the C program that applies the Landlock policy, then exec's
-  phobos-connect-guard*.c/.h  the connect guard: supervises connect() and enforces [connect] by host and port
-  phobos-policy.sh         turns the base and exercise configuration into a run's specification
-  phobos-network.sh        the network layer, runs the connect guard and the egress/inbound HAProxy
-  phobos-haproxy.sh        the egress broker and inbound filter: turns [connect]/[accept] into an haproxy.cfg
-  phobos-resources.sh      the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
-  phobos-timeout.sh        the timeout layer, which applies the group lock below when a timeout is set
-  phobos-pgroup-lock.c     the group lock: a seccomp filter refusing setsid and setpgid, then exec's
-  phobos-common.sh         the shared helpers, sourced by the others; it sources the seven below
-  phobos-log.sh            reporting, and counting what a run was denied
-  phobos-paths.sh          the two canonical forms a path is compared in
-  phobos-time.sh           the timeout contract: how a value is spelled and compared
-  phobos-spec-dir.sh       the specification directory and its lifetime
-  phobos-policy-parse.sh   one cfg in, the parsed state and the specification files out
-  phobos-rights.sh         a parsed policy to the --rights= arguments phobos-landlock takes
-  phobos-network-args.sh   [connect] and [bind] to the TCP and UDP port rules Landlock enforces
-  phobos-constants.sh      the numbers the scripts share, named once, the exit statuses among them
+  phobos-networksystem.sh  the network layer, runs the connect guard and the egress/inbound HAProxy
+  phobos-timeoutsystem.sh  the timeout layer, which applies the group lock when a timeout is set
+  phobos-resourcesystem.sh the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
+  phobos-landlock-filesystem-and-networksystem/  its *.c/.h: the C program that applies the Landlock policy, then exec's
+  phobos-seccomp-networksystem/  its *.c/.h: the connect guard, supervises connect() and enforces [connect] by host and port
+  phobos-seccomp-timeoutsystem/  its *.c: the group lock, a seccomp filter refusing setsid and setpgid, then exec's
+  phobos-tools-common/     sourced by every layer through phobos-common.sh, which sources the rest here and the three per-subsystem helpers
+    phobos-common.sh       the shared entry the layers source; it sources the others
+    phobos-constants.sh    the numbers the scripts share, named once, the exit statuses among them
+    phobos-log.sh          reporting, and counting what a run was denied
+    phobos-paths.sh        the two canonical forms a path is compared in
+    phobos-time.sh         the timeout contract: how a value is spelled and compared
+    phobos-spec-dir.sh     the specification directory and its lifetime
+  phobos-tools-policysystem/
+    phobos-policy-parse.sh one cfg in, the parsed state and the specification files out
+  phobos-tools-filesystem/
+    phobos-rights.sh       a parsed policy to the --rights= arguments phobos-landlock-filesystem-and-networksystem takes
+  phobos-tools-networksystem/
+    phobos-haproxy.sh      the egress broker and inbound filter: turns [connect]/[accept] into an haproxy.cfg
+    phobos-network-args.sh [connect] and [bind] to the TCP and UDP port rules Landlock enforces
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
 docker/prune_phase/        one image per language, plus the orchestrator
 docker/run_phase/          the image an exercise actually runs in
@@ -172,7 +186,7 @@ var/tmp/                   prune inputs, helpers and example outputs
 
 - One variable or function declaration per line, in every language.
 - British English in all prose, comments and messages.
-- Every function in `core/*.sh` says what it does and what it assumes about its environment.
+- Every function in the core shell scripts (`core/*.sh` and `core/phobos-tools-*/*.sh`) says what it does and what it assumes about its environment.
   AGENTS.md states this in full.
 - Shell is POSIX where it can be and bash where it must be; say which at the top of a file.
 - A `shellcheck` directive carries a comment on the line above saying why the finding is

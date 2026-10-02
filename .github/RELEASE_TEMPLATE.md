@@ -51,8 +51,6 @@
   If no issue is involved, write "None".
 -->
 
-None.
-
 ## Problems
 
 <!--

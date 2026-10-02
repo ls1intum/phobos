@@ -22,7 +22,7 @@ goes to standard error, so whatever reads the run can take one stream and a pers
 | `11` | `PHB-EPOLICY` | the policy is invalid, or cannot be enforced as written |
 | `14` | `PHB-ETIMEOUT` | the run passed its timeout and was stopped |
 | `15` | `PHB-ERUNTIME` | something Phobos needs is missing or cannot be started |
-| `125` | — | `phobos-landlock` or the connect guard refused to set the sandbox up |
+| `125` | — | `phobos-landlock-filesystem-and-networksystem` or the connect guard refused to set the sandbox up |
 | `127` | — | the command itself could not be executed |
 | anything else | — | the command's own status. Phobos did not stop the run. |
 
@@ -100,12 +100,12 @@ Point the link at something that exists, or name the real path.
 ### No base policy was found
 
 ```
-Policy invalid: no Base*.cfg beside phobos-policy.sh, so there is no sandbox to apply;
+Policy invalid: no Base*.cfg beside phobos-policysystem.sh, so there is no sandbox to apply;
 refusing to build a policy. (PHB-EPOLICY)
 ```
 
 You are running from a checkout rather than from the run-phase image. The shipped base
-configurations live in `core/config/`, and `phobos-policy.sh` looks for them beside itself.
+configurations live in `core/config/`, and `phobos-policysystem.sh` looks for them beside itself.
 Build the image, or pass `--allow-unsandboxed` where an unprotected run is what you meant.
 
 ### The specification directory lies under a write path
@@ -122,13 +122,13 @@ itself in the write sections.
 
 ## Exit status 125: the enforcer refused to set the sandbox up
 
-These come from `phobos-landlock` or the connect guard rather than from a shell layer, so they
+These come from `phobos-landlock-filesystem-and-networksystem` or the connect guard rather than from a shell layer, so they
 carry the program's own prefix and none of the `PHB-` codes.
 
 ### A datagram rule on a kernel below Landlock version 10
 
 ```
-[phobos-landlock] UDP network rules require Landlock version 10
+[phobos-landlock-filesystem-and-networksystem] UDP network rules require Landlock version 10
 ```
 
 A `udp` rule is refused rather than left unenforced. Either run on a kernel that carries the
@@ -140,7 +140,7 @@ that program, `--minimum-landlock-version` among them.
 ### The connect guard is missing
 
 ```
-The connect guard '/var/tmp/opt/core/phobos-connect-guard' is missing or not executable;
+The connect guard '/var/tmp/opt/core/phobos-seccomp-networksystem' is missing or not executable;
 refusing to run without connect supervision.
 ```
 
@@ -150,7 +150,7 @@ checkout therefore cannot run. Build the image.
 ### The process-group lock is missing
 
 ```
-The group lock '/var/tmp/opt/core/phobos-pgroup-lock' is missing or not executable; refusing
+The group lock '/var/tmp/opt/core/phobos-seccomp-timeoutsystem' is missing or not executable; refusing
 to run a timed command that could escape the timeout with setsid.
 ```
 
@@ -204,6 +204,30 @@ counted too, and the exit status never changes.
 Where the count is high and the run failed, the next step is `--debug`, which prints the whole
 effective policy each layer was given.
 
+## A server cannot listen, or a warning says bind stays open
+
+Bind is closed unless a `[bind]` row opens it, so a command that starts a server without one
+fails with a permission error on `bind` or `listen`. Add the port to `[bind]`, or `allow 0` for a
+port the kernel chooses. The shipped Java policy already grants port 0 and nothing more.
+
+A kernel too old to close bind gets a warning on standard error instead of a refusal:
+
+```
+warning: Landlock version 3 cannot close TCP bind (that needs version 4); a command can still
+bind and listen on any TCP port, so the container's network isolation is the only boundary there.
+```
+
+The run goes on, because refusing would stop every run on that kernel. The UDP warning is the same
+with version 10. Put `--minimum-landlock-version` in the tail flags to refuse such a kernel
+instead.
+
+## A run with no `--config` reaches nothing on the network
+
+A run given no `--config` is not a grading run, so Phobos drops every `[connect]`, `[bind]` and
+`[accept]` rule the base granted, loopback included. A Gradle build then cannot reach its own
+daemon. Pass the exercise configuration, or `--no-networksystem-restriction` to find out whether the
+network layer is the cause.
+
 ## Which layer refused?
 
 Switch one layer off at a time. A disabled layer is left out of the chain rather than entered
@@ -212,8 +236,8 @@ and skipped, and each is recorded on standard error, so the log says what was of
 ```bash
 ${PHOBOS_HOME}/phobos.sh --no-filesystem-restriction -- <command>    # -nfr
 ${PHOBOS_HOME}/phobos.sh --no-networksystem-restriction -- <command> # -nnr
-${PHOBOS_HOME}/phobos.sh --no-runtime-restriction -- <command>       # -ntr
-${PHOBOS_HOME}/phobos.sh --no-resources-restriction -- <command>     # -nrr
+${PHOBOS_HOME}/phobos.sh --no-timeoutsystem-restriction -- <command>       # -ntr
+${PHOBOS_HOME}/phobos.sh --no-resourcesystem-restriction -- <command>     # -nrr
 ```
 
 Each layer can be run on its own over a configuration instead, which is the other direction of
@@ -248,7 +272,7 @@ not mention gets no such entry.
 The REFER right is what Landlock requires for a rename or a hard link across directories, and
 it is granted only by [`[restructure]`](policy-reference/restructure.md). On a kernel below
 Landlock version 2 the right does not exist at all, and every such rename is refused;
-`phobos-landlock` reports that as a note before the run.
+`phobos-landlock-filesystem-and-networksystem` reports that as a note before the run.
 
 ## Further reading
 

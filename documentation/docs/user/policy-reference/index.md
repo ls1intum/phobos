@@ -61,12 +61,12 @@ section is not listed at all and stays denied.
 | `[delete]` | `d` | delete files and directories |
 | — | `i` | `ioctl` on a character or block device |
 
-The letters are the arguments `phobos-landlock` takes, and `--debug` prints them, so this table
+The letters are the arguments `phobos-landlock-filesystem-and-networksystem` takes, and `--debug` prints them, so this table
 is what a verbose log is read with. One letter can stand for more than one kernel right: `r`
 carries `READ_FILE`, `READ_DIRECTORY` and, from Landlock version 9, `RESOLVE_UNIX`.
 
 The letter `i` has no policy section, so nothing you write in a configuration file grants it.
-The tail flags file is the one place a `--rights=` reaches `phobos-landlock` without a section
+The tail flags file is the one place a `--rights=` reaches `phobos-landlock-filesystem-and-networksystem` without a section
 behind it; it ships inside the image as `TailPhobos.cfg`, carries the working directory alone
 today, and is part of the shipped policy rather than of a task configuration. Creating a device
 node has no letter at all and is never granted.
@@ -110,7 +110,7 @@ configuration, and three of its entries are worth knowing about before you copy 
   concrete port on one transport, so the run ends with `PHB-EPOLICY`. A task configuration can
   only widen, so the base policy has to name its loopback ports concretely first.
 - **The exact host name needs `--resolver`**, or the network layer refuses the run.
-- **The two `udp` rules need a Landlock version 10 kernel**, and `phobos-landlock` refuses them
+- **The two `udp` rules need a Landlock version 10 kernel**, and `phobos-landlock-filesystem-and-networksystem` refuses them
   on an older one.
 
 ## How several files are combined

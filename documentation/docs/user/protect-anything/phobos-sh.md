@@ -18,10 +18,11 @@ each of those layers can be run on its own where you need to isolate a failure.
 
 A bare checkout cannot run Phobos, deliberately. Two things are missing from it:
 
-- **The compiled programs.** `phobos-landlock`, the connect guard and the process-group lock
-  are built from the source under `core/` and never committed. Where the connect guard is
-  missing, the network layer ends the run rather than running without connect supervision.
-- **The base policy.** `phobos-policy.sh` finds it by globbing `Base*.cfg` beside itself, and a
+- **The compiled programs.** `phobos-landlock-filesystem-and-networksystem`, the connect guard and the process-group lock
+  are built from the source under `core/` and never committed. Where the connect guard, the
+  Landlock program or the process-group lock is missing, the layer that needs it ends the run
+  rather than running without it.
+- **The base policy.** `phobos-policysystem.sh` finds it by globbing `Base*.cfg` beside itself, and a
   checkout keeps those files in `core/config/` rather than in `core/`. A run from a checkout is
   refused with `PHB-EPOLICY` instead of running unprotected.
 
@@ -39,16 +40,34 @@ link to the same script.
 ## Running a command
 
 ```bash
-${PHOBOS_HOME}/phobos.sh -- ./gradlew test
-```
-
-The shipped base policy is applied without being named. `--config` is for a task configuration
-applied **on top of** that base, never for the base itself: naming a base file there applies it
-a second time.
-
-```bash
 ${PHOBOS_HOME}/phobos.sh --config exercise.cfg -- ./gradlew test
 ```
+
+The shipped base policy is applied without being named. `--config` is for the exercise's own
+configuration, applied **on top of** that base, never for the base itself: naming a base file
+there applies it a second time.
+
+:::warning[A run given no `--config` is not a grading run]
+Without one, Phobos takes its most restrictive shape. Every `[connect]`, `[bind]` and `[accept]`
+rule the base granted is dropped, so the command reaches no network at all, loopback included,
+and cannot bind or listen on any port. A Gradle build cannot reach its own daemon. The
+filesystem keeps what the base granted, because a command whose own binary and libraries were
+denied could not start at all. Give the exercise's own configuration for a real run.
+:::
+
+When no configuration names a value, the run is bounded by a default:
+
+| Bound | Default | Applied as |
+| --- | --- | --- |
+| `timeout` | 600 seconds | wall-clock time |
+| `mem_mb` | 8192 | `ulimit -v`, the virtual address space |
+| `cpu` | 600 seconds | `ulimit -t`, CPU time across every thread |
+| `nproc` | 256 | `ulimit -u`, counted per user |
+| `nofile` | 1024 | `ulimit -n` |
+| `fsize_mb` | 256 | `ulimit -f`, the size of any single file |
+
+A configuration that names a larger value wins over the default, and one that names `0` switches
+that limit off and wins over it too. The default is a floor, never a cap.
 
 Both spellings of the command work. Everything after `--` is the command and its arguments; if
 you leave `--` out, the first word that is not an option becomes the command and everything
@@ -59,9 +78,9 @@ command, so a mistyped flag fails with a message instead of ending up in `argv`.
 
 | Order | What | Where it comes from |
 | --- | --- | --- |
-| 1 | Base policy | every `Base*.cfg` beside `phobos-policy.sh`, in sorted order |
+| 1 | Base policy | every `Base*.cfg` beside `phobos-policysystem.sh`, in sorted order |
 | 2 | Task configurations | each `--config` file, in the order given |
-| 3 | Tail flags | `TailPhobos.cfg` beside `phobos-policy.sh`, or `--tail-flags-file` |
+| 3 | Tail flags | `TailPhobos.cfg` beside `phobos-policysystem.sh`, or `--tail-flags-file` |
 
 The model is additive in every dimension. Filesystem paths and network rules are unioned, and
 for the timeout and each resource limit the largest value any configuration names wins, where a
@@ -86,19 +105,23 @@ off cannot look like an ordinary one in a log.
 | --- | --- | --- |
 | `--no-filesystem-restriction` | `-nfr` | the Landlock filesystem ruleset. The port rules are unaffected. |
 | `--no-networksystem-restriction` | `-nnr` | the whole network restriction: the connect guard and the Landlock port rules |
-| `--no-runtime-restriction` | `-ntr` | the timeout, and with it the process-group lock |
-| `--no-resources-restriction` | `-nrr` | the resource limits |
-| `--allow-unsandboxed` | | every layer at once, even where a base policy is present |
+| `--no-timeoutsystem-restriction` | `-ntr` | the timeout, and with it the process-group lock |
+| `--no-resourcesystem-restriction` | `-nrr` | the resource limits |
+| `--no-restriction` | `-nr` | every layer at once, even where a base policy is present |
 
-`--allow-unsandboxed` runs the command raw. It is handled before any specification directory is
-created and before the configurations are read, so a raw run leaves nothing behind, and any
-`--config` given with it is reported as ignored.
+`--no-restriction` runs the command raw, and it says so on standard error in a block that names
+every layer it switched off. It is handled before any specification directory is created and
+before the configurations are read, so a raw run leaves nothing behind. It is refused outright
+beside `--config`, because giving a policy says a confined run was meant. That refusal is what
+catches `-nr` typed where `-nrr` was meant: the two are one character apart, `-nrr` switches off
+only the resource limits and `-nr` switches off the entire sandbox.
 
 ## The other options
 
 | Option | What it is for |
 | --- | --- |
-| `--debug` | Print on standard error what each layer does and runs, and have `phobos-landlock` and the connect guard report verbosely too. It prints the whole effective policy, so it is for diagnosis rather than for a production log. |
+| `--help` | Print the manual and end with status 0. Every script here, `phobos.sh` and each layer alike, has one: it names every flag the script parses with its default, both operating modes, the specification files it reads and the exit statuses it can end with. |
+| `--debug` | Print on standard error what each layer does and runs, and have `phobos-landlock-filesystem-and-networksystem` and the connect guard report verbosely too. It prints the whole effective policy, so it is for diagnosis rather than for a production log. |
 | `--resolver <ip[:port]>` | The Domain Name System (DNS) resolver the egress broker resolves an exact `[connect]` host name through. The default DNS port is added where no port is given. |
 | `--spec-parent <path>` | Where the run's specification directory is made. The default is `/var/tmp`, and it must lie outside every write path. |
 | `--landlock-bin`, `--connect-guard-bin`, `--pgroup-lock-bin` | Which program each layer uses. The default for each is the one beside the script. |
@@ -112,17 +135,22 @@ can only be switched on by the flag.
 ## What the layers do, in order
 
 ```
-phobos.sh -> phobos-timeout.sh -> phobos-network.sh -> phobos-landlock --no-filesystem
-          -> phobos-filesystem.sh -> phobos-resources.sh -> phobos-landlock -> your command
+phobos.sh -> phobos-timeoutsystem.sh -> phobos-networksystem.sh -> phobos-landlock-filesystem-and-networksystem --no-filesystem
+          -> phobos-filesystem.sh -> phobos-resourcesystem.sh -> phobos-landlock-filesystem-and-networksystem -> your command
 ```
 
 The network layer contributes two links: the connect guard, which it puts in front, and a
 Landlock ruleset of its own carrying the port rules, which composes with the filesystem
-layer's by intersection.
+layer's by intersection. That ruleset is applied on every run, even when the policy names no
+port, because it is what closes bind. The network layer runs the rest of the chain as a child and
+waits for it, rather than replacing itself with it, because it starts HAProxy processes and adds
+`/etc/hosts` lines that must not outlive the run. When the command ends it stops the broker and
+the inbound filter it started, and the lines it added are removed with the specification
+directory.
 
-`phobos.sh` builds the run's specification with `phobos-policy.sh`, then assembles that chain
+`phobos.sh` builds the run's specification with `phobos-policysystem.sh`, then assembles that chain
 from the flags. The resource layer is not a link of the chain: the filesystem layer starts it
-as the last step before `phobos-landlock`, so the limits bind the command and none of the
+as the last step before `phobos-landlock-filesystem-and-networksystem`, so the limits bind the command and none of the
 helpers around it.
 
 ## Reading the result
@@ -137,7 +165,7 @@ goes to standard error, and the exit status is the contract to read.
 | `11` | `PHB-EPOLICY`: the policy is invalid or cannot be enforced as written |
 | `14` | `PHB-ETIMEOUT`: the run passed its timeout and was stopped |
 | `15` | `PHB-ERUNTIME`: something Phobos needs is missing or cannot be started |
-| `125` | `phobos-landlock` or the connect guard refused to set the sandbox up |
+| `125` | `phobos-landlock-filesystem-and-networksystem` or the connect guard refused to set the sandbox up |
 | `127` | the command itself could not be executed |
 
 One more report carries no status of its own. Where the command's own standard error contained

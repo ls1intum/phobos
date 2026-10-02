@@ -13,13 +13,13 @@ two layers can never disagree about what the policy said.
 
 ## What it does
 
-`phobos-policy.sh` discovers the base policy, parses every configuration, merges them and
+`phobos-policysystem.sh` discovers the base policy, parses every configuration, merges them and
 writes one file per part into a directory the caller owns. It is the only parser: a layer
 running on its own over `--config` calls this program too, so no layer ever reads a
 configuration file itself.
 
 ```
-phobos-policy.sh [--debug] --spec-dir <dir> [--tail-flags-file <file>] [--config <file>]...
+phobos-policysystem.sh [--debug] --spec-dir <dir> [--tail-flags-file <file>] [--config <file>]...
 ```
 
 The caller creates and owns the directory and removes it when the run ends. This program only
@@ -31,9 +31,9 @@ usually makes writable.
 
 | File | What it holds |
 | --- | --- |
-| `phobos-policy.sh` | the program: base discovery, the merge, the checks, the write |
+| `phobos-policysystem.sh` | the program: base discovery, the merge, the checks, the write |
 | `phobos-policy-parse.sh` | one configuration in, the parsed state and the per-right files out |
-| `phobos-rights.sh` | a parsed policy to the `--rights=` arguments `phobos-landlock` takes |
+| `phobos-rights.sh` | a parsed policy to the `--rights=` arguments `phobos-landlock-filesystem-and-networksystem` takes |
 | `phobos-network-args.sh` | `[connect]` and `[bind]` to the Landlock port rules, and the refusals |
 | `phobos-spec-dir.sh` | the specification directory, its marker, and its lifetime |
 | `phobos-paths.sh` | the two canonical forms a path is compared in |

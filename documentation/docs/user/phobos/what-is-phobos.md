@@ -47,7 +47,7 @@ environment, offline, and a protected run only applies a fixed configuration.
 
 | Layer | Mechanism | What it bounds |
 | --- | --- | --- |
-| Filesystem | Landlock, applied by `phobos-landlock` | which paths the command may read, write, execute, create or delete |
+| Filesystem | Landlock, applied by `phobos-landlock-filesystem-and-networksystem` | which paths the command may read, write, execute, create or delete |
 | Network | a seccomp connect guard, an HAProxy egress broker and inbound filter, and Landlock port rules | which hosts and ports the command may reach, and which local ports it may listen on |
 | Timeout | GNU `timeout` plus a seccomp process-group lock | how long the whole run may take |
 | Resources | rlimits | how much memory, how many processes and open files, how large a file and how much processor time |
@@ -74,7 +74,7 @@ through the guide from top to bottom.
 | Know what a command is stopped from doing | [What does Phobos protect against](what-does-phobos-protect-against.md) |
 | Know where the boundary ends, and what your deployment still has to do | [What does Phobos not protect against](what-does-phobos-not-protect-against.md) |
 | Put a command in the sandbox for the first time | [phobos.sh](../protect-anything/phobos-sh.md) |
-| Understand one layer on its own | [phobos-filesystem.sh](../protect-anything/phobos-filesystem-sh.md), [phobos-network.sh](../protect-anything/phobos-network-sh.md), [phobos-timeout.sh](../protect-anything/phobos-timeout-sh.md), [phobos-resources.sh](../protect-anything/phobos-resources-sh.md) |
+| Understand one layer on its own | [phobos-filesystem.sh](../protect-anything/phobos-filesystem-sh.md), [phobos-networksystem.sh](../protect-anything/phobos-network-sh.md), [phobos-timeoutsystem.sh](../protect-anything/phobos-timeout-sh.md), [phobos-resourcesystem.sh](../protect-anything/phobos-resources-sh.md) |
 | Write a policy for one concrete situation | [Policy Cookbook](/user/policy-cookbook/) |
 | Look up a single policy section | [Policy Reference](/user/policy-reference/) |
 | Work out what a message is telling you | [Troubleshooting](../troubleshooting.md) |

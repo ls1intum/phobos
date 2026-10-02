@@ -98,7 +98,7 @@ The path is materialised like a `[write]` path, and the rule is emitted as `--ri
 kernel and checked against the link's target, so a link the command creates cannot reach a
 path the policy does not name.
 
-**A rule that may change something never follows a final link.** `phobos-landlock` opens such a
+**A rule that may change something never follows a final link.** `phobos-landlock-filesystem-and-networksystem` opens such a
 path with `O_NOFOLLOW`, and a changeable path that is itself a symbolic link is refused, so a
 link cannot redirect a rule.
 

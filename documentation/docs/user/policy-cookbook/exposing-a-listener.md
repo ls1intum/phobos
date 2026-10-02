@@ -33,7 +33,7 @@ inbound filter binds and which the command may not bind itself.
 ## What this still forbids
 
 - a listener on any port `[bind]` does not name, refused in the kernel and against raw system
-  calls
+  calls, and a `listen()` on a socket that never bound, which the connect guard refuses
 - an inbound connection from any source outside `198.51.100.0/24`
 - an outbound connection, unless `[connect]` names one
 - a datagram listener, which needs `allow 5353 udp` and Landlock version 10

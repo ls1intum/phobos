@@ -21,7 +21,7 @@ and preserved across `execve`, so a limit set once binds the whole tree below it
 
 ## The five Phobos sets
 
-`phobos-resources.sh` reads the specification and applies each limit through the shell's
+`phobos-resourcesystem.sh` reads the specification and applies each limit through the shell's
 `ulimit`, which is the interface to `setrlimit` a shell offers.
 
 | Key | `ulimit` | Resource | Unit conversion |
@@ -39,7 +39,7 @@ rather than leaving it unbounded.
 
 ## Where they are set, and why it matters
 
-The resource layer is the last step before `phobos-landlock`, started by the filesystem layer
+The resource layer is the last step before `phobos-landlock-filesystem-and-networksystem`, started by the filesystem layer
 rather than sitting in the outer chain. Everything Phobos runs beside the command therefore
 stays outside the limits: the layer shells, the standard error pass-through, the denial
 counter, and the connect guard's supervisor.

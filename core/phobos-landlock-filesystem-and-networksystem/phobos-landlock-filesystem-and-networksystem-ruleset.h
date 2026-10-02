@@ -1,0 +1,220 @@
+/*
+ * The Landlock ruleset: the kernel object that says what a process may still
+ * reach, and the operations on it.
+ *
+ * A ruleset is a descriptor plus the operations that add rules to it and
+ * finally apply it. The three attribute structures below stay raw data,
+ * because their layout is fixed by the kernel and they exist only to be handed
+ * to a system call.
+ *
+ * Names are spelled out here, while the kernel abbreviates them. The mapping,
+ * so that the kernel documentation stays searchable from this file:
+ *
+ *   here                                 kernel
+ *   LANDLOCK_ACCESS_FILESYSTEM_*         LANDLOCK_ACCESS_FS_*
+ *   LANDLOCK_ACCESS_NETWORK_*            LANDLOCK_ACCESS_NET_*
+ *   ..._READ_DIRECTORY, ..._MAKE_SOCKET  ..._READ_DIR, ..._MAKE_SOCK
+ *   struct landlock_*_attributes         struct landlock_*_attr
+ *   SYSCALL_NUMBER_LANDLOCK_*            __NR_landlock_*
+ *   Landlock version                     Landlock ABI version
+ *
+ * TCP keeps its abbreviation, because that is the name of the protocol.
+ */
+#ifndef PHOBOS_LANDLOCK_RULESET_H
+#define PHOBOS_LANDLOCK_RULESET_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+struct path_rule;
+
+/* Landlock has no wrapper in the C library, so the numbers are given here.
+ * They are the same on every architecture that supports Landlock. These stay
+ * macros: the fallback below is a preprocessor decision, and a constant cannot
+ * be tested with #ifdef. */
+#ifdef __NR_landlock_create_ruleset
+#define SYSCALL_NUMBER_LANDLOCK_CREATE_RULESET __NR_landlock_create_ruleset
+#else
+#define SYSCALL_NUMBER_LANDLOCK_CREATE_RULESET 444
+#endif
+#ifdef __NR_landlock_add_rule
+#define SYSCALL_NUMBER_LANDLOCK_ADD_RULE __NR_landlock_add_rule
+#else
+#define SYSCALL_NUMBER_LANDLOCK_ADD_RULE 445
+#endif
+#ifdef __NR_landlock_restrict_self
+#define SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF __NR_landlock_restrict_self
+#else
+#define SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF 446
+#endif
+
+static constexpr uint32_t LANDLOCK_CREATE_RULESET_VERSION = 1U << 0;
+static constexpr int LANDLOCK_RULE_PATH_BENEATH = 1;
+static constexpr int LANDLOCK_RULE_NETWORK_PORT = 2;
+
+/* Filesystem access rights, available since Landlock version 1 unless noted.
+ * An enumeration rather than one constant each, so that a translation unit
+ * using none of them still compiles clean under -Wall -Wextra -Werror. */
+enum landlock_filesystem_access : uint64_t {
+    LANDLOCK_ACCESS_FILESYSTEM_EXECUTE = 1ULL << 0,
+    LANDLOCK_ACCESS_FILESYSTEM_WRITE_FILE = 1ULL << 1,
+    LANDLOCK_ACCESS_FILESYSTEM_READ_FILE = 1ULL << 2,
+    LANDLOCK_ACCESS_FILESYSTEM_READ_DIRECTORY = 1ULL << 3,
+    LANDLOCK_ACCESS_FILESYSTEM_REMOVE_DIRECTORY = 1ULL << 4,
+    LANDLOCK_ACCESS_FILESYSTEM_REMOVE_FILE = 1ULL << 5,
+    LANDLOCK_ACCESS_FILESYSTEM_MAKE_CHARACTER_DEVICE = 1ULL << 6,
+    LANDLOCK_ACCESS_FILESYSTEM_MAKE_DIRECTORY = 1ULL << 7,
+    LANDLOCK_ACCESS_FILESYSTEM_MAKE_REGULAR_FILE = 1ULL << 8,
+    LANDLOCK_ACCESS_FILESYSTEM_MAKE_SOCKET = 1ULL << 9,
+    LANDLOCK_ACCESS_FILESYSTEM_MAKE_NAMED_PIPE = 1ULL << 10,
+    LANDLOCK_ACCESS_FILESYSTEM_MAKE_BLOCK_DEVICE = 1ULL << 11,
+    LANDLOCK_ACCESS_FILESYSTEM_MAKE_SYMBOLIC_LINK = 1ULL << 12,
+    LANDLOCK_ACCESS_FILESYSTEM_REFER = 1ULL << 13,        /* since version 2 */
+    LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE = 1ULL << 14,     /* since version 3 */
+    LANDLOCK_ACCESS_FILESYSTEM_IOCTL_DEVICE = 1ULL << 15, /* since version 5 */
+    LANDLOCK_ACCESS_FILESYSTEM_RESOLVE_UNIX = 1ULL << 16, /* since version 9 */
+};
+
+/* Network access rights. TCP is available since Landlock version 4, UDP since version 10.
+ * CONNECT_SEND_UDP covers both connecting a datagram socket and sending a datagram to a remote
+ * port, because UDP is connectionless and a bare sendto reaches a peer no connect ever vetted. */
+enum landlock_network_access : uint64_t {
+    LANDLOCK_ACCESS_NETWORK_BIND_TCP = 1ULL << 0,
+    LANDLOCK_ACCESS_NETWORK_CONNECT_TCP = 1ULL << 1,
+    LANDLOCK_ACCESS_NETWORK_BIND_UDP = 1ULL << 2,          /* since version 10 */
+    LANDLOCK_ACCESS_NETWORK_CONNECT_SEND_UDP = 1ULL << 3,  /* since version 10 */
+};
+
+/* Scope restrictions, available since Landlock version 6. They keep a sandboxed process
+ * from reaching two things outside its own Landlock domain: a process it could signal, and
+ * an abstract UNIX socket it could connect to. Both are ways a submission could otherwise
+ * reach the grader beside it, which the filesystem and network rules do not cover. */
+enum landlock_scope : uint64_t {
+    LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET = 1ULL << 0,
+    LANDLOCK_SCOPE_SIGNAL = 1ULL << 1,
+};
+
+/* Rights that only make sense on a directory, out of the ones this tool ever
+ * grants. Making a symbolic link is one of them, because a link is created in a
+ * directory. Device nodes are not in it because they are never granted at all. */
+static constexpr uint64_t DIRECTORY_ONLY_ACCESS_RIGHTS =
+    LANDLOCK_ACCESS_FILESYSTEM_READ_DIRECTORY | LANDLOCK_ACCESS_FILESYSTEM_REMOVE_DIRECTORY |
+    LANDLOCK_ACCESS_FILESYSTEM_REMOVE_FILE | LANDLOCK_ACCESS_FILESYSTEM_MAKE_DIRECTORY |
+    LANDLOCK_ACCESS_FILESYSTEM_MAKE_REGULAR_FILE | LANDLOCK_ACCESS_FILESYSTEM_MAKE_SOCKET |
+    LANDLOCK_ACCESS_FILESYSTEM_MAKE_NAMED_PIPE | LANDLOCK_ACCESS_FILESYSTEM_MAKE_SYMBOLIC_LINK |
+    LANDLOCK_ACCESS_FILESYSTEM_REFER;
+
+/* Highest Landlock version whose access rights this tool enumerates. A newer
+ * kernel may define rights we do not list, which would leave them
+ * unrestricted, so say so loudly rather than pretending the policy is whole.
+ *
+ * This is 10 because every access right and scope up to ABI version 10 is
+ * enumerated here: filesystem rights through RESOLVE_UNIX (version 9), network
+ * rights through the two UDP rights (version 10), and both scopes (version 6).
+ * Versions 7, 8 and 11 add only landlock_restrict_self flags (audit logging,
+ * TSYNC, an atomic no_new_privs), not access rights or scopes, so they leave
+ * nothing here unhandled. */
+static constexpr int HIGHEST_KNOWN_LANDLOCK_VERSION = 10;
+
+/* Versions at which a right first exists. Below them the kernel does not
+ * handle the right at all, so it is neither granted nor denied to anyone. */
+static constexpr int FIRST_VERSION_WITH_REFER = 2;
+static constexpr int FIRST_VERSION_WITH_TRUNCATE = 3;
+static constexpr int FIRST_VERSION_WITH_NETWORK = 4;
+static constexpr int FIRST_VERSION_WITH_IOCTL_DEVICE = 5;
+static constexpr int FIRST_VERSION_WITH_SCOPED = 6;
+static constexpr int FIRST_VERSION_WITH_RESOLVE_UNIX = 9;
+static constexpr int FIRST_VERSION_WITH_UDP = 10;
+
+/* Layout fixed by the kernel. Raw data, never a class. */
+struct landlock_ruleset_attributes {
+    uint64_t handled_access_filesystem;
+    uint64_t handled_access_network;
+    uint64_t scoped;
+};
+
+struct landlock_path_beneath_attributes {
+    uint64_t allowed_access;
+    int32_t parent_fd;
+} __attribute__((packed));
+
+struct landlock_network_port_attributes {
+    uint64_t allowed_access;
+    uint64_t port;
+};
+
+/* The kernel reads these by offset, so a compiler that padded them would send
+ * it something else entirely. Checked here rather than trusted: the kernel's
+ * struct landlock_path_beneath_attr is packed to 12 bytes, and the network and
+ * scope members of struct landlock_ruleset_attr follow the one before at 8 and
+ * 16 bytes. */
+static constexpr size_t KERNEL_PATH_BENEATH_ATTRIBUTES_SIZE = 12;
+static constexpr size_t KERNEL_RULESET_NETWORK_OFFSET = 8;
+static constexpr size_t KERNEL_RULESET_SCOPED_OFFSET = 16;
+static_assert(sizeof(struct landlock_path_beneath_attributes) == KERNEL_PATH_BENEATH_ATTRIBUTES_SIZE,
+              "landlock_path_beneath_attributes must be packed to 12 bytes");
+static_assert(offsetof(struct landlock_ruleset_attributes, handled_access_network)
+                  == KERNEL_RULESET_NETWORK_OFFSET,
+              "the kernel expects handled_access_network as the second member");
+static_assert(offsetof(struct landlock_ruleset_attributes, scoped) == KERNEL_RULESET_SCOPED_OFFSET,
+              "the kernel expects scoped as the third member");
+
+/* Rights available at the given Landlock version. */
+uint64_t filesystem_rights_for_version(int landlock_version);
+
+/* Size of the attribute structure the given version understands. */
+size_t ruleset_attributes_size_for_version(int landlock_version);
+
+/* The scope restrictions to hand the kernel at this version: none below version 6, and both
+ * the abstract-UNIX-socket and signal scopes at or above it, so the sandbox cannot reach a
+ * process or an abstract socket outside its own domain. */
+uint64_t scoped_for_version(int landlock_version);
+
+/* Asks the kernel for its Landlock version and refuses anything below the
+ * demanded minimum, so an unsupported kernel stops the run instead of quietly
+ * running it unprotected. TCP network rules require version 4; UDP network rules
+ * require version 10, so a policy naming a UDP port is refused rather than run
+ * with UDP unrestricted on a kernel too old to handle it. */
+int detect_landlock_version(int minimum_landlock_version, bool network_rules_wanted,
+                            bool udp_rules_wanted);
+
+/* Names every right this kernel cannot handle, and what that means in
+ * practice. Landlock offers no hook below those versions, so there is nothing
+ * to enforce in their place and the gap can only be reported. The filesystem
+ * warnings are said only when this ruleset handles the filesystem; the scoping
+ * note is said either way, because signal and abstract-socket scoping matter to
+ * a network-only ruleset too. */
+void report_unenforceable_rights(int landlock_version, bool filesystem_handled);
+
+/* Names the bind directions --close-bind cannot close on this kernel, TCP below version 4 and
+ * UDP below version 10, and what that leaves open. Always said, for the same reason as the
+ * rest: Landlock has no hook there, so the gap can only be reported, and the operator raises
+ * --minimum-landlock-version when the guarantee is needed. */
+void report_bind_not_closed(int landlock_version);
+
+/* Creates a ruleset that denies everything it handles unless a rule allows it.
+ *
+ * handled_network names the directions the policy actually speaks about. A
+ * direction that is handled but never granted is denied outright, so switching
+ * on both because the policy mentioned one would forbid the other without
+ * anyone asking for that. Pass 0 to leave network access alone entirely.
+ *
+ * handled_filesystem is the filesystem rights this ruleset governs, or 0 for a
+ * network-only ruleset that leaves the filesystem alone so it can compose with a
+ * separate filesystem ruleset. Scoping is always applied where the kernel
+ * supports it, network-only ruleset included. */
+int create_ruleset(int landlock_version, uint64_t handled_filesystem, uint64_t handled_network);
+
+/* Adds one allow-listed path. */
+void add_path_rule(int ruleset_descriptor, int landlock_version, const struct path_rule *rule);
+
+/* Adds one allowed port. `what` names the direction ("connect" or "bind") for a failure, and
+ * `protocol` names the transport ("tcp" or "udp") for the verbose line. */
+void add_port_rule(int ruleset_descriptor, uint64_t port, uint64_t allowed_access,
+                   const char *what, const char *protocol);
+
+/* The one-way door: after this the process, and everything it starts, can only
+ * lose access, never regain it. */
+void apply_restriction(int ruleset_descriptor);
+
+#endif

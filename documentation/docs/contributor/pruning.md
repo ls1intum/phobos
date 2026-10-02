@@ -122,7 +122,7 @@ The Bubblewrap mount and namespace flags of the prune are dropped: they belong t
 measurement rather than to the policy.
 
 :::warning[Ship exactly one `Base*.cfg` per runtime environment]
-`phobos-policy.sh` applies every `Base*.cfg` it finds beside itself. A `BasePhobos.cfg` left
+`phobos-policysystem.sh` applies every `Base*.cfg` it finds beside itself. A `BasePhobos.cfg` left
 next to a `BaseLanguage-java.cfg` gives a Java run the paths of every other language too. The
 orchestrator writes every alternative into one directory on purpose, because they are
 alternatives rather than parts of one policy; choosing between them is the packaging step, and

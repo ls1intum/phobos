@@ -10,7 +10,7 @@
 #     by docker-compose and already contains the shared  pruning/  folder.
 ################################################################################
 
-FROM ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78
+FROM ubuntu:26.04@sha256:3595d7fc4286a33fad0fd853a4063e654287a9c3787437d7937c94ca3f7a804e
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -27,7 +27,7 @@ RUN apt-get update && \
 # build at all: pip stops with externally-managed-environment.
 RUN pip3 install --no-cache-dir --break-system-packages \
         pytest==9.1.1 \
-        ruff==0.16.8
+        ruff==0.16.10
 
 RUN useradd -m sandboxuser
 

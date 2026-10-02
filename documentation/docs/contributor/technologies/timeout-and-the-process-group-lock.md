@@ -33,7 +33,7 @@ the status is 124 or 137 **and** the wall clock says the run lasted at least its
 
 ## The process-group lock
 
-`phobos-pgroup-lock` is eleven Berkeley Packet Filter instructions on x86-64, nine on
+`phobos-seccomp-timeoutsystem` is eleven Berkeley Packet Filter instructions on x86-64, nine on
 aarch64, and one `execvp`. It refuses
 `setsid` and `setpgid` with `EACCES`, refuses every non-native application binary interface
 (ABI) so that an alternate entry cannot reach those calls with different numbers, and allows

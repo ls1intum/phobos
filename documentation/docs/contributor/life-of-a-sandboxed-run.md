@@ -15,15 +15,15 @@ arbitrary: it is what keeps every limit on the command and off the helpers.
 
 ```
 phobos.sh
-  -> phobos-policy.sh                 (builds the specification, then returns)
-  -> phobos-timeout.sh                (runs the rest under GNU timeout and waits)
-       -> phobos-pgroup-lock          (installs the seccomp filter, then execs)
-       -> phobos-network.sh           (starts the broker and the filter, then execs)
-            -> phobos-connect-guard   (forks a supervisor, the child execs on)
-            -> phobos-landlock        (--no-filesystem: the port rules only)
+  -> phobos-policysystem.sh                 (builds the specification, then returns)
+  -> phobos-timeoutsystem.sh                (runs the rest under GNU timeout and waits)
+       -> phobos-seccomp-timeoutsystem          (installs the seccomp filter, then execs)
+       -> phobos-networksystem.sh           (starts the broker and the filter, then execs)
+            -> phobos-seccomp-networksystem   (forks a supervisor, the child execs on)
+            -> phobos-landlock-filesystem-and-networksystem        (--no-filesystem: the port rules only)
             -> phobos-filesystem.sh   (runs the command as a child and waits)
-                 -> phobos-resources.sh  (sets the rlimits, then execs)
-                 -> phobos-landlock      (the filesystem ruleset, then execs)
+                 -> phobos-resourcesystem.sh  (sets the rlimits, then execs)
+                 -> phobos-landlock-filesystem-and-networksystem      (the filesystem ruleset, then execs)
                  -> the command
 ```
 
@@ -47,7 +47,7 @@ configurations are read, so a raw run leaves nothing behind.
 ## Stage 2: the specification
 
 `phobos.sh` creates a directory under `--spec-parent`, marks it as its own with a hidden
-marker file, and calls `phobos-policy.sh` over it. That program is the only parser: it
+marker file, and calls `phobos-policysystem.sh` over it. That program is the only parser: it
 discovers the base policy, parses every configuration, merges them and writes one file per
 part.
 
@@ -70,42 +70,48 @@ checked to lie outside every write path.
 
 ## Stage 3: the timeout
 
-`phobos-timeout.sh` reads `timeout.sec`. Where it is empty the layer hands the chain straight
+`phobos-timeoutsystem.sh` reads `timeout.sec`. Where it is empty the layer hands the chain straight
 on with `exec`, and no process-group lock is applied, since there is no group kill to escape.
 
 Where a timeout is set the layer runs the rest under
-`timeout --kill-after=5s <value>s phobos-pgroup-lock -- ...` and **waits**. That makes it the
+`timeout --kill-after=5s <value>s phobos-seccomp-timeoutsystem -- ...` and **waits**. That makes it the
 layer that outlives the run, so its trap is what removes the specification directory.
 
 ## Stage 4: the network
 
-`phobos-network.sh` does four things and then replaces itself with the rest of the chain:
+`phobos-networksystem.sh` does four things and then runs the rest of the chain as a child, so that it is still there to clean up when the command ends:
 
 1. It reads `net.rules` for rules whose host is a name, and starts the egress broker where it
    finds one, mapping each exact name to a loopback placeholder in `/etc/hosts` first.
 2. It starts the inbound filter where `accept.rules` is non-empty.
 3. It builds the Landlock port arguments from `net.rules` and `bind.rules` and wraps the rest
-   of the chain in `phobos-landlock --no-filesystem`, a network-only ruleset that composes with
-   the filesystem layer's by intersection.
+   of the chain in `phobos-landlock-filesystem-and-networksystem --no-filesystem`, a network-only ruleset that composes with
+   the filesystem layer's by intersection. Bind is always closed with `--close-bind`, and only a
+   `[bind]` row opens a port.
 4. It puts the connect guard in front of all of that.
 
 The guard forks. The parent becomes the supervisor and is never restricted; the child installs
 its seccomp filter, hands the notification descriptor up, and execs on. The port ruleset is
 applied inside that child lineage, after the fork, so the supervisor that connects on the
-command's behalf stays unrestricted.
+command's behalf stays unrestricted. The supervisor runs every `listen` itself, on a socket
+it created for the command.
+
+When the command ends, the layer's `EXIT` trap stops the egress broker and the inbound filter it
+started and removes the run's own lines from `/etc/hosts`, then passes the command's status
+through unchanged.
 
 ## Stage 5: the filesystem, the resources, the command
 
 `phobos-filesystem.sh` builds the `--rights=` arguments, appends the tail flags, and runs the
 command as a **child** rather than replacing itself with it, so that it can watch the
-command's standard error for denials. Between itself and `phobos-landlock` it starts
-`phobos-resources.sh`, which sets the rlimits and execs on.
+command's standard error for denials. Between itself and `phobos-landlock-filesystem-and-networksystem` it starts
+`phobos-resourcesystem.sh`, which sets the rlimits and execs on.
 
 That ordering is the whole reason the resource layer is not a link of the outer chain: the
-limits reach `phobos-landlock` and the command and nothing else. The layer shells, the standard
+limits reach `phobos-landlock-filesystem-and-networksystem` and the command and nothing else. The layer shells, the standard
 error pass-through, the denial counter and the connect guard's supervisor all run without them.
 
-`phobos-landlock` then adds one `LANDLOCK_RULE_PATH_BENEATH` rule per path, enters the working
+`phobos-landlock-filesystem-and-networksystem` then adds one `LANDLOCK_RULE_PATH_BENEATH` rule per path, enters the working
 directory the tail flags named, sets `PR_SET_NO_NEW_PRIVS`, calls `landlock_restrict_self` and
 execs the command.
 

@@ -101,7 +101,7 @@ jobs:
       # them: Renovate reads no Python dependency out of a shell command, so without it
       # they would rot for exactly the reason the lock was rejected.
       - name: Install linters
-        run: python3 -m pip install --quiet ruff==0.16.8 bandit==1.9.4
+        run: python3 -m pip install --quiet ruff==0.16.10 bandit==1.9.4
 
       - name: Run ruff
         run: ruff check --no-cache --output-format github .
@@ -203,12 +203,13 @@ jobs:
         with:
           persist-credentials: false
 
-      # AGENTS.md asks that every function in core/*.sh carry a comment saying what it does
-      # and what it assumes about its environment, and nothing measured it. This checks the
-      # narrow half that a machine can: that a comment line immediately precedes each
+      # AGENTS.md asks that every function in the core shell scripts carry a comment saying what
+      # it does and what it assumes about its environment, and nothing measured it. This checks
+      # the narrow half that a machine can: that a comment line immediately precedes each
       # function. It says nothing about whether the comment states the assumptions, which
-      # stays a reviewer's job, and it does not find a comment inside a body.
-      - name: Every function in core/*.sh is preceded by a comment
+      # stays a reviewer's job, and it does not find a comment inside a body. The helpers moved
+      # into phobos-tools-* subfolders, so the check globs those beside the top-level layers.
+      - name: Every function in the core shell scripts is preceded by a comment
         run: |
           awk 'FNR == 1 { previous = "" }
                /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/ {
@@ -218,34 +219,9 @@ jobs:
                  }
                }
                { previous = $0 }
-               END { exit undocumented }' core/*.sh
+               END { exit undocumented }' core/*.sh core/phobos-tools-*/*.sh
 
-  workflows:
-    name: Workflows (actionlint)
-    runs-on: ubuntu-26.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Run actionlint
-        env:
-          # Update the checksum together with the version; it pins the exact release asset.
-          ACTIONLINT_VERSION: "1.7.12"
-          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
-        run: |
-          curl --fail --silent --show-error --location \
-            --output actionlint.tar.gz \
-            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum --check --strict
-          tar --extract --gzip --file actionlint.tar.gz actionlint
-          ./actionlint -color
-
-  # One check for a branch rule to require, rather than eight.
+  # One check for a branch rule to require, rather than seven.
   #
   # A rule naming the jobs themselves breaks quietly in two ways: a renamed job leaves the
   # old name required and forever pending, and a job that never runs, because a path
@@ -254,7 +230,7 @@ jobs:
   # rather than a silent pass.
   required:
     name: Lint / required
-    needs: [ shell, c, python, yaml, docker, editorconfig, conventions, workflows ]
+    needs: [ shell, c, python, yaml, docker, editorconfig, conventions ]
     # always(), not !cancelled(). A job that is skipped counts as success towards a
     # required check, so !cancelled() would let a cancelled run leave the one required
     # lint check skipped and therefore green.

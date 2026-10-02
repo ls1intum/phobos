@@ -12,7 +12,7 @@ in the end, hands them to the kernel, and then runs your command inside what is 
 :::
 
 The filesystem layer is the last link of the chain and the one that runs the command. It turns
-the policy's path sets into `--rights=LETTERS PATH` arguments for `phobos-landlock`, which
+the policy's path sets into `--rights=LETTERS PATH` arguments for `phobos-landlock-filesystem-and-networksystem`, which
 applies the Landlock ruleset and executes the command.
 
 ## Running it on its own
@@ -22,8 +22,8 @@ ${PHOBOS_HOME}/phobos-filesystem.sh --config exercise.cfg -- ./gradlew test
 ```
 
 Given one or more `--config` files, the layer builds a specification of its own through
-`phobos-policy.sh`, the single parser, and then enforces only the filesystem. Nothing else is
-applied: no timeout, no connect guard, no resource limits. That is what makes it useful for
+`phobos-policysystem.sh`, the single parser, and then enforces only the filesystem. Nothing else is
+applied: no timeout, no connect guard, and no resource limits unless `--resources-layer` names one. That is what makes it useful for
 isolating a failure.
 
 | Option | What it is for |
@@ -32,8 +32,8 @@ isolating a failure.
 | `--spec-parent <dir>` | Where the specification directory is made. The default is `/var/tmp`. |
 | `--tail-flags-file <file>` | The tail flags file to apply. |
 | `--no-landlock` | Run the command with no Landlock ruleset. |
-| `--landlock-bin <path>` | The `phobos-landlock` program to use. |
-| `--resources-layer <path>` | Start the resource layer as the last step before `phobos-landlock`. |
+| `--landlock-bin <path>` | The `phobos-landlock-filesystem-and-networksystem` program to use. |
+| `--resources-layer <path>` | Start the resource layer as the last step before `phobos-landlock-filesystem-and-networksystem`. |
 | `--debug` | Report what the layer builds and runs. |
 
 Called from `phobos.sh`, it receives a specification directory in place of the `--config`
@@ -61,7 +61,7 @@ in none is not listed at all and stays denied. The letter `i`, for `ioctl` on a 
 block device, has no policy section: nothing you write in a configuration file grants it.
 
 The one route to a letter no section produces is the tail flags file, whose lines this layer
-appends to the `phobos-landlock` argument vector unchanged. It ships as `TailPhobos.cfg` and
+appends to the `phobos-landlock-filesystem-and-networksystem` argument vector unchanged. It ships as `TailPhobos.cfg` and
 today carries the run's working directory alone. It is part of the image rather than of a task
 configuration, so a `--rights=` written there is a change to the shipped policy.
 
@@ -97,7 +97,7 @@ the effective set is the union.
 
 A read or execute path that does not exist is dropped quietly, because a system path absent
 from this image is not a policy error. A changeable path that does not exist is kept, so
-`phobos-landlock` refuses it with a clear message rather than the run failing later.
+`phobos-landlock-filesystem-and-networksystem` refuses it with a clear message rather than the run failing later.
 
 ## Counting denials
 

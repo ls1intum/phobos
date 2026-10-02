@@ -58,8 +58,8 @@ The second tempting version silently does the opposite of what it looks like:
 timeout=0
 ```
 
-Zero switches the limit off, and it beats every finite value any other configuration names. A
-base policy that sets `timeout=600` and a task configuration that sets `timeout=0` produce a
+Zero switches the limit off, and it beats every finite value any other configuration names, the
+built-in default of 600 seconds included. A task configuration that sets `timeout=0` produces a
 run with no timeout at all.
 
 The third is a spelling:

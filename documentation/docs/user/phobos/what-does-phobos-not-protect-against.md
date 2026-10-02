@@ -78,13 +78,31 @@ addresses the rule names. Three limits come with it:
 - **It removes `--network none`.** An external client cannot reach a container that has no
   network, so the rule only works where the container has a real one.
 - **Phobos locks the listening port, not its reachability.** Landlock refuses the command a
-  listener on any port `[bind]` does not name, in the kernel and against raw system calls. The
+  listener on any port `[bind]` does not name, in the kernel and against raw system calls, and
+  the connect guard refuses a `listen()` on a socket that was never bound. The
   bind right is per port rather than per address, though, so the command may bind its backend
   port on every interface. That the backend is reachable *only* through the filter comes from
   the container's network isolation.
 - **A source address is weak authentication.** It resists spoofing only for an established
   handshake, and network address translation makes it coarse. Treat it as a filter, never as an
   identity.
+
+## A datagram destination is checked, and a second thread can race the check
+
+The connect guard reads a datagram's destination from the command's memory, checks it, and lets
+the kernel run the call, which reads that memory again. A second thread of the command can change
+the address in between. Measured in an ordinary container, about one send in six reached an
+address the allow-list never named. The port stays held by Landlock on a version 10 kernel, so
+this concerns the address only. Treat a `udp` address rule as defence in depth, and rely on the
+container's network isolation against a hostile command.
+
+## A kernel too old to close bind leaves it open
+
+Landlock can close TCP bind from version 4 and UDP bind from version 10. Below that, the enforcer
+warns on every run and the bind stays open, so the container's network isolation is the only
+boundary there. `--minimum-landlock-version` in the tail flags turns the warning into a refusal.
+At the time of writing none of the kernels this project's tests run on offers version 10, so the
+UDP half has been exercised against a recording of the kernel's calls only.
 
 ## Attacks inside a language runtime
 
@@ -98,7 +116,7 @@ itself. A grading host is protected where Ares, Phobos and the container are all
 
 Landlock grew one release at a time. A right the running kernel does not know is not merely
 ungranted, it is not handled at all, so it is free on every path including the ones the policy
-calls read-only. `phobos-landlock` reports every such gap before the run rather than leaving it
+calls read-only. `phobos-landlock-filesystem-and-networksystem` reports every such gap before the run rather than leaving it
 to be discovered, and `--minimum-landlock-version` refuses a kernel too old for the guarantee
 you need. The table on the [Landlock](/contributor/technologies/landlock) page says which
 version brought which right.

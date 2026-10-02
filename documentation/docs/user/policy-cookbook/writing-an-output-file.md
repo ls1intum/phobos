@@ -87,7 +87,7 @@ missing.
 
 - A changeable path that is a symbolic link with no target is refused with `PHB-EPOLICY`:
   materialising it would write wherever it points.
-- A changeable path that cannot be created is kept rather than dropped, so `phobos-landlock`
+- A changeable path that cannot be created is kept rather than dropped, so `phobos-landlock-filesystem-and-networksystem`
   refuses it with a clear message instead of the run failing later.
 - The run's specification directory must lie outside every write path. The default parent is
   `/var/tmp`, and a policy that would make it writable is refused, so a workspace directly at
