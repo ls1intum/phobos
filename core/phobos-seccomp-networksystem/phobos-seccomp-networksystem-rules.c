@@ -49,6 +49,11 @@ void remember_rule(const char *host, const char *port_text, bool is_udp) {
                     host, port_text);
         return;
     }
+    if (strchr(host, '*') != nullptr && strcmp(host, "*") != 0) {
+        log_verbose("dropping the rule '%s %s': a wildcard host name cannot be enforced, and read as "
+                    "an unknown name it would match every address on its port", host, port_text);
+        return;
+    }
     struct connect_rule *rule = &connect_rules[connect_rule_count];
     memset(rule, 0, sizeof(*rule));
     rule->is_udp = is_udp;

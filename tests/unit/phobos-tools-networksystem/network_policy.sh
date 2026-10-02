@@ -176,18 +176,87 @@ else
   bad "an exact [connect] name without a resolver is refused fail-closed (PHB-ERUNTIME)" "exit ${PHB_ERUNTIME} naming a resolver, not --egress-broker" "exit ${name_rc}: ${name_out}"
 fi
 
-# A suffix rule (*.name) also auto-starts the broker, but needs no resolver: the broker matches it
-# by TLS host name rather than pinning it to an address. With a missing haproxy the start refuses
-# fail-closed, but the NOTICE that precedes the start proves the suffix rule entered the broker path.
-suffix_spec="$(mktemp -d "$WORK/suffix-spec.XXXXXX")"
-printf '*.example.test 443\n' > "$suffix_spec/net.rules"
-suffix_out="$(bash "$CORE/phobos-networksystem.sh" --connect-guard-bin "$stub_guard" --haproxy-bin /nonexistent-haproxy "$suffix_spec" -- true 2>&1)"
-suffix_rc=$?
-if [[ "$suffix_rc" -eq "$PHB_ERUNTIME" && "$suffix_out" == *"egress broker is started"* ]]; then
-  ok "a [connect] suffix rule auto-starts the broker and needs no resolver"
+# A wildcard host name is refused by the network layer itself, before the broker is started and
+# whichever transport the row names, so a specification handed to the layer on its own, never
+# having met the policy parser, cannot bring a wildcard in. Each body is written with printf %s, so
+# a last row with no newline is covered too, which the guard reads with fgets and a shell loop that
+# stopped at the missing newline would drop.
+for wildcard_body in $'*.example.test 443\n' $'a*b.example.test 443\n' $'name.* 443\n' $'127.0.0.1 53 udp\n*.example.test 53 udp\n' $'example.test 443\n*.example.test 53 udp' $'*.example.test 443'; do
+  wildcard_spec="$(mktemp -d "$WORK/wildcard-spec.XXXXXX")"
+  printf '%s' "$wildcard_body" > "$wildcard_spec/net.rules"
+  wildcard_out="$(bash "$CORE/phobos-networksystem.sh" --connect-guard-bin "$stub_guard" --haproxy-bin /nonexistent-haproxy --resolver 192.0.2.53 "$wildcard_spec" -- true 2>&1)"
+  wildcard_rc=$?
+  wildcard_label="$(printf '%s' "$wildcard_body" | tr '\n' ',')"
+  if [[ "$wildcard_rc" -eq "$PHB_EPOLICY" && "$wildcard_out" == *"wildcard host name"* && "$wildcard_out" != *"egress broker is started"* ]]; then
+    ok "the layer refuses '${wildcard_label}' with PHB-EPOLICY before any broker starts"
+  else
+    bad "the layer refuses '${wildcard_label}' with PHB-EPOLICY before any broker starts" "exit ${PHB_EPOLICY} naming a wildcard host name, no broker NOTICE" "exit ${wildcard_rc}: ${wildcard_out}"
+  fi
+done
+
+bare_star_spec="$(mktemp -d "$WORK/bare-star-spec.XXXXXX")"
+printf '* 443\n' > "$bare_star_spec/net.rules"
+bare_star_out="$(bash "$CORE/phobos-networksystem.sh" --connect-guard-bin /nonexistent-guard "$bare_star_spec" -- true 2>&1)"
+bare_star_rc=$?
+if [[ "$bare_star_rc" -eq "$PHB_ERUNTIME" && "$bare_star_out" == *"connect guard"* ]]; then
+  ok "the bare star is not a wildcard name and is left to the guard"
 else
-  bad "a [connect] suffix rule auto-starts the broker and needs no resolver" "exit ${PHB_ERUNTIME} after the broker NOTICE" "exit ${suffix_rc}: ${suffix_out}"
+  bad "the bare star is not a wildcard name and is left to the guard" "exit ${PHB_ERUNTIME} about the connect guard" "exit ${bare_star_rc}: ${bare_star_out}"
 fi
+
+# Runs refuse_unenforceable_network_rules over a net.rules body in a subshell, so the refusal's exit
+# is captured. Prints "<exit>|<log>".
+run_refuse() {
+  local body=$1
+  local out
+  printf '%s' "$body" > "$WORK/refuse.rules"
+  : > "$WORK/refuse.bind"
+  out="$(
+    # shellcheck source=../../../core/phobos-tools-common/phobos-common.sh
+    source "${CORE}/phobos-tools-common/phobos-common.sh"
+    refuse_unenforceable_network_rules "$WORK/refuse.rules" "$WORK/refuse.bind" 2>&1
+  )"
+  local rc=$?
+  printf '%s|%s' "$rc" "$(tr '\n' ' ' <<<"$out")"
+}
+
+echo
+echo "== the merged policy refuses a wildcard host name, and still accepts a name, an address and a star =="
+for wildcard_body in $'*.example.test 443\n' $'a*b.example.test 443\n' $'name.* 443\n' $'*.example.test 53 udp\n' $'example.test 443\n*.example.test 53 udp'; do
+  r="$(run_refuse "$wildcard_body")"
+  wildcard_label="$(printf '%s' "$wildcard_body" | tr '\n' ',')"
+  if [[ "$(cut -d'|' -f1 <<<"$r")" == "${PHB_EPOLICY}" && "$(cut -d'|' -f2- <<<"$r")" == *"wildcard host name"* ]]; then
+    ok "'${wildcard_label}' is refused where the specification is judged"
+  else
+    bad "'${wildcard_label}' is refused where the specification is judged" "exit ${PHB_EPOLICY} naming a wildcard host name" "$r"
+  fi
+done
+r="$(run_refuse $'example.test 443\n192.0.2.10 443\n* 8443\n127.0.0.1 53 udp\n')"
+[[ "$(cut -d'|' -f1 <<<"$r")" == 0 ]] && ok "an exact name, an address, a bare star and a udp address are accepted" || bad "an exact name, an address, a bare star and a udp address are accepted" "exit 0" "$r"
+
+echo
+echo "== the validator judges the host column and nothing else =="
+# A tab between the columns, a carriage return at the end of a row, an upper-case name and an
+# indented row are still wildcard hosts. A comment is not a row, and a star in the port column is
+# the port wildcard, not a wildcard name.
+for wildcard_body in $'*.example.test\t443\n' $'*.example.test 443\r\n' $'*.EXAMPLE.TEST 443\n' $'   *.example.test 443\n' $'example.test 443 # fine\n*.example.test 443 # not fine\n'; do
+  r="$(run_refuse "$wildcard_body")"
+  wildcard_label="$(printf '%s' "$wildcard_body" | tr '\t\r\n' '^$,')"
+  if [[ "$(cut -d'|' -f1 <<<"$r")" == "${PHB_EPOLICY}" && "$(cut -d'|' -f2- <<<"$r")" == *"wildcard host name"* ]]; then
+    ok "'${wildcard_label}' is refused"
+  else
+    bad "'${wildcard_label}' is refused" "exit ${PHB_EPOLICY} naming a wildcard host name" "$r"
+  fi
+done
+for control_body in $'# *.example.test 443\nexample.test 443\n' $'example.test 443 # *.example.test\n' $'127.0.0.1 *\n::1 *\n'; do
+  r="$(run_refuse "$control_body")"
+  control_label="$(printf '%s' "$control_body" | tr '\t\r\n' '^$,')"
+  if [[ "$(cut -d'|' -f1 <<<"$r")" == 0 ]]; then
+    ok "'${control_label}' is accepted"
+  else
+    bad "'${control_label}' is accepted" "exit 0" "$r"
+  fi
+done
 
 addr_spec="$(mktemp -d "$WORK/addr-spec.XXXXXX")"
 printf '127.0.0.1 443\n' > "$addr_spec/net.rules"

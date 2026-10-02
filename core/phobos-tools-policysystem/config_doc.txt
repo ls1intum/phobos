@@ -22,6 +22,14 @@ the same rules, with an optional third for host names:
   it itself and connects only to that address. The network layer refuses an
   exact-name rule when no resolver is given, rather than run with a name the
   broker cannot pin to an address.
+- A host name with a star in it, such as `*.example.org`, is refused (PHB-EPOLICY)
+  for either transport, because a wildcard cannot be resolved to an address and
+  would constrain nothing about where the connection goes. Name each host exactly.
+  The bare `*`, which names every host, is the one star that stays. The parser, the
+  merged-policy check, the network layer and the broker's config generator each
+  refuse it, so a specification written by hand is judged too, and the connect
+  guard drops such a row itself, which denies, rather than read it as an unknown
+  name that matches every address on its port.
 
 A [connect] rule may end with a transport marker, `udp` or `tcp`. The marker is
 optional and defaults to tcp, so every existing rule keeps its meaning. A `udp`

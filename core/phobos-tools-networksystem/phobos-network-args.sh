@@ -80,10 +80,41 @@ refuse_mixed_network_wildcard() {
   exit "${PHB_EPOLICY}"
 }
 
-# Refuses every [connect] and [bind] rule that cannot be enforced as written: a port that is
-# not one the protocol has, an external host with no port, and a loopback wildcard beside a
-# concrete port. phobos-policysystem.sh asks this once, where the specification is written, so that
-# a rule is judged whether or not the layer that would otherwise have judged it is in the
+# Refuses one [connect] host that holds a star without being exactly "*". A name is enforced by
+# the egress broker, which resolves it and lets the command reach only the addresses it resolves
+# to; a wildcard name has no address to resolve, so it could only be matched against a name the
+# command itself presents, and that constrains nothing about where the connection goes. Takes the
+# host. Assumes it is called plainly, so that a refusal ends the run.
+refuse_wildcard_host_name() {
+  local host="$1"
+  [[ "$host" == *"*"* && "$host" != "*" ]] || return 0
+  report "Policy invalid: '${host}' in [connect] is a wildcard host name. A name is enforced by resolving it, which a wildcard cannot be, so it would only match the name the command presents and constrain nothing about where it connects. Name the exact host, an address, a CIDR range or '*'. (PHB-EPOLICY)"
+  exit "${PHB_EPOLICY}"
+}
+
+# Refuses every row of a net.rules file whose host is a wildcard host name. Reads every row, UDP
+# rows included, and a last line with no newline, the way the connect guard does, and drops a
+# comment as the shell readers of this file do. A missing file names nothing. Assumes it is called
+# plainly, in the shell that ends the run, never in a pipeline or a command substitution, whose
+# subshell a refusal's exit would end instead of the run.
+refuse_wildcard_connect_names() {
+  local rules="$1"
+  local line
+  local host
+  [[ -n "$rules" && -f "$rules" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    host=""
+    read -r host _ <<< "$line" || true
+    [[ -z "$host" ]] && continue
+    refuse_wildcard_host_name "$host"
+  done < "$rules"
+}
+
+# Refuses every [connect] and [bind] rule that cannot be enforced as written: a wildcard host
+# name, a port that is not one the protocol has, an external host with no port, and a loopback
+# wildcard beside a concrete port. phobos-policysystem.sh asks this once, where the specification is
+# written, so that a rule is judged whether or not the layer that would otherwise have judged it is in the
 # chain: with --no-networksystem-restriction the network layer is absent, so nobody builds the
 # Landlock port rules, and the spec would otherwise carry a rule that is silently dropped.
 # Assumes it is called plainly, so that a refusal ends the run.
@@ -95,6 +126,7 @@ refuse_unenforceable_network_rules() {
   local proto
   local host
   local port
+  refuse_wildcard_connect_names "$net_rules"
   if [[ -n "$net_rules" && -s "$net_rules" ]]; then
     for proto in tcp udp; do
       ports_file="$(new_scratch_file phobos-check-ports.XXXXXX)"

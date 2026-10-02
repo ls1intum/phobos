@@ -156,10 +156,39 @@ refuse_case "a [connect] port with a leading zero is refused" '[connect]\nallow 
 refuse_case "a [bind] rule naming an address is refused"  '[bind]\nallow 127.0.0.1:8080\n'
 refuse_case "a [bind] rule naming a bracketed IPv6 address is refused" '[bind]\nallow [::1]:8080\n'
 
+# A wildcard host name is refused for either transport, and the reason has to be the wildcard: a
+# bare PHB-EPOLICY could come from another rule, such as a udp rule naming a host.
+refuse_wildcard_case() {
+  local name="$1"
+  local body="$2"
+  local spec
+  local out
+  local rc
+  spec="$(fresh_spec)"
+  printf "%b" "$body" > "$WORK/bad-wildcard.cfg"
+  out="$(bash "$CORE_X/phobos-policysystem.sh" --spec-dir "$spec" --config "$WORK/bad-wildcard.cfg" 2>&1)"
+  rc=$?
+  if [[ "$rc" -eq "$PHB_EPOLICY" && "$out" == *"wildcard host name"* && ! -f "$spec/net.rules" ]]; then
+    ok "$name"
+  else
+    bad "$name" "exit ${PHB_EPOLICY} naming a wildcard host name, no net.rules written" "exit $rc: $out"
+  fi
+}
+refuse_wildcard_case "a [connect] name with a leading wildcard label is refused"  '[connect]\nallow *.example.test:443\n'
+refuse_wildcard_case "a [connect] name with a star inside is refused"             '[connect]\nallow a*b.example.test:443\n'
+refuse_wildcard_case "a [connect] name ending in a star is refused"               '[connect]\nallow name.*:443\n'
+refuse_wildcard_case "a udp [connect] wildcard name is refused for the wildcard"  '[connect]\nallow *.example.test:53 udp\n'
+refuse_wildcard_case "a wildcard name beside valid rules is refused"              '[connect]\nallow example.test:443\nallow 192.0.2.10:443\nallow *.example.test:443\n'
+
 SPEC_OK="$(fresh_spec)"
 printf '[connect]\nallow example.test:443\n' > "$WORK/good-net.cfg"
 bash "$CORE_X/phobos-policysystem.sh" --spec-dir "$SPEC_OK" --config "$WORK/good-net.cfg" > /dev/null 2>&1
 check "a concrete port still builds a specification" "example.test 443" "$(cat "$SPEC_OK/net.rules")"
+
+SPEC_STAR="$(fresh_spec)"
+printf '[connect]\nallow *:443\n' > "$WORK/good-star.cfg"
+bash "$CORE_X/phobos-policysystem.sh" --spec-dir "$SPEC_STAR" --config "$WORK/good-star.cfg" > /dev/null 2>&1
+check "a bare star host with a port still builds a specification" "* 443" "$(cat "$SPEC_STAR/net.rules")"
 
 SPEC_BIND="$(fresh_spec)"
 printf '[bind]\nallow 8080\n' > "$WORK/good-bind.cfg"

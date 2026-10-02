@@ -255,8 +255,6 @@ check "parser: bracketed IPv6 with a port"                "::1 443"        "$(pa
 allow [::1]:443')"
 check "parser: IPv4 with a port"                          "127.0.0.1 8080" "$(parsed_net_rules '[connect]
 allow 127.0.0.1:8080')"
-check "parser: an unbracketed ::1:* is a bogus host"      "::1:* *"        "$(parsed_net_rules '[connect]
-allow ::1:*')"
 check "parser: a udp connect rule keeps the udp marker"   "8.8.8.8 53 udp" "$(parsed_net_rules '[connect]
 allow 8.8.8.8:53 udp')"
 check "parser: an explicit tcp marker stays two-field"    "1.2.3.4 443"    "$(parsed_net_rules '[connect]
@@ -264,6 +262,14 @@ allow 1.2.3.4:443 tcp')"
 
 rejects_net "a [connect] line without allow is refused"    '[connect]
 localhost'
+rejects_net "an unbracketed ::1:* is refused, its host holds a star" '[connect]
+allow ::1:*'
+rejects_net "a wildcard host name is refused for tcp"       '[connect]
+allow *.example.test:443'
+rejects_net "a wildcard host name is refused for udp"       '[connect]
+allow *.example.test:53 udp'
+check "parser: a bare star host is still a host"          "* 443"          "$(parsed_net_rules '[connect]
+allow *:443')"
 rejects_net "a udp [connect] rule naming a host is refused" '[connect]
 allow example.test:443 udp'
 rejects_net "an unknown transport marker is refused"        '[connect]

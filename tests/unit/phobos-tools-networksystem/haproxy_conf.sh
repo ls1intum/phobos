@@ -11,6 +11,11 @@ HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../harness.sh
 source "${HERE}/../../harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 CORE="${HERE}/../../../core"
+# shellcheck source=../../../core/phobos-tools-common/phobos-common.sh
+source "${CORE}/phobos-tools-common/phobos-common.sh"
+# phobos-common.sh turns errexit and nounset on for whoever sources it. This suite counts failures
+# and goes on, so it takes errexit back; the helpers under test run unchanged in either mode.
+set +e
 # shellcheck source=../../../core/phobos-tools-networksystem/phobos-haproxy.sh
 source "${CORE}/phobos-tools-networksystem/phobos-haproxy.sh"
 
@@ -52,11 +57,46 @@ has "an allowed SNI routes to the destination backend" "$out" "use_backend to_ds
 has "everything else is refused" "$out" "default_backend refuse"
 
 echo
-echo "== a leading-wildcard host becomes an SNI suffix match on the header destination =="
-out="$(emit "*.example.org 443")"
-has "the wildcard becomes an SNI suffix acl" "$out" "acl suffix_sni req.ssl_sni -m end -i .example.org"
-has "a suffix routes to the header destination, not a resolved one" "$out" "use_backend to_dst if suffix_sni"
-has "a suffix is not resolved by the broker" "$out" "!do-resolve"
+echo "== a wildcard host name is refused, never turned into a rule =="
+# Runs a body through build_haproxy_conf in a subshell, so the refusal's exit is captured. The body
+# is written with printf %s, which adds no newline, so the last row may be left unterminated.
+# Prints "<exit>|<config written?>|<log>".
+refuse_conf() {
+  local body="$1"
+  local out
+  rm -f "$WORK/refused.cfg"
+  printf '%s' "$body" > "$WORK/net.rules"
+  out="$( ( build_haproxy_conf "$WORK/net.rules" "$WORK/refused.cfg" "127.0.0.1:3128" "127.0.0.11:53" ) 2>&1 )"
+  local rc=$?
+  local written=no
+  [[ -e "$WORK/refused.cfg" ]] && written=yes
+  printf '%s|%s|%s' "$rc" "$written" "$(tr '\n' ' ' <<<"$out")"
+}
+for wildcard_body in "*.example.org 443
+" "a*b.example 443
+" "name.* 443
+" "*.example.org 53 udp
+" "repo.example.org 443
+127.0.0.1 53 udp
+*.example.org 53 udp" "*.example.org 443"; do
+  r="$(refuse_conf "$wildcard_body")"
+  label="$(printf '%s' "$wildcard_body" | tr '\n' ',')"
+  if [[ "$(cut -d'|' -f1 <<<"$r")" == "${PHB_EPOLICY}" && "$(cut -d'|' -f2 <<<"$r")" == no && "$(cut -d'|' -f3 <<<"$r")" == *"wildcard host name"* ]]; then
+    ok "'$label' is refused with PHB-EPOLICY and no config is written"
+  else
+    bad "'$label' is refused with PHB-EPOLICY and no config is written" "exit ${PHB_EPOLICY}, no file, a message naming the wildcard" "$r"
+  fi
+done
+has "a wildcard name is classified invalid" "$(classify_connect_host '*.example.org')" "invalid"
+has "a star inside a name is invalid" "$(classify_connect_host 'a*b.example')" "invalid"
+has "a trailing star is invalid" "$(classify_connect_host 'name.*')" "invalid"
+has "a star beside a slash is invalid, not an address" "$(classify_connect_host '*/8')" "invalid"
+has "a star beside a colon is invalid, not an address" "$(classify_connect_host '*::1')" "invalid"
+has "the bare star is still any" "$(classify_connect_host '*')" "any"
+r="$(refuse_conf "repo.example.org 443
+*
+")"
+[[ "$(cut -d'|' -f1 <<<"$r")" == 0 && "$(cut -d'|' -f2 <<<"$r")" == yes ]] && ok "an exact name and a bare star are still accepted" || bad "an exact name and a bare star are still accepted" "exit 0 and a config written" "$r"
 
 echo
 echo "== an IP literal and a CIDR range become destination acls, not SNI =="
@@ -86,7 +126,7 @@ echo "== exact_connect_names lists the names the broker resolves, and nothing el
 printf 'a.example 443\n*.b.example 443\n192.0.2.3 443\nlocalhost 443\n* 443\n' > "$WORK/net.rules"
 exact_out="$(exact_connect_names "$WORK/net.rules")"
 has "an exact name is listed" "$exact_out" "a.example"
-has "a suffix is not listed" "$exact_out" "!*.b.example"
+has "a wildcard name is not listed" "$exact_out" "!*.b.example"
 has "an address is not listed" "$exact_out" "!192.0.2.3"
 has "localhost is not listed" "$exact_out" "!localhost"
 has "a star is not listed" "$exact_out" "!*"
@@ -128,7 +168,7 @@ has "an address-only config needs no resolvers section" "$(cat "$WORK/haproxy.cf
 
 echo
 if command -v haproxy >/dev/null 2>&1; then
-  for body in "" "repo.maven.apache.org 443" "*.example.org 443
+  for body in "" "repo.maven.apache.org 443" "repo.example.org 443
 192.0.2.10 443
 104.16.0.0/12 443" "* 443"; do
     printf '%s\n' "$body" > "$WORK/net.rules"

@@ -197,7 +197,8 @@ refuse_unknown_section() {
 
 # Appends one [connect] line, "allow <host>[:<port>] [udp|tcp]", to the rules file as "host port"
 # for TCP, or "host port udp" for UDP. The transport marker is optional and defaults to tcp, so
-# every existing rule keeps its two-field form and its meaning. A UDP rule may name only an
+# every existing rule keeps its two-field form and its meaning. A host with a star in it, other
+# than "*" itself, is refused for either transport (refuse_wildcard_host_name). A UDP rule may name only an
 # address, a CIDR, a loopback name or "*": a host name in a UDP rule is refused, because the egress
 # broker enforces a host name through the TLS host name, which is TCP-only, so a UDP host name would
 # rest on its port alone with no host enforcement. A line of any other shape, or an unknown marker,
@@ -226,6 +227,7 @@ append_connect_rule() {
     exit "${PHB_EPOLICY}"
   fi
   parse_network_target "$target" host port
+  refuse_wildcard_host_name "$host"
   if [[ "$proto" == "udp" ]]; then
     case "$host" in
       "*" | localhost) ;;
