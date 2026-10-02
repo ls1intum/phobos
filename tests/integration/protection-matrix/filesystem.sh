@@ -237,9 +237,7 @@ run_pm --no-networksystem-restriction --config "$c_restructure" -- "$P" rename "
 if op_ok rename; then ok "a rename across trees works with the restructure right, the network layer off"; else bad "a rename across trees works with the restructure right, the network layer off" "$(pm_describe)"; fi
 rm -f "$PM/rw/m.txt" "$PM/rw2/m.txt"; touch "$PM/rw/m.txt"
 run_pm --config "$c_restructure" -- "$P" rename "$PM/rw/m.txt" "$PM/rw2/m.txt"
-known_defect "with the network layer on, which is the default, the restructure right does not let a file move between trees" \
-  "the network layer's Landlock ruleset handles no REFER, and Landlock then refuses every reparenting with EXDEV (tests/integration/protection-matrix/README.md, defect 1)" \
-  "$(op_failed_with rename EXDEV; echo $?)"
+if op_ok rename; then ok "a rename across trees works with the restructure right under the default layers, the network layer on"; else bad "a rename across trees works with the restructure right under the default layers" "$(pm_describe)"; fi
 PREP="rm -f $PM/rw/h.txt $PM/rw/h2.txt; touch $PM/rw/h.txt" \
   allow_case "a hard link inside one directory needs only the create right" "$c_make" link -- "$P" link "$PM/rw/h.txt" "$PM/rw/h2.txt"
 PREP="rm -f $PM/rw/h.txt $PM/rw2/h.txt; touch $PM/rw/h.txt" \
@@ -247,6 +245,9 @@ PREP="rm -f $PM/rw/h.txt $PM/rw2/h.txt; touch $PM/rw/h.txt" \
 rm -f "$PM/rw/h.txt" "$PM/rw2/h.txt"; touch "$PM/rw/h.txt"
 run_pm --no-networksystem-restriction --config "$c_restructure" -- "$P" link "$PM/rw/h.txt" "$PM/rw2/h.txt"
 if op_ok link; then ok "a hard link into another tree works with the restructure right, the network layer off"; else bad "a hard link into another tree works with the restructure right, the network layer off" "$(pm_describe)"; fi
+rm -f "$PM/rw/h.txt" "$PM/rw2/h.txt"; touch "$PM/rw/h.txt"
+run_pm --config "$c_restructure" -- "$P" link "$PM/rw/h.txt" "$PM/rw2/h.txt"
+if op_ok link; then ok "and so does a hard link into another tree, with every layer on"; else bad "a hard link into another tree works with the restructure right under the default layers" "$(pm_describe)"; fi
 rm -f "$PM/rw/stolen.txt" "$PM/rw/h.txt" "$PM/rw2/h.txt"
 PREP="rm -f $PM/rw/stolen.txt" \
   PM_EXTRA="-nnr" deny_case "a hard link to a file outside every tree, made inside a writable one, is refused" fs "$c_restructure" link "EXDEV EACCES EPERM" -- "$P" link "$PM/none/secret.txt" "$PM/rw/stolen.txt"

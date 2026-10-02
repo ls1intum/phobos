@@ -82,12 +82,7 @@ None of these lets a command reach something it was not granted. Each is a `know
 suite is green while it holds and red when it is fixed. They are ordinary bugs, not vulnerabilities,
 in the sense of `SECURITY.md`.
 
-1. **Moving a file between directories fails under the default layers.** With the network layer on,
-   a rename or hard link across two directories fails with `EXDEV` even where `[restructure]` grants
-   it, and works with `-nnr`. The network layer's own Landlock ruleset handles no reparenting right,
-   and Landlock refuses every reparenting that a stacked ruleset does not handle. Making that ruleset
-   handle the right and grant it on `/` would not widen the filesystem ruleset beside it, but that
-   needs measuring before it is trusted. Found in `filesystem.sh`.
+1. **Moving a file between directories failed under the default layers.** Fixed: the network layer's own ruleset now handles the reparenting right and grants it on the root, so it no longer refuses what the filesystem ruleset allows.
 2. **A space inside a limit value was dropped.** Fixed: `cpu=5 5` is now refused like every other malformed value.
 3. **A signal sent to `phobos.sh` never reaches the command.** `SIGTERM` with the timeout layer on,
    and `SIGHUP` either way, end the wrapper and remove the specification directory but leave the

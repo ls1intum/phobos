@@ -1258,13 +1258,24 @@ static void test_what_reaches_the_kernel(void) {
     char *net_only[] = {"phobos-landlock-filesystem-and-networksystem", "--no-filesystem", "--connect-tcp", "443", "--",
                         "/bin/true",       NULL};
     expect_exit("a network-only ruleset runs", 0, net_only);
-    check("a network-only ruleset handles no filesystem access",
-          record->handled_access_filesystem == 0);
+    check("a network-only ruleset handles no filesystem access but REFER, which the kernel would otherwise refuse",
+          record->handled_access_filesystem == LANDLOCK_ACCESS_FILESYSTEM_REFER);
     check("a network-only ruleset still handles the connect direction",
           record->handled_access_network == LANDLOCK_ACCESS_NETWORK_CONNECT_TCP);
-    check("a network-only ruleset carries no path rule", record->path_rule_count == 0);
+    check("a network-only ruleset carries one path rule, REFER on the root and nothing else",
+          record->path_rule_count == 1 && record->path_rule_allowed_access[0] == LANDLOCK_ACCESS_FILESYSTEM_REFER);
     check("a network-only ruleset still scopes signals and abstract UNIX sockets",
           record->scoped == (LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | LANDLOCK_SCOPE_SIGNAL));
+
+    char *scope_only[] = {"phobos-landlock-filesystem-and-networksystem", "--no-filesystem", "--", "/bin/true", NULL};
+    mock_landlock_version = 8;
+    expect_exit("a ruleset that exists only to scope runs", 0, scope_only);
+    check("it still carries REFER on the root, so it cannot refuse a rename the filesystem ruleset allows",
+          record->handled_access_filesystem == LANDLOCK_ACCESS_FILESYSTEM_REFER && record->path_rule_count == 1);
+    mock_landlock_version = 3;
+    expect_exit("a ruleset with nothing to hold, on a kernel that cannot scope, runs", 0, scope_only);
+    check("it is not created at all, so there is no layer to refuse a rename",
+          record->ruleset_attributes_size == 0 && record->path_rule_count == 0);
 
     mock_landlock_version = 3;
     expect_exit("an older kernel runs", 0, read_only);
