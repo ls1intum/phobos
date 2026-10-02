@@ -79,7 +79,7 @@ either way, or the specification carries something that is silently dropped.
 
 | Check | What it refuses |
 | --- | --- |
-| `refuse_unenforceable_network_rules` | a port outside 1 to 65535, an external host with no port, a loopback wildcard beside a concrete port |
+| `refuse_unenforceable_network_rules` | a wildcard host name, a port outside 1 to 65535, an external host with no port, a loopback wildcard beside a concrete port |
 | `refuse_unenforceable_accept_rules` | a public port below 1024, a public port the command may bind, a backend port `[bind]` does not name, two rules fronting one public port |
 | `refuse_spec_dir_under_write_path` | a specification directory beneath any write, create, delete, inter-process communication (IPC), symbolic-link or restructure path |
 

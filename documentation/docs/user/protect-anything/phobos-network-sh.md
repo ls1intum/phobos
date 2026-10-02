@@ -81,9 +81,11 @@ protocol header naming the destination the command meant, and the broker decides
 
 - For an **exact name** it does not trust the header at all. It resolves the name itself,
   through the resolver you gave, and connects only to that address.
-- For a **name suffix**, `*.example.org`, it matches the Server Name Indication (SNI) host name
-  by suffix and forwards to the header's destination.
 - For an **address**, a range or `*`, the header's destination is used unchanged.
+
+A name with a star in it, such as `*.example.org`, never reaches the broker. The layer refuses
+it with `PHB-EPOLICY` before it starts anything, because a wildcard cannot resolve to an
+address.
 
 An exact name needs a resolver, and the layer refuses the run with `PHB-ERUNTIME` where none
 was given rather than running without the host-name enforcement the rule asked for. Each exact

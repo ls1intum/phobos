@@ -36,15 +36,15 @@ version 2 header naming the destination the command meant. The broker then decid
 | The rule names | What the broker does |
 | --- | --- |
 | an exact name | resolves the name itself, through the `phobosdns` resolver, sets the destination to that address, and rejects the connection where the name does not resolve |
-| a name suffix, `*.example.org` | matches the Server Name Indication (SNI) host name by suffix and forwards to the header's destination |
 | an address or a range | accepts as soon as the destination matches, so a connection with no ClientHello does not wait out the inspection delay |
 | `*` | accepts everything and forwards to the header's destination |
 
 The exact-name case is the strong one, and it is the reason the network layer refuses such a
 rule without `--resolver`: the broker does not trust the header at all there, so a command that
 presents an allowed name while aiming at another address is still sent only to where the name
-resolves. The suffix case is weaker by construction, since a suffix cannot be resolved to one
-address.
+resolves. A wildcard name has no row in the table on purpose, because it cannot resolve to one
+address. `classify_connect_host` answers `invalid` for it, and the config generator refuses it
+before it writes anything.
 
 Each exact name is mapped to a loopback placeholder in `/etc/hosts` first, so the command's own
 name resolution succeeds without a query the guard would refuse. The broker does not consult

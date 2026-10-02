@@ -49,11 +49,15 @@ holds a raw system call that never reaches the guard's filter.
 A rule that names a host constrains nothing about the onward address unless somebody reads the
 host name. Making that a flag would let a run forget it and silently widen the rule to any
 address on the port, so `name_connect_rules` reads the allow-list and the layer starts the
-broker wherever it finds an exact name or a suffix.
+broker wherever it finds an exact name. A wildcard name is not one. The layer first runs
+`refuse_wildcard_connect_names` over every row of its rules, in its own shell, so it judges a
+hand-written specification too.
 
 `classify_connect_host` is the one classifier the configuration generator and the layer share,
 so the two can never disagree about what an exact name is. It treats `localhost` as an address
-rather than a name: the guard already resolves it to the loopback the command connected to.
+rather than a name: the guard already resolves it to the loopback the command connected to. It
+answers `invalid` for a host with a star in it other than `*`. It tests that before the address
+shortcuts, so a star beside a slash or a colon never counts as an address.
 
 The order of the refusals matters and is pinned: a missing guard and an exact name without a
 resolver both end the run **before** the notice that a broker is starting, so a run that never

@@ -111,9 +111,9 @@ collected apart, and neither does a [`[bind]`](/user/policy-reference/bind) rule
 
 - A name rule assumes a networked container, so it cannot work under `--network none`. The
   layer says so on standard error before it starts the broker.
-- A wildcard-label rule, `allow *.example.org:443`, matches the Transport Layer Security host
-  name by suffix and forwards to the destination the header carried. It does not itself
-  constrain the onward address, so it is the weaker of the two name forms.
+- Phobos refuses a wildcard-label rule, `allow *.example.org:443`, with `PHB-EPOLICY`. A
+  wildcard cannot resolve to an address, so the broker could only compare it with the name the
+  sandboxed command presents. Name each host exactly.
 - A datagram rule, `allow 203.0.113.53:53 udp`, needs Landlock version 10 and may not name a
   host name, since host enforcement rests on the Transport Layer Security host name.
 - Mixing a loopback rule with no port and a rule with a concrete port in one section is

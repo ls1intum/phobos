@@ -86,8 +86,13 @@ existed keeps its meaning.
 | a loopback name or address | `allow localhost`, `allow [::1]` | to loopback, by the connect guard |
 | a range in Classless Inter-Domain Routing (CIDR) notation | `allow 198.51.100.0/24:443` | to that network, by the connect guard |
 | an exact host name | `allow repo.example.org:443` | to the address that name resolves to, by the egress broker |
-| a name with a leading wildcard label | `allow *.example.org:443` | by suffix on the Transport Layer Security (TLS) host name, by the egress broker |
 | `*` | `allow *:443` | every host on that port |
+
+Phobos refuses a host name with a star in it, such as `allow *.example.org:443`, with
+`PHB-EPOLICY`, for either transport. The broker pins an exact name by resolving it itself. A
+wildcard name cannot resolve to an address, so the broker could only compare the name the
+sandboxed command presents and learn nothing about where the connection goes. Name each host
+exactly. The bare `*` is the one star that stays.
 
 An address in the sixth version of the Internet Protocol carries colons of its own, so a port
 is written in brackets: `allow [2001:db8::1]:443`. A bare `allow 2001:db8::1` is the host with
@@ -131,7 +136,7 @@ Two limits come with it:
 - **It needs Landlock version 10.** On an older kernel `phobos-landlock` refuses the run with
   `[phobos-landlock] UDP network rules require Landlock version 10` and exit status 125, rather
   than running with the transport left unenforced.
-- **It may not name a host name.** Host enforcement rests on the TLS host name, which is a
+- **It may not name a host name.** Host enforcement rests on the Transport Layer Security (TLS) host name, which is a
   stream concept, so a `udp` rule names an address, a range, a loopback name or `*`.
 
 ## Notes
@@ -143,8 +148,9 @@ it, and the network layer refuses the run with `PHB-ERUNTIME` where `--resolver`
 a run with `--network none` cannot serve such a rule. The network layer says so on standard
 error before it starts the broker.
 
-**A suffix rule is the weaker match.** It routes by the TLS host name to the destination the
-header carried and does not itself constrain the onward address.
+**Phobos refuses a wildcard name.** `allow *.example.org:443` ends the run with `PHB-EPOLICY`
+when Phobos reads the policy, and so does a hand-written `net.rules` that holds one. Write one
+rule per host, or an address range for a service whose addresses rotate.
 
 **A concrete stream port collides with the shipped base policies.** Both of them name three
 loopback rules with no port, and a section may not mix a wildcard with a concrete port on one
