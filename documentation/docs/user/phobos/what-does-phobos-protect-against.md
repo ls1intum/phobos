@@ -49,9 +49,9 @@ allow-list in two places, with a third for host names:
   and port, and a raw system call cannot step around it. It refuses a raw, packet or ICMP
   socket before the socket exists, judges a datagram that carries its own destination the way
   it judges a connect, refuses `io_uring` as a second syscall interface that would reach
-  `connect` unseen, and refuses `setsid` and `setpgid`. A datagram carries its destination in
-  the call, so the guard checks it and lets the call through; a command that changes the address
-  between the check and the call is the one known gap, described under
+  `connect` unseen, and refuses `setsid` and `setpgid`. It makes every datagram connect and
+  every send that names a destination itself, from a copy of the address and the data it took once, so a second thread cannot
+  change a destination after it was judged; what that costs is listed under
   [what Phobos does not protect against](what-does-phobos-not-protect-against.md).
 - **Landlock port rules** are the kernel-enforced second expression of the same ports, through
   `--connect-tcp` and `--bind-tcp`, and, on a version 10 kernel, `--connect-udp` and

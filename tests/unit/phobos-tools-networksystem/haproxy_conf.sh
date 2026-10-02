@@ -190,4 +190,41 @@ else
   skip "a generated config is valid to haproxy" "haproxy is not installed here; the acceptance suite checks it in the image"
 fi
 
+echo
+echo "== the names a udp rule holds, and the rules the guard is handed for them =="
+printf 'tcp.example 443\nudp.example 53 udp\nudp.example 5353 udp\n8.8.8.8 53 udp\nlocalhost 53 udp\n* 123 udp\n10.0.0.0/8 53 udp\n# c.example 9 udp\n' > "$WORK/udp-names.rules"
+got="$(udp_connect_names "$WORK/udp-names.rules" | paste -sd' ')"
+[[ "$got" == "udp.example" ]] && ok "only a host name in a udp row is listed, once, and no address, range, star or tcp name" \
+  || bad "only a host name in a udp row is listed, once, and no address, range, star or tcp name" "udp.example" "$got"
+got="$(exact_connect_names "$WORK/udp-names.rules" | paste -sd' ')"
+[[ "$got" == "tcp.example" ]] && ok "the broker's names stay the tcp ones, a udp name does not start the broker" \
+  || bad "the broker's names stay the tcp ones, a udp name does not start the broker" "tcp.example" "$got"
+printf 'DNS.example 53 udp\ndns.example 123 udp\nOther.Example 9 udp\n' > "$WORK/udp-case.rules"
+got="$(udp_connect_names "$WORK/udp-case.rules" | paste -sd' ')"
+[[ "$got" == "dns.example other.example" ]] && ok "a name spelled in two cases is one name, listed once in lower case" \
+  || bad "a name spelled in two cases is one name, listed once in lower case" "dns.example other.example" "$got"
+printf 'dns.example 192.0.2.7\nother.example 192.0.2.8\n' > "$WORK/resolved-case"
+expand_udp_name_rules "$WORK/udp-case.rules" "$WORK/resolved-case" "$WORK/guard-case.rules"
+got="$(paste -sd'|' "$WORK/guard-case.rules")"
+[[ "$got" == "192.0.2.7 53 udp|192.0.2.7 123 udp|192.0.2.8 9 udp" ]] \
+  && ok "every spelling of the name gets the one resolved set, on its own port" \
+  || bad "every spelling of the name gets the one resolved set, on its own port" "192.0.2.7 53 udp|192.0.2.7 123 udp|192.0.2.8 9 udp" "$got"
+got="$(udp_connect_names "$WORK/absent.rules")"
+[[ -z "$got" ]] && ok "a missing file names nothing" || bad "a missing file names nothing" "" "$got"
+
+printf 'udp.example 192.0.2.1\nudp.example 2001:db8::1\nother.example 192.0.2.9\n' > "$WORK/resolved"
+expand_udp_name_rules "$WORK/udp-names.rules" "$WORK/resolved" "$WORK/guard.rules"
+got="$(paste -sd'|' "$WORK/guard.rules")"
+want='tcp.example 443|192.0.2.1 53 udp|2001:db8::1 53 udp|192.0.2.1 5353 udp|2001:db8::1 5353 udp|8.8.8.8 53 udp|localhost 53 udp|* 123 udp|10.0.0.0/8 53 udp'
+[[ "$got" == "$want" ]] && ok "a udp name row becomes a row per address on its own port, every other row is kept as it was and the comment is dropped" \
+  || bad "a udp name row becomes a row per address on its own port, every other row is kept as it was" "$want" "$got"
+: > "$WORK/nothing"
+expand_udp_name_rules "$WORK/udp-names.rules" "$WORK/nothing" "$WORK/guard-none.rules"
+got="$(paste -sd'|' "$WORK/guard-none.rules")"
+[[ "$got" == 'tcp.example 443|8.8.8.8 53 udp|localhost 53 udp|* 123 udp|10.0.0.0/8 53 udp' ]] \
+  && ok "a udp name with no resolved address yields no row, so it is denied and never read as a port-only rule" \
+  || bad "a udp name with no resolved address yields no row, so it is denied and never read as a port-only rule" "" "$got"
+expand_udp_name_rules "$WORK/udp-names.rules" "$WORK/resolved" "$WORK/no-such-dir/out"
+[[ $? -ne 0 ]] && ok "a rules file that cannot be written is a failure" || bad "a rules file that cannot be written is a failure" "non-zero" "0"
+
 finish

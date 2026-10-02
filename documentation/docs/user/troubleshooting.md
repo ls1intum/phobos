@@ -263,9 +263,37 @@ policy never named it. Give the tool its scratch directory explicitly.
 
 A run under `--network none` has no resolver at all, and the connect guard refuses a datagram
 to one in any case unless `[connect]` names it. Where the policy names an exact host, Phobos
-maps that name to a loopback placeholder in `/etc/hosts` before the filesystem layer makes
-`/etc` read-only, so the command's own lookup succeeds without a query. A name the policy does
-not mention gets no such entry.
+maps that name in `/etc/hosts` before the filesystem layer makes `/etc` read-only, so the
+command's own lookup succeeds without a query: to a loopback placeholder for a stream rule, and to
+the real addresses the name had at the start for a `udp` rule, which a name held by both kinds of
+rule gets instead of the placeholder. A name the policy does not mention
+gets no such entry.
+
+## A `udp` rule that names a host refuses the run
+
+The network layer resolves such a name once, before the command starts, and ends the run with
+`PHB-ERUNTIME` and one of these messages when it cannot:
+
+- `A udp [connect] rule names a host (...) ... no resolver was given`: pass `--resolver <ip[:port]>`.
+- `A udp [connect] host name could not be resolved through ...`: the line above it from the
+  guard says why, for example that the name has no address, the resolver did not answer in
+  time, or the answer was truncated or held no record of that name. The lookup needs a networked
+  container, so it cannot succeed under `--network none`.
+- `/etc/hosts maps '...' to a different set of addresses than this run needs`: the file already
+  names the host with other addresses, for example from the image or another run that resolved
+  it differently. Remove the stale line, or let that run end first.
+- `Resolving the udp [connect] host names gives N rules, and the connect guard keeps 256`: name
+  fewer hosts or ports. More than 64 names to resolve is refused by the guard in the same way.
+
+## A datagram send is refused with `Permission denied`
+
+The connect guard makes every datagram connect and every send that names a destination itself, and
+refuses what it cannot do faithfully. Besides a destination the allow-list does not name, it refuses a send on a socket it
+did not create, `sendmsg` and `sendmmsg` on any socket that is not a datagram socket it holds
+(a TCP or UNIX socket included), a send with ancillary data, and a send on a socket that was
+never bound unless a `udp` rule or a `[bind]` row of port 0 for `udp` grants an ephemeral bind.
+A datagram of more than 65,535 bytes answers `Message too long`. Run with `--debug` to see which of these the
+guard reports.
 
 ## A rename fails with `EXDEV`
 

@@ -62,7 +62,8 @@ What the filter traps or refuses:
 | Call | Action | Why |
 | --- | --- | --- |
 | `connect` | notify | the decision the guard exists to make |
-| `sendto`, `sendmsg`, `sendmmsg` | notify | a datagram carries its own destination, and TCP Fast Open can open a connection past a `connect` |
+| `sendto` with an address, `sendmsg`, `sendmmsg` | notify | a datagram carries its own destination, and TCP Fast Open can open a connection past a `connect`; the supervisor sends them itself |
+| `sendto` with no address | allow | the send of a connected socket, whose peer the supervisor vetted when it made the connect; the address pointer is a register the command cannot change |
 | `socket` | notify | a raw, packet or ICMP socket is refused before it exists, and a stream socket is created by the supervisor so it can be held |
 | `listen` | notify | the supervisor runs it on its own descriptor for a socket it holds, so a socket never bound cannot become a listener on a port nothing judged |
 | `io_uring_setup` and its siblings | refuse | a second syscall interface that would reach `connect` unseen |
@@ -76,9 +77,22 @@ supervisor, from the address the check read, closes that window. The connected s
 back with `SECCOMP_IOCTL_NOTIF_ADDFD`.
 
 A datagram `connect` or send is different: it sets a default peer or names one, which cannot
-be injected the same way, so it is checked and then allowed through with `CONTINUE`. That is the
-window the caveat above describes, and it is the one place the guard is weaker than for a
-stream.
+be injected the same way, and `CONTINUE` would leave the window the caveat above describes, which
+measured at about one datagram in six reaching an address the allow-list never named. So the
+supervisor never continues one. It creates every datagram socket, keeps its own descriptor for
+the same open file description, copies the address, the data and the lengths out of the command
+with `process_vm_readv` once, checks the copies, and runs the `connect` or `sendto` itself on that
+descriptor, answering with what the kernel answered. Both descriptors name one open file
+description, so a `connect` it makes is the command's own, and the command's later address-less
+`send()` reaches the peer the supervisor vetted. For `sendmmsg` it writes each `msg_len` back with
+`process_vm_writev`, and a write that fails ends the batch, as the kernel does.
+
+The same reason decides what it refuses. `sendmsg` and `sendmmsg` carry their address inside
+memory, so on a socket the supervisor does not hold, TCP and UNIX sockets included, they are
+refused: a second thread could swap a datagram socket under the descriptor and name a
+destination. Ancillary data is refused because it can steer a datagram, and a send that would give
+an unbound socket a source port is refused unless the policy granted one, because the supervisor
+runs outside Landlock.
 
 Reading the destination out of the child's memory uses `process_vm_readv`, which a parent may
 do to its own child in an ordinary container. No capability, no container flag.

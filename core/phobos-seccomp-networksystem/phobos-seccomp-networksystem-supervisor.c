@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "phobos-seccomp-networksystem-supervisor.h"
 
+#include "phobos-seccomp-networksystem-datagram.h"
 #include "phobos-seccomp-networksystem-destination.h"
 #include "phobos-seccomp-networksystem-diagnostics.h"
 #include "phobos-seccomp-networksystem-held-sockets.h"
@@ -29,38 +30,20 @@
 #define SOCK_TYPE_MASK 0xf
 #endif
 
-/* The send flag that opens a connection with the first datagram (TCP Fast Open). It
- * carries a destination past connect(), so the guard refuses it rather than let a send
- * reach a host connect() never vetted. */
-#ifndef MSG_FASTOPEN
-#define MSG_FASTOPEN 0x20000000
-#endif
-
 /* How long the supervisor waits for one connection it makes on the command's behalf. */
 static constexpr int CONNECT_TIMEOUT_MS = 10000;
 /* Where each trapped syscall keeps the arguments the supervisor reads, as the kernel numbers
- * them in struct seccomp_data: connect(fd, address, length), socket(domain, type, protocol),
- * sendto(fd, buffer, length, flags, address, address_length) and
- * sendmmsg(fd, vector, count, flags). */
+ * them in struct seccomp_data: connect(fd, address, length) and socket(domain, type, protocol).
+ * The arguments of the sends are read in the datagram module. */
 static constexpr int CONNECT_ARGUMENT_DESCRIPTOR = 0;
 static constexpr int CONNECT_ARGUMENT_ADDRESS = 1;
 static constexpr int CONNECT_ARGUMENT_LENGTH = 2;
 static constexpr int SOCKET_ARGUMENT_DOMAIN = 0;
 static constexpr int SOCKET_ARGUMENT_TYPE = 1;
 static constexpr int SOCKET_ARGUMENT_PROTOCOL = 2;
-static constexpr int SEND_ARGUMENT_FLAGS = 3;
-static constexpr int SENDTO_ARGUMENT_ADDRESS = 4;
-static constexpr int SENDTO_ARGUMENT_ADDRESS_LENGTH = 5;
-static constexpr int SENDMMSG_ARGUMENT_VECTOR = 1;
-static constexpr int SENDMMSG_ARGUMENT_COUNT = 2;
-static constexpr int SENDMSG_ARGUMENT_HEADER = 1;
-static constexpr int SENDMSG_ARGUMENT_FLAGS = 2;
 /* listen(fd, backlog). */
 static constexpr int LISTEN_ARGUMENT_DESCRIPTOR = 0;
 static constexpr int LISTEN_ARGUMENT_BACKLOG = 1;
-/* The most messages the kernel sends in one sendmmsg call (UIO_MAXIOV); a larger count is
- * cut down to it, so no more entries than it would send are read. */
-static constexpr unsigned int SENDMMSG_MAXIMUM_BATCH = 1024;
 /* A shell reports a command killed by a signal as this plus the signal's number. */
 static constexpr int SIGNALLED_EXIT_BASE = 128;
 
@@ -109,13 +92,10 @@ void answer(int notify_descriptor, struct seccomp_notif_resp *response, __u64 id
     }
 }
 
-/* Let the kernel run the child's own syscall unchanged. Used where the call is outside what
- * this guard governs, so the guard adds nothing: a bare send on a connected socket the connect
- * already vetted, a send to a non-INET address, or an allowed socket(). CONTINUE re-runs the
- * syscall against the child's registers, so for a scalar-only decision (socket, the send flag)
- * there is nothing a second thread could rewrite; a destination behind a pointer is the one
- * case where CONTINUE is best-effort, which is why the send guard is defence in depth beside a
- * no-network container, not a boundary. */
+/* Let the kernel run the child's own syscall unchanged. Used only for a socket() the guard does
+ * not govern. CONTINUE re-runs the syscall against the child's registers, so it is sound only for
+ * a decision made from scalar arguments, which a second thread cannot rewrite; nothing that
+ * names a destination behind a pointer is ever continued. */
 static void answer_continue(int notify_descriptor, struct seccomp_notif_resp *response, __u64 id) {
     memset(response, 0, sizeof(*response));
     response->id = id;
@@ -347,8 +327,8 @@ bool connect_on_behalf(int notify_descriptor, struct seccomp_notif_resp *respons
  * very boundary a raw connect must not reach, so an unknown provenance fails closed. For a stream
  * socket, make the connection here and inject it, so the child's connect() returns already
  * connected to the address the check read and a second thread cannot redirect it. For a datagram
- * socket connect() only sets the default peer, which cannot be injected, so the checked call is
- * let through. */
+ * socket connect() only sets the default peer, which cannot be injected, so the datagram module
+ * makes the connect itself on the descriptor it holds for that socket. */
 static void service_connect(int notify_descriptor, struct seccomp_notif *request,
                             struct seccomp_notif_resp *response) {
     int target_descriptor = (int)request->data.args[CONNECT_ARGUMENT_DESCRIPTOR];
@@ -394,16 +374,17 @@ static void service_connect(int notify_descriptor, struct seccomp_notif *request
         }
         return;
     }
-    answer_continue(notify_descriptor, response, request->id);
+    service_datagram_connect(notify_descriptor, response, request->id, inode, &storage, length);
 }
 
 /* Decide one trapped socket(): refuse the socket kinds that reach the network outside the
  * connect and send hooks, a packet socket, a raw socket and an ICMP datagram socket (which any
  * user may open here because the container's ping_group_range spans every group). An INET
- * stream or datagram socket is created here and injected, so its type is tracked. A stream or
- * sequenced-packet socket of the INET, INET6 or UNIX family is also held: it is the only kind
- * that can listen, and a listen() is only ever run by this supervisor, on a socket it made and
- * still holds. Any other socket is left to the kernel. The arguments are the kernel's own scalar
+ * stream or datagram socket is created here and injected, so its type is tracked. A datagram
+ * socket is held, because every datagram connect and send is made by this supervisor on it. A
+ * stream or sequenced-packet socket of the INET, INET6 or UNIX family is held too: it is the only
+ * kind that can listen, and a listen() is only ever run by this supervisor, on a socket it made
+ * and still holds. Any other socket is left to the kernel. The arguments are the kernel's own scalar
  * copy in the notification, so there is nothing to read from the child and nothing a second
  * thread could rewrite. */
 static void service_socket(int notify_descriptor, struct seccomp_notif *request,
@@ -457,11 +438,7 @@ static void service_socket(int notify_descriptor, struct seccomp_notif *request,
     if (tracked) {
         record_socket_type(inode, base_type == SOCK_STREAM ? FD_TYPE_STREAM : FD_TYPE_DGRAM);
     }
-    if (may_listen) {
-        hold_socket(inode, made);
-    } else {
-        close(made);
-    }
+    hold_socket(inode, made);
     answer(notify_descriptor, response, request->id, allocated, 0);
 }
 
@@ -480,21 +457,15 @@ void configure_ephemeral_listen(bool allowed) {
  * from the supervisor's descriptor, which is the command's socket, so nothing the command can
  * rewrite is read. Any other family, or an address the kernel cannot report, is refused. */
 static bool listen_permitted(int held_descriptor) {
-    struct sockaddr_storage bound;
-    memset(&bound, 0, sizeof(bound));
-    socklen_t length = sizeof(bound);
-    if (getsockname(held_descriptor, (struct sockaddr *)&bound, &length) != 0) {
+    int family;
+    uint16_t port;
+    if (!socket_local_port(held_descriptor, &family, &port)) {
         return false;
     }
-    if (bound.ss_family == AF_UNIX) {
+    if (family == AF_UNIX) {
         return true;
     }
-    uint16_t port;
-    if (bound.ss_family == AF_INET) {
-        port = ntohs(((const struct sockaddr_in *)&bound)->sin_port);
-    } else if (bound.ss_family == AF_INET6) {
-        port = ntohs(((const struct sockaddr_in6 *)&bound)->sin6_port);
-    } else {
+    if (family != AF_INET && family != AF_INET6) {
         return false;
     }
     return port != 0 || ephemeral_listen_allowed;
@@ -542,161 +513,6 @@ static void service_listen(int notify_descriptor, struct seccomp_notif *request,
     answer(notify_descriptor, response, request->id, 0, 0);
 }
 
-/* Answer one send whose destination has already been read: let a non-INET destination through
- * (a UNIX or netlink address is not the network this guard governs), refuse an INET destination
- * the allow-list does not name or one that could not be read, and otherwise let the kernel run
- * the send. A send that carries its own destination is judged as UDP: the destination-bearing
- * sends are the datagram calls, so the allow-list is consulted for the UDP transport. A sendto
- * with a destination on a stream socket is unusual and is deliberately judged the same way, so it
- * is refused unless a UDP rule names the destination rather than passing on a TCP rule. */
-static void forward_or_refuse(int notify_descriptor, struct seccomp_notif *request,
-                              struct seccomp_notif_resp *response,
-                              const struct sockaddr_storage *storage, socklen_t length) {
-    if (length == 0) {
-        answer(notify_descriptor, response, request->id, 0, -EACCES);
-        return;
-    }
-    struct destination where = read_destination(storage);
-    if (where.family != AF_INET && where.family != AF_INET6) {
-        answer_continue(notify_descriptor, response, request->id);
-        return;
-    }
-    if (!connection_permitted(where.family, where.address, where.port, true)) {
-        log_verbose("refusing a datagram to a destination the allow-list does not name, port %u",
-                    (unsigned)where.port);
-        answer(notify_descriptor, response, request->id, 0, -EACCES);
-        return;
-    }
-    answer_continue(notify_descriptor, response, request->id);
-}
-
-/* The flags argument of the two send syscalls the guard traps, sendto and sendmmsg, is the
- * fourth. sendmsg is not trapped (see the filter), so it is not among them. */
-static unsigned int send_flags(const struct seccomp_notif *request) {
-    return (unsigned int)request->data.args[SEND_ARGUMENT_FLAGS];
-}
-
-/* Decide one trapped sendto: a call with no destination is a send on an already-connected
- * socket, whose connect() the guard decided when it was made, so it is not re-examined here; a
- * call carrying a destination has that destination read and judged. */
-static void service_sendto(int notify_descriptor, struct seccomp_notif *request,
-                           struct seccomp_notif_resp *response) {
-    uintptr_t address_pointer = (uintptr_t)request->data.args[SENDTO_ARGUMENT_ADDRESS];
-    socklen_t claimed_length = (socklen_t)request->data.args[SENDTO_ARGUMENT_ADDRESS_LENGTH];
-    if (address_pointer == 0 || claimed_length == 0) {
-        answer_continue(notify_descriptor, response, request->id);
-        return;
-    }
-    struct sockaddr_storage storage;
-    memset(&storage, 0, sizeof(storage));
-    socklen_t length = read_peer_address(request->pid, address_pointer, claimed_length, &storage);
-    if (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_ID_VALID, &request->id) != 0) {
-        return;
-    }
-    forward_or_refuse(notify_descriptor, request, response, &storage, length);
-}
-
-/* Decide one trapped sendmmsg: every message in the batch is judged, because one CONTINUE
- * lets the kernel send them all, so a batch is refused whole if any entry names an INET
- * destination the allow-list does not name. The count is capped at the kernel's own limit. */
-static void service_sendmmsg(int notify_descriptor, struct seccomp_notif *request,
-                             struct seccomp_notif_resp *response) {
-    uintptr_t vector = (uintptr_t)request->data.args[SENDMMSG_ARGUMENT_VECTOR];
-    unsigned int count = (unsigned int)request->data.args[SENDMMSG_ARGUMENT_COUNT];
-    if (count > SENDMMSG_MAXIMUM_BATCH) {
-        count = SENDMMSG_MAXIMUM_BATCH;
-    }
-    for (unsigned int index = 0; index < count; index++) {
-        struct mmsghdr entry;
-        memset(&entry, 0, sizeof(entry));
-        uintptr_t entry_pointer = vector + (uintptr_t)index * sizeof(struct mmsghdr);
-        bool read_ok = read_child_bytes(request->pid, entry_pointer, &entry, sizeof(entry));
-        if (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_ID_VALID, &request->id) != 0) {
-            return;
-        }
-        if (!read_ok) {
-            answer(notify_descriptor, response, request->id, 0, -EACCES);
-            return;
-        }
-        if (entry.msg_hdr.msg_name == NULL || entry.msg_hdr.msg_namelen == 0) {
-            continue;
-        }
-        struct sockaddr_storage storage;
-        memset(&storage, 0, sizeof(storage));
-        socklen_t length = read_peer_address(request->pid, (uintptr_t)entry.msg_hdr.msg_name,
-                                             (socklen_t)entry.msg_hdr.msg_namelen, &storage);
-        if (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_ID_VALID, &request->id) != 0) {
-            return;
-        }
-        if (length == 0) {
-            answer(notify_descriptor, response, request->id, 0, -EACCES);
-            return;
-        }
-        struct destination where = read_destination(&storage);
-        if ((where.family == AF_INET || where.family == AF_INET6)
-            && !connection_permitted(where.family, where.address, where.port, true)) {
-            log_verbose("refusing a sendmmsg batch: entry %u names a disallowed destination", index);
-            answer(notify_descriptor, response, request->id, 0, -EACCES);
-            return;
-        }
-    }
-    answer_continue(notify_descriptor, response, request->id);
-}
-
-/* Decide one trapped sendmsg: refuse TCP Fast Open, which carries a destination past connect(),
- * then read the destination out of the message header and judge it as a datagram send. A header
- * with no name is a send on a connected socket, whose connect the guard already decided, so it
- * continues; a header naming an INET destination the allow-list does not name is refused. The
- * flags of sendmsg are its third argument, unlike sendto and sendmmsg whose flags are the
- * fourth, so this reads them itself rather than through send_flags. */
-static void service_sendmsg(int notify_descriptor, struct seccomp_notif *request,
-                            struct seccomp_notif_resp *response) {
-    if ((unsigned int)request->data.args[SENDMSG_ARGUMENT_FLAGS] & MSG_FASTOPEN) {
-        log_verbose("refusing a sendmsg with MSG_FASTOPEN, which opens a connection past connect()");
-        answer(notify_descriptor, response, request->id, 0, -EACCES);
-        return;
-    }
-    struct msghdr header;
-    memset(&header, 0, sizeof(header));
-    uintptr_t header_pointer = (uintptr_t)request->data.args[SENDMSG_ARGUMENT_HEADER];
-    bool read_ok = read_child_bytes(request->pid, header_pointer, &header, sizeof(header));
-    if (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_ID_VALID, &request->id) != 0) {
-        return;
-    }
-    if (!read_ok) {
-        answer(notify_descriptor, response, request->id, 0, -EACCES);
-        return;
-    }
-    if (header.msg_name == NULL || header.msg_namelen == 0) {
-        answer_continue(notify_descriptor, response, request->id);
-        return;
-    }
-    struct sockaddr_storage storage;
-    memset(&storage, 0, sizeof(storage));
-    socklen_t length = read_peer_address(request->pid, (uintptr_t)header.msg_name,
-                                         (socklen_t)header.msg_namelen, &storage);
-    if (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_ID_VALID, &request->id) != 0) {
-        return;
-    }
-    forward_or_refuse(notify_descriptor, request, response, &storage, length);
-}
-
-/* Decide one trapped send: refuse TCP Fast Open outright, since it carries a destination past
- * connect(), then judge the destination by the send syscall it came from. */
-static void service_send(int notify_descriptor, struct seccomp_notif *request,
-                         struct seccomp_notif_resp *response) {
-    if (send_flags(request) & MSG_FASTOPEN) {
-        log_verbose("refusing a send with MSG_FASTOPEN, which opens a connection past connect()");
-        answer(notify_descriptor, response, request->id, 0, -EACCES);
-        return;
-    }
-    if (request->data.nr == __NR_sendto) {
-        service_sendto(notify_descriptor, request, response);
-        return;
-    }
-    service_sendmmsg(notify_descriptor, request, response);
-}
-
 void service_one(int notify_descriptor, struct seccomp_notif *request,
                  struct seccomp_notif_resp *response, size_t request_size) {
     memset(request, 0, request_size);
@@ -715,12 +531,9 @@ void service_one(int notify_descriptor, struct seccomp_notif *request,
         service_listen(notify_descriptor, request, response);
         return;
     }
-    if (request->data.nr == __NR_sendto || request->data.nr == __NR_sendmmsg) {
-        service_send(notify_descriptor, request, response);
-        return;
-    }
-    if (request->data.nr == __NR_sendmsg) {
-        service_sendmsg(notify_descriptor, request, response);
+    if (request->data.nr == __NR_sendto || request->data.nr == __NR_sendmmsg
+        || request->data.nr == __NR_sendmsg) {
+        service_datagram_send(notify_descriptor, request, response);
         return;
     }
     answer(notify_descriptor, response, request->id, 0, -EACCES);

@@ -36,9 +36,24 @@ rest exists to take privileges away. None of the following is a vulnerability.
   carry a `udp` transport marker: the guard enforces it for the UDP transport apart from TCP, and
   Landlock's `--connect-udp`/`--bind-udp` (the version-10 UDP rights) are its second, kernel-enforced
   expression. UDP needs Landlock version 10, so a udp rule is refused on an older kernel rather than
-  left unenforced. Host-level UDP egress beyond the allow-list (a udp rule may name only an address
-  or a range, not a host name), and external egress in general, are still a container started with
-  `--network none`.
+  left unenforced. A udp rule may name an exact host: a datagram carries no TLS host name for the
+  egress broker to read, so the network layer resolves the name once, before the command starts,
+  through the resolver the operator gave, hands the guard a rule for each address (at most sixteen) and
+  shows the command the same addresses in `/etc/hosts`. The rule is held to what the name led to at
+  the start of the run, which is a snapshot: an address the name gains later is not reachable, and
+  one it loses stays reachable until the run ends. The lookup is the guard's own, in a mode that
+  runs outside the sandbox before the command, reads the one answer a resolver gives with every
+  length checked, takes an address only from a record that belongs to the name asked or to an alias
+  chain that leads from it, and refuses a truncated or malformed answer, a name that does not resolve
+  and an answer to another question; it asks only the resolver given, never `/etc/resolv.conf`. The
+  name's owner decides which addresses it leads to, as for a TCP name, so a name that leads to a
+  loopback or private address allows datagrams there. A name is mapped in `/etc/hosts` only where the file
+  holds none of it yet or exactly the addresses this run resolved, whoever's lines they are, because
+  otherwise the command, or the command of another run that pinned the name, could be handed an
+  address its own guard denies; the run is refused too where the addresses add up to more rules than
+  the guard keeps. A name written in two cases is resolved once. External
+  egress in general is still a container started with `--network none`, and resolving needs a
+  networked one, so a name in a udp rule assumes the same posture as one in a tcp rule.
 - `docker/prune_phase/` runs the discovery phase, which deliberately breaks a build over and
   over: it hides a directory, runs the tests, and concludes from the failure that the
   directory was needed. Its orchestrator therefore starts processes and interprets their
@@ -103,6 +118,32 @@ the same class as the filesystem or egress layers, and enabling it changes the r
   A swap of another socket under the descriptor cannot create a listener, because the guard never
   lets the kernel run the command's own `listen()`. With `--no-networksystem-restriction` the
   guard is absent and so is this.
+- **The connect guard makes every datagram connect and send itself.** A destination behind a
+  pointer cannot be checked and then left to the kernel: re-running the call reads the pointer
+  again, and a second thread of the command can show the check one address and the kernel
+  another. Measured against a destination that thread rewrites, that sent about one datagram in six
+  to an address the allow-list did not name. So the guard copies the address, the data and the
+  lengths out of the command once, checks the copies, and sends from them on its own descriptor
+  for the very socket the command holds, never letting the call continue. The datagram `connect()`
+  is made the same way, which is why the command's own address-less `send()` then reaches a peer
+  the guard vetted, and a `sendto()` without an address is the one send the filter lets through.
+  The guard enforces the destination port and the source port itself, because it runs outside
+  Landlock: a connect or send on a socket that was never bound is refused unless the policy grants
+  an ephemeral UDP bind (`--allow-ephemeral-udp-bind`, set by the network layer for a udp `[bind]`
+  row of port 0 or any udp `[connect]` rule), since the kernel would give it a source port nobody
+  judged. This costs, and the costs are the price of closing the race rather than defects:
+  a datagram socket stays held by the guard after the command closes it until the table of 512
+  held sockets evicts it, so a port it was bound to stays taken and datagrams queued for it stay in
+  memory; a send on a socket the guard does not hold (inherited, received over a descriptor, or
+  evicted) is refused; `sendmsg` and `sendmmsg` are refused on every socket the guard does not hold,
+  which includes TCP and UNIX sockets, because a second thread could swap a datagram socket
+  under such a descriptor and name a destination; a send with ancillary data, a flag the guard
+  cannot pass on (`MSG_ZEROCOPY`, `MSG_OOB`), a datagram beyond 64 KiB and a `sendto` or
+  `sendmsg` with a UNIX address are refused; and a blocking socket that cannot take a datagram is
+  waited on for a second at most before the answer is `EAGAIN`. The guard serves one notification
+  at a time, so a slow socket delays every other call of the command by that second at most.
+  `tests/integration/seccomp_networksystem.sh` measures all four calls against the rewritten
+  destination, with a control without the guard that reaches it.
 - **Bind is closed unless a `[bind]` row opens it, as far as the kernel can close it.** The network
   layer always applies a network-only Landlock ruleset that handles TCP and UDP bind with nothing
   granted, so a run with no `[bind]` rule, or given no `--config`, binds and listens on nothing.

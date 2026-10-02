@@ -27,6 +27,10 @@ the process; the Landlock port rules, on a network-only ruleset of its own; and,
 [connect] rule names a host, an egress broker that checks the TLS host name the guard cannot
 see. An [accept] rule additionally fronts a listener with an inbound filter.
 
+A udp [connect] rule that names a host cannot be held to it at send time, so the layer resolves
+the name once before the command starts, through --resolver, holds the rule to the addresses it
+had then and shows the command the same addresses in /etc/hosts.
+
 When the command has ended, it stops the egress broker and the inbound filter it started, and
 the lines it added to /etc/hosts for an exact [connect] name are removed with the specification
 directory, so a run leaves neither behind.
@@ -50,9 +54,10 @@ OPTIONS
                               (default: "${HERE}/phobos-landlock-filesystem-and-networksystem").
   --haproxy-bin <path>        The egress broker and the inbound filter (default: haproxy).
   --resolver <ip[:port]>      The resolver the broker resolves an exact [connect] host name
-                              through, the default DNS port being used when none is given.
-                              An exact-name rule without a resolver is refused rather than
-                              run without host-name enforcement.
+                              through, and the one a udp [connect] host name is resolved
+                              through once at the start, the default DNS port being used when
+                              none is given. An exact-name rule without a resolver is refused
+                              rather than run without host-name enforcement.
   --config <file>, -c <file>  Standalone mode: an exercise configuration to build a
                               specification from. May be given repeatedly.
   --spec-parent <dir>         Standalone mode only: where that specification directory is
@@ -203,12 +208,62 @@ if [[ ! -f "$GUARD_BIN" || ! -x "$GUARD_BIN" ]]; then
 fi
 guard_command=( "$GUARD_BIN" )
 if (( PHB_DEBUG_ENABLED )); then guard_command+=( --verbose ); fi
+
+# A udp rule that names a host cannot be held to it at send time, because a datagram carries no TLS
+# host name for the egress broker to read. The name is therefore resolved once, now, before the
+# command runs, by the guard in its resolve mode and through the resolver given, never through
+# /etc/resolv.conf. The guard is handed a rule for each address, and the command is shown the same
+# addresses in /etc/hosts, so the two cannot disagree about where the name leads. The answer is a
+# snapshot for the run: an address the name gains afterwards is not followed. Every step is refused
+# when it cannot be met, so a run never keeps a name rule it could not tie to an address: a name
+# that does not resolve, more rules than the guard keeps, and an /etc/hosts line that maps the name
+# somewhere the lookup did not.
+GUARD_RULES="$RULES"
+mapfile -t udp_names < <(udp_connect_names "$RULES")
+if (( ${#udp_names[@]} > 0 )); then
+  if [[ -z "$RESOLVER_OPT" ]]; then
+    report "A udp [connect] rule names a host (${udp_names[*]}), which is resolved once before the command starts, but no resolver was given; pass --resolver <ip[:port]>. Refusing rather than run with a name rule that holds to nothing. (PHB-ERUNTIME)"
+    exit "${PHB_ERUNTIME}"
+  fi
+  _log "NOTICE: a udp [connect] rule names a host (${udp_names[*]}), so it is resolved once now through ${RESOLVER_OPT} and the rule is held to the addresses it has now. This assumes a NETWORKED container; in a --network none container the lookup cannot be made."
+  resolve_flags=()
+  if (( PHB_DEBUG_ENABLED )); then resolve_flags+=( --verbose ); fi
+  if ! udp_resolved="$("$GUARD_BIN" "${resolve_flags[@]}" --resolve --resolver "$RESOLVER_OPT" -- "${udp_names[@]}")"; then
+    report "A udp [connect] host name could not be resolved through ${RESOLVER_OPT}; refusing rather than run with a name rule that holds to nothing. (PHB-ERUNTIME)"
+    exit "${PHB_ERUNTIME}"
+  fi
+  GUARD_RULES="${SPEC_DIR}/${PHB_SPEC_GUARD_RULES}"
+  udp_resolved_file="$(new_scratch_file phobos-udp-resolved.XXXXXX)"
+  printf '%s\n' "$udp_resolved" > "$udp_resolved_file"
+  expand_udp_name_rules "$RULES" "$udp_resolved_file" "$GUARD_RULES"
+  rm -f "$udp_resolved_file"
+  guard_rule_count="$(grep -c . "$GUARD_RULES" || true)"
+  if (( guard_rule_count > PHB_GUARD_RULES_MAXIMUM )); then
+    report "Resolving the udp [connect] host names gives ${guard_rule_count} rules, and the connect guard keeps ${PHB_GUARD_RULES_MAXIMUM}; the rest would be dropped without a word. Name fewer hosts or ports. (PHB-ERUNTIME)"
+    exit "${PHB_ERUNTIME}"
+  fi
+  if ! write_resolved_hosts /etc/hosts "$SPEC_DIR" "$udp_resolved"; then
+    report "Could not write /etc/hosts to map the udp [connect] names to the addresses they resolved to; refusing rather than run with names the command cannot resolve. (PHB-ERUNTIME)"
+    exit "${PHB_ERUNTIME}"
+  fi
+fi
 if (( want_broker )); then
   # An exact [connect] name is bound to its own address by the broker, which resolves it through
   # the given resolver, and is mapped to a placeholder in /etc/hosts so the command can resolve it
   # without a DNS query the guard would refuse. Both are refused-closed when they cannot be met, so
   # a run never silently loses the host-name enforcement it asked for.
   mapfile -t exact_names < <(exact_connect_names "$RULES")
+  # A name a udp rule holds is mapped to its real addresses above, and a placeholder for the same
+  # name would make a datagram sent to it go nowhere, so it gets no placeholder. A TCP connection
+  # to a real address is bound by the name as well, since the broker resolves it itself. Names are
+  # compared without regard to case, as a hosts lookup does.
+  declare -A udp_held=()
+  for name in "${udp_names[@]}"; do udp_held["${name,,}"]=1; done
+  tcp_only_names=()
+  for name in "${exact_names[@]}"; do
+    [[ -n "${udp_held[${name,,}]:-}" ]] || tcp_only_names+=( "$name" )
+  done
+  exact_names=( "${tcp_only_names[@]}" )
   if (( ${#exact_names[@]} > 0 )); then
     if [[ -z "$RESOLVER_OPT" ]]; then
       report "The [connect] allow-list names an exact host, which the egress broker binds by resolving it, but no resolver was given; pass --resolver <ip[:port]>. Refusing rather than run without host-name enforcement. (PHB-ERUNTIME)"
@@ -249,7 +304,10 @@ fi
 if bind_rules_grant_ephemeral_tcp "${SPEC_DIR}/bind.rules"; then
   guard_command+=( --allow-ephemeral-listen )
 fi
-guard_command+=( --rules "$RULES" -- )
+if ephemeral_udp_bind_granted "${SPEC_DIR}/bind.rules" "$RULES"; then
+  guard_command+=( --allow-ephemeral-udp-bind )
+fi
+guard_command+=( --rules "$GUARD_RULES" -- )
 
 # The Landlock port rules are the kernel-enforced half of the network boundary, and this
 # layer applies them itself so that the network restriction is whole here rather than split

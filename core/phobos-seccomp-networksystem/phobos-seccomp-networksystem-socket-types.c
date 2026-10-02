@@ -5,6 +5,10 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+
 /* Long enough for "/proc/<pid>/fd/<descriptor>" and for the "socket:[<inode>]" it points to. */
 static constexpr size_t PROC_FD_LINK_LENGTH = 64;
 
@@ -63,6 +67,23 @@ uint64_t fd_socket_inode(pid_t owner_pid, int descriptor) {
         return 0;
     }
     return (uint64_t)inode;
+}
+
+bool socket_local_port(int descriptor, int *family, uint16_t *port) {
+    struct sockaddr_storage bound;
+    memset(&bound, 0, sizeof(bound));
+    socklen_t length = sizeof(bound);
+    if (getsockname(descriptor, (struct sockaddr *)&bound, &length) != 0) {
+        return false;
+    }
+    *port = 0;
+    if (bound.ss_family == AF_INET) {
+        *port = ntohs(((const struct sockaddr_in *)&bound)->sin_port);
+    } else if (bound.ss_family == AF_INET6) {
+        *port = ntohs(((const struct sockaddr_in6 *)&bound)->sin6_port);
+    }
+    *family = bound.ss_family;
+    return true;
 }
 
 #ifdef PHOBOS_CONNECT_GUARD_UNIT_TEST

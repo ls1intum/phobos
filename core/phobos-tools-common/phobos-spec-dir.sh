@@ -41,6 +41,11 @@ PHB_SPEC_MARKER=".phobos-owned-spec"
 # maps no name writes none, and its clean-up never opens the hosts file.
 PHB_SPEC_HOSTS_RECORD="hosts.record"
 
+# The allow-list the connect guard reads when a udp [connect] rule names a host: net.rules with each
+# such name replaced by one rule for every address it resolved to. The network layer writes it
+# beside net.rules, so it is listed in PHB_SPEC_FILES and removed with the directory.
+PHB_SPEC_GUARD_RULES="net.guard.rules"
+
 # The name, before a random suffix, of the copy remove_run_hosts_entries filters the hosts file into
 # inside the specification directory. A clean-up killed while the copy exists leaves it behind, so
 # remove_owned_spec_dir deletes any such copy rather than find the directory not empty for ever.
@@ -58,7 +63,7 @@ PHB_HOSTS_LOCK="/run/lock/phobos-hosts.lock"
 PHB_HOSTS_LOCK_WAIT_SECONDS=10
 
 # The files write_spec creates, the only ones remove_owned_spec_dir deletes.
-PHB_SPEC_FILES="read.paths execute.paths write.paths create.paths delete.paths ipc.paths symlink.paths refer.paths tail.flags net.rules bind.rules accept.rules timeout.sec limits.conf"
+PHB_SPEC_FILES="read.paths execute.paths write.paths create.paths delete.paths ipc.paths symlink.paths refer.paths tail.flags net.rules net.guard.rules bind.rules accept.rules timeout.sec limits.conf"
 
 # The subdirectory phobos.sh keeps its own scratch files in, so they live under the
 # specification directory and are removed with it rather than left in /tmp. phobos.sh ends

@@ -56,10 +56,10 @@ Phobos filters outbound stream `connect()` from outside the process, at the secc
 Landlock boundaries, and interposes no library call inside the process. Three things sit
 outside that:
 
-- **Host-level datagram egress.** A `udp` rule in `[connect]` may name an address, a range or
-  `*`, or the name `localhost`, never a host name that has to be resolved. Host enforcement
-  rests on the Transport Layer Security (TLS) host name, which is a stream concept, so datagram
-  traffic beyond the allow-list is governed by the container.
+- **Host-level datagram egress beyond the allow-list.** A `udp` rule in `[connect]` that names a
+  host is held to the addresses the name had when the run began, because a datagram carries no
+  Transport Layer Security (TLS) host name to check. An address the name gains later is not
+  reachable through that rule, and the container's isolation is the boundary beyond it.
 - **Inbound connections no `[accept]` rule fronts.** The inbound filter covers the ports it is
   given, on the Transmission Control Protocol only.
 - **Everything on a kernel below Landlock version 10**, where the UDP rights do not exist. A
@@ -87,14 +87,40 @@ addresses the rule names. Three limits come with it:
   handshake, and network address translation makes it coarse. Treat it as a filter, never as an
   identity.
 
-## A datagram destination is checked, and a second thread can race the check
+## What it costs that the guard sends the datagrams itself
 
-The connect guard reads a datagram's destination from the command's memory, checks it, and lets
-the kernel run the call, which reads that memory again. A second thread of the command can change
-the address in between. Measured in an ordinary container, about one send in six reached an
-address the allow-list never named. The port stays held by Landlock on a version 10 kernel, so
-this concerns the address only. Treat a `udp` address rule as defence in depth, and rely on the
-container's network isolation against a hostile command.
+The connect guard makes every datagram `connect()` and every `sendto()`, `sendmsg()` and
+`sendmmsg()` that names a destination on a socket it created and still holds, from copies it took
+of the address and the data once. A `sendto()` with no address is the one send it lets through
+untouched, since it is the send of a connected socket, whose peer the guard vetted when it made the
+connect; on a socket inherited from outside, already connected, it goes to the peer chosen before
+the sandbox. The copying closes the race in which a second thread rewrote the address between
+the check and the kernel's own read, which sent about one datagram in six to an address the
+allow-list never named. It has costs, and they are the price of closing it:
+
+- A datagram socket stays held by the guard after the command closes it, until the table of 512
+  held sockets, which the sockets that can listen share, is full and this one is the least
+  recently used. A port it was bound to stays taken, and datagrams queued for it stay in memory.
+- A send on a socket the guard did not create, an inherited one, one received over a descriptor
+  or one it has evicted, is refused.
+- `sendmsg` and `sendmmsg` are refused on every socket that is not a datagram socket the guard
+  still holds, TCP and UNIX sockets included, because a second thread could swap a datagram socket
+  under such a descriptor.
+- A send with ancillary data, a flag the guard cannot pass on (`MSG_ZEROCOPY`, `MSG_OOB`), a
+  datagram of more than 65,535 bytes, a message of more than 1,024 segments, and a `sendto` or
+  `sendmsg` with a UNIX address are refused.
+- A blocking socket that cannot take a datagram is waited on for one second at most per message,
+  then answered `EAGAIN`. The guard serves one call at a time, and a `sendmmsg` of many messages
+  can wait once for each, so a slow socket delays every other call of the command meanwhile.
+- A connect or send on a socket that was never bound is refused unless the policy grants an
+  ephemeral UDP bind.
+
+## A host name in a `udp` rule is a snapshot
+
+The addresses of a name in a `udp` rule are the ones it had when the run began, and the name's
+owner decides which they are, as for a stream name. A name that leads to a loopback or private
+address allows datagrams there. An address the name gains later is not reachable, and one it
+loses stays reachable until the run ends.
 
 ## A kernel too old to close bind leaves it open
 

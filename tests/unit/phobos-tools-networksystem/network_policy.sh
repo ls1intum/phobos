@@ -191,6 +191,23 @@ printf '* 8080\n* 0' > "$WORK/grant.rules"
 printf '* 8080\n' > "$WORK/grant.rules"
 ( source "${CORE}/phobos-tools-common/phobos-common.sh"; bind_rules_grant_ephemeral_tcp "$WORK/grant.rules" ) && bad "explicit ports alone grant no ephemeral listen" "no grant" "granted" || ok "explicit ports alone grant no ephemeral listen"
 ( source "${CORE}/phobos-tools-common/phobos-common.sh"; bind_rules_grant_ephemeral_tcp "$WORK/absent.rules" ) && bad "a missing bind.rules grants nothing" "no grant" "granted" || ok "a missing bind.rules grants nothing"
+printf '8.8.8.8 53 udp\n' > "$WORK/udp.rules"
+printf '8.8.8.8 53\n' > "$WORK/tcp.rules"
+printf '# 53 udp\n\n8.8.8.8 443\n' > "$WORK/commented.rules"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; connect_rules_name_udp "$WORK/udp.rules" ) && ok "a net.rules file with a udp row names a udp [connect] rule" || bad "a net.rules file with a udp row names a udp [connect] rule" "named" "not named"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; connect_rules_name_udp "$WORK/tcp.rules" ) && bad "a tcp-only net.rules names no udp rule" "none" "named" || ok "a tcp-only net.rules names no udp rule"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; connect_rules_name_udp "$WORK/commented.rules" ) && bad "a comment mentioning udp is not a udp rule" "none" "named" || ok "a comment mentioning udp is not a udp rule"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; connect_rules_name_udp "$WORK/absent.rules" ) && bad "a missing net.rules names no udp rule" "none" "named" || ok "a missing net.rules names no udp rule"
+printf '* 0 udp\n' > "$WORK/grant.rules"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; ephemeral_udp_bind_granted "$WORK/grant.rules" "$WORK/tcp.rules" ) && ok "a udp port 0 row lets the kernel choose a udp source port" || bad "a udp port 0 row lets the kernel choose a udp source port" "granted" "no grant"
+printf '* 0' > "$WORK/grant.rules"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; ephemeral_udp_bind_granted "$WORK/grant.rules" "$WORK/tcp.rules" ) && bad "a tcp port 0 row is not a udp source port grant" "no grant" "granted" || ok "a tcp port 0 row is not a udp source port grant"
+printf '* 0 udp' > "$WORK/grant.rules"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; ephemeral_udp_bind_granted "$WORK/grant.rules" "$WORK/tcp.rules" ) && ok "a udp port 0 row grants it, even on a last line with no newline" || bad "a udp port 0 row grants it, even on a last line with no newline" "granted" "no grant"
+printf '* 8080 udp\n' > "$WORK/grant.rules"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; ephemeral_udp_bind_granted "$WORK/grant.rules" "$WORK/udp.rules" ) && ok "any udp [connect] rule grants it, whatever [bind] names" || bad "any udp [connect] rule grants it, whatever [bind] names" "granted" "no grant"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; ephemeral_udp_bind_granted "$WORK/grant.rules" "$WORK/tcp.rules" ) && bad "an explicit udp bind port and tcp rules grant no ephemeral udp bind" "no grant" "granted" || ok "an explicit udp bind port and tcp rules grant no ephemeral udp bind"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; ephemeral_udp_bind_granted "$WORK/absent.rules" "$WORK/absent.rules" ) && bad "missing files grant nothing" "no grant" "granted" || ok "missing files grant nothing"
 printf -- '--chdir /var/tmp/testing-dir\n--minimum-landlock-version 4\n' > "$WORK/tail.flags"
 got="$( source "${CORE}/phobos-tools-common/phobos-common.sh"; tail_minimum_landlock_version "$WORK/tail.flags" )"
 [[ "$got" == "4" ]] && ok "the minimum Landlock version is read from the tail flags" || bad "the minimum Landlock version is read from the tail flags" "4" "$got"
@@ -373,6 +390,85 @@ if [[ "$got" == *"--ephemeral-bind-udp"* ]]; then
   ok "a udp [connect] rule brings the ephemeral udp bind with it, for the source port of a send"
 else
   bad "a udp [connect] rule brings the ephemeral udp bind with it, for the source port of a send" "--ephemeral-bind-udp" "$got"
+fi
+got="$(layer_arguments $'127.0.0.1 * udp\n' "")"
+if [[ "$got" == *"--allow-ephemeral-udp-bind --rules "* ]]; then
+  ok "a udp [connect] rule tells the guard an unbound datagram socket may connect and send"
+else
+  bad "a udp [connect] rule tells the guard an unbound datagram socket may connect and send" "--allow-ephemeral-udp-bind before --rules" "$got"
+fi
+got="$(layer_arguments "" $'* 0 udp\n')"
+if [[ "$got" == *"--allow-ephemeral-udp-bind --rules "* ]]; then
+  ok "a udp port 0 row tells the guard the same"
+else
+  bad "a udp port 0 row tells the guard the same" "--allow-ephemeral-udp-bind before --rules" "$got"
+fi
+got="$(layer_arguments $'1.2.3.4 443\n' $'* 8080\n')"
+if [[ "$got" != *"--allow-ephemeral-udp-bind"* ]]; then
+  ok "a policy with no udp rule and no udp port 0 leaves an unbound datagram socket refused"
+else
+  bad "a policy with no udp rule and no udp port 0 leaves an unbound datagram socket refused" "no --allow-ephemeral-udp-bind" "$got"
+fi
+# A udp rule that names a host is resolved once before the command starts. The cases here stop the
+# run before it reaches /etc/hosts, so they change nothing on the machine: a layer given no
+# resolver, and a guard whose lookup fails, each refuse the run and never start the command.
+failing_resolve_guard="$(mktemp "$WORK/failing-resolve-guard.XXXXXX")"
+cat > "$failing_resolve_guard" <<FAILING
+#!/bin/sh
+for word in "\$@"; do printf '%s\n' "\$word"; done > "$WORK/guard-args"
+exit 125
+FAILING
+chmod +x "$failing_resolve_guard"
+udp_name_spec="$(mktemp -d "$WORK/udp-name-spec.XXXXXX")"
+printf 'dns.example 53 udp\n' > "$udp_name_spec/net.rules"
+rm -f "$WORK/guard-args"
+udp_out="$(bash "$CORE/phobos-networksystem.sh" --connect-guard-bin "$recording_guard" --landlock-bin "$stub_landlock" "$udp_name_spec" -- true 2>&1)"
+udp_rc=$?
+if [[ $udp_rc -eq "${PHB_ERUNTIME}" && "$udp_out" == *"names a host (dns.example)"*"no resolver was given"* && ! -e "$WORK/guard-args" ]]; then
+  ok "a udp rule that names a host with no resolver given refuses the run before the guard is asked anything"
+else
+  bad "a udp rule that names a host with no resolver given refuses the run before the guard is asked anything" "PHB-ERUNTIME, no resolver, guard unused" "exit $udp_rc: $udp_out"
+fi
+udp_name_spec="$(mktemp -d "$WORK/udp-name-spec.XXXXXX")"
+printf 'dns.example 53 udp\nother.example 5353 udp\n8.8.8.8 53 udp\n' > "$udp_name_spec/net.rules"
+udp_out="$(bash "$CORE/phobos-networksystem.sh" --connect-guard-bin "$failing_resolve_guard" --landlock-bin "$stub_landlock" --resolver 192.0.2.53:5353 "$udp_name_spec" -- true 2>&1)"
+udp_rc=$?
+got="$(tr '\n' ' ' < "$WORK/guard-args")"
+if [[ $udp_rc -eq "${PHB_ERUNTIME}" && "$udp_out" == *"could not be resolved through 192.0.2.53:5353"* ]]; then
+  ok "a guard whose lookup fails refuses the run"
+else
+  bad "a guard whose lookup fails refuses the run" "PHB-ERUNTIME, could not be resolved" "exit $udp_rc: $udp_out"
+fi
+if [[ "$got" == "--resolve --resolver 192.0.2.53:5353 -- dns.example other.example " ]]; then
+  ok "the guard is asked in resolve mode, through the given resolver, for each name once and for no address"
+else
+  bad "the guard is asked in resolve mode, through the given resolver, for each name once and for no address" "--resolve --resolver 192.0.2.53:5353 -- dns.example other.example" "$got"
+fi
+# The guard keeps 256 rules and drops the rest without a word, so a lookup that would grow the rules
+# past that is refused before /etc/hosts is touched. The number is the guard's, read from its header.
+guard_maximum="$(sed -n 's/.*MAXIMUM_RULES = \([0-9]*\);.*/\1/p' "$CORE/phobos-seccomp-networksystem/phobos-seccomp-networksystem-rules.h")"
+[[ "$guard_maximum" == "$PHB_GUARD_RULES_MAXIMUM" ]] && ok "the layer's limit on the guard's rules is the guard's own" \
+  || bad "the layer's limit on the guard's rules is the guard's own" "$guard_maximum" "$PHB_GUARD_RULES_MAXIMUM"
+many_resolve_guard="$(mktemp "$WORK/many-resolve-guard.XXXXXX")"
+cat > "$many_resolve_guard" <<'MANY'
+#!/bin/sh
+while [ "$1" != "--" ]; do shift; done
+shift
+for name in "$@"; do
+  n=1
+  while [ "$n" -le 16 ]; do printf '%s 198.51.100.%s\n' "$name" "$n"; n=$((n + 1)); done
+done
+MANY
+chmod +x "$many_resolve_guard"
+udp_name_spec="$(mktemp -d "$WORK/udp-name-spec.XXXXXX")"
+: > "$udp_name_spec/net.rules"
+for count in $(seq 1 17); do printf 'host%s.example 53 udp\n' "$count" >> "$udp_name_spec/net.rules"; done
+udp_out="$(bash "$CORE/phobos-networksystem.sh" --connect-guard-bin "$many_resolve_guard" --landlock-bin "$stub_landlock" --resolver 192.0.2.53 "$udp_name_spec" -- true 2>&1)"
+udp_rc=$?
+if [[ $udp_rc -eq "${PHB_ERUNTIME}" && "$udp_out" == *"gives 272 rules, and the connect guard keeps 256"* ]]; then
+  ok "seventeen names of sixteen addresses give more rules than the guard keeps, and the run is refused"
+else
+  bad "seventeen names of sixteen addresses give more rules than the guard keeps, and the run is refused" "PHB-ERUNTIME, 272 rules" "exit $udp_rc: $udp_out"
 fi
 got="$(layer_arguments "" "" $'--chdir /x\n--minimum-landlock-version 4\n')"
 if [[ "$got" == *"--minimum-landlock-version 4 "* ]]; then

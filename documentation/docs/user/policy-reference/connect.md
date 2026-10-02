@@ -136,13 +136,18 @@ Two limits come with it:
 - **It needs Landlock version 10.** On an older kernel `phobos-landlock-filesystem-and-networksystem` refuses the run with
   `[phobos-landlock-filesystem-and-networksystem] UDP network rules require Landlock version 10` and exit status 125, rather
   than running with the transport left unenforced.
-- **It may not name a host name.** Host enforcement rests on the Transport Layer Security (TLS) host name, which is a
-  stream concept, so a `udp` rule names an address, a range, a loopback name or `*`.
+- **A host name in it is resolved once, at the start.** Host enforcement for a stream rests on the
+  Transport Layer Security (TLS) host name, which a datagram does not carry. The network layer
+  therefore looks the name up before the command starts, through `--resolver`, and holds the rule
+  to the addresses it had then, at most sixteen. The command is shown the same addresses in
+  `/etc/hosts`. An address the name gains later is not followed, and a name that does not resolve
+  refuses the run. A name with a star in it is refused, as for a stream rule.
 
 ## Notes
 
 **An exact name needs a resolver.** The broker binds the name to its own address by resolving
-it, and the network layer refuses the run with `PHB-ERUNTIME` where `--resolver` was not given.
+it, and a `udp` name is resolved once at the start, and the network layer refuses the run with
+`PHB-ERUNTIME` where `--resolver` was not given.
 
 **A name rule assumes a networked container.** The broker has to make the onward connection, so
 a run with `--network none` cannot serve such a rule. The network layer says so on standard

@@ -28,7 +28,7 @@ ${PHOBOS_HOME}/phobos-networksystem.sh --config exercise.cfg -- curl https://exa
 | `--tail-flags-file <file>` | The tail flags file to apply. |
 | `--connect-guard-bin <path>` | The connect guard program to use. |
 | `--haproxy-bin <path>` | The HAProxy program the broker and the inbound filter run as. |
-| `--resolver <ip[:port]>` | The Domain Name System (DNS) resolver the broker resolves an exact host name through. |
+| `--resolver <ip[:port]>` | The Domain Name System (DNS) resolver the broker resolves an exact host name through, and the one a `udp` host name is resolved through once at the start. |
 | `--landlock-bin <path>` | The `phobos-landlock-filesystem-and-networksystem` program that applies the port rules. |
 | `--debug` | Report what the layer builds and runs. |
 
@@ -45,16 +45,23 @@ Letting the kernel continue the original call would re-run it against whatever i
 command's memory at that later moment, so a command could show one address to the check and
 connect to another once it passed.
 
-A **datagram** `connect()` and a datagram send are still checked and then let through to the
-kernel, and that is a known weakness: a second thread of the command can rewrite the address
-between the check and the kernel's own read. Measured in an ordinary container, about one send
-in six reached an address the allow-list never named. For a datagram, the address rule is
-therefore defence in depth. The port is held in the kernel by Landlock, and the boundary
-against a hostile command is the container's own isolation.
+A **datagram** `connect()` and every datagram send that names a destination the supervisor makes
+itself too. A `sendto()` with no address is the send of a connected socket, whose peer the
+supervisor vetted when it made the connect, and the filter lets it through. It creates
+each datagram socket of the command, keeps its own descriptor for the same open file
+description, copies the address, the data and the lengths out of the command once, checks the
+copies and sends from them. The call is never let through to the kernel, because the kernel would
+read the address from the command's memory a second time, and a second thread could rewrite it in
+between. Measured in an ordinary container, about one send in six reached an address the
+allow-list never named before the guard did this, and none does now. The cost is spelled out in
+[what Phobos does not protect against](/user/phobos/what-does-phobos-not-protect-against).
+
+The guard judges the source port itself, because it runs outside Landlock. A connect or send on
+a datagram socket that was never bound is refused unless the policy grants an ephemeral UDP
+bind, which the layer tells it when a `udp` rule or a `[bind]` row of port 0 for `udp` exists.
 
 The guard refuses a raw, packet or ICMP socket before the socket exists, and refuses
-`io_uring`, which would otherwise reach `connect` unseen. An ordinary datagram socket it
-creates and tracks, so that a send through it is judged later.
+`io_uring`, which would otherwise reach `connect` unseen.
 
 The guard never lets the kernel run a command's own `listen()`. The kernel gives a socket that
 was never bound a port of its choosing when it listens, and Landlock has no check for that, so
@@ -70,7 +77,8 @@ The guard enforces a rule by the address and the port it can see:
 | --- | --- |
 | an address literal, or the name `localhost` | that exact address |
 | a range in Classless Inter-Domain Routing (CIDR) notation | that network |
-| a host name it cannot tie to an address | its port alone, with the host left to the broker |
+| a host name in a stream rule it cannot tie to an address | its port alone, with the host left to the broker |
+| a host name in a `udp` rule | the addresses the name had when the run began |
 
 A `connect` of a family the guard does not carry, a UNIX-domain socket among them, is refused
 rather than made outside the Landlock view the command is held to.
@@ -106,6 +114,28 @@ resolution succeeds without a DNS query the guard would refuse.
 Starting the broker changes the run's posture, and the layer says so on standard error: the
 broker's onward connection needs a real network, so a rule that names a host cannot work in a
 container started with `--network none`.
+
+## A host name in a `udp` rule
+
+A datagram carries no TLS host name for the broker to read, so a `udp` rule that names a host is
+held to the addresses the name had at the start of the run. Before the command starts, the layer
+runs the guard in its resolve mode, which asks the resolver you gave for the A and AAAA records of
+each name and nothing else. It never reads `/etc/resolv.conf`. The guard is then given one rule
+for each address, at most sixteen for a name (the IPv4 records first, the rest dropped without
+refusing the run), and the command is shown the same addresses in
+`/etc/hosts`, so the two cannot disagree about where the name leads. The `/etc/hosts` lines hold
+the real addresses, not the loopback placeholder a stream name gets.
+
+The answer is a snapshot. An address the name gains later is not reachable, and one it loses
+stays reachable until the run ends. The lookup reads an answer that whoever controls the name's
+domain influences, so it takes an address only from a record that belongs to the name asked or to
+a chain of aliases that leads from it, and refuses a truncated or malformed answer.
+
+The layer refuses the run with `PHB-ERUNTIME`, before the command starts, where no resolver was
+given, a name does not resolve, `/etc/hosts` already maps the name to a different set of
+addresses, more than 64 names need resolving, or the addresses add up to more rules than the
+guard keeps, 256. A name written in two
+cases is resolved once. The lookup needs a networked container, as a stream name does.
 
 ## The inbound filter
 

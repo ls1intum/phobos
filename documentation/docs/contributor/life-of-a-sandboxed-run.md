@@ -79,22 +79,26 @@ layer that outlives the run, so its trap is what removes the specification direc
 
 ## Stage 4: the network
 
-`phobos-networksystem.sh` does four things and then runs the rest of the chain as a child, so that it is still there to clean up when the command ends:
+`phobos-networksystem.sh` does five things and then runs the rest of the chain as a child, so that it is still there to clean up when the command ends:
 
-1. It reads `net.rules` for rules whose host is a name, and starts the egress broker where it
-   finds one, mapping each exact name to a loopback placeholder in `/etc/hosts` first.
-2. It starts the inbound filter where `accept.rules` is non-empty.
-3. It builds the Landlock port arguments from `net.rules` and `bind.rules` and wraps the rest
+1. It resolves the host names of `udp` rules once, by running the guard in its resolve mode
+   through `--resolver`, writes the guard a `net.guard.rules` with one row per address in place of
+   each name, and maps the name to those real addresses in `/etc/hosts`.
+2. It reads `net.rules` for stream rules whose host is a name, and starts the egress broker where
+   it finds one, mapping each such name to a loopback placeholder in `/etc/hosts` first, except a
+   name a `udp` rule already holds.
+3. It starts the inbound filter where `accept.rules` is non-empty.
+4. It builds the Landlock port arguments from `net.rules` and `bind.rules` and wraps the rest
    of the chain in `phobos-landlock-filesystem-and-networksystem --no-filesystem`, a network-only ruleset that composes with
    the filesystem layer's by intersection. Bind is always closed with `--close-bind`, and only a
    `[bind]` row opens a port.
-4. It puts the connect guard in front of all of that.
+5. It puts the connect guard in front of all of that.
 
 The guard forks. The parent becomes the supervisor and is never restricted; the child installs
 its seccomp filter, hands the notification descriptor up, and execs on. The port ruleset is
 applied inside that child lineage, after the fork, so the supervisor that connects on the
-command's behalf stays unrestricted. The supervisor runs every `listen` itself, on a socket
-it created for the command.
+command's behalf stays unrestricted. The supervisor runs every `listen` itself, and every datagram
+`connect` and every send that names a destination, on a socket it created for the command.
 
 When the command ends, the layer's `EXIT` trap stops the egress broker and the inbound filter it
 started and removes the run's own lines from `/etc/hosts`, then passes the command's status

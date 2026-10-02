@@ -36,6 +36,7 @@
 #include <netinet/in.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/random.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
@@ -79,6 +80,13 @@ static constexpr uint32_t FAKE_COMMAND_PID = 12345;             /* the pid of ev
 static constexpr pid_t FAKE_CHILD_PID = 99;                     /* what the wrapped fork returns on the parent path */
 static constexpr uint64_t FAKE_ADDRESS_POINTER = 0x4000;        /* a command pointer to an address or a message vector */
 static constexpr uintptr_t FAKE_MESSAGE_NAME_POINTER = 0x5000;  /* msg_name inside a faked sendmmsg entry */
+static constexpr uintptr_t FAKE_IOVEC_POINTER = 0x1000000;      /* msg_iov inside a faked message header, beyond any faked sendmmsg vector */
+static constexpr uintptr_t FAKE_DATA_POINTER = 0x2000000;       /* the data a faked send names, up to FAKE_DATA_SPAN bytes */
+static constexpr uintptr_t FAKE_DATA_SPAN = 0x1000000;          /* how far past FAKE_DATA_POINTER a read still counts as data */
+static constexpr size_t FAKE_DATAGRAM_LENGTH = 16;              /* the length of every segment a faked send names */
+static constexpr uint16_t FAKE_DNS_ID = 0xBEEF;                 /* what the wrapped getrandom hands out, so a case knows the id */
+static constexpr size_t DNS_TEST_HEADER = 12;                   /* the length of a DNS message's header */
+static constexpr size_t DNS_TEST_OPT_RECORD = 11;               /* the EDNS0 record the query ends with */
 
 /* The exit status the wrapped execvp ends the child with, in place of a successful exec. */
 static constexpr int EXEC_STAND_IN_EXIT_STATUS = 200;
@@ -101,6 +109,34 @@ enum recvmsg_fault {
     RECVMSG_WRONG_LEVEL,  /* IPPROTO_IP in place of SOL_SOCKET */
     RECVMSG_WRONG_TYPE,   /* SCM_CREDENTIALS in place of SCM_RIGHTS */
     RECVMSG_WRONG_LENGTH  /* a length with no room for a descriptor */
+};
+
+/* What the wrapped resolver answers a query of one record type with. */
+enum dns_behaviour {
+    DNS_NORMAL,             /* two IPv4 addresses for A, one IPv6 address for AAAA */
+    DNS_NO_RECORDS,         /* no error, and no record */
+    DNS_NXDOMAIN,           /* the name does not exist */
+    DNS_SERVFAIL,           /* the resolver failed */
+    DNS_TRUNCATED,          /* the truncation bit set */
+    DNS_SILENT,             /* no answer at all */
+    DNS_WRONG_ID,           /* an answer to another query */
+    DNS_WRONG_QUESTION,     /* an answer whose question is another name */
+    DNS_NOT_A_RESPONSE,     /* the query echoed back, not marked as a response */
+    DNS_NONSTANDARD_OPCODE, /* a response with an opcode that is not a query */
+    DNS_TWO_QUESTIONS,      /* a response that claims two questions */
+    DNS_MANY,               /* twenty addresses of the asked type */
+    DNS_ALIAS,              /* an alias record, then the addresses */
+    DNS_FOREIGN_CLASS,      /* records of a class other than the Internet one */
+    DNS_OTHER_TYPE,         /* an AAAA record in the answer to an A query, and the other way round */
+    DNS_LABEL_OWNER,        /* the normal answer, its records named by labels, not a pointer */
+    DNS_FOREIGN_OWNER,      /* well formed address records that belong to another name */
+    DNS_ALIAS_CHAIN,        /* the address first, then two aliases that lead to it, in the wrong order */
+    DNS_ALIAS_LOOP,         /* two aliases that lead to each other, and an address for neither */
+    DNS_ALIAS_DEEP,         /* a chain of ten aliases, the address at the end of it */
+    DNS_ALIAS_TARGET_CUT,   /* an alias whose target runs past the end of its data */
+    DNS_TOO_MANY_RECORDS,   /* more records than one answer may hold */
+    DNS_OWNER_WITH_DOT,     /* an address record owned by one label that holds a dot, spelling the name asked */
+    DNS_OWNER_WITH_ZERO     /* an address record owned by labels one of which holds a zero byte */
 };
 
 /* What the wrapped readlink answers for a descriptor's /proc link. */
@@ -168,6 +204,7 @@ struct behaviour {
     int msg_name_missing;
     int addr_read_seen;
     unsigned int mmsg_count;
+    int mmsg_vlen_zero;
     int id_valid_seen;
     int id_valid_fail_at;
     int notif_recv_family;
@@ -190,6 +227,46 @@ struct behaviour {
     int getsockname_result;
     int getsockname_family;
     uint16_t getsockname_port;
+    /* the datagrams the supervisor sends itself */
+    int sendto_result;          /* 0: the whole length goes; above 0: that many bytes; below 0: fail */
+    int sendto_errno;
+    int sendto_calls;
+    int sendto_eagain_first;    /* how many calls fail with EAGAIN before one is let go */
+    int sendto_eintr_once;
+    size_t last_sendto_length;
+    int last_sendto_flags;
+    socklen_t last_sendto_name_length;
+    uint16_t last_sendto_port;
+    int fcntl_getfl_value;
+    int last_connect_descriptor;
+    int writev_fail_at;         /* the 1-based write-back that fails, and every one after it; 0 never */
+    int writev_short;           /* when not zero, a write-back that reports fewer bytes than asked */
+    int writev_calls;
+    unsigned int written_lengths[8];
+    int iov_count;              /* the segments a faked message header names */
+    size_t segment_length;      /* the length of each of them */
+    size_t message_iovlen;      /* when not zero, msg_iovlen claims this instead */
+    int message_control;        /* when not zero, the header carries ancillary data */
+    int iov_unreadable;
+    int data_unreadable;
+    size_t sendto_length;       /* the length argument of a faked sendto */
+    socklen_t sendto_address_length;  /* when not zero, the address length argument of a faked sendto */
+    /* the resolve mode's lookups: what each record type is answered with, and what it was asked */
+    int dns_active;             /* set while a resolve case runs, so poll and send know whose they are */
+    int dns_behaviour[2];       /* for A (0) and AAAA (1), a dns_behaviour value */
+    int dns_strays;             /* how many packets that are not the answer arrive before it, per try */
+    int dns_stray_remaining;
+    int dns_cut_to;             /* when not zero, the reply is cut to this many bytes */
+    int dns_count_override;     /* when not negative, the reply's answer count is this */
+    int dns_poke_offset;        /* when not negative, a byte of the first answer is changed */
+    int dns_poke_value;
+    int dns_poke_second;        /* the byte after it, which a pointer needs as its second half */
+    int dns_record_class;       /* when not zero, the class of the records in the reply */
+    int recv_fails;
+    int getrandom_fails;
+    int dns_queries;
+    unsigned char dns_query[512];
+    size_t dns_query_length;
     /* the peer-address read */
     ssize_t process_vm_readv_result;
     /* the outward connection */
@@ -200,6 +277,7 @@ struct behaviour {
     uint16_t last_connect_port;
     int poll_result;
     int poll_eintr_once;
+    int poll_calls;
     short poll_revents;
     int getsockopt_result;
     int getsockopt_so_error;
@@ -249,7 +327,13 @@ static void reset_behaviour(void) {
     socket_types_reset_for_tests();
     held_sockets_reset_for_tests();
     ephemeral_listen_reset_for_tests();
+    ephemeral_udp_bind_reset_for_tests();
     bx->getsockname_family = AF_INET;
+    bx->iov_count = 1;
+    bx->segment_length = FAKE_DATAGRAM_LENGTH;
+    bx->sendto_length = FAKE_DATAGRAM_LENGTH;
+    bx->dns_count_override = -1;
+    bx->dns_poke_offset = -1;
 }
 
 /* ------------------------------------------------------------------- wraps */
@@ -461,6 +545,25 @@ ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned l
     if (bx->process_vm_readv_result == 0) {
         return 0;
     }
+    uintptr_t remote_base = (uintptr_t)remote->iov_base;
+    if (remote_base == FAKE_IOVEC_POINTER) {
+        if (bx->iov_unreadable) {
+            return 0;
+        }
+        struct iovec *segments = local->iov_base;
+        for (size_t index = 0; index < local->iov_len / sizeof(struct iovec); index++) {
+            segments[index].iov_base = (void *)(FAKE_DATA_POINTER + index * FAKE_DATAGRAM_LENGTH);
+            segments[index].iov_len = bx->segment_length;
+        }
+        return (ssize_t)local->iov_len;
+    }
+    if (remote_base >= FAKE_DATA_POINTER && remote_base < FAKE_DATA_POINTER + FAKE_DATA_SPAN) {
+        if (bx->data_unreadable) {
+            return 0;
+        }
+        memset(local->iov_base, 0xAB, local->iov_len);
+        return (ssize_t)local->iov_len;
+    }
     if (bx->mmsg_mode && local->iov_len == sizeof(struct mmsghdr)) {
         struct mmsghdr batch_entry;
         memset(&batch_entry, 0, sizeof(batch_entry));
@@ -468,6 +571,9 @@ ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned l
             batch_entry.msg_hdr.msg_name = (void *)FAKE_MESSAGE_NAME_POINTER;
             batch_entry.msg_hdr.msg_namelen = sizeof(struct sockaddr_in);
         }
+        batch_entry.msg_hdr.msg_iov = (struct iovec *)FAKE_IOVEC_POINTER;
+        batch_entry.msg_hdr.msg_iovlen = bx->message_iovlen != 0 ? bx->message_iovlen : (size_t)bx->iov_count;
+        batch_entry.msg_hdr.msg_controllen = bx->message_control ? 8 : 0;
         memcpy(local->iov_base, &batch_entry, local->iov_len);
         return (ssize_t)local->iov_len;
     }
@@ -478,6 +584,9 @@ ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned l
             header.msg_name = (void *)FAKE_MESSAGE_NAME_POINTER;
             header.msg_namelen = sizeof(struct sockaddr_in);
         }
+        header.msg_iov = (struct iovec *)FAKE_IOVEC_POINTER;
+        header.msg_iovlen = bx->message_iovlen != 0 ? bx->message_iovlen : (size_t)bx->iov_count;
+        header.msg_controllen = bx->message_control ? 8 : 0;
         memcpy(local->iov_base, &header, local->iov_len);
         return (ssize_t)local->iov_len;
     }
@@ -529,12 +638,11 @@ int __wrap_socket(int domain, int type, int protocol) {
 
 int __wrap_fcntl(int fd, int command, ...) {
     (void)fd;
-    (void)command;
     if (bx->fcntl_fails) {
         errno = EINVAL;
         return -1;
     }
-    return 0;
+    return command == F_GETFL ? bx->fcntl_getfl_value : 0;
 }
 
 int __wrap_listen(int fd, int backlog) {
@@ -585,7 +693,7 @@ ssize_t __wrap_readlink(const char *path, char *buffer, size_t size) {
 }
 
 int __wrap_connect(int fd, const struct sockaddr *address, socklen_t length) {
-    (void)fd;
+    bx->last_connect_descriptor = fd;
     bx->connect_calls++;
     if (address != NULL && length >= (socklen_t)sizeof(struct sockaddr_in)) {
         bx->last_connect_family = address->sa_family;
@@ -615,6 +723,13 @@ ssize_t __wrap_send(int fd, const void *buffer, size_t length, int flags) {
         errno = ECONNREFUSED;
         return -1;
     }
+    if (bx->dns_active) {
+        bx->dns_queries++;
+        bx->dns_stray_remaining = bx->dns_strays;
+        bx->dns_query_length = length < sizeof(bx->dns_query) ? length : sizeof(bx->dns_query);
+        memcpy(bx->dns_query, buffer, bx->dns_query_length);
+        return (ssize_t)length;
+    }
     size_t take = length;
     if (bx->send_short_once && take > 1) {
         bx->send_short_once = 0;
@@ -625,6 +740,340 @@ ssize_t __wrap_send(int fd, const void *buffer, size_t length, int flags) {
         bx->captured_header_length += take;
     }
     return (ssize_t)take;
+}
+
+/* The datagram the supervisor sends itself: what it was asked to send is recorded, and the answer
+ * is the one a case arranged. */
+ssize_t __wrap_sendto(int fd, const void *buffer, size_t length, int flags,
+                      const struct sockaddr *address, socklen_t address_length) {
+    (void)fd;
+    (void)buffer;
+    bx->sendto_calls++;
+    bx->last_sendto_length = length;
+    bx->last_sendto_flags = flags;
+    bx->last_sendto_name_length = address == NULL ? 0 : address_length;
+    if (address != NULL && address->sa_family == AF_INET) {
+        bx->last_sendto_port = ntohs(((const struct sockaddr_in *)address)->sin_port);
+    } else if (address != NULL && address->sa_family == AF_INET6) {
+        bx->last_sendto_port = ntohs(((const struct sockaddr_in6 *)address)->sin6_port);
+    }
+    if (bx->sendto_eintr_once) {
+        bx->sendto_eintr_once = 0;
+        errno = EINTR;
+        return -1;
+    }
+    if (bx->sendto_eagain_first > 0) {
+        bx->sendto_eagain_first--;
+        errno = EAGAIN;
+        return -1;
+    }
+    if (bx->sendto_result < 0) {
+        errno = bx->sendto_errno;
+        return -1;
+    }
+    return bx->sendto_result > 0 ? bx->sendto_result : (ssize_t)length;
+}
+
+/* The length of a sent message written back into the command's vector: recorded, in order. */
+ssize_t __wrap_process_vm_writev(pid_t pid, const struct iovec *local, unsigned long liovcnt,
+                                 const struct iovec *remote, unsigned long riovcnt,
+                                 unsigned long flags) {
+    (void)pid;
+    (void)liovcnt;
+    (void)remote;
+    (void)riovcnt;
+    (void)flags;
+    int call = bx->writev_calls++;
+    if (bx->writev_fail_at != 0 && call + 1 >= bx->writev_fail_at) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (bx->writev_short) {
+        return 0;
+    }
+    if (call < (int)(sizeof(bx->written_lengths) / sizeof(bx->written_lengths[0]))) {
+        memcpy(&bx->written_lengths[call], local->iov_base, sizeof(unsigned int));
+    }
+    return (ssize_t)local->iov_len;
+}
+
+/* How long the DNS names in the test answers are: the question, as the query carried it. */
+static size_t dns_question_length(void) {
+    return bx->dns_query_length - DNS_TEST_HEADER - DNS_TEST_OPT_RECORD;
+}
+
+/* Appends one record to a reply: an owner name that points back at the question, the type and
+ * class, a time to live and the data. */
+static bool dns_use_label_owner = false;
+/* When set, the owner of the next records is these bytes, a name written out, not the question. */
+static const unsigned char *dns_owner_bytes = NULL;
+static size_t dns_owner_length = 0;
+
+static size_t dns_add_record(unsigned char *out, size_t at, uint16_t type, uint16_t klass,
+                             const unsigned char *data, size_t data_length) {
+    if (dns_owner_bytes != NULL) {
+        memcpy(out + at, dns_owner_bytes, dns_owner_length);
+        at += dns_owner_length;
+    } else if (dns_use_label_owner) {
+        size_t name_length = 0;
+        while (out[DNS_TEST_HEADER + name_length] != 0) {
+            name_length += (size_t)out[DNS_TEST_HEADER + name_length] + 1;
+        }
+        name_length++;
+        memcpy(out + at, out + DNS_TEST_HEADER, name_length);
+        at += name_length;
+    } else {
+        out[at++] = 0xc0;
+        out[at++] = DNS_TEST_HEADER;
+    }
+    out[at++] = (unsigned char)(type >> 8);
+    out[at++] = (unsigned char)(type & 0xff);
+    out[at++] = (unsigned char)(klass >> 8);
+    out[at++] = (unsigned char)(klass & 0xff);
+    memset(out + at, 0, 3);
+    at += 3;
+    out[at++] = 60;
+    out[at++] = (unsigned char)(data_length >> 8);
+    out[at++] = (unsigned char)(data_length & 0xff);
+    memcpy(out + at, data, data_length);
+    return at + data_length;
+}
+
+/* Builds the answer the case arranged for the query last sent, from that query's own header and
+ * question, so that what the guard checks the answer against is what it asked. */
+static size_t dns_build_reply(unsigned char *out, size_t size) {
+    (void)size;
+    int type_index = bx->dns_query[bx->dns_query_length - DNS_TEST_OPT_RECORD - 3] == 28 ? 1 : 0;
+    int behaviour = bx->dns_behaviour[type_index];
+    uint16_t asked = type_index == 1 ? 28 : 1;
+    size_t end = DNS_TEST_HEADER + dns_question_length();
+    memcpy(out, bx->dns_query, end);
+    out[2] = (unsigned char)(0x80 | (bx->dns_query[2] & 0x01));
+    out[3] = 0x80;
+    memset(out + 6, 0, 6);
+    out[5] = 1;
+    size_t at = end;
+    unsigned int answers = 0;
+    uint16_t klass = bx->dns_record_class != 0 ? (uint16_t)bx->dns_record_class : 1;
+    dns_use_label_owner = behaviour == DNS_LABEL_OWNER;
+    unsigned char v4_first[4] = { 192, 0, 2, 1 };
+    unsigned char v4_second[4] = { 192, 0, 2, 2 };
+    unsigned char v6[16] = { 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+    switch (behaviour) {
+    case DNS_NXDOMAIN:
+        out[3] = 0x83;
+        break;
+    case DNS_SERVFAIL:
+        out[3] = 0x82;
+        break;
+    case DNS_TRUNCATED:
+        out[2] |= 0x02;
+        break;
+    case DNS_WRONG_ID:
+        out[0] ^= 0xff;
+        break;
+    case DNS_WRONG_QUESTION:
+        out[DNS_TEST_HEADER + 1] ^= 0x01;
+        break;
+    case DNS_NOT_A_RESPONSE:
+        out[2] &= (unsigned char)~0x80;
+        break;
+    case DNS_NONSTANDARD_OPCODE:
+        out[2] |= 0x10;
+        break;
+    case DNS_TWO_QUESTIONS:
+        out[5] = 2;
+        break;
+    case DNS_MANY:
+        for (unsigned char index = 0; index < 20; index++) {
+            unsigned char v4[4] = { 198, 51, 100, (unsigned char)(index + 1) };
+            unsigned char many6[16] = { 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (unsigned char)(index + 1) };
+            at = asked == 1 ? dns_add_record(out, at, 1, 1, v4, sizeof(v4))
+                            : dns_add_record(out, at, 28, 1, many6, sizeof(many6));
+            answers++;
+        }
+        break;
+    case DNS_ALIAS: {
+        unsigned char alias[] = { 5, 'a', 'l', 'i', 'a', 's', 0 };
+        at = dns_add_record(out, at, 5, 1, alias, sizeof(alias));
+        answers++;
+        dns_owner_bytes = alias;
+        dns_owner_length = sizeof(alias);
+        at = asked == 1 ? dns_add_record(out, at, 1, 1, v4_first, sizeof(v4_first))
+                        : dns_add_record(out, at, 28, 1, v6, sizeof(v6));
+        dns_owner_bytes = NULL;
+        answers++;
+        break;
+    }
+    case DNS_FOREIGN_OWNER: {
+        unsigned char other[] = { 5, 'o', 't', 'h', 'e', 'r', 0 };
+        dns_owner_bytes = other;
+        dns_owner_length = sizeof(other);
+        at = asked == 1 ? dns_add_record(out, at, 1, 1, v4_first, sizeof(v4_first))
+                        : dns_add_record(out, at, 28, 1, v6, sizeof(v6));
+        dns_owner_bytes = NULL;
+        answers++;
+        break;
+    }
+    case DNS_ALIAS_CHAIN: {
+        unsigned char first_alias[] = { 3, 'o', 'n', 'e', 0 };
+        unsigned char second_alias[] = { 3, 't', 'w', 'o', 0 };
+        dns_owner_bytes = second_alias;
+        dns_owner_length = sizeof(second_alias);
+        at = asked == 1 ? dns_add_record(out, at, 1, 1, v4_first, sizeof(v4_first))
+                        : dns_add_record(out, at, 28, 1, v6, sizeof(v6));
+        dns_owner_bytes = first_alias;
+        dns_owner_length = sizeof(first_alias);
+        at = dns_add_record(out, at, 5, 1, second_alias, sizeof(second_alias));
+        dns_owner_bytes = NULL;
+        at = dns_add_record(out, at, 5, 1, first_alias, sizeof(first_alias));
+        answers += 3;
+        break;
+    }
+    case DNS_ALIAS_LOOP: {
+        unsigned char first_alias[] = { 3, 'o', 'n', 'e', 0 };
+        unsigned char second_alias[] = { 3, 't', 'w', 'o', 0 };
+        at = dns_add_record(out, at, 5, 1, first_alias, sizeof(first_alias));
+        dns_owner_bytes = first_alias;
+        dns_owner_length = sizeof(first_alias);
+        at = dns_add_record(out, at, 5, 1, second_alias, sizeof(second_alias));
+        dns_owner_bytes = second_alias;
+        dns_owner_length = sizeof(second_alias);
+        at = dns_add_record(out, at, 5, 1, first_alias, sizeof(first_alias));
+        dns_owner_bytes = NULL;
+        answers += 3;
+        break;
+    }
+    case DNS_ALIAS_DEEP: {
+        unsigned char names[11][5];
+        for (unsigned char index = 0; index < 11; index++) {
+            names[index][0] = 3;
+            names[index][1] = 'n';
+            names[index][2] = (unsigned char)('a' + index);
+            names[index][3] = 'x';
+            names[index][4] = 0;
+        }
+        at = dns_add_record(out, at, 5, 1, names[0], 5);
+        for (int index = 0; index < 10; index++) {
+            dns_owner_bytes = names[index];
+            dns_owner_length = 5;
+            at = dns_add_record(out, at, 5, 1, names[index + 1], 5);
+        }
+        dns_owner_bytes = names[10];
+        at = asked == 1 ? dns_add_record(out, at, 1, 1, v4_first, sizeof(v4_first))
+                        : dns_add_record(out, at, 28, 1, v6, sizeof(v6));
+        dns_owner_bytes = NULL;
+        answers += 12;
+        break;
+    }
+    case DNS_ALIAS_TARGET_CUT: {
+        unsigned char cut_target[] = { 40, 'a', 'b' };
+        at = dns_add_record(out, at, 5, 1, cut_target, sizeof(cut_target));
+        answers++;
+        break;
+    }
+    case DNS_OWNER_WITH_DOT: {
+        unsigned char dotted[] = { 12, 'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 't', 'e', 's', 't', 0 };
+        dns_owner_bytes = dotted;
+        dns_owner_length = sizeof(dotted);
+        at = asked == 1 ? dns_add_record(out, at, 1, 1, v4_first, sizeof(v4_first))
+                        : dns_add_record(out, at, 28, 1, v6, sizeof(v6));
+        dns_owner_bytes = NULL;
+        answers++;
+        break;
+    }
+    case DNS_OWNER_WITH_ZERO: {
+        unsigned char zeroed[] = { 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 9, 't', 'e', 's', 't', 0, 'e', 'v', 'i', 'l', 0 };
+        dns_owner_bytes = zeroed;
+        dns_owner_length = sizeof(zeroed);
+        at = asked == 1 ? dns_add_record(out, at, 1, 1, v4_first, sizeof(v4_first))
+                        : dns_add_record(out, at, 28, 1, v6, sizeof(v6));
+        dns_owner_bytes = NULL;
+        answers++;
+        break;
+    }
+    case DNS_TOO_MANY_RECORDS:
+        for (int index = 0; index < 65; index++) {
+            at = asked == 1 ? dns_add_record(out, at, 1, 1, v4_first, sizeof(v4_first))
+                            : dns_add_record(out, at, 28, 1, v6, sizeof(v6));
+            answers++;
+        }
+        break;
+    case DNS_OTHER_TYPE:
+        at = asked == 1 ? dns_add_record(out, at, 28, 1, v6, sizeof(v6))
+                        : dns_add_record(out, at, 1, 1, v4_first, sizeof(v4_first));
+        answers++;
+        at = asked == 1 ? dns_add_record(out, at, 1, klass, v4_first, sizeof(v4_first))
+                        : dns_add_record(out, at, 28, klass, v6, sizeof(v6));
+        answers++;
+        break;
+    case DNS_FOREIGN_CLASS:
+        at = asked == 1 ? dns_add_record(out, at, 1, 3, v4_first, sizeof(v4_first))
+                        : dns_add_record(out, at, 28, 3, v6, sizeof(v6));
+        answers++;
+        at = asked == 1 ? dns_add_record(out, at, 1, 1, v4_second, sizeof(v4_second))
+                        : dns_add_record(out, at, 28, 1, v6, sizeof(v6));
+        answers++;
+        break;
+    case DNS_LABEL_OWNER:
+    case DNS_NORMAL:
+        if (asked == 1) {
+            at = dns_add_record(out, at, 1, klass, v4_first, sizeof(v4_first));
+            at = dns_add_record(out, at, 1, klass, v4_second, sizeof(v4_second));
+            answers = 2;
+        } else {
+            at = dns_add_record(out, at, 28, klass, v6, sizeof(v6));
+            answers = 1;
+        }
+        break;
+    default:
+        break;
+    }
+    out[6] = (unsigned char)(answers >> 8);
+    out[7] = (unsigned char)(answers & 0xff);
+    if (bx->dns_count_override >= 0) {
+        out[7] = (unsigned char)bx->dns_count_override;
+    }
+    if (bx->dns_poke_offset >= 0) {
+        out[end + (size_t)bx->dns_poke_offset] = (unsigned char)bx->dns_poke_value;
+        out[end + (size_t)bx->dns_poke_offset + 1] = (unsigned char)bx->dns_poke_second;
+    }
+    if (bx->dns_cut_to > 0 && (size_t)bx->dns_cut_to < at) {
+        at = (size_t)bx->dns_cut_to;
+    }
+    return at;
+}
+
+/* The wrapped recv, for the resolve mode: first any packets that are not the answer, then the
+ * answer the case arranged. */
+ssize_t __wrap_recv(int fd, void *buffer, size_t length, int flags) {
+    (void)fd;
+    (void)flags;
+    if (bx->recv_fails) {
+        errno = ECONNREFUSED;
+        return -1;
+    }
+    unsigned char reply[1500];
+    size_t reply_length = dns_build_reply(reply, sizeof(reply));
+    if (bx->dns_stray_remaining > 0) {
+        bx->dns_stray_remaining--;
+        reply[0] ^= 0xff;
+    }
+    size_t take = reply_length < length ? reply_length : length;
+    memcpy(buffer, reply, take);
+    return (ssize_t)take;
+}
+
+/* The id every query carries, so a case can build the answer that matches it or one that does not. */
+ssize_t __wrap_getrandom(void *buffer, size_t length, unsigned int flags) {
+    (void)flags;
+    if (bx->getrandom_fails) {
+        errno = EAGAIN;
+        return -1;
+    }
+    uint16_t id = FAKE_DNS_ID;
+    memcpy(buffer, &id, length < sizeof(id) ? length : sizeof(id));
+    return (ssize_t)length;
 }
 
 /* The supervise loop waits for POLLIN: hand out a readable turn for each arranged
@@ -670,6 +1119,15 @@ static int connect_deadline_poll(struct pollfd *fds) {
 int __wrap_poll(struct pollfd *fds, nfds_t count, int timeout) {
     (void)timeout;
     (void)count;
+    bx->poll_calls++;
+    if (bx->dns_active) {
+        int type_index = bx->dns_query[bx->dns_query_length - DNS_TEST_OPT_RECORD - 3] == 28 ? 1 : 0;
+        if (bx->dns_behaviour[type_index] == DNS_SILENT) {
+            return 0;
+        }
+        fds[0].revents = POLLIN;
+        return 1;
+    }
     if (fds[0].events & POLLIN) {
         return supervise_loop_poll(fds);
     }
@@ -709,17 +1167,21 @@ int __wrap_ioctl(int fd, unsigned long request, ...) {
         req->data.nr = bx->notif_recv_nr;
         uint64_t address_length = bx->notif_recv_family == AF_INET6 ? sizeof(struct sockaddr_in6)
                                                                     : sizeof(struct sockaddr_in);
+        req->data.args[0] = bx->notif_recv_target_fd;
         if (bx->notif_recv_nr == __NR_socket) {
             req->data.args[0] = (uint64_t)bx->notif_socket_domain;
             req->data.args[1] = (uint64_t)bx->notif_socket_type;
             req->data.args[2] = (uint64_t)bx->notif_socket_protocol;
         } else if (bx->notif_recv_nr == __NR_sendto) {
+            req->data.args[1] = FAKE_DATA_POINTER;
+            req->data.args[2] = bx->sendto_length;
             req->data.args[3] = bx->notif_send_flags;
             req->data.args[4] = bx->notif_recv_family == 0 ? 0 : FAKE_ADDRESS_POINTER;
-            req->data.args[5] = bx->notif_recv_family == 0 ? 0 : address_length;
+            req->data.args[5] = bx->notif_recv_family == 0 ? 0
+                                : (bx->sendto_address_length != 0 ? bx->sendto_address_length : address_length);
         } else if (bx->notif_recv_nr == __NR_sendmmsg) {
             req->data.args[1] = FAKE_ADDRESS_POINTER;
-            req->data.args[2] = bx->mmsg_count ? bx->mmsg_count : 1;
+            req->data.args[2] = bx->mmsg_vlen_zero ? 0 : (bx->mmsg_count ? bx->mmsg_count : 1);
             req->data.args[3] = bx->notif_send_flags;
         } else if (bx->notif_recv_nr == __NR_sendmsg) {
             req->data.args[1] = FAKE_ADDRESS_POINTER;
@@ -1055,7 +1517,10 @@ static constexpr uint64_t HELD_UNIX_INODE = 9003;                /* a held UNIX 
 static constexpr uint64_t NEVER_HELD_INODE = 9004;               /* a socket the supervisor never created */
 static constexpr uint64_t CREATED_UNIX_INODE = 9005;             /* the UNIX socket the guard creates */
 static constexpr uint64_t CREATED_SEQPACKET_INODE = 9006;        /* the sequenced-packet socket the guard creates */
+static constexpr uint64_t HELD_DATAGRAM_INODE = 9101;            /* a held datagram socket the supervisor sends on */
 static constexpr int HELD_DESCRIPTOR = 700;                      /* a stand-in for the supervisor's own descriptor */
+static constexpr int HELD_DATAGRAM_DESCRIPTOR = 710;             /* a stand-in for its descriptor for that datagram socket */
+static constexpr uint16_t FAKE_SOURCE_PORT = 40000;              /* the port a held datagram socket is bound to */
 static constexpr int FAKE_BACKLOG = 5;                           /* the backlog a listen asks for */
 static constexpr uint16_t FAKE_BOUND_PORT = 8080;                /* the port a held socket is bound to */
 
@@ -1139,9 +1604,9 @@ static void test_service_paths(void) {
           bx->connect_calls == 1 && bx->addfd_calls == 1 && bx->last_answer_error == 0);
 }
 
-/* The supervisor decides socket() and the send syscalls, not only connect. These drive each
- * new branch through the notification dispatcher: a socket kind refused, a socket kind allowed,
- * TCP Fast Open refused, and a datagram judged by its destination. */
+/* The supervisor decides socket() and the send syscalls, not only connect. These drive the
+ * socket kinds it refuses and allows, and a syscall it does not trap, through the dispatcher. The
+ * datagram sends have their own cases, in test_datagram_mediation. */
 static void test_egress_syscalls(void) {
     reset_behaviour();
     bx->notif_recv_nr = __NR_socket;
@@ -1176,185 +1641,14 @@ static void test_egress_syscalls(void) {
               lookup_socket_type(CREATED_TCP_INODE) == FD_TYPE_STREAM);
 
     reset_behaviour();
-    bx->notif_recv_nr = __NR_sendto;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 443;
-    bx->notif_send_flags = MSG_FASTOPEN;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "443", false);
+    set_verbose(true);
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_UNIX;
+    bx->notif_socket_type = SOCK_DGRAM;
+    bx->notif_send_result = -1;
     service_once();
-    check("a TCP Fast Open send is refused even to a listed destination",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendto;
-    bx->process_vm_readv_result = 1;
-    service_once();
-    check("a datagram with no destination is a connected send and continues",
-          bx->answers == 1 && bx->last_answer_error == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendto;
-    bx->notif_recv_family = AF_UNIX;
-    bx->process_vm_readv_result = 1;
-    service_once();
-    check("a datagram to a non-INET address continues untouched",
-          bx->answers == 1 && bx->last_answer_error == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendto;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 53;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53", true);
-    service_once();
-    check("a datagram to a listed destination continues",
-          bx->answers == 1 && bx->last_answer_error == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendto;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 9999;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53", true);
-    service_once();
-    check("a datagram to a destination the list does not name is refused",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendto;
-    bx->notif_recv_family = AF_INET;
-    bx->process_vm_readv_result = 0;
-    service_once();
-    check("a datagram whose address cannot be read is refused",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmsg;
-    bx->msg_mode = 1;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 53;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53", true);
-    service_once();
-    check("a sendmsg to a listed destination continues",
-          bx->answers == 1 && bx->last_answer_error == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmsg;
-    bx->msg_mode = 1;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 9999;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53", true);
-    service_once();
-    check("a sendmsg to a destination the list does not name is refused",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmsg;
-    bx->msg_mode = 1;
-    bx->msg_name_missing = 1;
-    bx->process_vm_readv_result = 1;
-    service_once();
-    check("a sendmsg with no destination is a connected send and continues",
-          bx->answers == 1 && bx->last_answer_error == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmsg;
-    bx->notif_send_flags = MSG_FASTOPEN;
-    bx->msg_mode = 1;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 53;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53", true);
-    service_once();
-    check("a sendmsg with TCP Fast Open is refused even to a listed destination",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmsg;
-    bx->process_vm_readv_result = 0;
-    service_once();
-    check("a sendmsg whose header cannot be read is refused",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmsg;
-    bx->msg_mode = 1;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 53;
-    bx->process_vm_readv_result = 1;
-    bx->id_valid_fail_at = 1;
-    service_once();
-    check("a sendmsg whose notification turns invalid after the header read is dropped",
-          bx->answers == 0);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmsg;
-    bx->msg_mode = 1;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 53;
-    bx->process_vm_readv_result = 1;
-    bx->id_valid_fail_at = 2;
-    service_once();
-    check("a sendmsg whose notification turns invalid after the address read is dropped",
-          bx->answers == 0);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 53;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53", true);
-    service_once();
-    check("a sendmmsg batch to a listed destination continues",
-          bx->answers == 1 && bx->last_answer_error == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 9999;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53", true);
-    service_once();
-    check("a sendmmsg batch naming a disallowed destination is refused whole",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->process_vm_readv_result = -1;
-    service_once();
-    check("a sendmmsg whose header cannot be read is refused",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->mmsg_name_missing = 1;
-    bx->process_vm_readv_result = 1;
-    service_once();
-    check("a sendmmsg batch of connected sends continues",
-          bx->answers == 1 && bx->last_answer_error == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->mmsg_addr_short = 1;
-    bx->process_vm_readv_result = 1;
-    service_once();
-    check("a sendmmsg entry whose address cannot be read is refused",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
+    set_verbose(false);
+    check("a continue whose notify send fails is tolerated", bx->answers == 1);
 
     reset_behaviour();
     bx->notif_recv_nr = __NR_getpid;
@@ -1368,56 +1662,7 @@ static void test_egress_syscalls(void) {
     bx->notif_send_result = -1;
     service_once();
     set_verbose(false);
-    check("a continue whose notify send fails is tolerated", bx->answers == 1);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendto;
-    bx->notif_recv_family = AF_INET;
-    bx->process_vm_readv_result = 1;
-    bx->notif_id_valid_result = -1;
-    service_once();
-    check("a sendto whose notification turns invalid is dropped", bx->answers == 0);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->mmsg_name_missing = 1;
-    bx->mmsg_count = 2000;
-    bx->process_vm_readv_result = 1;
-    service_once();
-    check("a sendmmsg batch is capped and still continues",
-          bx->answers == 1 && bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->process_vm_readv_result = 1;
-    bx->id_valid_fail_at = 1;
-    service_once();
-    check("a sendmmsg whose notification turns invalid before the header check is dropped",
-          bx->answers == 0);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->process_vm_readv_result = 1;
-    bx->id_valid_fail_at = 2;
-    service_once();
-    check("a sendmmsg whose notification turns invalid after the address read is dropped",
-          bx->answers == 0);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->mmsg_hetero = 1;
-    bx->mmsg_count = 2;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 53;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53", true);
-    service_once();
-    check("a sendmmsg batch is refused when a later entry names a disallowed destination",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
+    check("an answer whose notify send fails is tolerated", bx->answers == 1);
 }
 
 /* The guard creates each INET socket itself and records its type, so a later connect can tell a
@@ -1485,12 +1730,15 @@ static void test_socket_tracking(void) {
     bx->notif_recv_target_fd = 6;
     bx->process_vm_readv_result = 1;
     bx->readlink_inode = TRACKED_DATAGRAM_INODE;
+    bx->getsockname_port = FAKE_SOURCE_PORT;
     record_socket_type(TRACKED_DATAGRAM_INODE, FD_TYPE_DGRAM);
+    hold_socket(TRACKED_DATAGRAM_INODE, HELD_DATAGRAM_DESCRIPTOR);
     remember_rule("127.0.0.1", "53", true);
     service_once();
-    check("a connect on a datagram socket is checked then let through, not injected",
-          bx->answers == 1 && bx->last_answer_error == 0 && bx->connect_calls == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+    check("a connect on a datagram socket is made by the supervisor on its own descriptor, not injected or continued",
+          bx->answers == 1 && bx->last_answer_error == 0 && bx->connect_calls == 1 &&
+              bx->last_connect_descriptor == HELD_DATAGRAM_DESCRIPTOR && bx->addfd_calls == 0 &&
+              bx->last_answer_flags != SECCOMP_USER_NOTIF_FLAG_CONTINUE);
 
     reset_behaviour();
     bx->notif_recv_family = AF_INET;
@@ -1626,9 +1874,9 @@ static void test_listen_closure(void) {
     bx->notif_socket_type = SOCK_DGRAM;
     bx->readlink_inode = CREATED_UDP_INODE;
     service_once();
-    check("a datagram socket is tracked but never held, it cannot listen",
+    check("a datagram socket is tracked and held, because every datagram it sends is sent by the supervisor",
           bx->answers == 1 && lookup_socket_type(CREATED_UDP_INODE) == FD_TYPE_DGRAM &&
-              held_sockets_count_for_tests() == 0);
+              held_socket_descriptor(CREATED_UDP_INODE) == FAKE_OUTWARD_SOCKET_DESCRIPTOR);
 
     reset_behaviour();
     bx->notif_recv_nr = __NR_socket;
@@ -1801,6 +2049,17 @@ static void test_listen_closure(void) {
               held_sockets_count_for_tests() == HELD_SOCKET_CAPACITY);
 
     reset_behaviour();
+    for (size_t inode = 1; inode <= HELD_SOCKET_CAPACITY; inode++) {
+        hold_socket(inode, FIRST_TABLE_DESCRIPTOR + (int)inode);
+    }
+    check("using a held socket answers its descriptor",
+          use_held_socket(1) == FIRST_TABLE_DESCRIPTOR + 1);
+    hold_socket(HELD_SOCKET_CAPACITY + 1, NEW_TABLE_DESCRIPTOR);
+    check("a socket in use is the last to be evicted, the least recently used goes instead",
+          held_socket_descriptor(1) == FIRST_TABLE_DESCRIPTOR + 1 && held_socket_descriptor(2) < 0 &&
+              held_socket_descriptor(3) == FIRST_TABLE_DESCRIPTOR + 3);
+
+    reset_behaviour();
     hold_socket(HELD_BOUND_INODE, HELD_DESCRIPTOR);
     hold_socket(HELD_BOUND_INODE, HELD_DESCRIPTOR + 1);
     check("holding an inode again replaces its entry",
@@ -1827,6 +2086,964 @@ static void test_listen_closure(void) {
     check("the listened set is a ring that forgets its oldest entry first",
           !was_listened(FIRST_LISTENED_INODE) && was_listened(FIRST_LISTENED_INODE + 1) &&
               was_listened(FIRST_LISTENED_INODE + LISTENED_SOCKET_CAPACITY));
+}
+
+/* A datagram socket the supervisor created and holds, bound to a source port, and the next
+ * notification pointed at a send, from the command's descriptor 6, on the socket that inode names. */
+static void arrange_held_datagram(int syscall_number) {
+    bx->notif_recv_nr = syscall_number;
+    bx->notif_recv_target_fd = 6;
+    bx->readlink_inode = HELD_DATAGRAM_INODE;
+    bx->getsockname_family = AF_INET;
+    bx->getsockname_port = FAKE_SOURCE_PORT;
+    bx->process_vm_readv_result = 1;
+    record_socket_type(HELD_DATAGRAM_INODE, FD_TYPE_DGRAM);
+    hold_socket(HELD_DATAGRAM_INODE, HELD_DATAGRAM_DESCRIPTOR);
+}
+
+/* The same, sending to 127.0.0.1 on this port, which a UDP rule names. */
+static void arrange_datagram_send(int syscall_number, uint16_t port) {
+    arrange_held_datagram(syscall_number);
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = port;
+    bx->msg_mode = syscall_number == __NR_sendmsg;
+    bx->mmsg_mode = syscall_number == __NR_sendmmsg;
+    remember_rule("127.0.0.1", "53", true);
+}
+
+/* Whether the answer was an error of this kind and the supervisor sent nothing. */
+static bool refused_with(int error) {
+    return bx->answers == 1 && bx->last_answer_error == -error && bx->sendto_calls == 0 &&
+           bx->last_answer_flags != SECCOMP_USER_NOTIF_FLAG_CONTINUE;
+}
+
+/* Whether the supervisor sent exactly this many datagrams, answered with this value, and never
+ * continued the call in the command. */
+static bool sent_and_answered(int datagrams, int64_t value) {
+    return bx->answers == 1 && bx->last_answer_error == 0 && bx->last_answer_val == value &&
+           bx->sendto_calls == datagrams && bx->last_answer_flags != SECCOMP_USER_NOTIF_FLAG_CONTINUE;
+}
+
+static void test_datagram_sendto(void) {
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    service_once();
+    check("a sendto to a listed destination is sent by the supervisor from its own copy, to that port",
+          sent_and_answered(1, FAKE_DATAGRAM_LENGTH) && bx->last_sendto_length == FAKE_DATAGRAM_LENGTH &&
+              bx->last_sendto_port == 53 && bx->last_sendto_name_length == sizeof(struct sockaddr_in) &&
+              (bx->last_sendto_flags & MSG_NOSIGNAL) && (bx->last_sendto_flags & MSG_DONTWAIT));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_recv_family = AF_INET6;
+    remember_rule("2001:db8::1", "53", true);
+    service_once();
+    check("a sendto to a listed IPv6 destination is sent too, to that port",
+          sent_and_answered(1, FAKE_DATAGRAM_LENGTH) && bx->last_sendto_port == 53 &&
+              bx->last_sendto_name_length == sizeof(struct sockaddr_in6));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_length = 0;
+    service_once();
+    check("an empty datagram is sent, and nothing is read from the command for it",
+          sent_and_answered(1, 0) && bx->last_sendto_length == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 9999);
+    service_once();
+    check("a sendto to a destination the list does not name is refused and nothing is sent",
+          refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_recv_family = AF_UNIX;
+    service_once();
+    check("a sendto to a UNIX address is refused, where it used to be let through", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_send_flags = MSG_FASTOPEN;
+    service_once();
+    check("a send with TCP Fast Open is refused even to a listed destination", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_send_flags = MSG_OOB;
+    service_once();
+    check("a send with a flag the supervisor cannot pass on is refused with EOPNOTSUPP",
+          refused_with(EOPNOTSUPP));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_send_flags = MSG_MORE | MSG_CONFIRM | MSG_DONTROUTE;
+    service_once();
+    check("the flags the supervisor can pass on go to its own send",
+          sent_and_answered(1, FAKE_DATAGRAM_LENGTH) &&
+              (bx->last_sendto_flags & (MSG_MORE | MSG_CONFIRM | MSG_DONTROUTE)) ==
+                  (MSG_MORE | MSG_CONFIRM | MSG_DONTROUTE));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_recv_family = 0;
+    service_once();
+    check("a sendto with no destination is a send on the connected socket, with no name",
+          sent_and_answered(1, FAKE_DATAGRAM_LENGTH) && bx->last_sendto_name_length == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_address_length = sizeof(struct sockaddr_storage) + 1;
+    service_once();
+    check("an address longer than any socket address is refused with EINVAL", refused_with(EINVAL));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->process_vm_readv_result = 0;
+    service_once();
+    check("a sendto whose address cannot be read is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->data_unreadable = 1;
+    service_once();
+    check("a sendto whose data cannot be read is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_length = 65536;
+    service_once();
+    check("a datagram beyond 64 KiB is refused with EMSGSIZE", refused_with(EMSGSIZE));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_length = 65535;
+    service_once();
+    check("a datagram of exactly 64 KiB less one is sent",
+          sent_and_answered(1, 65535) && bx->last_sendto_length == 65535);
+}
+
+static void test_datagram_provenance(void) {
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    release_held_socket(HELD_DATAGRAM_INODE);
+    service_once();
+    check("a send on a datagram socket the supervisor no longer holds is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    record_socket_type(HELD_DATAGRAM_INODE, FD_TYPE_STREAM);
+    service_once();
+    check("a sendto with a destination on a stream socket is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->readlink_kind = READLINK_PIPE;
+    service_once();
+    check("a send on a descriptor that is not a socket is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->getsockname_port = 0;
+    service_once();
+    check("a send on a socket bound to no port is refused when the policy grants no ephemeral bind",
+          refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->getsockname_port = 0;
+    configure_ephemeral_udp_bind(true);
+    service_once();
+    check("a send on a socket bound to no port goes ahead when the policy grants an ephemeral bind",
+          sent_and_answered(1, FAKE_DATAGRAM_LENGTH));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->getsockname_family = AF_INET6;
+    bx->getsockname_port = FAKE_SOURCE_PORT;
+    service_once();
+    check("a socket bound to an IPv6 port may send", sent_and_answered(1, FAKE_DATAGRAM_LENGTH));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->getsockname_family = AF_UNIX;
+    service_once();
+    check("a socket of another family than IPv4 and IPv6 is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->getsockname_result = -1;
+    service_once();
+    check("a socket whose address the kernel cannot report is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_recv_family = 0;
+    bx->getsockname_port = 0;
+    service_once();
+    check("a send with no destination on a socket bound to no port is refused too, the kernel would bind it first",
+          refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_recv_family = 0;
+    configure_ephemeral_udp_bind(true);
+    bx->getsockname_port = 0;
+    service_once();
+    check("a send with no destination on an unbound socket goes ahead when the policy grants an ephemeral bind",
+          sent_and_answered(1, FAKE_DATAGRAM_LENGTH));
+
+    reset_behaviour();
+    check("a socket nobody holds has no descriptor to use",
+          use_held_socket(HELD_DATAGRAM_INODE) == -1 && use_held_socket(0) == -1);
+}
+
+static void test_datagram_kernel_answers(void) {
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_result = -1;
+    bx->sendto_errno = ECONNREFUSED;
+    service_once();
+    check("an error the kernel gives the supervisor's send is the command's answer",
+          bx->answers == 1 && bx->last_answer_error == -ECONNREFUSED && bx->sendto_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_result = 7;
+    service_once();
+    check("a send the kernel took in part is answered with the count it took",
+          sent_and_answered(1, 7));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_eintr_once = 1;
+    service_once();
+    check("a send the kernel interrupts is repeated", sent_and_answered(2, FAKE_DATAGRAM_LENGTH));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_eagain_first = 1;
+    bx->poll_result = 1;
+    bx->poll_revents = POLLOUT;
+    service_once();
+    check("a blocking socket that cannot take the datagram is waited on once, then the send is made",
+          sent_and_answered(2, FAKE_DATAGRAM_LENGTH) && bx->poll_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_eagain_first = 2;
+    bx->poll_result = 1;
+    bx->poll_revents = POLLOUT;
+    service_once();
+    check("a socket still full after the wait is answered EAGAIN, with one wait and no second one",
+          bx->answers == 1 && bx->last_answer_error == -EAGAIN && bx->sendto_calls == 2 &&
+              bx->poll_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_eagain_first = 1;
+    bx->poll_result = 0;
+    service_once();
+    check("a socket that stays full for the whole wait is answered EAGAIN",
+          bx->answers == 1 && bx->last_answer_error == -EAGAIN && bx->sendto_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_eagain_first = 1;
+    bx->fcntl_getfl_value = O_NONBLOCK;
+    service_once();
+    check("a non-blocking socket that cannot take the datagram is answered EAGAIN with no wait",
+          bx->answers == 1 && bx->last_answer_error == -EAGAIN && bx->sendto_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_eagain_first = 1;
+    bx->notif_send_flags = MSG_DONTWAIT;
+    service_once();
+    check("a send the command asked not to block is answered EAGAIN with no wait",
+          bx->answers == 1 && bx->last_answer_error == -EAGAIN && bx->sendto_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_eagain_first = 1;
+    bx->fcntl_fails = 1;
+    service_once();
+    check("a socket whose mode cannot be read is never waited on",
+          bx->answers == 1 && bx->last_answer_error == -EAGAIN && bx->sendto_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_eagain_first = 1;
+    bx->poll_eintr_once = 1;
+    bx->poll_result = 0;
+    service_once();
+    check("a wait that is interrupted is answered EAGAIN too, so the supervisor never stalls",
+          bx->answers == 1 && bx->last_answer_error == -EAGAIN);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->id_valid_fail_at = 1;
+    service_once();
+    check("a sendto whose notification turns invalid after the address read is dropped, nothing sent",
+          bx->answers == 0 && bx->sendto_calls == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->id_valid_fail_at = 2;
+    service_once();
+    check("a sendto whose notification turns invalid after the data read is dropped, nothing sent",
+          bx->answers == 0 && bx->sendto_calls == 0);
+}
+
+static void test_datagram_sendmsg(void) {
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->iov_count = 3;
+    service_once();
+    check("a sendmsg to a listed destination is sent as one datagram of every segment",
+          sent_and_answered(1, 3 * FAKE_DATAGRAM_LENGTH) &&
+              bx->last_sendto_length == 3 * FAKE_DATAGRAM_LENGTH && bx->last_sendto_port == 53);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 9999);
+    service_once();
+    check("a sendmsg to a destination the list does not name is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->msg_name_missing = 1;
+    service_once();
+    check("a sendmsg with no destination is a send on the connected socket, with no name",
+          sent_and_answered(1, FAKE_DATAGRAM_LENGTH) && bx->last_sendto_name_length == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->iov_count = 0;
+    service_once();
+    check("a sendmsg of no segments sends an empty datagram", sent_and_answered(1, 0));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->message_control = 1;
+    service_once();
+    check("a sendmsg with ancillary data is refused, it can steer a datagram", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->message_iovlen = 1025;
+    service_once();
+    check("a sendmsg of more segments than the kernel takes is refused with EMSGSIZE",
+          refused_with(EMSGSIZE));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->iov_count = 2;
+    bx->segment_length = 40000;
+    service_once();
+    check("a sendmsg whose segments together exceed 64 KiB is refused with EMSGSIZE",
+          refused_with(EMSGSIZE));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->iov_unreadable = 1;
+    service_once();
+    check("a sendmsg whose segment list cannot be read is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->iov_unreadable = 1;
+    bx->id_valid_fail_at = 2;
+    service_once();
+    check("a sendmsg whose notification turns invalid before the segment list is read is dropped",
+          bx->answers == 0 && bx->sendto_calls == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->notif_send_flags = MSG_FASTOPEN;
+    service_once();
+    check("a sendmsg with TCP Fast Open is refused even to a listed destination", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->process_vm_readv_result = 0;
+    service_once();
+    check("a sendmsg whose header cannot be read is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->id_valid_fail_at = 1;
+    service_once();
+    check("a sendmsg whose notification turns invalid after the header read is dropped",
+          bx->answers == 0 && bx->sendto_calls == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    release_held_socket(HELD_DATAGRAM_INODE);
+    service_once();
+    check("a sendmsg on a socket the supervisor does not hold is refused, not continued",
+          refused_with(EACCES));
+}
+
+static void test_datagram_sendmmsg(void) {
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->mmsg_count = 3;
+    service_once();
+    check("a sendmmsg batch to a listed destination is sent message by message, and the count answered",
+          sent_and_answered(3, 3) && bx->writev_calls == 3 &&
+              bx->written_lengths[0] == FAKE_DATAGRAM_LENGTH &&
+              bx->written_lengths[2] == FAKE_DATAGRAM_LENGTH);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->mmsg_count = 2000;
+    bx->mmsg_name_missing = 1;
+    service_once();
+        check("a sendmmsg count beyond the kernel's limit is cut down to it", sent_and_answered(1024, 1024));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->mmsg_count = 3;
+    bx->writev_fail_at = 1;
+    service_once();
+    check("a first length that cannot be written back is the batch's error, EFAULT, as in the kernel",
+          bx->answers == 1 && bx->last_answer_error == -EFAULT && bx->sendto_calls == 1 &&
+              bx->writev_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->mmsg_count = 3;
+    bx->writev_fail_at = 2;
+    service_once();
+    check("a later length that cannot be written back ends the batch, and that message is not counted",
+          bx->answers == 1 && bx->last_answer_error == 0 && bx->last_answer_val == 1 &&
+              bx->sendto_calls == 2 && bx->writev_calls == 2);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->mmsg_count = 2;
+    bx->writev_short = 1;
+    service_once();
+    check("a length written in part counts as not written",
+          bx->answers == 1 && bx->last_answer_error == -EFAULT && bx->sendto_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->mmsg_count = 9;
+    service_once();
+    check("only the first eight written lengths are recorded by the test, all nine are written",
+          sent_and_answered(9, 9) && bx->writev_calls == 9);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->mmsg_hetero = 1;
+    bx->mmsg_count = 2;
+    service_once();
+    check("a later message to a destination the list does not name ends the batch, the count stands",
+          bx->answers == 1 && bx->last_answer_error == 0 && bx->last_answer_val == 1 &&
+              bx->sendto_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 9999);
+    service_once();
+    check("a first message to a destination the list does not name is the batch's error",
+          refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->mmsg_vlen_zero = 1;
+    service_once();
+    check("a batch of no messages sends nothing and answers zero",
+          bx->answers == 1 && bx->last_answer_error == 0 && bx->last_answer_val == 0 &&
+              bx->sendto_calls == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->process_vm_readv_result = 0;
+    service_once();
+    check("a sendmmsg whose entry cannot be read is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->id_valid_fail_at = 1;
+    service_once();
+    check("a sendmmsg whose notification turns invalid after an entry read is dropped",
+          bx->answers == 0 && bx->sendto_calls == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->id_valid_fail_at = 2;
+    service_once();
+    check("a sendmmsg whose notification turns invalid while its message is judged is dropped",
+          bx->answers == 0 && bx->sendto_calls == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->message_control = 1;
+    service_once();
+    check("a sendmmsg message with ancillary data is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->notif_send_flags = MSG_FASTOPEN;
+    service_once();
+    check("a sendmmsg with TCP Fast Open is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    release_held_socket(HELD_DATAGRAM_INODE);
+    service_once();
+    check("a sendmmsg on a socket the supervisor does not hold is refused", refused_with(EACCES));
+}
+
+static void test_datagram_connect(void) {
+    reset_behaviour();
+    arrange_held_datagram(__NR_connect);
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    remember_rule("127.0.0.1", "53", true);
+    service_once();
+    check("a datagram connect to a listed destination is made on the supervisor's own descriptor",
+          bx->answers == 1 && bx->last_answer_error == 0 && bx->connect_calls == 1 &&
+              bx->last_connect_descriptor == HELD_DATAGRAM_DESCRIPTOR && bx->last_connect_port == 53 &&
+              bx->addfd_calls == 0 && bx->last_answer_flags != SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    reset_behaviour();
+    arrange_held_datagram(__NR_connect);
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 9999;
+    remember_rule("127.0.0.1", "53", true);
+    service_once();
+    check("a datagram connect to a destination the list does not name is refused",
+          bx->answers == 1 && bx->last_answer_error == -EACCES && bx->connect_calls == 0);
+
+    reset_behaviour();
+    arrange_held_datagram(__NR_connect);
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->connect_result = -1;
+    bx->connect_errno = ENETUNREACH;
+    remember_rule("127.0.0.1", "53", true);
+    service_once();
+    check("an error the kernel gives the supervisor's connect is the command's answer",
+          bx->answers == 1 && bx->last_answer_error == -ENETUNREACH && bx->connect_calls == 1);
+
+    reset_behaviour();
+    arrange_held_datagram(__NR_connect);
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    remember_rule("127.0.0.1", "53", true);
+    release_held_socket(HELD_DATAGRAM_INODE);
+    service_once();
+    check("a datagram connect on a socket the supervisor does not hold is refused, not continued",
+          bx->answers == 1 && bx->last_answer_error == -EACCES && bx->connect_calls == 0 &&
+              bx->last_answer_flags != SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    reset_behaviour();
+    arrange_held_datagram(__NR_connect);
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->getsockname_port = 0;
+    remember_rule("127.0.0.1", "53", true);
+    service_once();
+    check("a datagram connect on a socket bound to no port is refused without an ephemeral bind grant",
+          bx->answers == 1 && bx->last_answer_error == -EACCES && bx->connect_calls == 0);
+
+    reset_behaviour();
+    arrange_held_datagram(__NR_connect);
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->getsockname_port = 0;
+    configure_ephemeral_udp_bind(true);
+    remember_rule("127.0.0.1", "53", true);
+    service_once();
+    check("a datagram connect on a socket bound to no port goes ahead with an ephemeral bind grant",
+          bx->answers == 1 && bx->last_answer_error == 0 && bx->connect_calls == 1);
+}
+
+/* The output the last resolve case wrote, and the status it ended with. */
+static char dns_output[8192];
+
+static int run_resolve(const char *resolver, char *const *names) {
+    bx->dns_active = 1;
+    FILE *out = tmpfile();
+    if (out == NULL) {
+        perror("tmpfile");
+        exit(HARNESS_SETUP_FAILURE);
+    }
+    int status = run_resolve_mode(resolver, names, out);
+    rewind(out);
+    size_t length = fread(dns_output, 1, sizeof(dns_output) - 1, out);
+    dns_output[length] = '\0';
+    fclose(out);
+    bx->dns_active = 0;
+    return status;
+}
+
+static size_t count_lines(const char *text) {
+    size_t lines = 0;
+    for (; *text != '\0'; text++) {
+        if (*text == '\n') {
+            lines++;
+        }
+    }
+    return lines;
+}
+
+/* A resolve case that must end with the setup status and write nothing. */
+static bool resolve_refused(const char *name) {
+    char *names[] = { (char *)name, NULL };
+    int status = run_resolve("192.0.2.53", names);
+    return status == EXIT_CODE_SETUP_ERROR && dns_output[0] == '\0';
+}
+
+static void test_resolver_endpoints(void) {
+    struct sockaddr_storage address;
+    socklen_t length = 0;
+    check("a resolver address alone takes port 53",
+          parse_resolver_endpoint("192.0.2.53", &address, &length) && address.ss_family == AF_INET &&
+              ntohs(((struct sockaddr_in *)&address)->sin_port) == 53 && length == sizeof(struct sockaddr_in));
+    check("a resolver address with a port keeps it",
+          parse_resolver_endpoint("192.0.2.53:5353", &address, &length) &&
+              ntohs(((struct sockaddr_in *)&address)->sin_port) == 5353);
+    check("a bracketed IPv6 resolver with a port is read",
+          parse_resolver_endpoint("[2001:db8::53]:5353", &address, &length) && address.ss_family == AF_INET6 &&
+              ntohs(((struct sockaddr_in6 *)&address)->sin6_port) == 5353 && length == sizeof(struct sockaddr_in6));
+    check("a bracketed IPv6 resolver with no port takes port 53",
+          parse_resolver_endpoint("[2001:db8::53]", &address, &length) &&
+              ntohs(((struct sockaddr_in6 *)&address)->sin6_port) == 53);
+    const char *refused[] = {
+        "", "example.com", "2001:db8::53", "[2001:db8::53", "[]:53", "[2001:db8::53]x", "192.0.2.53:0",
+        "192.0.2.53:abc", "192.0.2.53:", "192.0.2.53:70000", "[2001:db8::53]:", "[2001:db8::53]:0", "[not-an-ip]:53",
+        "[192.0.2.53]:53", ":53", "999.0.0.1", "[2001:db8:2001:db8:2001:db8:2001:db8:2001:db8:2001:db8]:53",
+        "1111111111111111111111111111111111111111111111111111:53"
+    };
+    bool all_refused = true;
+    for (size_t index = 0; index < sizeof(refused) / sizeof(refused[0]); index++) {
+        if (parse_resolver_endpoint(refused[index], &address, &length)) {
+            printf("      accepted: %s\n", refused[index]);
+            all_refused = false;
+        }
+    }
+    check("a resolver that is empty, a name, a bare IPv6 address, unclosed, portless or out of range is refused",
+          all_refused);
+}
+
+static void test_resolve_mode(void) {
+    test_resolver_endpoints();
+    char *one[] = { "example.test", NULL };
+
+    reset_behaviour();
+    check("a name with two IPv4 addresses and one IPv6 address is written, one line each",
+          run_resolve("192.0.2.53:5353", one) == 0 &&
+              strcmp(dns_output, "example.test 192.0.2.1\nexample.test 192.0.2.2\nexample.test 2001:db8::1\n") == 0);
+    check("the resolver is connected to at its port, and asked twice, once for each record type",
+          bx->last_connect_port == 5353 && bx->last_connect_family == AF_INET && bx->dns_queries == 2);
+    const unsigned char *query = bx->dns_query;
+    check("the query carries a random id, asks for recursion, one question and one EDNS0 record",
+          query[0] == 0xBE && query[1] == 0xEF && query[2] == 0x01 && query[5] == 1 && query[11] == 1);
+    check("the question is the name as labels, the type, the Internet class, then the EDNS0 record",
+          memcmp(query + 12, "\x07" "example\x04" "test", 13) == 0 && query[25] == 0 && query[26] == 0 &&
+              query[27] == 28 && query[28] == 0 && query[29] == 1 && query[31] == 0 && query[32] == 41 &&
+              bx->dns_query_length == 12 + 18 + 11);
+
+    reset_behaviour();
+    check("a bracketed IPv6 resolver is connected to over IPv6",
+          run_resolve("[2001:db8::53]:5353", one) == 0 && bx->last_connect_family == AF_INET6 &&
+              bx->last_connect_port == 5353);
+    reset_behaviour();
+    check("a resolver with no port is asked on port 53",
+          run_resolve("192.0.2.53", one) == 0 && bx->last_connect_port == 53);
+
+    reset_behaviour();
+    bx->dns_behaviour[1] = DNS_NO_RECORDS;
+    check("an empty AAAA answer is not a failure when A gave addresses",
+          run_resolve("192.0.2.53", one) == 0 && count_lines(dns_output) == 2);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_NO_RECORDS;
+    check("an empty A answer is not a failure when AAAA gave an address",
+          run_resolve("192.0.2.53", one) == 0 && strcmp(dns_output, "example.test 2001:db8::1\n") == 0);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_NXDOMAIN;
+    check("a name error for one record type is not a failure when the other type gave an address",
+          run_resolve("192.0.2.53", one) == 0 && count_lines(dns_output) == 1);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_NO_RECORDS;
+    bx->dns_behaviour[1] = DNS_NO_RECORDS;
+    check("a name with no address of either type is refused, and nothing is written", resolve_refused("example.test"));
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_NXDOMAIN;
+    bx->dns_behaviour[1] = DNS_NXDOMAIN;
+    check("a name that does not exist is refused", resolve_refused("example.test"));
+
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_SERVFAIL;
+    check("a resolver failure on the A query is refused", resolve_refused("example.test"));
+    reset_behaviour();
+    bx->dns_behaviour[1] = DNS_SERVFAIL;
+    check("a resolver failure on the AAAA query is refused, however good the A answer was",
+          resolve_refused("example.test"));
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_TRUNCATED;
+    check("a truncated answer is refused rather than used in part", resolve_refused("example.test"));
+
+    struct {
+        int behaviour;
+        const char *what;
+    } unanswered[] = {
+        { DNS_SILENT, "a resolver that never answers" },
+        { DNS_WRONG_ID, "an answer with another query's id" },
+        { DNS_WRONG_QUESTION, "an answer to another question" },
+        { DNS_NOT_A_RESPONSE, "a packet that is not marked as a response" },
+        { DNS_NONSTANDARD_OPCODE, "a response with an opcode that is not a query" },
+        { DNS_TWO_QUESTIONS, "a response that claims two questions" },
+    };
+    for (size_t index = 0; index < sizeof(unanswered) / sizeof(unanswered[0]); index++) {
+        reset_behaviour();
+        bx->dns_behaviour[0] = unanswered[index].behaviour;
+        char label[160];
+        snprintf(label, sizeof(label), "%s is refused as timed out, after both tries", unanswered[index].what);
+        check(label, resolve_refused("example.test") && bx->dns_queries == 2);
+    }
+
+    reset_behaviour();
+    bx->dns_strays = 4;
+    check("four packets that are not the answer are set aside and the answer after them is taken",
+          run_resolve("192.0.2.53", one) == 0 && bx->dns_queries == 2);
+    reset_behaviour();
+    bx->dns_strays = 5;
+    check("five packets that are not the answer count as no answer, in both tries",
+          resolve_refused("example.test") && bx->dns_queries == 2);
+    reset_behaviour();
+    bx->recv_fails = 1;
+    check("a receive that fails is no answer either", resolve_refused("example.test"));
+
+    reset_behaviour();
+    set_verbose(true);
+    bx->dns_behaviour[0] = DNS_MANY;
+    check("twenty addresses are cut to sixteen, the rest dropped",
+          run_resolve("192.0.2.53", one) == 0 && count_lines(dns_output) == 16);
+    reset_behaviour();
+    bx->dns_behaviour[1] = DNS_MANY;
+    check("sixteen is the limit for the name as a whole, IPv4 and IPv6 together",
+          run_resolve("192.0.2.53", one) == 0 && count_lines(dns_output) == 16);
+    set_verbose(false);
+
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_ALIAS;
+    bx->dns_behaviour[1] = DNS_ALIAS;
+    check("an alias record is stepped over and the address after it is kept",
+          run_resolve("192.0.2.53", one) == 0 && strcmp(dns_output, "example.test 192.0.2.1\nexample.test 2001:db8::1\n") == 0);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_FOREIGN_OWNER;
+    check("an address record that belongs to another name is not an address of the name asked",
+          run_resolve("192.0.2.53", one) == 0 && strcmp(dns_output, "example.test 2001:db8::1\n") == 0);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_FOREIGN_OWNER;
+    bx->dns_behaviour[1] = DNS_FOREIGN_OWNER;
+    check("an answer holding only records of another name leaves no address, and the run is refused",
+          resolve_refused("example.test"));
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_ALIAS_CHAIN;
+    bx->dns_behaviour[1] = DNS_ALIAS_CHAIN;
+    check("a chain of aliases is followed to its address, whatever order the resolver wrote it in",
+          run_resolve("192.0.2.53", one) == 0 && strcmp(dns_output, "example.test 192.0.2.1\nexample.test 2001:db8::1\n") == 0);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_ALIAS_LOOP;
+    bx->dns_behaviour[1] = DNS_ALIAS_LOOP;
+    check("aliases that lead to each other end the lookup with no address", resolve_refused("example.test") && bx->dns_queries == 2);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_ALIAS_DEEP;
+    bx->dns_behaviour[1] = DNS_ALIAS_DEEP;
+    check("a chain of aliases longer than eight is not followed to its end, so its address is not taken",
+          resolve_refused("example.test"));
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_OWNER_WITH_DOT;
+    check("a record whose one label holds a dot is refused, not read as the name it spells",
+          resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_OWNER_WITH_ZERO;
+    check("a record whose label holds a zero byte is refused, not read as a shorter name",
+          resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_ALIAS_TARGET_CUT;
+    check("an alias whose target runs past its data is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_TOO_MANY_RECORDS;
+    check("an answer with more records than the limit is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_poke_offset = 0;
+    bx->dns_poke_value = 0xc0;
+    bx->dns_poke_second = 30;
+    check("a record name that points at itself is refused, not followed for ever",
+          resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_poke_offset = 0;
+    bx->dns_poke_value = 0xc0;
+    bx->dns_poke_second = 0xff;
+    check("a record name that points past the end of the message is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_poke_offset = 0;
+    bx->dns_poke_value = 63;
+    bx->dns_poke_second = 'x';
+    check("a record name whose label runs past the end of the message is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_poke_offset = 0;
+    bx->dns_poke_value = 0;
+    bx->dns_poke_second = 0;
+    check("a record whose name is the root is not a record of the name asked", resolve_refused("example.test"));
+
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_FOREIGN_CLASS;
+    bx->dns_behaviour[1] = DNS_NO_RECORDS;
+    check("a record of another class than the Internet one is not an address",
+          run_resolve("192.0.2.53", one) == 0 && strcmp(dns_output, "example.test 192.0.2.2\n") == 0);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_OTHER_TYPE;
+    bx->dns_behaviour[1] = DNS_OTHER_TYPE;
+    check("a record of another type in the answer is not an address of the asked type",
+          run_resolve("192.0.2.53", one) == 0 && strcmp(dns_output, "example.test 192.0.2.1\nexample.test 2001:db8::1\n") == 0);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_LABEL_OWNER;
+    bx->dns_behaviour[1] = DNS_LABEL_OWNER;
+    check("records named by labels, not a pointer, are read too", run_resolve("192.0.2.53", one) == 0 && count_lines(dns_output) == 3);
+
+    reset_behaviour();
+    bx->dns_cut_to = 20;
+    check("a reply too short to hold the question is no answer, in both tries",
+          resolve_refused("example.test") && bx->dns_queries == 2);
+
+    reset_behaviour();
+    bx->dns_count_override = 5;
+    check("an answer that claims more records than it holds is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_cut_to = 30 + 1;
+    check("an answer cut inside a record's name is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_cut_to = 30 + 2;
+    check("an answer cut before a record's fixed part is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_cut_to = 30 + 12 + 2;
+    check("an answer cut inside a record's data is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_poke_offset = 0;
+    bx->dns_poke_value = 0x40;
+    check("a record name with a label type nobody uses is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_poke_offset = 11;
+    bx->dns_poke_value = 3;
+    check("an IPv4 record that is not four bytes long is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_NO_RECORDS;
+    bx->dns_poke_offset = 11;
+    bx->dns_poke_value = 15;
+    check("an IPv6 record that is not sixteen bytes long is refused", resolve_refused("example.test") && bx->dns_queries == 2);
+
+    reset_behaviour();
+    bx->socket_result = -1;
+    check("a resolver socket that cannot be made is refused", resolve_refused("example.test"));
+    reset_behaviour();
+    bx->connect_result = -1;
+    bx->connect_errno = ENETUNREACH;
+    check("a resolver that cannot be connected to is refused", resolve_refused("example.test"));
+    reset_behaviour();
+    bx->send_fails = 1;
+    check("a query that cannot be sent is refused", resolve_refused("example.test"));
+    reset_behaviour();
+    bx->getrandom_fails = 1;
+    check("no random id is no query", resolve_refused("example.test"));
+
+    const char *invalid[] = { "", "a..b", "bad!name.test", "-", ".", "x.", };
+    bool invalid_all = true;
+    for (size_t index = 0; index < 3; index++) {
+        reset_behaviour();
+        if (!resolve_refused(invalid[index])) {
+            printf("      sent: %s\n", invalid[index]);
+            invalid_all = false;
+        }
+    }
+    check("an empty name, an empty label and a character no label may hold are never put in a query",
+          invalid_all);
+    char long_label[80];
+    memset(long_label, 'a', 64);
+    long_label[64] = '\0';
+    reset_behaviour();
+    check("a label of 64 characters is refused", resolve_refused(long_label));
+    char long_name[300];
+    memset(long_name, 'a', sizeof(long_name));
+    for (size_t at = 50; at < sizeof(long_name); at += 50) {
+        long_name[at] = '.';
+    }
+    long_name[sizeof(long_name) - 1] = '\0';
+    reset_behaviour();
+    check("a name beyond 253 characters is refused", resolve_refused(long_name));
+    char *dotted[] = { "example.test.", NULL };
+    reset_behaviour();
+    check("a name with a trailing dot is sent as the same question", run_resolve("192.0.2.53", dotted) == 0 &&
+              memcmp(bx->dns_query + 12, "\x07" "example\x04" "test", 13) == 0 && bx->dns_query[25] == 0);
+    char *underscored[] = { "_sip._udp.example-1.test", NULL };
+    reset_behaviour();
+    check("a service name with underscores and a hyphen in a label is sent",
+          run_resolve("192.0.2.53", underscored) == 0);
+
+    reset_behaviour();
+    char *two[] = { "first.test", "second.test", NULL };
+    check("several names are resolved in one call, each line naming its name",
+          run_resolve("192.0.2.53", two) == 0 && count_lines(dns_output) == 6 &&
+              strstr(dns_output, "second.test 192.0.2.2") != NULL && bx->dns_queries == 4);
+    reset_behaviour();
+    bx->dns_behaviour[1] = DNS_SERVFAIL;
+    check("when a later name fails, nothing is written, the earlier names included",
+          !(run_resolve("192.0.2.53", two) == 0) && dns_output[0] == '\0');
+
+    reset_behaviour();
+    char *many_names[RESOLVE_NAMES_MAXIMUM + 2];
+    for (size_t index = 0; index < RESOLVE_NAMES_MAXIMUM + 1; index++) {
+        many_names[index] = "example.test";
+    }
+    many_names[RESOLVE_NAMES_MAXIMUM + 1] = NULL;
+    check("more names than the limit are refused before any is asked",
+          run_resolve("192.0.2.53", many_names) == EXIT_CODE_SETUP_ERROR && bx->dns_queries == 0);
+    char *exactly_limit[RESOLVE_NAMES_MAXIMUM + 1];
+    for (size_t index = 0; index < RESOLVE_NAMES_MAXIMUM; index++) {
+        exactly_limit[index] = "example.test";
+    }
+    exactly_limit[RESOLVE_NAMES_MAXIMUM] = NULL;
+    reset_behaviour();
+    check("exactly the limit of names is resolved", run_resolve("192.0.2.53", exactly_limit) == 0);
+
+    reset_behaviour();
+    check("a resolver that cannot be read is refused before any query",
+          run_resolve("example.com", one) == EXIT_CODE_SETUP_ERROR && bx->dns_queries == 0);
+    reset_behaviour();
+    check("no resolver at all is refused", run_resolve(NULL, one) == EXIT_CODE_SETUP_ERROR);
+
+    struct guard_options parsed;
+    char *resolving[] = { "guard", "--resolve", "--resolver", "192.0.2.53:5353", "--", "example.test", NULL };
+    parse_arguments(6, resolving, &parsed);
+    check("--resolve with --resolver keeps the names after -- as the arguments",
+          parsed.resolve && strcmp(parsed.resolver_endpoint, "192.0.2.53:5353") == 0 &&
+              strcmp(parsed.command[0], "example.test") == 0);
+    char *dangling_resolver[] = { "guard", "--resolver", NULL };
+    check("a --resolver with no value is a usage error", run_main(dangling_resolver) == EXIT_CODE_USAGE);
+    reset_behaviour();
+    bx->dns_active = 1;
+    check("the program in resolve mode ends with the status of the lookup",
+          run_main(resolving) == 0);
+    bx->dns_active = 0;
+    char *plain_parse[] = { "guard", "--", "cmd", NULL };
+    parse_arguments(3, plain_parse, &parsed);
+    check("a normal call is not in resolve mode", !parsed.resolve && parsed.resolver_endpoint == NULL);
+}
+
+/* The datagram sends and connects are made by the supervisor and never continued in the command,
+ * so a second thread cannot change the destination after it was judged. */
+static void test_datagram_mediation(void) {
+    test_datagram_sendto();
+    test_datagram_provenance();
+    test_datagram_kernel_answers();
+    test_datagram_sendmsg();
+    test_datagram_sendmmsg();
+    test_datagram_connect();
 }
 
 /* Every way a connect made on the command's behalf can end. A poll result of 0 is a
@@ -2011,9 +3228,14 @@ static void test_argument_errors(void) {
     char *ephemeral[] = { "guard", "--allow-ephemeral-listen", "--", "cmd", NULL };
     parse_arguments(4, ephemeral, &parsed);
     check("--allow-ephemeral-listen is read", parsed.allow_ephemeral_listen);
+    char *ephemeral_udp[] = { "guard", "--allow-ephemeral-udp-bind", "--", "cmd", NULL };
+    parse_arguments(4, ephemeral_udp, &parsed);
+    check("--allow-ephemeral-udp-bind is read", parsed.allow_ephemeral_udp_bind);
     char *plain[] = { "guard", "--", "cmd", NULL };
     parse_arguments(3, plain, &parsed);
     check("an unbound socket may not listen unless the option is given", !parsed.allow_ephemeral_listen);
+    check("an unbound datagram socket may not connect or send unless the option is given",
+          !parsed.allow_ephemeral_udp_bind);
 
     char *dangling_broker[] = { "guard", "--broker", NULL };
     check("a --broker with no value is a usage error", run_main(dangling_broker) == EXIT_CODE_USAGE);
@@ -2028,6 +3250,8 @@ static void test_argument_errors(void) {
  * compare the accumulator with a constant, test bits of it, and return. Anything else is a
  * form this filter does not use, and answering zero for it makes the case fail rather than
  * quietly pass. Assumes a case has already run the child, so a filter was captured. */
+static uint64_t filter_fifth_argument = 0;
+
 static uint32_t run_captured_filter(const struct sock_filter *program, unsigned short length,
                                     uint32_t audit_arch, int syscall_number,
                                     uint64_t first_argument) {
@@ -2036,6 +3260,7 @@ static uint32_t run_captured_filter(const struct sock_filter *program, unsigned 
     data.arch = audit_arch;
     data.nr = syscall_number;
     data.args[0] = first_argument;
+    data.args[4] = filter_fifth_argument;
     uint32_t accumulator = 0;
     for (unsigned short at = 0; at < length; at++) {
         const struct sock_filter *instruction = &program[at];
@@ -2231,8 +3456,15 @@ static void test_egress_filter(void) {
           filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_socket) == SECCOMP_RET_USER_NOTIF);
     check("listen is trapped to the supervisor, which runs it itself",
           filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_listen) == SECCOMP_RET_USER_NOTIF);
-    check("sendto is trapped to the supervisor",
+    filter_fifth_argument = FAKE_ADDRESS_POINTER;
+    check("a sendto that names a destination is trapped to the supervisor",
           filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_sendto) == SECCOMP_RET_USER_NOTIF);
+    filter_fifth_argument = (uint64_t)1 << 32;
+    check("a sendto whose address pointer has only its high word set is trapped, not read as null",
+          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_sendto) == SECCOMP_RET_USER_NOTIF);
+    filter_fifth_argument = 0;
+    check("a sendto with no destination is the send of a connected socket and is allowed",
+          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_sendto) == SECCOMP_RET_ALLOW);
     check("sendmmsg is trapped to the supervisor",
           filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_sendmmsg) == SECCOMP_RET_USER_NOTIF);
     check("sendmsg on the bootstrap descriptor is allowed, so the handoff is not parked",
@@ -2393,6 +3625,8 @@ int main(void) {
     test_egress_syscalls();
     test_socket_tracking();
     test_listen_closure();
+    test_datagram_mediation();
+    test_resolve_mode();
     test_connect_on_behalf_paths();
     test_broker_handoff();
     test_supervise_loop();
