@@ -40,6 +40,10 @@ struct options {
     const char *working_directory;
     int minimum_landlock_version;
     bool no_filesystem;
+    /* --close-bind, and the two grants of port 0 (the kernel picks the port) that go with it. */
+    bool close_bind;
+    bool ephemeral_bind_tcp;
+    bool ephemeral_bind_udp;
     char **command;
 };
 
@@ -59,6 +63,13 @@ bool udp_rules_wanted(const struct options *options);
  * to the kernel as handled, because a handled direction with no rule is a
  * blanket denial nobody asked for. */
 uint64_t handled_network_access(const struct options *options);
+
+/* The bind directions --close-bind asks for that this kernel can handle: TCP from Landlock
+ * version 4, UDP from version 10. Nothing is granted by them, so a direction that is handled
+ * here and named by no port rule denies every bind. A direction the kernel is too old for is
+ * left out, and report_bind_not_closed says so; it is never a refusal, which only an explicit
+ * port rule is. Zero when --close-bind was not given. */
+uint64_t close_bind_access(const struct options *options, int landlock_version);
 
 /* Records one --rights=LETTERS option. Exposed for the tests. */
 void remember_path_rule(struct options *options, const char *letters, const char *path);

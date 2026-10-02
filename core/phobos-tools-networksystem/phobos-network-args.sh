@@ -19,6 +19,19 @@ refuse_unusable_port() {
   exit "${PHB_EPOLICY}"
 }
 
+# Refuses a [bind] port that is not one the protocol has. Port 0 is the one value a [bind] rule may
+# name that a [connect] rule may not: it asks the kernel to choose the port, which is what a server
+# that does not care which port it gets does, and it is how the shipped Java policy lets Gradle and
+# its test workers listen. Every other port goes through refuse_unusable_port, so "00" and a port
+# above 65535 are still refused. Takes the host and the port. Assumes it is called plainly, so that
+# a refusal ends the run.
+refuse_unusable_bind_port() {
+  local host="$1"
+  local port="$2"
+  [[ "$port" == "0" ]] && return 0
+  refuse_unusable_port "$host" "$port"
+}
+
 # True when the host is the loopback interface. Under the no-network container an exercise
 # runs in, loopback is the only network there is, so a loopback rule that names no port is
 # tolerated even though Landlock, which enforces ports and not hosts, cannot express it: the
@@ -139,7 +152,7 @@ refuse_unenforceable_network_rules() {
   if [[ -n "$bind_rules" && -s "$bind_rules" ]]; then
     while read -r host port _; do
       [[ -z "$host" ]] && continue
-      refuse_unusable_port "$host" "$port"
+      refuse_unusable_bind_port "$host" "$port"
     done < "$bind_rules"
   fi
 }
@@ -259,8 +272,9 @@ build_network_args() {
 # Landlock enforces the port per transport, so several rules that share a port and transport
 # collapse to one flag. Landlock's bind right is per-port and knows no local address, so the parser
 # refuses a [bind] rule that names an address and this emits one --bind-tcp or --bind-udp per port.
-# The host field is always "*" and is ignored here. A port outside 1..65535 is a policy mistake and
-# ends the run.
+# Port 0 becomes --ephemeral-bind-tcp or --ephemeral-bind-udp instead, a grant that never refuses
+# a kernel too old to handle the direction, where an explicit port rule does. The host field is
+# always "*" and is ignored here. A port outside 0..65535 is a policy mistake and ends the run.
 build_bind_args() {
   local arguments_name="$1"
   local rules="$2"
@@ -276,7 +290,7 @@ build_bind_args() {
   udp_ports="$(new_scratch_file phobos-bindports-udp.XXXXXX)"
   while read -r host port proto; do
     [[ -z "$host" ]] && continue
-    refuse_unusable_port "$host" "$port"
+    refuse_unusable_bind_port "$host" "$port"
     if [[ "$proto" == "udp" ]]; then
       printf '%s\n' "$port" >> "$udp_ports"
     else
@@ -284,35 +298,80 @@ build_bind_args() {
     fi
   done < "$rules"
   while IFS= read -r emitted; do
-    bind_ref+=( --bind-tcp "$emitted" )
+    if [[ "$emitted" == "0" ]]; then
+      bind_ref+=( --ephemeral-bind-tcp )
+    else
+      bind_ref+=( --bind-tcp "$emitted" )
+    fi
   done < <(sort -n -u "$tcp_ports")
   while IFS= read -r emitted; do
-    bind_ref+=( --bind-udp "$emitted" )
+    if [[ "$emitted" == "0" ]]; then
+      bind_ref+=( --ephemeral-bind-udp )
+    else
+      bind_ref+=( --bind-udp "$emitted" )
+    fi
   done < <(sort -n -u "$udp_ports")
   rm -f "$tcp_ports" "$udp_ports"
 }
 
-# Adds a "--bind-udp 0" (any local port) to the named argument array when the policy handles both
-# UDP directions and does not already grant it. The kernel auto-binds an ephemeral local source
-# port for an outgoing datagram, and when BIND_UDP is handled that auto-bind is itself gated by
-# BIND_UDP, so without a port-0 rule an allowed send is denied its source port. This is only added
-# when a --connect-udp and a --bind-udp are both present, so a TCP-only or connect-only-UDP policy
-# gains no bind capability it did not ask for. Takes the argument array by name.
+# Adds --ephemeral-bind-udp to the named argument array when the policy has any UDP [connect] rule,
+# a wildcard one such as "127.0.0.1 * udp" included, which emits no --connect-udp of its own. The
+# kernel auto-binds an ephemeral local source port for an outgoing datagram, and the network layer
+# now always handles UDP bind, so that auto-bind is gated by BIND_UDP and an allowed send would be
+# denied its source port without a grant for port 0. The grant is the ephemeral one, so on a kernel
+# that cannot handle UDP bind it does nothing and never refuses. A policy with no UDP [connect]
+# rule gains nothing. Takes the argument array by name and the net.rules file.
 add_udp_ephemeral_bind_if_needed() {
   local -n args_ref="$1"
-  local has_connect_udp=0
-  local has_bind_udp=0
-  local has_bind_udp_zero=0
-  local index
-  for (( index = 0; index < ${#args_ref[@]}; index++ )); do
-    case "${args_ref[$index]}" in
-      --connect-udp) has_connect_udp=1 ;;
-      --bind-udp)
-        has_bind_udp=1
-        [[ "${args_ref[$((index + 1))]:-}" == "0" ]] && has_bind_udp_zero=1 ;;
-    esac
+  local rules="$2"
+  local argument
+  local proto
+  local has_udp_connect=0
+  for argument in "${args_ref[@]}"; do
+    [[ "$argument" == "--ephemeral-bind-udp" ]] && return 0
   done
-  if (( has_connect_udp && has_bind_udp && ! has_bind_udp_zero )); then
-    args_ref+=( --bind-udp 0 )
-  fi
+  [[ -n "$rules" && -s "$rules" ]] || return 0
+  while read -r _ _ proto; do
+    [[ "$proto" == "udp" ]] && has_udp_connect=1
+  done < <(sed -E 's/#.*$//' "$rules" | sed '/^[[:space:]]*$/d')
+  (( has_udp_connect )) && args_ref+=( --ephemeral-bind-udp )
+  return 0
+}
+
+# Answers whether a bind.rules file grants an ephemeral TCP bind, a "* 0" row: the policy then
+# lets a server take a port the kernel chooses, so a listen() on a socket that was never bound,
+# which gets such a port too, adds nothing the policy has not already granted. The network layer
+# tells the connect guard so with --allow-ephemeral-listen. A UDP row does not count, a listener
+# is TCP. Reads a last line with no newline. A missing file grants nothing.
+bind_rules_grant_ephemeral_tcp() {
+  local rules="$1"
+  local port
+  local proto
+  [[ -n "$rules" && -s "$rules" ]] || return 1
+  while read -r _ port proto || [[ -n "$port" ]]; do
+    if [[ "$port" == "0" && "$proto" != "udp" ]]; then
+      return 0
+    fi
+  done < "$rules"
+  return 1
+}
+
+# Prints the number after --minimum-landlock-version in a tail.flags file, or nothing. That flag
+# is how an operator makes a kernel too old to close bind a refusal rather than a warning, and
+# it reaches the filesystem layer's Landlock call through the tail flags; the network layer makes
+# its own call, so it reads the same word. A value that is not a whole number is left to the
+# enforcer to refuse. A missing file names nothing.
+tail_minimum_landlock_version() {
+  local tail_file="$1"
+  local -a words=()
+  local index
+  [[ -n "$tail_file" && -f "$tail_file" ]] || return 0
+  read -ra words < <(tr '\n' ' ' < "$tail_file") || true
+  for (( index = 0; index + 1 < ${#words[@]}; index++ )); do
+    if [[ "${words[$index]}" == "--minimum-landlock-version" && "${words[$((index + 1))]}" =~ ^[0-9]+$ ]]; then
+      printf '%s\n' "${words[$((index + 1))]}"
+      return 0
+    fi
+  done
+  return 0
 }

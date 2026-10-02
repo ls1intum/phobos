@@ -125,6 +125,22 @@ void report_unenforceable_rights(int landlock_version, bool filesystem_handled) 
     }
 }
 
+void report_bind_not_closed(int landlock_version) {
+    if (landlock_version < FIRST_VERSION_WITH_NETWORK) {
+        warn_always("warning: Landlock version %d cannot close TCP bind (that needs version %d); "
+                    "a command can still bind and listen on any TCP port, so the container's "
+                    "network isolation is the only boundary there. Pass --minimum-landlock-version "
+                    "%d to refuse such a kernel instead.",
+                    landlock_version, FIRST_VERSION_WITH_NETWORK, FIRST_VERSION_WITH_NETWORK);
+    }
+    if (landlock_version < FIRST_VERSION_WITH_UDP) {
+        warn_always("warning: Landlock version %d cannot close UDP bind (that needs version %d); "
+                    "a command can still bind any UDP port. Pass --minimum-landlock-version %d to "
+                    "refuse such a kernel instead.",
+                    landlock_version, FIRST_VERSION_WITH_UDP, FIRST_VERSION_WITH_UDP);
+    }
+}
+
 uint64_t scoped_for_version(int landlock_version) {
     if (landlock_version < FIRST_VERSION_WITH_SCOPED) {
         return 0;

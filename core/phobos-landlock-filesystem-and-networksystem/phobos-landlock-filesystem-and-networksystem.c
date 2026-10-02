@@ -9,6 +9,7 @@
  *   phobos-landlock-filesystem-and-networksystem --rights=LETTERS PATH [--rights=LETTERS PATH ...]
  *                   [--connect-tcp PORT] [--bind-tcp PORT]
  *                   [--connect-udp PORT] [--bind-udp PORT]
+ *                   [--close-bind] [--ephemeral-bind-tcp] [--ephemeral-bind-udp]
  *                   [--chdir DIRECTORY] [--minimum-landlock-version NUMBER]
  *                   [--verbose] -- COMMAND [ARGUMENTS...]
  *
@@ -73,6 +74,22 @@ static void add_port_rules(int ruleset_descriptor, const struct options *options
     }
 }
 
+/* ------------------------------------------- stage: add the ephemeral bind grants */
+
+/* Port 0 asks the kernel to pick the port. It is granted only for a direction the ruleset
+ * handles, because a rule for an access the ruleset does not handle is refused by the kernel,
+ * and a direction an old kernel cannot handle is already reported by report_bind_not_closed.
+ * It never refuses: it is a grant, not a demand for a kernel feature. */
+static void add_ephemeral_bind_rules(int ruleset_descriptor, const struct options *options,
+                                     uint64_t handled_network) {
+    if (options->ephemeral_bind_tcp && (handled_network & LANDLOCK_ACCESS_NETWORK_BIND_TCP) != 0) {
+        add_port_rule(ruleset_descriptor, 0, LANDLOCK_ACCESS_NETWORK_BIND_TCP, "bind", "tcp");
+    }
+    if (options->ephemeral_bind_udp && (handled_network & LANDLOCK_ACCESS_NETWORK_BIND_UDP) != 0) {
+        add_port_rule(ruleset_descriptor, 0, LANDLOCK_ACCESS_NETWORK_BIND_UDP, "bind", "udp");
+    }
+}
+
 /* ------------------------------------------------------- stage: move, first */
 
 /* Before the restriction, because the working directory itself may be outside
@@ -110,9 +127,13 @@ int main(int argument_count, char *arguments[]) {
      * applied either way, inside create_ruleset. */
     uint64_t handled_filesystem =
         options.no_filesystem ? 0 : filesystem_rights_for_version(landlock_version);
-    uint64_t handled_network = handled_network_access(&options);
+    uint64_t handled_network =
+        handled_network_access(&options) | close_bind_access(&options, landlock_version);
 
     report_unenforceable_rights(landlock_version, handled_filesystem != 0);
+    if (options.close_bind) {
+        report_bind_not_closed(landlock_version);
+    }
 
     /* A ruleset the kernel would reject as empty: no filesystem right, no network direction, and
      * a kernel too old to scope. Nothing is left for Landlock to hold, so enter the working
@@ -129,6 +150,7 @@ int main(int argument_count, char *arguments[]) {
         add_path_rules(ruleset_descriptor, landlock_version, &options);
     }
     add_port_rules(ruleset_descriptor, &options);
+    add_ephemeral_bind_rules(ruleset_descriptor, &options, handled_network);
     enter_working_directory(&options);
     apply_restriction(ruleset_descriptor);
     exec_command(&options);

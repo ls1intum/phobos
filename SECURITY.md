@@ -98,10 +98,23 @@ the same class as the filesystem or egress layers, and enabling it changes the r
   kernel also gives a socket that was never bound a port of its own choosing when it calls
   `listen()`, and Landlock has no hook for that. The connect guard therefore traps `listen()` and
   runs it itself, only on a socket it created for the command, and refuses a socket that is
-  unbound unless it is started with `--allow-ephemeral-listen`, which no policy section sets yet.
+  unbound unless it is started with `--allow-ephemeral-listen`, which the network layer sets when
+  a `[bind]` row names port 0, because that row already grants the port the kernel would choose.
   A swap of another socket under the descriptor cannot create a listener, because the guard never
   lets the kernel run the command's own `listen()`. With `--no-networksystem-restriction` the
   guard is absent and so is this.
+- **Bind is closed unless a `[bind]` row opens it, as far as the kernel can close it.** The network
+  layer always applies a network-only Landlock ruleset that handles TCP and UDP bind with nothing
+  granted, so a run with no `[bind]` rule, or given no `--config`, binds and listens on nothing.
+  Port 0 grants only a port the kernel chooses. The shipped Java policy carries `allow 0` and
+  `allow 0 udp` for Gradle, so a submission under it can still take a kernel-chosen port, on every
+  interface, but cannot name one; because policies are additive, an exercise that names only
+  `allow 8080` gets port 0 from that base as well. A kernel below Landlock version 4 (TCP) or 10
+  (UDP) cannot close the direction: the enforcer says so on every run and leaves it open, and the
+  container's network isolation is the only boundary there. `--minimum-landlock-version` in the tail
+  flags turns that into a refusal. At the time of writing none of the kernels the project's CI
+  and local runs use offers version 10, so the UDP half has been exercised against a recording of the
+  kernel's calls only.
 - **A source address is weak authentication.** It resists spoofing only for an established
   handshake, and NAT and shared egress addresses make it coarse. Treat it as a filter, not an
   identity.

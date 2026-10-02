@@ -186,6 +186,12 @@ int detect_landlock_version(int minimum_landlock_version, bool network_rules_wan
  * a network-only ruleset too. */
 void report_unenforceable_rights(int landlock_version, bool filesystem_handled);
 
+/* Names the bind directions --close-bind cannot close on this kernel, TCP below version 4 and
+ * UDP below version 10, and what that leaves open. Always said, for the same reason as the
+ * rest: Landlock has no hook there, so the gap can only be reported, and the operator raises
+ * --minimum-landlock-version when the guarantee is needed. */
+void report_bind_not_closed(int landlock_version);
+
 /* Creates a ruleset that denies everything it handles unless a rule allows it.
  *
  * handled_network names the directions the policy actually speaks about. A

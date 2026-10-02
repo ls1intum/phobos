@@ -83,4 +83,74 @@ else
   bad "shipped policy denies a path outside the allow-list" "$output"
 fi
 
+# The shipped policy grants Gradle and its workers a server on a port the kernel chooses, and no
+# port of their own: a server that takes whatever port it gets runs, one that names a port is
+# refused. A run given no --config drops every bind rule, so there is no server at all.
+cat > "$EXERCISE/assignment/ServerProbe.java" <<'JAVA'
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+
+public class ServerProbe {
+    public static void main(String[] args) throws Exception {
+        InetAddress loopback = InetAddress.getLoopbackAddress();
+        try (ServerSocket server = new ServerSocket(0, 50, loopback)) {
+            Thread acceptor = new Thread(() -> {
+                try (Socket peer = server.accept()) {
+                    peer.getOutputStream().write(7);
+                } catch (Exception ignored) {
+                }
+            });
+            acceptor.start();
+            try (Socket client = new Socket(loopback, server.getLocalPort())) {
+                System.out.println("ephemeral-server=ok read=" + client.getInputStream().read());
+            }
+        } catch (Exception refused) {
+            System.out.println("ephemeral-server=denied");
+        }
+        try (ServerSocket fixed = new ServerSocket(18555, 50, loopback)) {
+            System.out.println("fixed-server=OPEN");
+        } catch (Exception denied) {
+            System.out.println("fixed-server=denied");
+        }
+        try (DatagramSocket datagram = new DatagramSocket(0, loopback)) {
+            System.out.println("ephemeral-udp=ok");
+        } catch (Exception refused) {
+            System.out.println("ephemeral-udp=denied");
+        }
+    }
+}
+JAVA
+( cd "$EXERCISE/assignment" && /opt/java/openjdk/bin/javac ServerProbe.java )
+printf '[limits]\ntimeout=120\nmem_mb=0\nnproc=0\ncpu=0\n' > "$EXERCISE/exercise.cfg"
+
+output="$("$CORE/phobos.sh" --config "$EXERCISE/exercise.cfg" -- /opt/java/openjdk/bin/java -cp "$EXERCISE/assignment" ServerProbe 2>&1)"
+printf '%s\n' "$output"
+echo
+if grep -qF "ephemeral-server=ok read=7" <<<"$output"; then
+  ok "shipped policy lets a server take a kernel-chosen port, and a client reach it"
+else
+  bad "shipped policy lets a server take a kernel-chosen port, and a client reach it" "$output"
+fi
+if grep -qF "fixed-server=denied" <<<"$output"; then
+  ok "shipped policy refuses a server that names a port of its own"
+else
+  bad "shipped policy refuses a server that names a port of its own" "$output"
+fi
+if grep -qF "ephemeral-udp=ok" <<<"$output"; then
+  ok "shipped policy lets a UDP socket take a kernel-chosen port, which Gradle needs for file locking"
+else
+  bad "shipped policy lets a UDP socket take a kernel-chosen port, which Gradle needs for file locking" "$output"
+fi
+
+output="$("$CORE/phobos.sh" -- /opt/java/openjdk/bin/java -cp "$EXERCISE/assignment" ServerProbe 2>&1)"
+printf '%s\n' "$output"
+echo
+if grep -qF "ephemeral-server=denied" <<<"$output" && grep -qF "fixed-server=denied" <<<"$output"; then
+  ok "a run given no --config drops the bind rule, so no server opens at all"
+else
+  bad "a run given no --config drops the bind rule, so no server opens at all" "$output"
+fi
+
 finish
