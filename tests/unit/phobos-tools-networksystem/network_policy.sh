@@ -132,28 +132,76 @@ r="$(run_bind "* 8080
 * 5353 udp")"
 [[ "$(field "$r" 2)" == "--bind-tcp 8080 --bind-udp 5353" ]] && ok "tcp and udp bind rules are emitted apart" || bad "tcp and udp bind rules are emitted apart" "--bind-tcp 8080 --bind-udp 5353" "$(field "$r" 2)"
 
-# Runs add_udp_ephemeral_bind_if_needed over a whitespace-separated argument list in a subshell.
+# Runs add_udp_ephemeral_bind_if_needed over a whitespace-separated argument list and a net.rules
+# body in a subshell.
 run_ephemeral() {
   local body=$1
+  local rules=$2
+  printf '%s' "$rules" > "$WORK/ephemeral.rules"
   (
     # shellcheck source=../../../core/phobos-tools-common/phobos-common.sh
     source "${CORE}/phobos-tools-common/phobos-common.sh"
     # Word-splitting the body into an argument array is intended here.
     # shellcheck disable=SC2206
     args=( $body )
-    add_udp_ephemeral_bind_if_needed args
+    add_udp_ephemeral_bind_if_needed args "$WORK/ephemeral.rules"
     printf '%s' "${args[*]}"
   )
 }
 
 echo
-echo "== the ephemeral udp source bind is added only when both udp directions are present =="
-got="$(run_ephemeral "--connect-udp 53 --bind-udp 5353")"
-[[ "$got" == *"--bind-udp 0"* ]] && ok "both udp directions add --bind-udp 0 for the ephemeral source" || bad "both udp directions add --bind-udp 0 for the ephemeral source" "an argument list containing --bind-udp 0" "$got"
-got="$(run_ephemeral "--connect-udp 53")"
-[[ "$got" != *"--bind-udp"* ]] && ok "a connect-only udp policy adds no bind" || bad "a connect-only udp policy adds no bind" "no --bind-udp" "$got"
-got="$(run_ephemeral "--connect-tcp 443 --bind-tcp 8080")"
-[[ "$got" != *"--bind-udp"* ]] && ok "a tcp-only policy adds no udp bind" || bad "a tcp-only policy adds no udp bind" "no --bind-udp" "$got"
+echo "== a udp [connect] rule brings the ephemeral udp source bind with it, and nothing else does =="
+got="$(run_ephemeral "--connect-udp 53" $'8.8.8.8 53 udp\n')"
+[[ "$got" == "--connect-udp 53 --ephemeral-bind-udp" ]] && ok "a udp connect rule adds the ephemeral bind grant" || bad "a udp connect rule adds the ephemeral bind grant" "--connect-udp 53 --ephemeral-bind-udp" "$got"
+got="$(run_ephemeral "" $'127.0.0.1 * udp\n')"
+[[ "$got" == "--ephemeral-bind-udp" ]] && ok "a wildcard udp rule, which emits no --connect-udp, adds it too" || bad "a wildcard udp rule, which emits no --connect-udp, adds it too" "--ephemeral-bind-udp" "$got"
+got="$(run_ephemeral "--ephemeral-bind-udp" $'8.8.8.8 53 udp\n')"
+[[ "$got" == "--ephemeral-bind-udp" ]] && ok "a grant already present is not added twice" || bad "a grant already present is not added twice" "--ephemeral-bind-udp" "$got"
+got="$(run_ephemeral "--connect-tcp 443 --bind-tcp 8080" $'1.2.3.4 443\n')"
+[[ "$got" == "--connect-tcp 443 --bind-tcp 8080" ]] && ok "a tcp-only policy gains no udp bind" || bad "a tcp-only policy gains no udp bind" "no --ephemeral-bind-udp" "$got"
+got="$(run_ephemeral "--close-bind" "")"
+[[ "$got" == "--close-bind" ]] && ok "a policy with no connect rule gains no udp bind" || bad "a policy with no connect rule gains no udp bind" "--close-bind" "$got"
+got="$(run_ephemeral "--close-bind" $'# a comment 53 udp\n8.8.8.8 53\n')"
+[[ "$got" == "--close-bind" ]] && ok "a comment does not count as a udp rule" || bad "a comment does not count as a udp rule" "--close-bind" "$got"
+
+echo
+echo "== a [bind] row for port 0 is the ephemeral grant, and every other port is still a port rule =="
+r="$(run_bind "* 0")"
+[[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" == "--ephemeral-bind-tcp" ]] && ok "port 0 emits --ephemeral-bind-tcp, not --bind-tcp 0" || bad "port 0 emits --ephemeral-bind-tcp, not --bind-tcp 0" "--ephemeral-bind-tcp" "exit $(field "$r" 1): $(field "$r" 2)"
+r="$(run_bind "* 0 udp")"
+[[ "$(field "$r" 2)" == "--ephemeral-bind-udp" ]] && ok "udp port 0 emits --ephemeral-bind-udp" || bad "udp port 0 emits --ephemeral-bind-udp" "--ephemeral-bind-udp" "$(field "$r" 2)"
+r="$(run_bind "* 8080
+* 0
+* 0 udp
+* 5353 udp")"
+[[ "$(field "$r" 2)" == "--ephemeral-bind-tcp --bind-tcp 8080 --ephemeral-bind-udp --bind-udp 5353" ]] && ok "the grant and the port rules come out together, each transport apart" || bad "the grant and the port rules come out together, each transport apart" "--ephemeral-bind-tcp --bind-tcp 8080 --ephemeral-bind-udp --bind-udp 5353" "$(field "$r" 2)"
+for refused in "* 00" "* 65536" "* 08" "* -1" "* x"; do
+  r="$(run_bind "$refused")"
+  [[ "$(field "$r" 1)" != 0 ]] && ok "the bind port '${refused#* }' is refused" || bad "the bind port '${refused#* }' is refused" "a non-zero exit" "exit $(field "$r" 1)"
+done
+r="$(run_rules "example.com 0")"
+[[ "$(field "$r" 1)" != 0 ]] && ok "port 0 is still refused for a [connect] rule" || bad "port 0 is still refused for a [connect] rule" "a non-zero exit" "exit $(field "$r" 1)"
+
+echo
+echo "== the helpers the network layer reads its flags with =="
+printf '* 8080\n* 0 udp\n' > "$WORK/grant.rules"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; bind_rules_grant_ephemeral_tcp "$WORK/grant.rules" ) && bad "a udp port 0 row is not an ephemeral listen grant" "no grant" "granted" || ok "a udp port 0 row is not an ephemeral listen grant"
+printf '* 8080\n* 0' > "$WORK/grant.rules"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; bind_rules_grant_ephemeral_tcp "$WORK/grant.rules" ) && ok "a tcp port 0 row grants it, even on a last line with no newline" || bad "a tcp port 0 row grants it, even on a last line with no newline" "granted" "no grant"
+printf '* 8080\n' > "$WORK/grant.rules"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; bind_rules_grant_ephemeral_tcp "$WORK/grant.rules" ) && bad "explicit ports alone grant no ephemeral listen" "no grant" "granted" || ok "explicit ports alone grant no ephemeral listen"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; bind_rules_grant_ephemeral_tcp "$WORK/absent.rules" ) && bad "a missing bind.rules grants nothing" "no grant" "granted" || ok "a missing bind.rules grants nothing"
+printf -- '--chdir /var/tmp/testing-dir\n--minimum-landlock-version 4\n' > "$WORK/tail.flags"
+got="$( source "${CORE}/phobos-tools-common/phobos-common.sh"; tail_minimum_landlock_version "$WORK/tail.flags" )"
+[[ "$got" == "4" ]] && ok "the minimum Landlock version is read from the tail flags" || bad "the minimum Landlock version is read from the tail flags" "4" "$got"
+printf -- '--chdir /var/tmp/testing-dir' > "$WORK/tail.flags"
+got="$( source "${CORE}/phobos-tools-common/phobos-common.sh"; tail_minimum_landlock_version "$WORK/tail.flags" )"
+[[ -z "$got" ]] && ok "tail flags without it name no minimum" || bad "tail flags without it name no minimum" "nothing" "$got"
+printf -- '--minimum-landlock-version abc' > "$WORK/tail.flags"
+got="$( source "${CORE}/phobos-tools-common/phobos-common.sh"; tail_minimum_landlock_version "$WORK/tail.flags" )"
+[[ -z "$got" ]] && ok "a minimum that is not a number is left to the enforcer to refuse" || bad "a minimum that is not a number is left to the enforcer to refuse" "nothing" "$got"
+got="$( source "${CORE}/phobos-tools-common/phobos-common.sh"; tail_minimum_landlock_version "$WORK/absent.flags" )"
+[[ -z "$got" ]] && ok "a missing tail.flags names no minimum" || bad "a missing tail.flags names no minimum" "nothing" "$got"
 
 echo
 echo "== a [connect] name rule starts the egress broker automatically; an exact name still needs a resolver =="
@@ -266,6 +314,79 @@ if [[ "$addr_rc" -eq "$PHB_ERUNTIME" && "$addr_out" == *"connect guard"* && "$ad
   ok "an address [connect] rule needs no broker and is left to the guard"
 else
   bad "an address [connect] rule needs no broker and is left to the guard" "exit ${PHB_ERUNTIME} about the connect guard, not --egress-broker" "exit ${addr_rc}: ${addr_out}"
+fi
+
+echo
+echo "== the network layer always applies the closed bind, and tells the guard what the policy grants =="
+# A guard that only writes down the words it was given, and a Landlock enforcer that does nothing,
+# so what the layer builds can be read without a kernel that has either.
+stub_landlock="$(mktemp "$WORK/stub-landlock.XXXXXX")"
+printf '#!/bin/sh\nexit 0\n' > "$stub_landlock"
+chmod +x "$stub_landlock"
+recording_guard="$(mktemp "$WORK/recording-guard.XXXXXX")"
+cat > "$recording_guard" <<RECORDING
+#!/bin/sh
+for word in "\$@"; do printf '%s\n' "\$word"; done > "$WORK/guard-args"
+exit 0
+RECORDING
+chmod +x "$recording_guard"
+
+# Runs the layer over a net.rules body, a bind.rules body and optional tail flags, and prints the
+# words the layer handed the guard on one line.
+layer_arguments() {
+  local spec
+  spec="$(mktemp -d "$WORK/layer-spec.XXXXXX")"
+  printf '%s' "$1" > "$spec/net.rules"
+  printf '%s' "$2" > "$spec/bind.rules"
+  printf '%s' "${3:-}" > "$spec/tail.flags"
+  rm -f "$WORK/guard-args"
+  bash "$CORE/phobos-networksystem.sh" --connect-guard-bin "$recording_guard" --landlock-bin "$stub_landlock" "$spec" -- true > /dev/null 2>&1
+  tr '\n' ' ' < "$WORK/guard-args"
+}
+
+got="$(layer_arguments "" "")"
+if [[ "$got" == *" --no-filesystem --close-bind "* && "$got" != *"--allow-ephemeral-listen"* && "$got" != *"--bind-tcp"* ]]; then
+  ok "a policy that names nothing still runs the enforcer with the bind closed, and allows no unbound listen"
+else
+  bad "a policy that names nothing still runs the enforcer with the bind closed, and allows no unbound listen" "--no-filesystem --close-bind, no grant" "$got"
+fi
+got="$(layer_arguments "" $'* 0\n')"
+if [[ "$got" == *"--ephemeral-bind-tcp"* && "$got" == *"--allow-ephemeral-listen --rules "* ]]; then
+  ok "a [bind] port 0 row grants the ephemeral bind and tells the guard an unbound listen is no wider"
+else
+  bad "a [bind] port 0 row grants the ephemeral bind and tells the guard an unbound listen is no wider" "--ephemeral-bind-tcp and --allow-ephemeral-listen before --rules" "$got"
+fi
+got="$(layer_arguments "" $'* 8080\n')"
+if [[ "$got" == *"--bind-tcp 8080"* && "$got" != *"--ephemeral-bind-tcp"* && "$got" != *"--allow-ephemeral-listen"* ]]; then
+  ok "an explicit [bind] port grants that port only, and an unbound listen stays refused"
+else
+  bad "an explicit [bind] port grants that port only, and an unbound listen stays refused" "--bind-tcp 8080, no ephemeral grant" "$got"
+fi
+got="$(layer_arguments "" $'* 0 udp\n')"
+if [[ "$got" == *"--ephemeral-bind-udp"* && "$got" != *"--allow-ephemeral-listen"* ]]; then
+  ok "a udp port 0 row grants the udp bind only, a listener is TCP"
+else
+  bad "a udp port 0 row grants the udp bind only, a listener is TCP" "--ephemeral-bind-udp, no --allow-ephemeral-listen" "$got"
+fi
+got="$(layer_arguments $'127.0.0.1 * udp\n' "")"
+if [[ "$got" == *"--ephemeral-bind-udp"* ]]; then
+  ok "a udp [connect] rule brings the ephemeral udp bind with it, for the source port of a send"
+else
+  bad "a udp [connect] rule brings the ephemeral udp bind with it, for the source port of a send" "--ephemeral-bind-udp" "$got"
+fi
+got="$(layer_arguments "" "" $'--chdir /x\n--minimum-landlock-version 4\n')"
+if [[ "$got" == *"--minimum-landlock-version 4 "* ]]; then
+  ok "the operator's minimum Landlock version reaches the network layer's own enforcer call"
+else
+  bad "the operator's minimum Landlock version reaches the network layer's own enforcer call" "--minimum-landlock-version 4" "$got"
+fi
+missing_spec="$(mktemp -d "$WORK/missing-landlock.XXXXXX")"
+missing_out="$(bash "$CORE/phobos-networksystem.sh" --connect-guard-bin "$recording_guard" --landlock-bin /nonexistent-landlock "$missing_spec" -- true 2>&1)"
+missing_rc=$?
+if [[ "$missing_rc" -eq "$PHB_ERUNTIME" && "$missing_out" == *"closed bind"* ]]; then
+  ok "a run with no Landlock enforcer is refused, even with a policy that names no port"
+else
+  bad "a run with no Landlock enforcer is refused, even with a policy that names no port" "exit ${PHB_ERUNTIME} naming the closed bind" "exit ${missing_rc}: ${missing_out}"
 fi
 
 finish

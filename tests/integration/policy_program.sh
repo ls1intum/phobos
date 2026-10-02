@@ -147,6 +147,9 @@ refuse_case "a [connect] port of 0 is refused"            '[connect]\nallow exam
 refuse_case "a [connect] port above 65535 is refused"     '[connect]\nallow example.test:99999\n'
 refuse_case "an external host with no port is refused"    '[connect]\nallow example.test\n'
 refuse_case "a [bind] port above 65535 is refused"        '[bind]\nallow 99999\n'
+refuse_case "a [bind] port with a leading zero is refused"  '[bind]\nallow 00\n'
+refuse_case "a [bind] port below zero is refused"           '[bind]\nallow -1\n'
+refuse_case "a udp [bind] port above 65535 is refused"      '[bind]\nallow 99999 udp\n'
 # The shell's arithmetic is 64 bits wide and wraps, so a port longer than the protocol has
 # digits for must be refused by its shape rather than by its value: 2^64 + 1 evaluates to 1.
 refuse_case "a [connect] port of twenty digits is refused" '[connect]\nallow example.test:18446744073709551617\n'
@@ -194,6 +197,13 @@ SPEC_BIND="$(fresh_spec)"
 printf '[bind]\nallow 8080\n' > "$WORK/good-bind.cfg"
 bash "$CORE_X/phobos-policysystem.sh" --spec-dir "$SPEC_BIND" --config "$WORK/good-bind.cfg" > /dev/null 2>&1
 check "a bare [bind] port still builds a specification (host stored as *)" "* 8080" "$(cat "$SPEC_BIND/bind.rules")"
+
+SPEC_EPHEMERAL="$(fresh_spec)"
+printf '[bind]\nallow 0\nallow 0 udp\nallow 8080\n' > "$WORK/good-ephemeral.cfg"
+bash "$CORE_X/phobos-policysystem.sh" --spec-dir "$SPEC_EPHEMERAL" --config "$WORK/good-ephemeral.cfg" > /dev/null 2>&1
+check "a [bind] port 0 builds a specification for each transport, beside an explicit port" "* 0
+* 0 udp
+* 8080" "$(cat "$SPEC_EPHEMERAL/bind.rules")"
 
 echo
 echo "== an unenforceable [accept] rule is refused against the merged policy =="

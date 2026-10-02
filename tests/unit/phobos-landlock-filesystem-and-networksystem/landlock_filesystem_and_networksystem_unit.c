@@ -1321,6 +1321,93 @@ static void test_what_reaches_the_kernel(void) {
           strcmp(record->entered_directory, "/tmp") == 0);
 }
 
+/* --close-bind and the grants of port 0 that go with it. Bind is closed as far as the kernel can
+ * close it, TCP from Landlock version 4 and UDP from version 10, and a direction it cannot close is
+ * a warning and never a refusal, which only an explicit port rule is. */
+static void test_close_bind(void) {
+    printf("\nClosing bind\n");
+    constexpr uint64_t BIND_BOTH = LANDLOCK_ACCESS_NETWORK_BIND_TCP | LANDLOCK_ACCESS_NETWORK_BIND_UDP;
+    char *closed[] = {"phobos-landlock-filesystem-and-networksystem", "--no-filesystem", "--close-bind", "--", "/bin/true", NULL};
+
+    mock_landlock_version = 8;
+    expect_exit("--close-bind runs on a version 8 kernel", 0, closed);
+    check("version 8 handles TCP bind and nothing else, and grants nothing",
+          record->handled_access_network == LANDLOCK_ACCESS_NETWORK_BIND_TCP && record->port_rule_count == 0);
+    check("version 8 is told UDP bind stays open", stderr_says("cannot close UDP bind"));
+    check("version 8 is not told about TCP bind", !stderr_says("cannot close TCP bind"));
+    check("the warning names the option that would refuse such a kernel",
+          stderr_says("--minimum-landlock-version 10"));
+    check("the warning does not read as a denial the run's report would count",
+          !stderr_says("Permission denied") && !stderr_says("EACCES"));
+
+    mock_landlock_version = 10;
+    expect_exit("--close-bind runs on a version 10 kernel", 0, closed);
+    check("version 10 handles both bind directions and grants nothing",
+          record->handled_access_network == BIND_BOTH && record->port_rule_count == 0);
+    check("version 10 is told nothing about bind", !stderr_says("cannot close"));
+
+    mock_landlock_version = 3;
+    expect_exit("--close-bind runs on a version 3 kernel", 0, closed);
+    check("version 3 can close no bind direction, so no ruleset is created at all",
+          record->handled_access_network == 0 && record->ruleset_attributes_size == 0);
+    check("version 3 is told about both directions",
+          stderr_says("cannot close TCP bind") && stderr_says("cannot close UDP bind"));
+    check("the TCP warning names the option that would refuse such a kernel",
+          stderr_says("--minimum-landlock-version 4"));
+
+    char *demanding[] = {"phobos-landlock-filesystem-and-networksystem", "--minimum-landlock-version", "4", "--no-filesystem",
+                         "--close-bind", "--", "/bin/true", NULL};
+    mock_landlock_version = 3;
+    expect_exit("a demanded version of 4 refuses a kernel that cannot close TCP bind", EXIT_CODE_POLICY_ERROR, demanding);
+
+    char *grants[] = {"phobos-landlock-filesystem-and-networksystem", "--no-filesystem", "--close-bind", "--ephemeral-bind-tcp",
+                      "--ephemeral-bind-udp", "--", "/bin/true", NULL};
+    mock_landlock_version = 10;
+    expect_exit("both ephemeral grants run on a version 10 kernel", 0, grants);
+    check("each grant is port 0 with its own direction's right and nothing else",
+          record->port_rule_count == 2 && record->port_rule_port[0] == 0 && record->port_rule_port[1] == 0 &&
+              record->port_rule_allowed_access[0] == LANDLOCK_ACCESS_NETWORK_BIND_TCP &&
+              record->port_rule_allowed_access[1] == LANDLOCK_ACCESS_NETWORK_BIND_UDP);
+
+    mock_landlock_version = 8;
+    expect_exit("both ephemeral grants run on a version 8 kernel", 0, grants);
+    check("only the TCP grant reaches the kernel, UDP bind is not handled there",
+          record->port_rule_count == 1 && record->port_rule_port[0] == 0 &&
+              record->port_rule_allowed_access[0] == LANDLOCK_ACCESS_NETWORK_BIND_TCP);
+
+    mock_landlock_version = 3;
+    expect_exit("the grants never refuse a kernel too old to close bind", 0, grants);
+    check("no grant reaches a kernel that handles no bind direction", record->port_rule_count == 0);
+
+    char *grant_only[] = {"phobos-landlock-filesystem-and-networksystem", "--no-filesystem", "--ephemeral-bind-tcp", "--", "/bin/true", NULL};
+    mock_landlock_version = 8;
+    expect_exit("a grant without --close-bind runs", 0, grant_only);
+    check("a grant alone handles no bind direction, so it grants nothing",
+          record->port_rule_count == 0 && record->handled_access_network == 0);
+
+    char *explicit_port[] = {"phobos-landlock-filesystem-and-networksystem", "--no-filesystem", "--close-bind", "--bind-tcp", "8080",
+                             "--ephemeral-bind-tcp", "--", "/bin/true", NULL};
+    mock_landlock_version = 8;
+    expect_exit("an explicit bind port beside the closed bind runs", 0, explicit_port);
+    check("the explicit port and the ephemeral grant both reach the kernel, in that order",
+          record->port_rule_count == 2 && record->port_rule_port[0] == 8080 && record->port_rule_port[1] == 0 &&
+              record->handled_access_network == LANDLOCK_ACCESS_NETWORK_BIND_TCP);
+    mock_landlock_version = 3;
+    expect_exit("an explicit bind port still refuses a kernel that cannot handle network rules", EXIT_CODE_POLICY_ERROR, explicit_port);
+
+    char *explicit_udp[] = {"phobos-landlock-filesystem-and-networksystem", "--no-filesystem", "--close-bind", "--bind-udp", "5353",
+                            "--", "/bin/true", NULL};
+    mock_landlock_version = 8;
+    expect_exit("an explicit udp bind port still refuses a kernel below version 10", EXIT_CODE_POLICY_ERROR, explicit_udp);
+
+    char *with_filesystem[] = {"phobos-landlock-filesystem-and-networksystem", "--close-bind", "--rights=r", "/usr", "--", "/bin/true", NULL};
+    mock_landlock_version = 8;
+    expect_exit("--close-bind beside a filesystem rule runs", 0, with_filesystem);
+    check("the filesystem rights and the closed TCP bind are handled together",
+          record->handled_access_filesystem == filesystem_rights_for_version(8) &&
+              record->handled_access_network == LANDLOCK_ACCESS_NETWORK_BIND_TCP);
+}
+
 /* Room for a Landlock version written out as decimal text. */
 static constexpr size_t VERSION_TEXT_LENGTH = 16;
 
@@ -1428,6 +1515,7 @@ int main(void) {
     test_syscall_failures();
     test_success_paths();
     test_what_reaches_the_kernel();
+    test_close_bind();
     test_boundaries();
     printf("\n%d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;

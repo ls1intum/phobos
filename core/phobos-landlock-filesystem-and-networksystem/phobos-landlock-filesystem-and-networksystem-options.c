@@ -28,6 +28,7 @@ static constexpr int OPTION_AND_VALUE_WORDS = 2;
             "Usage: phobos-landlock-filesystem-and-networksystem --rights=LETTERS PATH [--rights=LETTERS PATH ...]\n"
             "                       [--connect-tcp PORT] [--bind-tcp PORT]\n"
             "                       [--connect-udp PORT] [--bind-udp PORT]\n"
+            "                       [--close-bind] [--ephemeral-bind-tcp] [--ephemeral-bind-udp]\n"
             "                       [--chdir DIRECTORY] [--no-filesystem]\n"
             "                       [--minimum-landlock-version NUMBER] [--verbose]\n"
             "                       -- COMMAND [ARGUMENTS...]\n"
@@ -154,6 +155,21 @@ void parse_arguments(int argument_count, char *arguments[], struct options *opti
             argument_index++;
             continue;
         }
+        if (strcmp(argument, "--close-bind") == 0) {
+            options->close_bind = true;
+            argument_index++;
+            continue;
+        }
+        if (strcmp(argument, "--ephemeral-bind-tcp") == 0) {
+            options->ephemeral_bind_tcp = true;
+            argument_index++;
+            continue;
+        }
+        if (strcmp(argument, "--ephemeral-bind-udp") == 0) {
+            options->ephemeral_bind_udp = true;
+            argument_index++;
+            continue;
+        }
         if (argument_index + 1 >= argument_count) {
             print_usage_and_exit();
         }
@@ -215,6 +231,20 @@ uint64_t handled_network_access(const struct options *options) {
         handled |= LANDLOCK_ACCESS_NETWORK_CONNECT_SEND_UDP;
     }
     if (options->bind_udp_port_count > 0) {
+        handled |= LANDLOCK_ACCESS_NETWORK_BIND_UDP;
+    }
+    return handled;
+}
+
+uint64_t close_bind_access(const struct options *options, int landlock_version) {
+    uint64_t handled = 0;
+    if (!options->close_bind) {
+        return handled;
+    }
+    if (landlock_version >= FIRST_VERSION_WITH_NETWORK) {
+        handled |= LANDLOCK_ACCESS_NETWORK_BIND_TCP;
+    }
+    if (landlock_version >= FIRST_VERSION_WITH_UDP) {
         handled |= LANDLOCK_ACCESS_NETWORK_BIND_UDP;
     }
     return handled;

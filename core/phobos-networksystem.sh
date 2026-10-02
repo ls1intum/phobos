@@ -246,36 +246,47 @@ if [[ -s "$ACCEPT_RULES" ]]; then
     exit "${PHB_ERUNTIME}"
   fi
 fi
+if bind_rules_grant_ephemeral_tcp "${SPEC_DIR}/bind.rules"; then
+  guard_command+=( --allow-ephemeral-listen )
+fi
 guard_command+=( --rules "$RULES" -- )
 
-# The Landlock TCP-port rules are the kernel-enforced half of the network boundary, and this
+# The Landlock port rules are the kernel-enforced half of the network boundary, and this
 # layer applies them itself so that the network restriction is whole here rather than split
 # across another layer. They go on a network-only Landlock ruleset (--no-filesystem), which
 # leaves the filesystem to the filesystem layer's own ruleset and composes with it by
 # intersection. The ruleset is applied inside the connect guard's child lineage, after its
 # supervisor has forked, so the supervisor that connects on the command's behalf stays
-# unrestricted. When the policy names no TCP port, no ruleset is needed here and the guard alone
-# filters the run.
+# unrestricted.
+#
+# Bind is closed by default: --close-bind hands the kernel the bind directions with nothing
+# granted, so only a [bind] row opens a port, and a row for port 0 opens only the kernel's own
+# choice of port. The ruleset is therefore applied on every run, also when the policy names no
+# port at all and in a run given no --config, where it is what keeps a bare run from listening.
 LANDLOCK_BIN="${LANDLOCK_BIN_OPT:-${HERE}/phobos-landlock-filesystem-and-networksystem}"
 command_tail=( "$@" )
-port_args=()
+port_args=( --close-bind )
 build_network_args port_args "$RULES"
 build_bind_args port_args "${SPEC_DIR}/bind.rules"
-# When the policy handles both UDP directions, the kernel gates an outgoing datagram's ephemeral
-# source-port auto-bind by BIND_UDP, so a "--bind-udp 0" is added or an allowed send is denied its
-# source. Added here, after both builders, because it depends on connect and bind rules together.
-add_udp_ephemeral_bind_if_needed port_args
-if (( ${#port_args[@]} > 0 )); then
-  # Refused when missing rather than left to fail obscurely inside the guard's child, so a run
-  # that names a TCP port cannot lose its kernel-enforced port rules without a clear message.
-  if [[ ! -f "$LANDLOCK_BIN" || ! -x "$LANDLOCK_BIN" ]]; then
-    report "The Landlock binary '${LANDLOCK_BIN}' is missing or not executable; refusing to run without the TCP-port rules the [connect]/[bind] policy names. (PHB-ERUNTIME)"
-    exit "${PHB_ERUNTIME}"
-  fi
-  landlock_prefix=( "$LANDLOCK_BIN" --no-filesystem )
-  if (( PHB_DEBUG_ENABLED )); then landlock_prefix+=( --verbose ); fi
-  command_tail=( "${landlock_prefix[@]}" "${port_args[@]}" -- "${command_tail[@]}" )
+# An allowed datagram send needs a source port, which the kernel auto-binds and BIND_UDP now
+# gates, so a UDP [connect] rule brings the ephemeral grant with it. Added after both builders
+# because it reads the connect rules, not the arguments they made.
+add_udp_ephemeral_bind_if_needed port_args "$RULES"
+# Refused when missing rather than left to fail obscurely inside the guard's child, so a run
+# cannot lose the kernel-enforced port rules and the closed bind without a clear message.
+if [[ ! -f "$LANDLOCK_BIN" || ! -x "$LANDLOCK_BIN" ]]; then
+  report "The Landlock binary '${LANDLOCK_BIN}' is missing or not executable; refusing to run without the port rules and the closed bind. (PHB-ERUNTIME)"
+  exit "${PHB_ERUNTIME}"
 fi
+landlock_prefix=( "$LANDLOCK_BIN" --no-filesystem )
+if (( PHB_DEBUG_ENABLED )); then landlock_prefix+=( --verbose ); fi
+# The operator's --minimum-landlock-version lives in the tail flags, which only the filesystem
+# layer reads, so it is read here too, or a kernel too old to close bind could not be refused.
+minimum_landlock_version="$(tail_minimum_landlock_version "${SPEC_DIR}/tail.flags")"
+if [[ -n "$minimum_landlock_version" ]]; then
+  landlock_prefix+=( --minimum-landlock-version "$minimum_landlock_version" )
+fi
+command_tail=( "${landlock_prefix[@]}" "${port_args[@]}" -- "${command_tail[@]}" )
 
 # The guard runs as a child rather than replacing this shell, so the EXIT trap is still here to
 # clean up once it ends; its status, the command's own, is passed through unchanged.
