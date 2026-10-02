@@ -36,6 +36,7 @@ MODULES=(
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-child.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-destination.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-diagnostics.c"
+  "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-held-sockets.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-options.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-rules.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-socket-types.c"
@@ -67,6 +68,8 @@ WRAPS=(
   -Wl,--wrap=getsockopt
   -Wl,--wrap=ioctl
   -Wl,--wrap=fcntl
+  -Wl,--wrap=listen
+  -Wl,--wrap=getsockname
   -Wl,--wrap=readlink
 )
 

@@ -15,6 +15,12 @@
  * no broker set, the guard connects to the destination itself as before. */
 bool configure_broker(const char *endpoint);
 
+/* Allow, or refuse, a listen() on a socket that was never bound. The kernel gives such a socket a
+ * port of its own choosing, which no bind rule judged, so it is refused unless the policy
+ * grants an ephemeral bind; a socket bound to an explicit port, which Landlock already judged,
+ * may always listen. */
+void configure_ephemeral_listen(bool allowed);
+
 /* Receive the one descriptor the child sends. Returns it, or -1 on any failure,
  * including the child exiting before it sent one (an end of file here). */
 int receive_descriptor(int socket_descriptor);
@@ -35,8 +41,9 @@ int connect_within_deadline(int family, const struct sockaddr *address, socklen_
 
 /* Make the allowed connection here and inject the connected socket back over the
  * descriptor number the command called connect() on, so the command's connect()
- * returns 0 with a socket already connected to the address the check saw. */
-void connect_on_behalf(int notify_descriptor, struct seccomp_notif_resp *response,
+ * returns 0 with a socket already connected to the address the check saw. Answers whether the
+ * connected socket was injected, so the caller can let go of the socket it replaced. */
+bool connect_on_behalf(int notify_descriptor, struct seccomp_notif_resp *response,
                        __u64 id, int target_descriptor, int family,
                        const struct sockaddr *address, socklen_t length);
 
@@ -58,6 +65,10 @@ int exit_code_from_status(int status);
 /* Forgets any configured broker, so each test case starts with the guard connecting to the
  * destination itself unless it configures a broker of its own. */
 void broker_reset_for_tests(void);
+
+/* Forgets the ephemeral-listen setting, so each test case starts with an unbound socket refused
+ * unless it allows one itself. */
+void ephemeral_listen_reset_for_tests(void);
 #endif
 
 #endif

@@ -651,4 +651,267 @@ else
   bad "a forbidden connect is refused before the broker, which receives nothing" "rc=$rc out=$out brk=$brk"
 fi
 
+echo
+echo "== a listen() is run by the guard on a socket it created, so an unbound socket cannot become a listener =="
+cat > "$WORK/lprobe.c" <<'C'
+#define _GNU_SOURCE
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+/* How long the probe waits for the closed connection to leave the port before it binds it again. */
+enum {
+    REBIND_PAUSE_MICROSECONDS = 200000
+};
+/* The descriptor number the race flips between a bound and an unbound socket, and how many listens
+ * the race attempts while it does. */
+enum {
+    RACE_DESCRIPTOR = 50,
+    RACE_LISTENS = 20000,
+    BACKLOG = 4,
+    INHERITED_DESCRIPTOR = 3
+};
+static atomic_int race_over;
+static int race_bound_socket;
+static int race_unbound_socket;
+
+static void loopback(struct sockaddr_in *address, int port) {
+    memset(address, 0, sizeof(*address));
+    address->sin_family = AF_INET;
+    address->sin_port = htons((unsigned short)port);
+    address->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+}
+
+static int bound_port(int fd) {
+    struct sockaddr_in address;
+    socklen_t length = sizeof(address);
+    if (getsockname(fd, (struct sockaddr *)&address, &length) != 0) {
+        return -1;
+    }
+    return ntohs(address.sin_port);
+}
+
+/* The thread that puts first the unbound and then the bound socket under the descriptor the main
+ * thread is listening on, as fast as it can. */
+static void *flip(void *unused) {
+    (void)unused;
+    while (!atomic_load(&race_over)) {
+        dup2(race_unbound_socket, RACE_DESCRIPTOR);
+        dup2(race_bound_socket, RACE_DESCRIPTOR);
+    }
+    return NULL;
+}
+
+static int race(void) {
+    race_bound_socket = socket(AF_INET, SOCK_STREAM, 0);
+    race_unbound_socket = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in address;
+    loopback(&address, 0);
+    if (bind(race_bound_socket, (struct sockaddr *)&address, sizeof(address)) != 0) {
+        printf("RACE-BIND-FAILED %s\n", strerror(errno));
+        return 1;
+    }
+    dup2(race_bound_socket, RACE_DESCRIPTOR);
+    pthread_t thread;
+    pthread_create(&thread, NULL, flip, NULL);
+    for (int attempt = 0; attempt < RACE_LISTENS; attempt++) {
+        (void)listen(RACE_DESCRIPTOR, BACKLOG);
+    }
+    atomic_store(&race_over, 1);
+    pthread_join(thread, NULL);
+    int port = bound_port(race_unbound_socket);
+    if (port == 0) {
+        printf("RACE-NO-LISTENER\n");
+    } else {
+        printf("RACE-LISTENER-CREATED port %d\n", port);
+    }
+    return 0;
+}
+
+static int stream_server(int family, const struct sockaddr *address, socklen_t length, const char *label) {
+    int server = socket(family, SOCK_STREAM, 0);
+    int reuse = 1;
+    setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    if (bind(server, address, length) != 0) {
+        printf("%s-BIND-FAILED %s\n", label, strerror(errno));
+        return 1;
+    }
+    if (listen(server, BACKLOG) != 0) {
+        printf("%s-LISTEN-FAILED %s\n", label, strerror(errno));
+        return 1;
+    }
+    if (family == AF_UNIX) {
+        printf("%s-LISTEN-OK\n", label);
+        return 0;
+    }
+    int client = socket(family, SOCK_STREAM, 0);
+    if (family == AF_INET) {
+        struct sockaddr_in target;
+        socklen_t target_length = sizeof(target);
+        getsockname(server, (struct sockaddr *)&target, &target_length);
+        if (connect(client, (struct sockaddr *)&target, target_length) != 0) {
+            printf("%s-CONNECT-FAILED %s\n", label, strerror(errno));
+            return 1;
+        }
+    }
+    int accepted = accept(server, NULL, NULL);
+    printf("%s-LISTEN-OK accept %s\n", label, accepted >= 0 ? "ok" : strerror(errno));
+    if (accepted >= 0) {
+        close(accepted);
+    }
+    close(client);
+    if (family == AF_INET) {
+        int port = bound_port(server);
+        close(server);
+        usleep(REBIND_PAUSE_MICROSECONDS);
+        int again = socket(AF_INET, SOCK_STREAM, 0);
+        int one = 1;
+        setsockopt(again, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+        struct sockaddr_in same;
+        loopback(&same, port);
+        printf("%s-REBIND %s\n", label, bind(again, (struct sockaddr *)&same, sizeof(same)) == 0 ? "ok" : strerror(errno));
+    }
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc >= 2 && strcmp(argv[1], "race") == 0) {
+        return race();
+    }
+    if (argc >= 2 && strcmp(argv[1], "bound") == 0) {
+        struct sockaddr_in address;
+        loopback(&address, 0);
+        return stream_server(AF_INET, (struct sockaddr *)&address, sizeof(address), "BOUND");
+    }
+    if (argc >= 3 && strcmp(argv[1], "unix") == 0) {
+        struct sockaddr_un address;
+        memset(&address, 0, sizeof(address));
+        address.sun_family = AF_UNIX;
+        snprintf(address.sun_path, sizeof(address.sun_path), "%s", argv[2]);
+        unlink(argv[2]);
+        return stream_server(AF_UNIX, (struct sockaddr *)&address, sizeof(address), "UNIX");
+    }
+    if (argc >= 2 && strcmp(argv[1], "twice") == 0) {
+        int server = socket(AF_INET, SOCK_STREAM, 0);
+        struct sockaddr_in address;
+        loopback(&address, 0);
+        bind(server, (struct sockaddr *)&address, sizeof(address));
+        int first = listen(server, BACKLOG);
+        int second = listen(server, BACKLOG + 1);
+        printf("TWICE first %s second %s\n", first == 0 ? "ok" : strerror(errno), second == 0 ? "ok" : strerror(errno));
+        return 0;
+    }
+    if (argc >= 5 && strcmp(argv[1], "holder") == 0) {
+        int outside = socket(AF_INET, SOCK_STREAM, 0);
+        struct sockaddr_in address;
+        loopback(&address, 0);
+        bind(outside, (struct sockaddr *)&address, sizeof(address));
+        dup2(outside, INHERITED_DESCRIPTOR);
+        execl(argv[2], argv[2], "--rules", argv[3], "--", argv[4], "inherited", "3", (char *)NULL);
+        return 1;
+    }
+    if (argc >= 3 && strcmp(argv[1], "inherited") == 0) {
+        int rc = listen(atoi(argv[2]), BACKLOG);
+        printf("INHERITED %s\n", rc == 0 ? "ok" : strerror(errno));
+        return 0;
+    }
+    if (argc >= 2 && strcmp(argv[1], "unbound") == 0) {
+        int server = socket(AF_INET, SOCK_STREAM, 0);
+        int rc = listen(server, BACKLOG);
+        if (rc != 0) {
+            printf("UNBOUND %s\n", strerror(errno));
+            return 0;
+        }
+        int port = bound_port(server);
+        int client = socket(AF_INET, SOCK_STREAM, 0);
+        struct sockaddr_in target;
+        loopback(&target, port);
+        printf("UNBOUND ok port %d reachable %s\n", port, connect(client, (struct sockaddr *)&target, sizeof(target)) == 0 ? "yes" : "no");
+        return 0;
+    }
+    fprintf(stderr, "usage: lprobe race|bound|unbound|twice | unix <path> | inherited <fd> | holder <guard> <rules> <lprobe>\n");
+    return 2;
+}
+C
+if ! "$compiler" -O2 -pthread -o "$WORK/lprobe" "$WORK/lprobe.c" 2>"$WORK/lprobe-cc.log"; then
+  bad "the listen probe builds" "$(cat "$WORK/lprobe-cc.log")"
+  finish
+fi
+printf '127.0.0.1 *\n' > "$WORK/rules-loopback"
+
+out="$("$WORK/guard" --rules "$WORK/rules-loopback" -- "$WORK/lprobe" bound 2>&1)"
+if [[ "$out" == *"BOUND-LISTEN-OK accept ok"* ]]; then
+  ok "a socket bound to a port listens, a client connects and accept() sees it"
+else
+  bad "a socket bound to a port listens, a client connects and accept() sees it" "$out"
+fi
+if [[ "$out" == *"BOUND-REBIND ok"* ]]; then
+  ok "the port is free again once the command closes its listener, the guard keeps no copy"
+else
+  bad "the port is free again once the command closes its listener, the guard keeps no copy" "$out"
+fi
+
+out="$("$WORK/guard" --rules "$WORK/rules-loopback" -- "$WORK/lprobe" unix "$WORK/listen.sock" 2>&1)"
+if [[ "$out" == *"UNIX-LISTEN-OK"* ]]; then
+  ok "a UNIX-domain socket still binds and listens under the guard"
+else
+  bad "a UNIX-domain socket still binds and listens under the guard" "$out"
+fi
+
+out="$("$WORK/guard" --rules "$WORK/rules-loopback" -- "$WORK/lprobe" twice 2>&1)"
+if [[ "$out" == *"TWICE first ok second ok"* ]]; then
+  ok "a repeated listen succeeds, without changing anything"
+else
+  bad "a repeated listen succeeds, without changing anything" "$out"
+fi
+
+out="$("$WORK/guard" --rules "$WORK/rules-loopback" -- "$WORK/lprobe" unbound 2>&1)"
+if [[ "$out" == *"UNBOUND Permission denied"* ]]; then
+  ok "a socket that was never bound is refused when it listens, so no listener appears on a port nothing judged"
+else
+  bad "a socket that was never bound is refused when it listens, so no listener appears on a port nothing judged" "$out"
+fi
+
+out="$("$WORK/lprobe" unbound 2>&1)"
+if [[ "$out" == *"UNBOUND ok"*"reachable yes"* ]]; then
+  ok "control: without the guard the same unbound listen creates a reachable listener"
+else
+  bad "control: without the guard the same unbound listen creates a reachable listener" "$out"
+fi
+
+out="$("$WORK/guard" --rules "$WORK/rules-loopback" --allow-ephemeral-listen -- "$WORK/lprobe" unbound 2>&1)"
+if [[ "$out" == *"UNBOUND ok"*"reachable yes"* ]]; then
+  ok "with --allow-ephemeral-listen the same unbound listen works and is reachable"
+else
+  bad "with --allow-ephemeral-listen the same unbound listen works and is reachable" "$out"
+fi
+
+out="$("$WORK/lprobe" holder "$WORK/guard" "$WORK/rules-loopback" "$WORK/lprobe" 2>&1)"
+if [[ "$out" == *"INHERITED Permission denied"* ]]; then
+  ok "a socket the guard did not create, here a bound one inherited from outside, cannot listen"
+else
+  bad "a socket the guard did not create, here a bound one inherited from outside, cannot listen" "$out"
+fi
+
+out="$("$WORK/guard" --rules "$WORK/rules-loopback" -- "$WORK/lprobe" race 2>&1)"
+if [[ "$out" == *"RACE-NO-LISTENER"* ]]; then
+  ok "swapping an unbound socket under the descriptor while it listens never creates a listener"
+else
+  bad "swapping an unbound socket under the descriptor while it listens never creates a listener" "$out"
+fi
+
+out="$("$WORK/lprobe" race 2>&1)"
+if [[ "$out" == *"RACE-LISTENER-CREATED"* ]]; then
+  ok "control: without the guard the same swap does create a listener, so the race really reaches listen()"
+else
+  bad "control: without the guard the same swap does create a listener, so the race really reaches listen()" "$out"
+fi
+
 finish

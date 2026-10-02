@@ -51,6 +51,7 @@
 #undef main
 #include "../../../core/phobos-seccomp-networksystem/phobos-seccomp-networksystem-child.h"
 #include "../../../core/phobos-seccomp-networksystem/phobos-seccomp-networksystem-destination.h"
+#include "../../../core/phobos-seccomp-networksystem/phobos-seccomp-networksystem-held-sockets.h"
 #include "../../../core/phobos-seccomp-networksystem/phobos-seccomp-networksystem-socket-types.h"
 
 #include <linux/filter.h>
@@ -179,6 +180,16 @@ struct behaviour {
     int readlink_kind;
     unsigned long long readlink_inode;
     int fcntl_fails;
+    /* the listen the supervisor runs itself, and the socket address it reads first */
+    int notif_listen_backlog;
+    int listen_result;
+    int listen_errno;
+    int listen_calls;
+    int last_listen_backlog;
+    int last_listen_descriptor;
+    int getsockname_result;
+    int getsockname_family;
+    uint16_t getsockname_port;
     /* the peer-address read */
     ssize_t process_vm_readv_result;
     /* the outward connection */
@@ -236,6 +247,9 @@ static void reset_behaviour(void) {
     broker_reset_for_tests();
     set_verbose(false);
     socket_types_reset_for_tests();
+    held_sockets_reset_for_tests();
+    ephemeral_listen_reset_for_tests();
+    bx->getsockname_family = AF_INET;
 }
 
 /* ------------------------------------------------------------------- wraps */
@@ -523,6 +537,33 @@ int __wrap_fcntl(int fd, int command, ...) {
     return 0;
 }
 
+int __wrap_listen(int fd, int backlog) {
+    bx->listen_calls++;
+    bx->last_listen_descriptor = fd;
+    bx->last_listen_backlog = backlog;
+    if (bx->listen_result != 0) {
+        errno = bx->listen_errno;
+        return -1;
+    }
+    return 0;
+}
+
+int __wrap_getsockname(int fd, struct sockaddr *address, socklen_t *length) {
+    (void)fd;
+    if (bx->getsockname_result != 0) {
+        errno = ENOTSOCK;
+        return -1;
+    }
+    memset(address, 0, *length);
+    address->sa_family = (sa_family_t)bx->getsockname_family;
+    if (bx->getsockname_family == AF_INET) {
+        ((struct sockaddr_in *)address)->sin_port = htons(bx->getsockname_port);
+    } else if (bx->getsockname_family == AF_INET6) {
+        ((struct sockaddr_in6 *)address)->sin6_port = htons(bx->getsockname_port);
+    }
+    return 0;
+}
+
 ssize_t __wrap_readlink(const char *path, char *buffer, size_t size) {
     (void)path;
     if (bx->readlink_kind == READLINK_FAILS) {
@@ -683,6 +724,9 @@ int __wrap_ioctl(int fd, unsigned long request, ...) {
         } else if (bx->notif_recv_nr == __NR_sendmsg) {
             req->data.args[1] = FAKE_ADDRESS_POINTER;
             req->data.args[2] = bx->notif_send_flags;
+        } else if (bx->notif_recv_nr == __NR_listen) {
+            req->data.args[0] = bx->notif_recv_target_fd;
+            req->data.args[1] = (uint64_t)bx->notif_listen_backlog;
         } else {
             req->data.args[0] = bx->notif_recv_target_fd;
             req->data.args[1] = FAKE_ADDRESS_POINTER;
@@ -1005,6 +1049,15 @@ static constexpr uint64_t CREATED_NONBLOCKING_UDP_INODE = 8201;  /* the non-bloc
 static constexpr uint64_t TRACKED_DATAGRAM_INODE = 8300;         /* a datagram socket already recorded */
 static constexpr uint64_t UNNAMEABLE_STREAM_INODE = 8300;        /* a recorded stream socket /proc cannot name */
 static constexpr uint64_t TRACKED_STREAM_INODE = 8400;           /* a stream socket already recorded */
+static constexpr uint64_t HELD_BOUND_INODE = 9001;               /* a held socket bound to an explicit port */
+static constexpr uint64_t HELD_UNBOUND_INODE = 9002;             /* a held socket never bound */
+static constexpr uint64_t HELD_UNIX_INODE = 9003;                /* a held UNIX socket */
+static constexpr uint64_t NEVER_HELD_INODE = 9004;               /* a socket the supervisor never created */
+static constexpr uint64_t CREATED_UNIX_INODE = 9005;             /* the UNIX socket the guard creates */
+static constexpr uint64_t CREATED_SEQPACKET_INODE = 9006;        /* the sequenced-packet socket the guard creates */
+static constexpr int HELD_DESCRIPTOR = 700;                      /* a stand-in for the supervisor's own descriptor */
+static constexpr int FAKE_BACKLOG = 5;                           /* the backlog a listen asks for */
+static constexpr uint16_t FAKE_BOUND_PORT = 8080;                /* the port a held socket is bound to */
 
 static void service_once(void) {
     struct seccomp_notif request;
@@ -1420,10 +1473,11 @@ static void test_socket_tracking(void) {
     reset_behaviour();
     bx->notif_recv_nr = __NR_socket;
     bx->notif_socket_domain = AF_UNIX;
-    bx->notif_socket_type = SOCK_STREAM;
+    bx->notif_socket_type = SOCK_DGRAM;
     service_once();
-    check("a non-INET socket is left to the kernel untracked",
-          bx->answers == 1 && bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+    check("a socket that is neither a tracked INET socket nor able to listen is left to the kernel",
+          bx->answers == 1 && bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE &&
+              held_sockets_count_for_tests() == 0);
 
     reset_behaviour();
     bx->notif_recv_family = AF_INET;
@@ -1519,6 +1573,260 @@ static void test_socket_tracking(void) {
     check("a full table still records by evicting a slot, and an absent inode reads unknown",
           lookup_socket_type(SOCKET_TYPE_TABLE_SIZE + 1) == FD_TYPE_DGRAM
               && lookup_socket_type(SOCKET_TYPE_TABLE_SIZE + 2) == FD_TYPE_UNKNOWN);
+}
+
+/* Points the next notification at a listen() on a socket with this inode. */
+static void arrange_listen(uint64_t inode) {
+    bx->notif_recv_nr = __NR_listen;
+    bx->notif_recv_target_fd = 6;
+    bx->notif_listen_backlog = FAKE_BACKLOG;
+    bx->readlink_inode = inode;
+}
+
+static bool answered_not_continued(void) {
+    return bx->answers == 1 && bx->last_answer_flags != SECCOMP_USER_NOTIF_FLAG_CONTINUE;
+}
+
+/* Every sockets the supervisor creates for a listen, and every way a listen() is answered. */
+static void test_listen_closure(void) {
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_UNIX;
+    bx->notif_socket_type = SOCK_STREAM;
+    bx->readlink_inode = CREATED_UNIX_INODE;
+    service_once();
+    check("a UNIX stream socket is created by the guard, held, and not tracked as INET",
+          bx->answers == 1 && bx->last_answer_val == FAKE_ADDFD_DESCRIPTOR &&
+              held_socket_descriptor(CREATED_UNIX_INODE) == FAKE_OUTWARD_SOCKET_DESCRIPTOR &&
+              lookup_socket_type(CREATED_UNIX_INODE) == FD_TYPE_UNKNOWN);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_INET;
+    bx->notif_socket_type = SOCK_STREAM;
+    bx->readlink_inode = CREATED_TCP_INODE;
+    service_once();
+    check("an INET stream socket is both tracked and held",
+          bx->answers == 1 && lookup_socket_type(CREATED_TCP_INODE) == FD_TYPE_STREAM &&
+              held_socket_descriptor(CREATED_TCP_INODE) == FAKE_OUTWARD_SOCKET_DESCRIPTOR);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_INET6;
+    bx->notif_socket_type = SOCK_SEQPACKET;
+    bx->readlink_inode = CREATED_SEQPACKET_INODE;
+    service_once();
+    check("a sequenced-packet socket is held but not tracked, it can listen and never connects here",
+          bx->answers == 1 && held_socket_descriptor(CREATED_SEQPACKET_INODE) == FAKE_OUTWARD_SOCKET_DESCRIPTOR &&
+              lookup_socket_type(CREATED_SEQPACKET_INODE) == FD_TYPE_UNKNOWN);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_INET;
+    bx->notif_socket_type = SOCK_DGRAM;
+    bx->readlink_inode = CREATED_UDP_INODE;
+    service_once();
+    check("a datagram socket is tracked but never held, it cannot listen",
+          bx->answers == 1 && lookup_socket_type(CREATED_UDP_INODE) == FD_TYPE_DGRAM &&
+              held_sockets_count_for_tests() == 0);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_INET;
+    bx->notif_socket_type = SOCK_STREAM;
+    bx->notif_addfd_result = -1;
+    service_once();
+    check("a stream socket whose injection fails is not held", held_sockets_count_for_tests() == 0);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_INET;
+    bx->notif_socket_type = SOCK_STREAM;
+    bx->readlink_kind = READLINK_FAILS;
+    service_once();
+    check("a stream socket /proc cannot name is created but cannot be held, so it can never listen",
+          bx->answers == 1 && bx->last_answer_error == 0 && held_sockets_count_for_tests() == 0);
+
+    reset_behaviour();
+    hold_socket(HELD_BOUND_INODE, HELD_DESCRIPTOR);
+    arrange_listen(HELD_BOUND_INODE);
+    bx->getsockname_port = FAKE_BOUND_PORT;
+    service_once();
+    check("a held socket bound to an explicit port is made to listen by the supervisor, not continued",
+          answered_not_continued() && bx->last_answer_error == 0 && bx->last_answer_val == 0 &&
+              bx->listen_calls == 1 && bx->last_listen_descriptor == HELD_DESCRIPTOR &&
+              bx->last_listen_backlog == FAKE_BACKLOG);
+    check("the supervisor lets go of a socket once it listens, so its port is free when the command closes",
+          held_socket_descriptor(HELD_BOUND_INODE) < 0 && was_listened(HELD_BOUND_INODE));
+    bx->answers = 0;
+    bx->listen_calls = 0;
+    service_once();
+    check("a repeated listen is answered 0 without calling the kernel again",
+          answered_not_continued() && bx->last_answer_error == 0 && bx->listen_calls == 0);
+
+    reset_behaviour();
+    hold_socket(HELD_BOUND_INODE, HELD_DESCRIPTOR);
+    arrange_listen(HELD_BOUND_INODE);
+    bx->getsockname_family = AF_INET6;
+    bx->getsockname_port = FAKE_BOUND_PORT;
+    service_once();
+    check("an IPv6 socket bound to an explicit port may listen",
+          answered_not_continued() && bx->last_answer_error == 0 && bx->listen_calls == 1);
+
+    reset_behaviour();
+    hold_socket(HELD_UNBOUND_INODE, HELD_DESCRIPTOR);
+    arrange_listen(HELD_UNBOUND_INODE);
+    service_once();
+    check("a held socket that was never bound is refused, the kernel would pick it a port",
+          answered_not_continued() && bx->last_answer_error == -EACCES && bx->listen_calls == 0 &&
+              held_socket_descriptor(HELD_UNBOUND_INODE) == HELD_DESCRIPTOR);
+
+    reset_behaviour();
+    hold_socket(HELD_UNBOUND_INODE, HELD_DESCRIPTOR);
+    arrange_listen(HELD_UNBOUND_INODE);
+    bx->getsockname_family = AF_INET6;
+    service_once();
+    check("an unbound IPv6 socket is refused the same way",
+          answered_not_continued() && bx->last_answer_error == -EACCES && bx->listen_calls == 0);
+
+    reset_behaviour();
+    configure_ephemeral_listen(true);
+    hold_socket(HELD_UNBOUND_INODE, HELD_DESCRIPTOR);
+    arrange_listen(HELD_UNBOUND_INODE);
+    service_once();
+    check("a socket that was never bound may listen where the policy grants an ephemeral bind",
+          answered_not_continued() && bx->last_answer_error == 0 && bx->listen_calls == 1);
+
+    reset_behaviour();
+    hold_socket(HELD_UNIX_INODE, HELD_DESCRIPTOR);
+    arrange_listen(HELD_UNIX_INODE);
+    bx->getsockname_family = AF_UNIX;
+    service_once();
+    check("a UNIX socket may listen, Landlock judged where it was bound",
+          answered_not_continued() && bx->last_answer_error == 0 && bx->listen_calls == 1);
+
+    reset_behaviour();
+    hold_socket(HELD_BOUND_INODE, HELD_DESCRIPTOR);
+    arrange_listen(HELD_BOUND_INODE);
+    bx->getsockname_family = AF_PACKET;
+    service_once();
+    check("a held socket of any other family is refused",
+          answered_not_continued() && bx->last_answer_error == -EACCES && bx->listen_calls == 0);
+
+    reset_behaviour();
+    hold_socket(HELD_BOUND_INODE, HELD_DESCRIPTOR);
+    arrange_listen(HELD_BOUND_INODE);
+    bx->getsockname_result = -1;
+    service_once();
+    check("a held socket whose address cannot be read is refused",
+          answered_not_continued() && bx->last_answer_error == -EACCES && bx->listen_calls == 0);
+
+    reset_behaviour();
+    arrange_listen(NEVER_HELD_INODE);
+    bx->getsockname_port = FAKE_BOUND_PORT;
+    service_once();
+    check("a listen on a socket the supervisor never created is refused, not continued",
+          answered_not_continued() && bx->last_answer_error == -EACCES && bx->listen_calls == 0);
+
+    reset_behaviour();
+    arrange_listen(NEVER_HELD_INODE);
+    bx->readlink_kind = READLINK_FAILS;
+    service_once();
+    check("a listen on a descriptor /proc cannot name is refused, not continued",
+          answered_not_continued() && bx->last_answer_error == -EACCES && bx->listen_calls == 0);
+
+    reset_behaviour();
+    hold_socket(HELD_BOUND_INODE, HELD_DESCRIPTOR);
+    arrange_listen(HELD_BOUND_INODE);
+    bx->getsockname_port = FAKE_BOUND_PORT;
+    bx->listen_result = -1;
+    bx->listen_errno = EADDRINUSE;
+    service_once();
+    check("a listen the kernel refuses is answered with its errno and the socket stays held",
+          answered_not_continued() && bx->last_answer_error == -EADDRINUSE &&
+              held_socket_descriptor(HELD_BOUND_INODE) == HELD_DESCRIPTOR && !was_listened(HELD_BOUND_INODE));
+
+    reset_behaviour();
+    hold_socket(HELD_BOUND_INODE, HELD_DESCRIPTOR);
+    arrange_listen(HELD_BOUND_INODE);
+    bx->getsockname_port = FAKE_BOUND_PORT;
+    bx->notif_id_valid_result = -1;
+    service_once();
+    check("a listen whose notification is no longer valid is dropped before the supervisor listens",
+          bx->answers == 0 && bx->listen_calls == 0 && held_socket_descriptor(HELD_BOUND_INODE) == HELD_DESCRIPTOR);
+
+    reset_behaviour();
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->notif_recv_target_fd = 6;
+    bx->process_vm_readv_result = 1;
+    bx->readlink_inode = TRACKED_STREAM_INODE;
+    record_socket_type(TRACKED_STREAM_INODE, FD_TYPE_STREAM);
+    hold_socket(TRACKED_STREAM_INODE, HELD_DESCRIPTOR);
+    remember_rule("127.0.0.1", "53", false);
+    service_once();
+    check("a connect that injects the socket lets go of the socket it replaced",
+          bx->answers == 1 && bx->connect_calls == 1 && held_socket_descriptor(TRACKED_STREAM_INODE) < 0);
+
+    reset_behaviour();
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->notif_recv_target_fd = 6;
+    bx->process_vm_readv_result = 1;
+    bx->readlink_inode = TRACKED_STREAM_INODE;
+    bx->connect_result = -1;
+    bx->connect_errno = ECONNREFUSED;
+    record_socket_type(TRACKED_STREAM_INODE, FD_TYPE_STREAM);
+    hold_socket(TRACKED_STREAM_INODE, HELD_DESCRIPTOR);
+    remember_rule("127.0.0.1", "53", false);
+    service_once();
+    check("a connect that fails keeps the socket held, so the command can still listen on it",
+          bx->answers == 1 && held_socket_descriptor(TRACKED_STREAM_INODE) == HELD_DESCRIPTOR);
+
+    reset_behaviour();
+    constexpr int FIRST_TABLE_DESCRIPTOR = 1000;
+    constexpr int NEW_TABLE_DESCRIPTOR = 2000;
+    for (size_t inode = 1; inode <= HELD_SOCKET_CAPACITY; inode++) {
+        hold_socket(inode, FIRST_TABLE_DESCRIPTOR + (int)inode);
+    }
+    check("the held table takes its capacity", held_sockets_count_for_tests() == HELD_SOCKET_CAPACITY);
+    hold_socket(HELD_SOCKET_CAPACITY + 1, NEW_TABLE_DESCRIPTOR);
+    check("a full table evicts the oldest socket and keeps the others and the newest",
+          held_sockets_count_for_tests() == HELD_SOCKET_CAPACITY && held_socket_descriptor(1) < 0 &&
+              held_socket_descriptor(2) == FIRST_TABLE_DESCRIPTOR + 2 &&
+              held_socket_descriptor(HELD_SOCKET_CAPACITY + 1) == NEW_TABLE_DESCRIPTOR);
+    hold_socket(HELD_SOCKET_CAPACITY + 2, NEW_TABLE_DESCRIPTOR + 1);
+    check("the next eviction takes the next oldest, wherever its slot is",
+          held_socket_descriptor(2) < 0 && held_socket_descriptor(3) == FIRST_TABLE_DESCRIPTOR + 3 &&
+              held_sockets_count_for_tests() == HELD_SOCKET_CAPACITY);
+
+    reset_behaviour();
+    hold_socket(HELD_BOUND_INODE, HELD_DESCRIPTOR);
+    hold_socket(HELD_BOUND_INODE, HELD_DESCRIPTOR + 1);
+    check("holding an inode again replaces its entry",
+          held_sockets_count_for_tests() == 1 && held_socket_descriptor(HELD_BOUND_INODE) == HELD_DESCRIPTOR + 1);
+    hold_socket(0, HELD_DESCRIPTOR + 2);
+    release_held_socket(0);
+    release_held_socket(NEVER_HELD_INODE);
+    check("inode zero is never held, and releasing one that is not held changes nothing",
+          held_sockets_count_for_tests() == 1 && held_socket_descriptor(0) < 0);
+    release_held_socket(HELD_BOUND_INODE);
+    check("releasing a held socket empties its slot", held_sockets_count_for_tests() == 0);
+
+    reset_behaviour();
+    remember_listened(0);
+    check("inode zero is never remembered as listened", !was_listened(0));
+    remember_listened(HELD_BOUND_INODE);
+    check("a socket that listened is remembered", was_listened(HELD_BOUND_INODE));
+    hold_socket(HELD_BOUND_INODE, HELD_DESCRIPTOR);
+    check("a new socket with a recycled inode starts un-listened", !was_listened(HELD_BOUND_INODE));
+    constexpr uint64_t FIRST_LISTENED_INODE = 100000;
+    for (size_t index = 0; index <= LISTENED_SOCKET_CAPACITY; index++) {
+        remember_listened(FIRST_LISTENED_INODE + index);
+    }
+    check("the listened set is a ring that forgets its oldest entry first",
+          !was_listened(FIRST_LISTENED_INODE) && was_listened(FIRST_LISTENED_INODE + 1) &&
+              was_listened(FIRST_LISTENED_INODE + LISTENED_SOCKET_CAPACITY));
 }
 
 /* Every way a connect made on the command's behalf can end. A poll result of 0 is a
@@ -1699,6 +2007,14 @@ static void test_argument_errors(void) {
     check("a --rules with no value is a usage error", run_main(dangling_rules) == EXIT_CODE_USAGE);
     char *unreadable[] = { "guard", "--rules", "/dev/null/impossible", "--", "cmd", NULL };
     check("an unreadable rules file refuses the run", run_main(unreadable) == EXIT_CODE_SETUP_ERROR);
+    struct guard_options parsed;
+    char *ephemeral[] = { "guard", "--allow-ephemeral-listen", "--", "cmd", NULL };
+    parse_arguments(4, ephemeral, &parsed);
+    check("--allow-ephemeral-listen is read", parsed.allow_ephemeral_listen);
+    char *plain[] = { "guard", "--", "cmd", NULL };
+    parse_arguments(3, plain, &parsed);
+    check("an unbound socket may not listen unless the option is given", !parsed.allow_ephemeral_listen);
+
     char *dangling_broker[] = { "guard", "--broker", NULL };
     check("a --broker with no value is a usage error", run_main(dangling_broker) == EXIT_CODE_USAGE);
     char *bad_broker[] = { "guard", "--broker", "not-an-endpoint", "--", "cmd", NULL };
@@ -1913,6 +2229,8 @@ static void test_egress_filter(void) {
           filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_connect) == SECCOMP_RET_USER_NOTIF);
     check("socket is trapped to the supervisor",
           filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_socket) == SECCOMP_RET_USER_NOTIF);
+    check("listen is trapped to the supervisor, which runs it itself",
+          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_listen) == SECCOMP_RET_USER_NOTIF);
     check("sendto is trapped to the supervisor",
           filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_sendto) == SECCOMP_RET_USER_NOTIF);
     check("sendmmsg is trapped to the supervisor",
@@ -2074,6 +2392,7 @@ int main(void) {
     test_service_paths();
     test_egress_syscalls();
     test_socket_tracking();
+    test_listen_closure();
     test_connect_on_behalf_paths();
     test_broker_handoff();
     test_supervise_loop();

@@ -4,12 +4,15 @@
 #ifndef PHOBOS_CONNECT_GUARD_OPTIONS_H
 #define PHOBOS_CONNECT_GUARD_OPTIONS_H
 
-/* The command to supervise, the rules file, the optional broker endpoint and --verbose. */
+/* The command to supervise, the rules file, the optional broker endpoint, --verbose and whether
+ * a socket that was never bound may listen (--allow-ephemeral-listen), which the kernel then
+ * gives a port of its own choosing. */
 struct guard_options {
     char **command;
     const char *rules_path;
     const char *broker_endpoint;
     bool verbose;
+    bool allow_ephemeral_listen;
 };
 
 /* Prints how to call the guard and gives up. */

@@ -3,6 +3,7 @@
 
 #include "phobos-seccomp-networksystem-destination.h"
 #include "phobos-seccomp-networksystem-diagnostics.h"
+#include "phobos-seccomp-networksystem-held-sockets.h"
 #include "phobos-seccomp-networksystem-rules.h"
 #include "phobos-seccomp-networksystem-seccomp-compat.h"
 #include "phobos-seccomp-networksystem-socket-types.h"
@@ -54,6 +55,9 @@ static constexpr int SENDMMSG_ARGUMENT_VECTOR = 1;
 static constexpr int SENDMMSG_ARGUMENT_COUNT = 2;
 static constexpr int SENDMSG_ARGUMENT_HEADER = 1;
 static constexpr int SENDMSG_ARGUMENT_FLAGS = 2;
+/* listen(fd, backlog). */
+static constexpr int LISTEN_ARGUMENT_DESCRIPTOR = 0;
+static constexpr int LISTEN_ARGUMENT_BACKLOG = 1;
 /* The most messages the kernel sends in one sendmmsg call (UIO_MAXIOV); a larger count is
  * cut down to it, so no more entries than it would send are read. */
 static constexpr unsigned int SENDMMSG_MAXIMUM_BATCH = 1024;
@@ -289,7 +293,7 @@ static bool send_proxy_v2_header(int socket_descriptor, const struct sockaddr_st
     return true;
 }
 
-void connect_on_behalf(int notify_descriptor, struct seccomp_notif_resp *response,
+bool connect_on_behalf(int notify_descriptor, struct seccomp_notif_resp *response,
                        __u64 id, int target_descriptor, int family,
                        const struct sockaddr *address, socklen_t length) {
     int outward;
@@ -301,7 +305,7 @@ void connect_on_behalf(int notify_descriptor, struct seccomp_notif_resp *respons
     }
     if (outward < 0) {
         answer(notify_descriptor, response, id, 0, outward);
-        return;
+        return false;
     }
     if (broker_set) {
         struct sockaddr_storage destination;
@@ -310,7 +314,7 @@ void connect_on_behalf(int notify_descriptor, struct seccomp_notif_resp *respons
         if (!send_proxy_v2_header(outward, &destination)) {
             close(outward);
             answer(notify_descriptor, response, id, 0, -ECONNREFUSED);
-            return;
+            return false;
         }
     }
     struct seccomp_notif_addfd addfd;
@@ -325,10 +329,11 @@ void connect_on_behalf(int notify_descriptor, struct seccomp_notif_resp *respons
             answer(notify_descriptor, response, id, 0, -errno);
         }
         close(outward);
-        return;
+        return false;
     }
     close(outward);
     answer(notify_descriptor, response, id, 0, 0);
+    return true;
 }
 
 /* Decide one trapped connect: read the destination from the child, confirm the notification is
@@ -383,8 +388,10 @@ static void service_connect(int notify_descriptor, struct seccomp_notif *request
         return;
     }
     if (provenance == FD_TYPE_STREAM) {
-        connect_on_behalf(notify_descriptor, response, request->id, target_descriptor,
-                          where.family, (const struct sockaddr *)&storage, length);
+        if (connect_on_behalf(notify_descriptor, response, request->id, target_descriptor,
+                              where.family, (const struct sockaddr *)&storage, length)) {
+            release_held_socket(inode);
+        }
         return;
     }
     answer_continue(notify_descriptor, response, request->id);
@@ -392,9 +399,13 @@ static void service_connect(int notify_descriptor, struct seccomp_notif *request
 
 /* Decide one trapped socket(): refuse the socket kinds that reach the network outside the
  * connect and send hooks, a packet socket, a raw socket and an ICMP datagram socket (which any
- * user may open here because the container's ping_group_range spans every group), and otherwise
- * let the kernel create it. The arguments are the kernel's own scalar copy in the notification,
- * so there is nothing to read from the child and nothing a second thread could rewrite. */
+ * user may open here because the container's ping_group_range spans every group). An INET
+ * stream or datagram socket is created here and injected, so its type is tracked. A stream or
+ * sequenced-packet socket of the INET, INET6 or UNIX family is also held: it is the only kind
+ * that can listen, and a listen() is only ever run by this supervisor, on a socket it made and
+ * still holds. Any other socket is left to the kernel. The arguments are the kernel's own scalar
+ * copy in the notification, so there is nothing to read from the child and nothing a second
+ * thread could rewrite. */
 static void service_socket(int notify_descriptor, struct seccomp_notif *request,
                            struct seccomp_notif_resp *response) {
     int domain = (int)request->data.args[SOCKET_ARGUMENT_DOMAIN];
@@ -410,7 +421,9 @@ static void service_socket(int notify_descriptor, struct seccomp_notif *request,
     }
     bool tracked = (domain == AF_INET || domain == AF_INET6)
                    && (base_type == SOCK_STREAM || base_type == SOCK_DGRAM);
-    if (!tracked) {
+    bool may_listen = (domain == AF_INET || domain == AF_INET6 || domain == AF_UNIX)
+                      && (base_type == SOCK_STREAM || base_type == SOCK_SEQPACKET);
+    if (!tracked && !may_listen) {
         answer_continue(notify_descriptor, response, request->id);
         return;
     }
@@ -441,9 +454,92 @@ static void service_socket(int notify_descriptor, struct seccomp_notif *request,
         return;
     }
     uint64_t inode = fd_socket_inode(getpid(), made);
-    close(made);
-    record_socket_type(inode, base_type == SOCK_STREAM ? FD_TYPE_STREAM : FD_TYPE_DGRAM);
+    if (tracked) {
+        record_socket_type(inode, base_type == SOCK_STREAM ? FD_TYPE_STREAM : FD_TYPE_DGRAM);
+    }
+    if (may_listen) {
+        hold_socket(inode, made);
+    } else {
+        close(made);
+    }
     answer(notify_descriptor, response, request->id, allocated, 0);
+}
+
+/* Whether the guard allows a socket that was never bound to listen: a kernel that is asked to
+ * listen on an unbound socket binds it to a port of its own choosing, which no bind rule judged. */
+static bool ephemeral_listen_allowed = false;
+
+void configure_ephemeral_listen(bool allowed) {
+    ephemeral_listen_allowed = allowed;
+}
+
+/* Whether a socket the supervisor holds may be put into the listening state: a UNIX socket
+ * always may, because Landlock's filesystem rules and scoping judged where it was bound; an INET
+ * or INET6 socket may when it is bound to an explicit port, which Landlock's bind rules already
+ * judged, or when it is unbound and an ephemeral bind is allowed. Reads the socket's own address
+ * from the supervisor's descriptor, which is the command's socket, so nothing the command can
+ * rewrite is read. Any other family, or an address the kernel cannot report, is refused. */
+static bool listen_permitted(int held_descriptor) {
+    struct sockaddr_storage bound;
+    memset(&bound, 0, sizeof(bound));
+    socklen_t length = sizeof(bound);
+    if (getsockname(held_descriptor, (struct sockaddr *)&bound, &length) != 0) {
+        return false;
+    }
+    if (bound.ss_family == AF_UNIX) {
+        return true;
+    }
+    uint16_t port;
+    if (bound.ss_family == AF_INET) {
+        port = ntohs(((const struct sockaddr_in *)&bound)->sin_port);
+    } else if (bound.ss_family == AF_INET6) {
+        port = ntohs(((const struct sockaddr_in6 *)&bound)->sin6_port);
+    } else {
+        return false;
+    }
+    return port != 0 || ephemeral_listen_allowed;
+}
+
+/* Decide one trapped listen(). The call is never continued: whatever the check saw, the command
+ * could have swapped another socket onto the descriptor before the kernel ran it, one that was
+ * never bound, so the supervisor runs listen() itself, on the descriptor it holds for the socket
+ * the command's descriptor named when it was read, and answers with the result. A socket this
+ * supervisor never created (an inherited descriptor, an accepted socket, one evicted from the
+ * table) is refused. A socket it has already let listen is answered 0 without calling the kernel:
+ * that covers a listen() repeated to change the backlog and one the command retries after a
+ * signal cancelled the notification once the supervisor had already listened; if the command had
+ * swapped another socket onto the descriptor, that socket simply is not listening. The listening
+ * socket is then let go of, so the port is free again when the command closes its descriptor. */
+static void service_listen(int notify_descriptor, struct seccomp_notif *request,
+                           struct seccomp_notif_resp *response) {
+    int target_descriptor = (int)request->data.args[LISTEN_ARGUMENT_DESCRIPTOR];
+    int backlog = (int)request->data.args[LISTEN_ARGUMENT_BACKLOG];
+    uint64_t inode = fd_socket_inode(request->pid, target_descriptor);
+    if (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_ID_VALID, &request->id) != 0) {
+        return;
+    }
+    if (was_listened(inode)) {
+        answer(notify_descriptor, response, request->id, 0, 0);
+        return;
+    }
+    int held = held_socket_descriptor(inode);
+    if (held < 0) {
+        log_verbose("refusing listen on a socket this guard did not create, fd %d", target_descriptor);
+        answer(notify_descriptor, response, request->id, 0, -EACCES);
+        return;
+    }
+    if (!listen_permitted(held)) {
+        log_verbose("refusing listen on a socket bound to no port, fd %d", target_descriptor);
+        answer(notify_descriptor, response, request->id, 0, -EACCES);
+        return;
+    }
+    if (listen(held, backlog) != 0) {
+        answer(notify_descriptor, response, request->id, 0, -errno);
+        return;
+    }
+    remember_listened(inode);
+    release_held_socket(inode);
+    answer(notify_descriptor, response, request->id, 0, 0);
 }
 
 /* Answer one send whose destination has already been read: let a non-INET destination through
@@ -615,6 +711,10 @@ void service_one(int notify_descriptor, struct seccomp_notif *request,
         service_socket(notify_descriptor, request, response);
         return;
     }
+    if (request->data.nr == __NR_listen) {
+        service_listen(notify_descriptor, request, response);
+        return;
+    }
     if (request->data.nr == __NR_sendto || request->data.nr == __NR_sendmmsg) {
         service_send(notify_descriptor, request, response);
         return;
@@ -683,5 +783,9 @@ int exit_code_from_status(int status) {
 void broker_reset_for_tests(void) {
     broker_set = false;
     broker_length = 0;
+}
+
+void ephemeral_listen_reset_for_tests(void) {
+    ephemeral_listen_allowed = false;
 }
 #endif

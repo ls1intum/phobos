@@ -7,13 +7,16 @@
  * could reach the network without one: socket(), so a raw, packet or ICMP socket is
  * refused before it exists; sendto(), sendmmsg() and sendmsg(), so a datagram carrying its
  * own destination is judged like a connect and TCP Fast Open cannot open a connection past
- * one; io_uring, a second syscall interface that would reach connect unseen; and
- * setsid/setpgid, which would take the command out of the group an outer timeout kills.
+ * one; io_uring, a second syscall interface that would reach connect unseen; listen(), which
+ * the supervisor runs itself, so a socket that was never bound cannot become a listener on a
+ * port no bind rule judged; and setsid/setpgid, which would take the command out of the group
+ * an outer timeout kills.
  * phobos-seccomp-networksystem-child.h holds the filter and says how sendmsg is trapped without
  * parking the child's own handoff of the notification descriptor.
  *
  * Usage:
- *   phobos-seccomp-networksystem [--verbose] [--rules FILE] -- COMMAND [ARGUMENTS...]
+ *   phobos-seccomp-networksystem [--verbose] [--rules FILE] [--broker ADDRESS:PORT]
+ *                                [--allow-ephemeral-listen] -- COMMAND [ARGUMENTS...]
  *
  * It is one process that becomes two. It forks: the child is the sandboxed
  * lineage and the parent is the supervisor beside it.
@@ -100,6 +103,7 @@ int main(int argument_count, char *arguments[]) {
     struct guard_options options;
     parse_arguments(argument_count, arguments, &options);
     set_verbose(options.verbose);
+    configure_ephemeral_listen(options.allow_ephemeral_listen);
     if (!load_rules(options.rules_path)) {
         report_failure("cannot read the rules file '%s': %s; refusing to run rather than "
                        "fall open to allow-all",

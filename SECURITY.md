@@ -94,6 +94,14 @@ the same class as the filesystem or egress layers, and enabling it changes the r
   Phobos. That isolation must be concrete: a dedicated network with inter-container communication
   disabled, only the public port published, no other or UDP port exposed. `[accept]` covers TCP
   only.
+- **The connect guard closes the listen that never binds.** Landlock judges `bind()`, but the
+  kernel also gives a socket that was never bound a port of its own choosing when it calls
+  `listen()`, and Landlock has no hook for that. The connect guard therefore traps `listen()` and
+  runs it itself, only on a socket it created for the command, and refuses a socket that is
+  unbound unless it is started with `--allow-ephemeral-listen`, which no policy section sets yet.
+  A swap of another socket under the descriptor cannot create a listener, because the guard never
+  lets the kernel run the command's own `listen()`. With `--no-networksystem-restriction` the
+  guard is absent and so is this.
 - **A source address is weak authentication.** It resists spoofing only for an established
   handshake, and NAT and shared egress addresses make it coarse. Treat it as a filter, not an
   identity.
