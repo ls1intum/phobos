@@ -205,4 +205,140 @@ removal_status=$?
   && ok "a removal of the lines that fails keeps the directory and its record, so an outer layer tries again" \
   || bad "a removal of the lines that fails keeps the directory and its record" "status=${removal_status} left=$(ls -A "$run_f" 2>/dev/null | tr '\n' ' ')"
 
+echo "== the names a udp rule holds are mapped to the addresses they resolved to =="
+udp_hosts="$WORK/hosts-udp"
+printf '%s' "$IMAGE_HOSTS" > "$udp_hosts"
+run_u="$(owned_spec)"
+run_v="$(owned_spec)"
+tag_u="$(run_hosts_tag "$run_u")"
+resolved=$'dns.example 192.0.2.7\ndns.example 2001:db8::7\nother.example 192.0.2.8'
+write_resolved_hosts "$udp_hosts" "$run_u" "$resolved"
+write_resolved_hosts "$udp_hosts" "$run_u" "$resolved"
+check "every resolved address becomes a line of its own, IPv6 included, written once however often" "1 1 1" \
+  "$(grep -cxF "192.0.2.7 dns.example # ${tag_u}" "$udp_hosts") $(grep -cxF "2001:db8::7 dns.example # ${tag_u}" "$udp_hosts") $(grep -cxF "192.0.2.8 other.example # ${tag_u}" "$udp_hosts")"
+check "the real address is mapped, not the placeholder a TCP name gets" "0" "$(grep -c -- "^${PHB_BROKER_PLACEHOLDER_IP} dns.example" "$udp_hosts")"
+check "the file the run wrote to is recorded in its specification directory" "$udp_hosts" "$(cat "$run_u/${PHB_SPEC_HOSTS_RECORD}")"
+[[ "$(head -n 3 "$udp_hosts"; printf 'x')" == "${IMAGE_HOSTS}x" ]] \
+  && ok "the image's own lines stay in front, unchanged byte for byte" \
+  || bad "the image's own lines stay in front, unchanged byte for byte" "$(cat "$udp_hosts")"
+write_resolved_hosts "$udp_hosts" "$run_v" "$resolved"
+check "a name another run already maps gets lines of this run's own" "1" \
+  "$(grep -cxF "192.0.2.7 dns.example # $(run_hosts_tag "$run_v")" "$udp_hosts")"
+remove_owned_spec_dir "$run_u"
+check "removing the run takes every one of its lines away, and only its own" "0 3" \
+  "$(grep -c -- "# ${tag_u}$" "$udp_hosts") $(grep -c -- "# $(run_hosts_tag "$run_v")$" "$udp_hosts")"
+remove_owned_spec_dir "$run_v"
+[[ "$(cat "$udp_hosts"; printf 'x')" == "${IMAGE_HOSTS}x" ]] \
+  && ok "once both runs are removed the file is byte-identical to the image's" \
+  || bad "once both runs are removed the file is byte-identical to the image's" "$(cat "$udp_hosts")"
+udp_bare="$WORK/hosts-udp-bare"
+printf '127.0.0.1 localhost' > "$udp_bare"
+run_w="$(owned_spec)"
+write_resolved_hosts "$udp_bare" "$run_w" "dns.example 192.0.2.7"
+check "the image's last line with no newline and the run's line stay two lines" "127.0.0.1 localhost|192.0.2.7 dns.example # $(run_hosts_tag "$run_w")" \
+  "$(paste -sd'|' "$udp_bare")"
+remove_owned_spec_dir "$run_w"
+write_resolved_hosts "$WORK/no-such-dir/hosts" "$(owned_spec)" "dns.example 192.0.2.7"
+check "a hosts file that cannot be written is a failure the caller can refuse on" "1" "$([[ $? -ne 0 ]] && echo 1 || echo 0)"
+
+echo "== a hosts file that already maps a name somewhere the lookup did not is refused =="
+conflict_hosts="$WORK/hosts-conflict"
+resolved_one="dns.example 192.0.2.7"
+run_x2="$(owned_spec)"
+printf '%s192.0.2.10 dns.example\n' "$IMAGE_HOSTS" > "$conflict_hosts"
+before="$(cat "$conflict_hosts")"
+write_resolved_hosts "$conflict_hosts" "$run_x2" "$resolved_one" 2>"$WORK/conflict.err"
+check "a line of the image that maps the name to another address refuses the write" "1" "$([[ $? -ne 0 ]] && echo 1 || echo 0)"
+check "and nothing is written" "$before" "$(cat "$conflict_hosts")"
+check "and the report names the name and an address only one side has" "1" "$(grep -c "maps 'dns.example' to a different set of addresses.*192.0.2.1[0]\|maps 'dns.example' to a different set of addresses.*192.0.2.7" "$WORK/conflict.err")"
+printf '%s192.0.2.7 dns.example\n' "$IMAGE_HOSTS" > "$conflict_hosts"
+write_resolved_hosts "$conflict_hosts" "$run_x2" "$resolved_one"
+check "a line that maps the name to an address the lookup gave is no conflict" "0" "$?"
+printf '%s# 192.0.2.10 dns.example\n192.0.2.10 other.example # dns.example\n' "$IMAGE_HOSTS" > "$conflict_hosts"
+write_resolved_hosts "$conflict_hosts" "$run_x2" "$resolved_one"
+check "a comment, and a name that only appears in a comment, is no conflict" "0" "$?"
+printf '%s192.0.2.10 alias.example DNS.Example\n' "$IMAGE_HOSTS" > "$conflict_hosts"
+write_resolved_hosts "$conflict_hosts" "$run_x2" "$resolved_one" 2>/dev/null
+check "a second name on the line and another case of the name still conflict" "1" "$([[ $? -ne 0 ]] && echo 1 || echo 0)"
+printf '%s%s dns.example # tag-of-another-run\n' "$IMAGE_HOSTS" "${PHB_BROKER_PLACEHOLDER_IP}" > "$conflict_hosts"
+write_resolved_hosts "$conflict_hosts" "$run_x2" "$resolved_one" 2>/dev/null
+check "another run's TCP placeholder for the name conflicts too" "1" "$([[ $? -ne 0 ]] && echo 1 || echo 0)"
+printf '%s' "$IMAGE_HOSTS" > "$conflict_hosts"
+write_resolved_hosts "$conflict_hosts" "$run_x2" $'dns.example 192.0.2.7\ndns.example 192.0.2.8'
+write_resolved_hosts "$conflict_hosts" "$run_x2" $'dns.example 192.0.2.7\ndns.example 192.0.2.8'
+check "writing the same lookup again is no conflict with the run's own lines" "0" "$?"
+remove_owned_spec_dir "$run_x2"
+
+echo "== a name another run pinned must not gain addresses, and must not lose them =="
+pinned_hosts="$WORK/hosts-pinned"
+run_p1="$(owned_spec)"
+run_p2="$(owned_spec)"
+printf '%s' "$IMAGE_HOSTS" > "$pinned_hosts"
+write_resolved_hosts "$pinned_hosts" "$run_p1" "dns.example 192.0.2.7"
+before="$(cat "$pinned_hosts")"
+write_resolved_hosts "$pinned_hosts" "$run_p2" $'dns.example 192.0.2.7\ndns.example 192.0.2.8' 2>/dev/null
+check "a second run whose lookup gave more addresses than the first pinned is refused" "1" "$([[ $? -ne 0 ]] && echo 1 || echo 0)"
+write_resolved_hosts "$pinned_hosts" "$run_p2" "dns.example 192.0.2.8" 2>/dev/null
+check "and so is one whose lookup gave other addresses" "1" "$([[ $? -ne 0 ]] && echo 1 || echo 0)"
+check "and neither wrote anything" "$before" "$(cat "$pinned_hosts")"
+write_resolved_hosts "$pinned_hosts" "$run_p2" "dns.example 192.0.2.7"
+check "a second run whose lookup gave exactly the same addresses is fine" "0" "$?"
+remove_owned_spec_dir "$run_p1"
+remove_owned_spec_dir "$run_p2"
+printf '%s' "$IMAGE_HOSTS" > "$pinned_hosts"
+run_p3="$(owned_spec)"
+run_p4="$(owned_spec)"
+write_resolved_hosts "$pinned_hosts" "$run_p3" "dns.example 192.0.2.7"
+write_broker_hosts "$pinned_hosts" "$run_p4" dns.example 2>/dev/null
+check "a run that maps the name to the TCP placeholder is refused where another pinned it to a real address" "1" "$([[ $? -ne 0 ]] && echo 1 || echo 0)"
+remove_owned_spec_dir "$run_p3"
+remove_owned_spec_dir "$run_p4"
+printf '%s' "$IMAGE_HOSTS" > "$pinned_hosts"
+run_p5="$(owned_spec)"
+run_p6="$(owned_spec)"
+write_broker_hosts "$pinned_hosts" "$run_p5" dns.example
+write_broker_hosts "$pinned_hosts" "$run_p6" dns.example
+check "two runs that both map the name to the placeholder are fine, as before" "0" "$?"
+write_resolved_hosts "$pinned_hosts" "$(owned_spec)" "dns.example 192.0.2.7" 2>/dev/null
+check "and a run that wants the real address for that name is refused" "1" "$([[ $? -ne 0 ]] && echo 1 || echo 0)"
+remove_owned_spec_dir "$run_p5"
+remove_owned_spec_dir "$run_p6"
+
+echo "== two spellings of one IPv6 address are one address, and a hosts file that cannot be checked is refused =="
+v6_hosts="$WORK/hosts-v6"
+run_v6="$(owned_spec)"
+spelled_equal() {
+  printf '%s%s one.test\n' "$IMAGE_HOSTS" "$1" > "$v6_hosts"
+  hosts_conflict "$v6_hosts" "one.test $2" > /dev/null
+  [[ $? -eq 1 ]] && echo same || echo different
+}
+check "a compressed and a fully written address are the same" "same" "$(spelled_equal 2001:0DB8:0:0:0:0:0:1 2001:db8::1)"
+check "an address with a zero group in the middle and its compressed spelling are the same" "same" "$(spelled_equal 2001:db8:0:0:1:0:0:1 2001:db8::1:0:0:1)"
+check "an IPv4-mapped address in dots and in groups are the same" "same" "$(spelled_equal ::ffff:192.0.2.1 ::ffff:c000:201)"
+check "the loopback in full and as ::1 are the same" "same" "$(spelled_equal 0:0:0:0:0:0:0:1 ::1)"
+check "an address that differs in one group is another address" "different" "$(spelled_equal 2001:db8::2 2001:db8::1)"
+check "an IPv4 address is compared as written" "different" "$(spelled_equal 192.0.2.1 192.0.2.10)"
+printf '%s' "$IMAGE_HOSTS" > "$v6_hosts"
+write_resolved_hosts "$v6_hosts" "$run_v6" $'one.test 2001:db8::1\none.test 2001:db8::2'
+write_resolved_hosts "$v6_hosts" "$run_v6" $'one.test 2001:0db8:0:0:0:0:0:2\none.test 2001:DB8::1'
+check "a run that writes its IPv6 lookup again in other spellings is no conflict with itself" "0" "$?"
+remove_owned_spec_dir "$run_v6"
+run_bad="$(owned_spec)"
+printf '%s' "$IMAGE_HOSTS" > "$v6_hosts"
+before="$(cat "$v6_hosts")"
+(
+  awk() { return 2; }
+  write_resolved_hosts "$v6_hosts" "$run_bad" "one.test 192.0.2.1" 2>"$WORK/unreadable.err"
+)
+check "a check that cannot be made refuses the write, and does not take that for no conflict" "1" "$([[ $? -ne 0 ]] && echo 1 || echo 0)"
+check "and writes nothing" "$before" "$(cat "$v6_hosts")"
+check "and says it could not read the file" "1" "$(grep -c "could not be read to check" "$WORK/unreadable.err")"
+(
+  awk() { return 2; }
+  write_broker_hosts "$v6_hosts" "$run_bad" one.test 2>/dev/null
+)
+check "the TCP placeholder writer refuses in the same way" "1" "$([[ $? -ne 0 ]] && echo 1 || echo 0)"
+check "and writes nothing either" "$before" "$(cat "$v6_hosts")"
+remove_owned_spec_dir "$run_bad"
+
 finish

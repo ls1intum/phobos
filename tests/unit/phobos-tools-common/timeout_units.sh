@@ -270,8 +270,8 @@ rejects_net "a wildcard host name is refused for udp"       '[connect]
 allow *.example.test:53 udp'
 check "parser: a bare star host is still a host"          "* 443"          "$(parsed_net_rules '[connect]
 allow *:443')"
-rejects_net "a udp [connect] rule naming a host is refused" '[connect]
-allow example.test:443 udp'
+check "parser: a udp connect rule may name a host, which the network layer then resolves" "example.test 443 udp" "$(parsed_net_rules '[connect]
+allow example.test:443 udp')"
 rejects_net "an unknown transport marker is refused"        '[connect]
 allow 1.2.3.4:443 sctp'
 rejects_net "an IPv6 bracket that never closes is refused" '[connect]

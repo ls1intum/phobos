@@ -7,7 +7,8 @@
 /* The command to supervise, the rules file, the optional broker endpoint, --verbose, whether
  * a socket that was never bound may listen (--allow-ephemeral-listen) and whether one may connect
  * or send a datagram (--allow-ephemeral-udp-bind), which the kernel then gives a port of its own
- * choosing. */
+ * choosing. With --resolve the guard supervises nothing: it looks up the host names that follow
+ * the -- through the resolver --resolver names, and command then holds those names. */
 struct guard_options {
     char **command;
     const char *rules_path;
@@ -15,6 +16,8 @@ struct guard_options {
     bool verbose;
     bool allow_ephemeral_listen;
     bool allow_ephemeral_udp_bind;
+    bool resolve;
+    const char *resolver_endpoint;
 };
 
 /* Prints how to call the guard and gives up. */
