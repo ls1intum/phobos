@@ -270,7 +270,7 @@ else
   bad "an ordinary send on a connected socket still works" "rc=$rc out=$out"
 fi
 
-out="$("$GUARD" --rules "$WORK/rules-udp" -- "$WORK/probe" udp 127.0.0.1 "$PORT" 2>&1)"
+out="$("$GUARD" --rules "$WORK/rules-udp" --allow-ephemeral-udp-bind -- "$WORK/probe" udp 127.0.0.1 "$PORT" 2>&1)"
 rc=$?
 if [[ $rc -eq 0 && "$out" == *UDP-OK* ]]; then
   ok "a datagram to a destination the udp list names is allowed"
@@ -278,7 +278,7 @@ else
   bad "a datagram to a destination the udp list names is allowed" "rc=$rc out=$out"
 fi
 
-out="$("$GUARD" --rules "$WORK/rules-udp" -- "$WORK/probe" udp 127.0.0.1 "$OTHER" 2>&1)"
+out="$("$GUARD" --rules "$WORK/rules-udp" --allow-ephemeral-udp-bind -- "$WORK/probe" udp 127.0.0.1 "$OTHER" 2>&1)"
 rc=$?
 if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "a datagram to a destination the udp list does not name is refused"
@@ -332,7 +332,7 @@ fi
 
 # No listener runs on $PORT here, so a datagram socket's connect (which only sets a default
 # peer) succeeds while the old TCP-injection would fail with a refused connection.
-out="$("$GUARD" --rules "$WORK/rules-udp" -- "$WORK/probe" cudp 127.0.0.1 "$PORT" 2>&1)"
+out="$("$GUARD" --rules "$WORK/rules-udp" --allow-ephemeral-udp-bind -- "$WORK/probe" cudp 127.0.0.1 "$PORT" 2>&1)"
 rc=$?
 if [[ $rc -eq 0 && "$out" == *CUDP-OK* ]]; then
   ok "a connected datagram socket stays a datagram, not turned into TCP"
@@ -340,7 +340,7 @@ else
   bad "a connected datagram socket stays a datagram, not turned into TCP" "rc=$rc out=$out"
 fi
 
-out="$("$GUARD" --rules "$WORK/rules-udp" -- "$WORK/probe" cudp 127.0.0.1 "$OTHER" 2>&1)"
+out="$("$GUARD" --rules "$WORK/rules-udp" --allow-ephemeral-udp-bind -- "$WORK/probe" cudp 127.0.0.1 "$OTHER" 2>&1)"
 rc=$?
 if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "a connected datagram socket to an unlisted destination is refused at connect"
@@ -351,7 +351,7 @@ fi
 # The two directions of what #121 bought. Every other datagram assertion here passes on a guard
 # that ignored the transport altogether, because each names a destination the list carries;
 # these two are the only ones that fail on such a guard.
-out="$("$GUARD" --rules "$WORK/rules" -- "$WORK/probe" udp 127.0.0.1 "$PORT" 2>&1)"
+out="$("$GUARD" --rules "$WORK/rules" --allow-ephemeral-udp-bind -- "$WORK/probe" udp 127.0.0.1 "$PORT" 2>&1)"
 rc=$?
 if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "a tcp rule does not admit a datagram to the same host and port"
@@ -362,7 +362,7 @@ fi
 # A listener does run here, so an unguarded connect to this port would succeed. The refusal is
 # therefore the guard's and not a connection nobody answered.
 lp=$(start_listener "$PORT")
-out="$("$GUARD" --rules "$WORK/rules-udp" -- "$WORK/probe" inet 127.0.0.1 "$PORT" 2>&1)"
+out="$("$GUARD" --rules "$WORK/rules-udp" --allow-ephemeral-udp-bind -- "$WORK/probe" inet 127.0.0.1 "$PORT" 2>&1)"
 rc=$?
 kill "$lp" 2>/dev/null
 wait "$lp" 2>/dev/null
@@ -390,6 +390,27 @@ if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "an IP range refuses an address outside it that shares the allowed port"
 else
   bad "an IP range refuses an address outside it that shares the allowed port" "rc=$rc out=$out"
+fi
+
+# The two checks above name the guard's flag themselves. These two go through the network layer,
+# which is what has to pass it: a udp [connect] rule lets the kernel choose a source port, and a
+# policy without one does not. A wildcard port keeps them independent of the Landlock version, as
+# only a rule that names a port needs the version 10 UDP rights.
+printf '[connect]\nallow 127.0.0.1 udp\n' > "$WORK/layer-udp.cfg"
+printf '[connect]\nallow 127.0.0.1 tcp\n' > "$WORK/layer-tcp.cfg"
+out="$(phobos-networksystem.sh --config "$WORK/layer-udp.cfg" -- "$WORK/probe" udp 127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+if [[ $rc -eq 0 && "$out" == *UDP-OK* ]]; then
+  ok "through the network layer, a udp [connect] rule lets a datagram go out from a socket that was never bound"
+else
+  bad "through the network layer, a udp [connect] rule lets a datagram go out from a socket that was never bound" "rc=$rc out=$out"
+fi
+out="$(phobos-networksystem.sh --config "$WORK/layer-tcp.cfg" -- "$WORK/probe" udp 127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
+  ok "through the network layer, a policy with no udp rule refuses the same datagram"
+else
+  bad "through the network layer, a policy with no udp rule refuses the same datagram" "rc=$rc out=$out"
 fi
 
 finish

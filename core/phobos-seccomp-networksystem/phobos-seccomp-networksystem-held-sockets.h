@@ -8,11 +8,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* How many listen-capable sockets the supervisor holds at once. A socket the supervisor holds
- * is one descriptor of its own, so this stays well under the descriptor limit a container
- * starts a process with, 1024 in the narrowest ordinary case. When the table is full the
- * oldest entry is closed to make room, and a socket evicted that way can never listen: the
- * command's listen() on it is refused, which fails closed. */
+/* How many sockets the supervisor holds at once, listen-capable and datagram sockets together.
+ * A socket the supervisor holds is one descriptor of its own, so this stays well under the
+ * descriptor limit a container starts a process with, 1024 in the narrowest ordinary case. When
+ * the table is full the least recently used entry is closed to make room, and a socket evicted
+ * that way can no longer listen or send a datagram: the command's listen() on it, or its send to
+ * a destination, is refused, which fails closed. */
 static constexpr size_t HELD_SOCKET_CAPACITY = 512;
 
 /* How many sockets the supervisor remembers having let listen. It keeps no descriptor for
@@ -33,6 +34,10 @@ void hold_socket(uint64_t inode, int descriptor);
  * evicted, was released after it listened or after a connect replaced it. The descriptor stays
  * held and owned by the table. */
 int held_socket_descriptor(uint64_t inode);
+
+/* The same as held_socket_descriptor, and the entry counts as used just now, so that a datagram
+ * socket the command keeps sending on is the last to be evicted. */
+int use_held_socket(uint64_t inode);
 
 /* Closes the supervisor's descriptor for this inode and forgets it. Nothing happens when none is
  * held. Releasing a socket after it listens, rather than keeping it, is what lets the port be

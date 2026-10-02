@@ -44,11 +44,14 @@ static constexpr int BOOTSTRAP_DESCRIPTOR_FLOOR = 1023;
  * arrive under a different arch or number and fall through to ALLOW unwatched. On the native
  * ABI it refuses io_uring (a second syscall interface that would reach connect unseen) and
  * setsid/setpgid (a new session or group would escape the timeout's group-kill), and it traps
- * socket, connect, listen, sendto, sendmmsg and sendmsg to the supervisor, which decides them from
- * the kernel's own copy of the scalar arguments and, for a destination behind a pointer, from the
- * child's memory. listen is trapped because the kernel gives a socket that was never bound a port
+ * socket, connect, listen, sendmmsg, sendmsg and every sendto that names a destination to the
+ * supervisor, which decides them from the kernel's own copy of the scalar arguments and, for a
+ * destination behind a pointer, from the child's memory. listen is trapped because the kernel gives a socket that was never bound a port
  * of its own choosing when it listens, a listener no bind rule judged; the supervisor therefore
- * runs every listen itself, on a socket it created. Everything else is allowed.
+ * runs every listen itself, on a socket it created. A sendto whose address pointer is null names no
+ * destination, is the send() of a connected socket, and is allowed: its connect was the
+ * supervisor's, so the peer is one the guard vetted, and its registers are a copy the command
+ * cannot change, so there is nothing to race. Everything else is allowed.
  *
  * sendmsg is the one call the child itself must make while this filter is in force: it hands
  * the notification descriptor up to the supervisor with sendmsg, because SCM_RIGHTS is the
@@ -65,10 +68,12 @@ static constexpr int BOOTSTRAP_DESCRIPTOR_FLOOR = 1023;
  * program cannot follow a pointer to read an address, and deciding the scalar cases there too
  * keeps the one decision in one testable place.
  *
- * The sendmsg block sits last, right before the final ALLOW, so its branches never cross the
- * number comparisons above it: nr already holds in the accumulator when the block is entered,
- * S0 skips the whole block when the call is not sendmsg, and the loads of the descriptor's two
- * words only clobber the accumulator on the sendmsg path, where no later instruction reads it. */
+ * The sendto and sendmsg blocks sit last, right before the final ALLOW, so their branches never
+ * cross the number comparisons above them: nr already holds in the accumulator when a block is
+ * entered, the first instruction of each skips the whole block when the call is not its own, and
+ * the loads of an argument's two words only clobber the accumulator on that block's own path,
+ * where no later instruction reads it. The sendto block reads the address pointer as two 32-bit
+ * words for the same reason the sendmsg block reads the descriptor so. */
 static int install_connect_filter(int bootstrap_descriptor) {
     struct sock_filter instructions[] = {
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
@@ -87,8 +92,14 @@ static int install_connect_filter(int bootstrap_descriptor) {
         GUARD_TRAP_SYSCALL(__NR_connect),
         GUARD_TRAP_SYSCALL(__NR_socket),
         GUARD_TRAP_SYSCALL(__NR_listen),
-        GUARD_TRAP_SYSCALL(__NR_sendto),
         GUARD_TRAP_SYSCALL(__NR_sendmmsg),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_sendto, 0, 6),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[4]) + sizeof(__u32)),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, 0, 0, 2),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[4])),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, 0, 1, 0),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_sendmsg, 0, 5),
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[0]) + sizeof(__u32)),
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, 0, 0, 2),

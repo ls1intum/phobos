@@ -191,6 +191,23 @@ printf '* 8080\n* 0' > "$WORK/grant.rules"
 printf '* 8080\n' > "$WORK/grant.rules"
 ( source "${CORE}/phobos-tools-common/phobos-common.sh"; bind_rules_grant_ephemeral_tcp "$WORK/grant.rules" ) && bad "explicit ports alone grant no ephemeral listen" "no grant" "granted" || ok "explicit ports alone grant no ephemeral listen"
 ( source "${CORE}/phobos-tools-common/phobos-common.sh"; bind_rules_grant_ephemeral_tcp "$WORK/absent.rules" ) && bad "a missing bind.rules grants nothing" "no grant" "granted" || ok "a missing bind.rules grants nothing"
+printf '8.8.8.8 53 udp\n' > "$WORK/udp.rules"
+printf '8.8.8.8 53\n' > "$WORK/tcp.rules"
+printf '# 53 udp\n\n8.8.8.8 443\n' > "$WORK/commented.rules"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; connect_rules_name_udp "$WORK/udp.rules" ) && ok "a net.rules file with a udp row names a udp [connect] rule" || bad "a net.rules file with a udp row names a udp [connect] rule" "named" "not named"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; connect_rules_name_udp "$WORK/tcp.rules" ) && bad "a tcp-only net.rules names no udp rule" "none" "named" || ok "a tcp-only net.rules names no udp rule"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; connect_rules_name_udp "$WORK/commented.rules" ) && bad "a comment mentioning udp is not a udp rule" "none" "named" || ok "a comment mentioning udp is not a udp rule"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; connect_rules_name_udp "$WORK/absent.rules" ) && bad "a missing net.rules names no udp rule" "none" "named" || ok "a missing net.rules names no udp rule"
+printf '* 0 udp\n' > "$WORK/grant.rules"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; ephemeral_udp_bind_granted "$WORK/grant.rules" "$WORK/tcp.rules" ) && ok "a udp port 0 row lets the kernel choose a udp source port" || bad "a udp port 0 row lets the kernel choose a udp source port" "granted" "no grant"
+printf '* 0' > "$WORK/grant.rules"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; ephemeral_udp_bind_granted "$WORK/grant.rules" "$WORK/tcp.rules" ) && bad "a tcp port 0 row is not a udp source port grant" "no grant" "granted" || ok "a tcp port 0 row is not a udp source port grant"
+printf '* 0 udp' > "$WORK/grant.rules"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; ephemeral_udp_bind_granted "$WORK/grant.rules" "$WORK/tcp.rules" ) && ok "a udp port 0 row grants it, even on a last line with no newline" || bad "a udp port 0 row grants it, even on a last line with no newline" "granted" "no grant"
+printf '* 8080 udp\n' > "$WORK/grant.rules"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; ephemeral_udp_bind_granted "$WORK/grant.rules" "$WORK/udp.rules" ) && ok "any udp [connect] rule grants it, whatever [bind] names" || bad "any udp [connect] rule grants it, whatever [bind] names" "granted" "no grant"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; ephemeral_udp_bind_granted "$WORK/grant.rules" "$WORK/tcp.rules" ) && bad "an explicit udp bind port and tcp rules grant no ephemeral udp bind" "no grant" "granted" || ok "an explicit udp bind port and tcp rules grant no ephemeral udp bind"
+( source "${CORE}/phobos-tools-common/phobos-common.sh"; ephemeral_udp_bind_granted "$WORK/absent.rules" "$WORK/absent.rules" ) && bad "missing files grant nothing" "no grant" "granted" || ok "missing files grant nothing"
 printf -- '--chdir /var/tmp/testing-dir\n--minimum-landlock-version 4\n' > "$WORK/tail.flags"
 got="$( source "${CORE}/phobos-tools-common/phobos-common.sh"; tail_minimum_landlock_version "$WORK/tail.flags" )"
 [[ "$got" == "4" ]] && ok "the minimum Landlock version is read from the tail flags" || bad "the minimum Landlock version is read from the tail flags" "4" "$got"
@@ -373,6 +390,24 @@ if [[ "$got" == *"--ephemeral-bind-udp"* ]]; then
   ok "a udp [connect] rule brings the ephemeral udp bind with it, for the source port of a send"
 else
   bad "a udp [connect] rule brings the ephemeral udp bind with it, for the source port of a send" "--ephemeral-bind-udp" "$got"
+fi
+got="$(layer_arguments $'127.0.0.1 * udp\n' "")"
+if [[ "$got" == *"--allow-ephemeral-udp-bind --rules "* ]]; then
+  ok "a udp [connect] rule tells the guard an unbound datagram socket may connect and send"
+else
+  bad "a udp [connect] rule tells the guard an unbound datagram socket may connect and send" "--allow-ephemeral-udp-bind before --rules" "$got"
+fi
+got="$(layer_arguments "" $'* 0 udp\n')"
+if [[ "$got" == *"--allow-ephemeral-udp-bind --rules "* ]]; then
+  ok "a udp port 0 row tells the guard the same"
+else
+  bad "a udp port 0 row tells the guard the same" "--allow-ephemeral-udp-bind before --rules" "$got"
+fi
+got="$(layer_arguments $'1.2.3.4 443\n' $'* 8080\n')"
+if [[ "$got" != *"--allow-ephemeral-udp-bind"* ]]; then
+  ok "a policy with no udp rule and no udp port 0 leaves an unbound datagram socket refused"
+else
+  bad "a policy with no udp rule and no udp port 0 leaves an unbound datagram socket refused" "no --allow-ephemeral-udp-bind" "$got"
 fi
 got="$(layer_arguments "" "" $'--chdir /x\n--minimum-landlock-version 4\n')"
 if [[ "$got" == *"--minimum-landlock-version 4 "* ]]; then

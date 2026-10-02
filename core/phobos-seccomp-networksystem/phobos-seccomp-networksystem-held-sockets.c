@@ -5,8 +5,8 @@
 #include <string.h>
 #include <unistd.h>
 
-/* One held socket: its inode, the supervisor's descriptor, and when it arrived, so that the
- * oldest can be found. An inode of zero marks a free slot. */
+/* One held socket: its inode, the supervisor's descriptor, and when it last arrived or was used,
+ * so that the least recently used can be found. An inode of zero marks a free slot. */
 struct held_entry {
     uint64_t inode;
     int descriptor;
@@ -28,7 +28,8 @@ static struct held_entry *find_held(uint64_t inode) {
     return nullptr;
 }
 
-/* The slot to fill: a free one, or, when none is, the oldest entry, closed and emptied. */
+/* The slot to fill: a free one, or, when none is, the least recently used entry, closed and
+ * emptied. */
 static struct held_entry *slot_for_new_entry(void) {
     struct held_entry *oldest = &held_entries[0];
     for (size_t slot = 0; slot < HELD_SOCKET_CAPACITY; slot++) {
@@ -68,6 +69,15 @@ void hold_socket(uint64_t inode, int descriptor) {
 int held_socket_descriptor(uint64_t inode) {
     struct held_entry *entry = inode == 0 ? nullptr : find_held(inode);
     return entry == nullptr ? -1 : entry->descriptor;
+}
+
+int use_held_socket(uint64_t inode) {
+    struct held_entry *entry = inode == 0 ? nullptr : find_held(inode);
+    if (entry == nullptr) {
+        return -1;
+    }
+    entry->age = next_age++;
+    return entry->descriptor;
 }
 
 void release_held_socket(uint64_t inode) {

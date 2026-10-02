@@ -40,6 +40,12 @@ uint8_t lookup_socket_type(uint64_t inode);
  * provenance, which the connect path refuses rather than inject a socket over. */
 uint64_t fd_socket_inode(pid_t owner_pid, int descriptor);
 
+/* The family and local port of the socket behind a descriptor of this process, as the kernel
+ * reports them: port 0 for an INET or INET6 socket that was never bound, and for any other
+ * family, whose address has no port. Answers false, and stores nothing, when the kernel cannot
+ * report the address. */
+bool socket_local_port(int descriptor, int *family, uint16_t *port);
+
 #ifdef PHOBOS_CONNECT_GUARD_UNIT_TEST
 /* Forgets every recorded socket, so each test case starts from an empty table. */
 void socket_types_reset_for_tests(void);

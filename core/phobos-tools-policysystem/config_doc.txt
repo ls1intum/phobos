@@ -67,7 +67,11 @@ marker defaults to tcp. When a run handles both a udp bind and a udp connect rul
 Phobos also grants `--bind-udp` on port 0 (any local port), because the kernel
 auto-binds an ephemeral UDP source port for an outgoing datagram and gates that
 auto-bind by BIND_UDP, which is now always handled, so any udp [connect] rule
-brings the port 0 grant with it. UDP bind needs Landlock version 10.
+brings the port 0 grant with it. UDP bind needs Landlock version 10. The connect
+guard runs outside Landlock and makes every datagram connect and send itself, so
+it judges that source port too: a connect or send on a socket that was never bound
+is refused unless the policy has such a row or any udp [connect] rule, which the
+network layer tells it with --allow-ephemeral-udp-bind.
 
 On a kernel below Landlock version 4 (TCP) or 10 (UDP) the bind cannot be closed.
 The enforcer says so on every run and leaves the bind open, and

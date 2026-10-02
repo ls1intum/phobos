@@ -5,9 +5,9 @@
  * The name is narrower than the program. connect() is what it decides against the
  * allow-list and connects on behalf of, and around that it closes the ways a command
  * could reach the network without one: socket(), so a raw, packet or ICMP socket is
- * refused before it exists; sendto(), sendmmsg() and sendmsg(), so a datagram carrying its
- * own destination is judged like a connect and TCP Fast Open cannot open a connection past
- * one; io_uring, a second syscall interface that would reach connect unseen; listen(), which
+ * refused before it exists; connect(), sendto(), sendmmsg() and sendmsg() on a datagram socket,
+ * which the supervisor makes itself from copies of what the command named, so a destination
+ * cannot change after it was judged and TCP Fast Open cannot open a connection past one; io_uring, a second syscall interface that would reach connect unseen; listen(), which
  * the supervisor runs itself, so a socket that was never bound cannot become a listener on a
  * port no bind rule judged; and setsid/setpgid, which would take the command out of the group
  * an outer timeout kills.
@@ -16,7 +16,8 @@
  *
  * Usage:
  *   phobos-seccomp-networksystem [--verbose] [--rules FILE] [--broker ADDRESS:PORT]
- *                                [--allow-ephemeral-listen] -- COMMAND [ARGUMENTS...]
+ *                                [--allow-ephemeral-listen] [--allow-ephemeral-udp-bind]
+ *                                -- COMMAND [ARGUMENTS...]
  *
  * It is one process that becomes two. It forks: the child is the sandboxed
  * lineage and the parent is the supervisor beside it.
@@ -36,9 +37,10 @@
  * re-runs the original syscall against whatever is in the command's memory at that later
  * moment, so a command could show one address to the check and connect to another once it
  * passes. Making the connection here, from the address the check read, closes that window for
- * a stream connect. A datagram connect only sets a default peer, which cannot be injected, so
- * it is checked and then let through; the boundary for a datagram is the checked send that
- * follows and the no-network container. The command never runs a stream connect() itself.
+ * a stream connect. A datagram connect only sets a default peer, which cannot be injected, so the
+ * supervisor makes it on its own descriptor for the same socket, and makes every datagram send
+ * the same way, from copies of the address and the data it read out of the command once. The
+ * command never runs a stream connect(), or a send that names a destination, itself.
  *
  * seccomp intercepts a connect at the syscall boundary, before the kernel path
  * where Landlock would check the port, and this supervisor then connects outside
@@ -66,6 +68,8 @@
  *   phobos-seccomp-networksystem-child.h           the sandboxed half: install the filter, hand over
  *   phobos-seccomp-networksystem-supervisor.h      the supervising half: decide every trapped call
  *   phobos-seccomp-networksystem-destination.h     a destination read out of the command's memory
+ *   phobos-seccomp-networksystem-datagram.h        the datagram connects and sends the supervisor makes
+ *   phobos-seccomp-networksystem-held-sockets.h    the sockets the supervisor created and still holds
  *   phobos-seccomp-networksystem-socket-types.h    the type of every socket, remembered by inode
  *   phobos-seccomp-networksystem-seccomp-compat.h  the seccomp names older headers lack
  *   phobos-seccomp-networksystem-diagnostics.h     the setup exit status and the --verbose lines
@@ -79,6 +83,7 @@
 
 #define _GNU_SOURCE
 #include "phobos-seccomp-networksystem-child.h"
+#include "phobos-seccomp-networksystem-datagram.h"
 #include "phobos-seccomp-networksystem-diagnostics.h"
 #include "phobos-seccomp-networksystem-options.h"
 #include "phobos-seccomp-networksystem-rules.h"
@@ -104,6 +109,7 @@ int main(int argument_count, char *arguments[]) {
     parse_arguments(argument_count, arguments, &options);
     set_verbose(options.verbose);
     configure_ephemeral_listen(options.allow_ephemeral_listen);
+    configure_ephemeral_udp_bind(options.allow_ephemeral_udp_bind);
     if (!load_rules(options.rules_path)) {
         report_failure("cannot read the rules file '%s': %s; refusing to run rather than "
                        "fall open to allow-all",
