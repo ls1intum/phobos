@@ -797,6 +797,14 @@ static void test_rule_parsing(void) {
     big[sizeof(big) - 1] = '\0';
     remember_rule(big, "443", false);
     check("an over-long host is dropped", connect_rules_count_for_tests() == 0);
+    remember_rule("*.example.org", "443", false);
+    remember_rule("a*b.example", "443", true);
+    remember_rule("name.*", "443", false);
+    remember_rule("*/8", "443", false);
+    check("a wildcard host name is dropped for either transport", connect_rules_count_for_tests() == 0);
+    remember_rule("*", "443", false);
+    check("the bare star host is kept", connect_rules_count_for_tests() == 1);
+    reset_behaviour();
     for (size_t i = 0; i < MAXIMUM_RULES + RULE_TABLE_OVERFLOW; i++) {
         remember_rule("127.0.0.1", "443", false);
     }
@@ -823,6 +831,10 @@ static void test_policy_matching(void) {
     remember_rule("example.com", "8080", false);
     check("a hostname rule permits any host on its port", permits_v4("9.9.9.9", 8080));
     check("a hostname rule refuses another port", !permits_v4("9.9.9.9", 80));
+
+    reset_behaviour();
+    remember_rule("*.example.org", "443", false);
+    check("a wildcard host name permits nothing, not every host on its port", !permits_v4("9.9.9.9", 443));
 
     reset_behaviour();
     remember_rule("localhost", "*", false);

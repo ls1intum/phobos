@@ -173,12 +173,15 @@ RULES="${SPEC_DIR}/net.rules"
 [[ -f "$RULES" ]] || : > "$RULES"
 
 # The connect guard enforces a [connect] rule by address and port alone. A rule that names a host
-# (an exact name or a "*.name" suffix) constrains nothing about the onward address unless the egress
+# (an exact name) constrains nothing about the onward address unless the egress
 # broker checks the TLS host name. So the broker is started automatically whenever the allow-list
 # names a host, rather than requiring a flag the run could forget and then widen the rule to any
 # address on the port. In the default --network none grading container the broker's onward
 # connection fails at run time rather than being refused up front, so say loudly that this run now
-# assumes a networked container, as the [accept] path does.
+# assumes a networked container, as the [accept] path does. A wildcard host name is refused first,
+# in this shell and over every row, UDP rows included, because a specification handed to this layer
+# on its own may never have met the policy parser, and the helpers below skip UDP rows.
+refuse_wildcard_connect_names "$RULES"
 want_broker=0
 mapfile -t name_rules < <(name_connect_rules "$RULES")
 if (( ${#name_rules[@]} > 0 )); then want_broker=1; fi

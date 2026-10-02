@@ -11,14 +11,16 @@
 # host name from the TLS ClientHello, which the guard cannot see. For an exact host name it does
 # not trust the header's destination at all: it resolves the name itself, through its own
 # resolver, and connects to that address, so a command that presents an allowed name but aims at
-# some other address is still sent only to where the name resolves. A rule that names an address,
-# a name suffix, or "*" is enforced by the destination the header carried, unchanged. net.rules
+# some other address is still sent only to where the name resolves. A rule that names an address
+# or "*" is enforced by the destination the header carried, unchanged. A wildcard name has no
+# address to resolve and is refused before any config is written. net.rules
 # holds one "host port" per line, as phobos-policysystem.sh wrote it. The port was already enforced by
 # the guard before the redirect, so the broker decides the host alone.
 
-# Classifies one [connect] host into the four kinds the broker treats apart: "any" for "*",
-# "address" for a host with a slash, an IPv6 colon or only digits and dots, "suffix" for "*.name",
-# and "exact" for anything else. "localhost" is an address, not an exact name: the guard already
+# Classifies one [connect] host into the kinds the broker treats apart: "any" for "*", "invalid"
+# for any other host with a star in it, which is tested before the shortcuts below so that a star
+# beside a slash or a colon is not taken for an address, "address" for a host with a slash, an IPv6
+# colon or only digits and dots, and "exact" for anything else. "localhost" is an address, not an exact name: the guard already
 # treats it as the loopback the command connected to, so the broker sends it to the header's
 # destination rather than resolve it, and it is never mapped to a placeholder. This is the one
 # classifier the config generator and the network layer share, so the two never disagree on what an
@@ -29,10 +31,10 @@ classify_connect_host() {
   local host="$1"
   if [[ "$host" == "*" ]]; then
     printf 'any\n'
+  elif [[ "$host" == *"*"* ]]; then
+    printf 'invalid\n'
   elif [[ "$host" == "localhost" || "$host" == *"/"* || "$host" == *:* || "$host" =~ ^[0-9.]+$ ]]; then
     printf 'address\n'
-  elif [[ "$host" == "*."* ]]; then
-    printf 'suffix\n'
   else
     printf 'exact\n'
   fi
@@ -54,7 +56,7 @@ exact_connect_names() {
 }
 
 # Prints, one per line and sorted, the host names a net.rules file names in [connect] whose match
-# depends on the egress broker: the "exact" and "suffix" hosts. The connect guard enforces a
+# depends on the egress broker: the "exact" hosts. The connect guard enforces a
 # [connect] rule by address and port alone, so a name-based rule constrains nothing about the onward
 # host unless the broker checks the TLS host name; the network layer uses this to refuse a name rule
 # when the broker is off, rather than run with a rule the guard would widen to any address on the
@@ -63,13 +65,11 @@ exact_connect_names() {
 name_connect_rules() {
   local rules="$1"
   local host
-  local kind
   local proto
   while read -r host _ proto; do
     [[ -z "$host" ]] && continue
     [[ "$proto" == "udp" ]] && continue
-    kind="$(classify_connect_host "$host")"
-    [[ "$kind" == "exact" || "$kind" == "suffix" ]] && printf '%s\n' "$host"
+    [[ "$(classify_connect_host "$host")" == "exact" ]] && printf '%s\n' "$host"
   done < <(sed -E 's/#.*$//' "$rules" 2>/dev/null | sed '/^[[:space:]]*$/d') | sort -u
 }
 
@@ -162,22 +162,22 @@ stop_haproxy_child() {
 }
 
 # Prints the frontend allow-list lines for one net.rules file. A host of "*" permits any host. A
-# host with a slash, an IPv6 colon or only digits and dots is an address; "*.name" is a name
-# suffix; anything else is an exact name. For an exact name the broker resolves the ClientHello's
+# host with a slash, an IPv6 colon or only digits and dots is an address; any other host with a
+# star in it ends the run through refuse_wildcard_host_name rather than yield a rule; anything else is an
+# exact name. For an exact name the broker resolves the ClientHello's
 # host name through the "phobosdns" resolver into a variable, sets the destination to it, and
 # refuses when it does not resolve, so the connection can only reach the name's own address; this
 # needs the resolvers section build_haproxy_conf emits, which the network layer guarantees by
-# refusing an exact-name rule with no resolver. A suffix waits for the ClientHello and is sent to
-# the header's destination, the weaker match the name cannot be resolved from. An address rule is
+# refusing an exact-name rule with no resolver. An address rule is
 # accepted the moment its destination matches, so a connection with no ClientHello does not wait
 # out the inspect-delay. Name matching is case-insensitive. Assumes
-# it is called where its output belongs, inside the frontend and after set-dst.
+# it is called where its output belongs, inside the frontend and after set-dst, and that
+# refuse_wildcard_host_name is defined, as it is wherever phobos-common.sh was sourced.
 haproxy_allow_rules() {
   local rules="$1"
   local host
   local proto
   local -a names=()
-  local -a suffixes=()
   local -a addresses=()
   local any_host=0
   while read -r host _ proto; do
@@ -192,7 +192,7 @@ haproxy_allow_rules() {
           addresses+=("$host")
         fi
         ;;
-      suffix) suffixes+=(".${host#*.}") ;;
+      invalid) refuse_wildcard_host_name "$host" ;;
       exact) names+=("$host") ;;
     esac
   done < <(sed -E 's/#.*$//' "$rules" 2>/dev/null | sed '/^[[:space:]]*$/d')
@@ -208,9 +208,6 @@ haproxy_allow_rules() {
     printf '    tcp-request content set-dst var(txn.hostip) if exact_sni { var(txn.hostip) -m found }\n'
     printf '    tcp-request content reject if exact_sni !{ var(txn.hostip) -m found }\n'
   fi
-  if (( ${#suffixes[@]} > 0 )); then
-    printf '    acl suffix_sni req.ssl_sni -m end -i %s\n' "$(printf '%s\n' "${suffixes[@]}" | sort -u | tr '\n' ' ' | sed 's/ $//')"
-  fi
   if (( ${#addresses[@]} > 0 )); then
     printf '    acl allowed_dst dst -m ip %s\n' "$(printf '%s\n' "${addresses[@]}" | sort -u | tr '\n' ' ' | sed 's/ $//')"
     printf '    tcp-request content accept if allowed_dst\n'
@@ -218,9 +215,6 @@ haproxy_allow_rules() {
   printf '    tcp-request content accept if { req.ssl_hello_type 1 }\n'
   if (( ${#names[@]} > 0 )); then
     printf '    use_backend to_dst if exact_sni\n'
-  fi
-  if (( ${#suffixes[@]} > 0 )); then
-    printf '    use_backend to_dst if suffix_sni\n'
   fi
   if (( ${#addresses[@]} > 0 )); then
     printf '    use_backend to_dst if allowed_dst\n'
@@ -311,11 +305,15 @@ emit_broker_resolvers() {
 # net.rules file, the output path, the "address:port" the broker listens on, and the upstream
 # resolver ("ip" or "ip:port", empty when no exact-name rule needs one). An exact-name rule needs
 # the resolvers section; the network layer guarantees a resolver is given whenever one is present.
+# A wildcard host name ends the run before anything is written, so a half-written config never
+# stands for a refusal. Assumes phobos-common.sh was sourced and that it is called plainly, so
+# the refusal ends the run.
 build_haproxy_conf() {
   local rules="$1"
   local out="$2"
   local listen="$3"
   local resolver="${4:-}"
+  refuse_wildcard_connect_names "$rules"
   {
     if [[ -n "$resolver" ]]; then
       emit_broker_resolvers "$resolver"
