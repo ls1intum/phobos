@@ -44,9 +44,11 @@ static constexpr int BOOTSTRAP_DESCRIPTOR_FLOOR = 1023;
  * arrive under a different arch or number and fall through to ALLOW unwatched. On the native
  * ABI it refuses io_uring (a second syscall interface that would reach connect unseen) and
  * setsid/setpgid (a new session or group would escape the timeout's group-kill), and it traps
- * socket, connect, sendto, sendmmsg and sendmsg to the supervisor, which decides them from the
- * kernel's own copy of the scalar arguments and, for a destination behind a pointer, from the
- * child's memory. Everything else is allowed.
+ * socket, connect, listen, sendto, sendmmsg and sendmsg to the supervisor, which decides them from
+ * the kernel's own copy of the scalar arguments and, for a destination behind a pointer, from the
+ * child's memory. listen is trapped because the kernel gives a socket that was never bound a port
+ * of its own choosing when it listens, a listener no bind rule judged; the supervisor therefore
+ * runs every listen itself, on a socket it created. Everything else is allowed.
  *
  * sendmsg is the one call the child itself must make while this filter is in force: it hands
  * the notification descriptor up to the supervisor with sendmsg, because SCM_RIGHTS is the
@@ -84,6 +86,7 @@ static int install_connect_filter(int bootstrap_descriptor) {
         GUARD_DENY_SYSCALL(__NR_setpgid),
         GUARD_TRAP_SYSCALL(__NR_connect),
         GUARD_TRAP_SYSCALL(__NR_socket),
+        GUARD_TRAP_SYSCALL(__NR_listen),
         GUARD_TRAP_SYSCALL(__NR_sendto),
         GUARD_TRAP_SYSCALL(__NR_sendmmsg),
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_sendmsg, 0, 5),

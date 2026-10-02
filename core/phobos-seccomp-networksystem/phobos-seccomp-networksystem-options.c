@@ -10,7 +10,7 @@
 [[noreturn]] void print_usage_and_exit(void) {
     fprintf(stderr,
             "Usage: phobos-seccomp-networksystem [--verbose] [--rules FILE] [--broker ADDRESS:PORT] "
-            "-- COMMAND [ARGUMENTS...]\n");
+            "[--allow-ephemeral-listen] -- COMMAND [ARGUMENTS...]\n");
     exit(EXIT_CODE_USAGE);
 }
 
@@ -20,6 +20,10 @@ void parse_arguments(int argument_count, char *arguments[], struct guard_options
     for (; index < argument_count; index++) {
         if (strcmp(arguments[index], "--verbose") == 0) {
             options->verbose = true;
+            continue;
+        }
+        if (strcmp(arguments[index], "--allow-ephemeral-listen") == 0) {
+            options->allow_ephemeral_listen = true;
             continue;
         }
         if (strcmp(arguments[index], "--rules") == 0) {
