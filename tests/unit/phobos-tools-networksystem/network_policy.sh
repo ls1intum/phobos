@@ -409,6 +409,67 @@ if [[ "$got" != *"--allow-ephemeral-udp-bind"* ]]; then
 else
   bad "a policy with no udp rule and no udp port 0 leaves an unbound datagram socket refused" "no --allow-ephemeral-udp-bind" "$got"
 fi
+# A udp rule that names a host is resolved once before the command starts. The cases here stop the
+# run before it reaches /etc/hosts, so they change nothing on the machine: a layer given no
+# resolver, and a guard whose lookup fails, each refuse the run and never start the command.
+failing_resolve_guard="$(mktemp "$WORK/failing-resolve-guard.XXXXXX")"
+cat > "$failing_resolve_guard" <<FAILING
+#!/bin/sh
+for word in "\$@"; do printf '%s\n' "\$word"; done > "$WORK/guard-args"
+exit 125
+FAILING
+chmod +x "$failing_resolve_guard"
+udp_name_spec="$(mktemp -d "$WORK/udp-name-spec.XXXXXX")"
+printf 'dns.example 53 udp\n' > "$udp_name_spec/net.rules"
+rm -f "$WORK/guard-args"
+udp_out="$(bash "$CORE/phobos-networksystem.sh" --connect-guard-bin "$recording_guard" --landlock-bin "$stub_landlock" "$udp_name_spec" -- true 2>&1)"
+udp_rc=$?
+if [[ $udp_rc -eq "${PHB_ERUNTIME}" && "$udp_out" == *"names a host (dns.example)"*"no resolver was given"* && ! -e "$WORK/guard-args" ]]; then
+  ok "a udp rule that names a host with no resolver given refuses the run before the guard is asked anything"
+else
+  bad "a udp rule that names a host with no resolver given refuses the run before the guard is asked anything" "PHB-ERUNTIME, no resolver, guard unused" "exit $udp_rc: $udp_out"
+fi
+udp_name_spec="$(mktemp -d "$WORK/udp-name-spec.XXXXXX")"
+printf 'dns.example 53 udp\nother.example 5353 udp\n8.8.8.8 53 udp\n' > "$udp_name_spec/net.rules"
+udp_out="$(bash "$CORE/phobos-networksystem.sh" --connect-guard-bin "$failing_resolve_guard" --landlock-bin "$stub_landlock" --resolver 192.0.2.53:5353 "$udp_name_spec" -- true 2>&1)"
+udp_rc=$?
+got="$(tr '\n' ' ' < "$WORK/guard-args")"
+if [[ $udp_rc -eq "${PHB_ERUNTIME}" && "$udp_out" == *"could not be resolved through 192.0.2.53:5353"* ]]; then
+  ok "a guard whose lookup fails refuses the run"
+else
+  bad "a guard whose lookup fails refuses the run" "PHB-ERUNTIME, could not be resolved" "exit $udp_rc: $udp_out"
+fi
+if [[ "$got" == "--resolve --resolver 192.0.2.53:5353 -- dns.example other.example " ]]; then
+  ok "the guard is asked in resolve mode, through the given resolver, for each name once and for no address"
+else
+  bad "the guard is asked in resolve mode, through the given resolver, for each name once and for no address" "--resolve --resolver 192.0.2.53:5353 -- dns.example other.example" "$got"
+fi
+# The guard keeps 256 rules and drops the rest without a word, so a lookup that would grow the rules
+# past that is refused before /etc/hosts is touched. The number is the guard's, read from its header.
+guard_maximum="$(sed -n 's/.*MAXIMUM_RULES = \([0-9]*\);.*/\1/p' "$CORE/phobos-seccomp-networksystem/phobos-seccomp-networksystem-rules.h")"
+[[ "$guard_maximum" == "$PHB_GUARD_RULES_MAXIMUM" ]] && ok "the layer's limit on the guard's rules is the guard's own" \
+  || bad "the layer's limit on the guard's rules is the guard's own" "$guard_maximum" "$PHB_GUARD_RULES_MAXIMUM"
+many_resolve_guard="$(mktemp "$WORK/many-resolve-guard.XXXXXX")"
+cat > "$many_resolve_guard" <<'MANY'
+#!/bin/sh
+while [ "$1" != "--" ]; do shift; done
+shift
+for name in "$@"; do
+  n=1
+  while [ "$n" -le 16 ]; do printf '%s 198.51.100.%s\n' "$name" "$n"; n=$((n + 1)); done
+done
+MANY
+chmod +x "$many_resolve_guard"
+udp_name_spec="$(mktemp -d "$WORK/udp-name-spec.XXXXXX")"
+: > "$udp_name_spec/net.rules"
+for count in $(seq 1 17); do printf 'host%s.example 53 udp\n' "$count" >> "$udp_name_spec/net.rules"; done
+udp_out="$(bash "$CORE/phobos-networksystem.sh" --connect-guard-bin "$many_resolve_guard" --landlock-bin "$stub_landlock" --resolver 192.0.2.53 "$udp_name_spec" -- true 2>&1)"
+udp_rc=$?
+if [[ $udp_rc -eq "${PHB_ERUNTIME}" && "$udp_out" == *"gives 272 rules, and the connect guard keeps 256"* ]]; then
+  ok "seventeen names of sixteen addresses give more rules than the guard keeps, and the run is refused"
+else
+  bad "seventeen names of sixteen addresses give more rules than the guard keeps, and the run is refused" "PHB-ERUNTIME, 272 rules" "exit $udp_rc: $udp_out"
+fi
 got="$(layer_arguments "" "" $'--chdir /x\n--minimum-landlock-version 4\n')"
 if [[ "$got" == *"--minimum-landlock-version 4 "* ]]; then
   ok "the operator's minimum Landlock version reaches the network layer's own enforcer call"

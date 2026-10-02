@@ -72,3 +72,8 @@ PHB_HIGHEST_PORT=65535
 # An unbracketed [connect] target with at least this many colons is an IPv6 address, whose own
 # colons leave no room for a ":port".
 PHB_IPV6_MINIMUM_COLONS=2
+
+# The most rules the connect guard keeps. It drops every row after this many, quietly, so a rules
+# file the network layer has grown by expanding host names is refused when it would pass this. Kept
+# equal to MAXIMUM_RULES in phobos-seccomp-networksystem-rules.h, which a test compares.
+PHB_GUARD_RULES_MAXIMUM=256

@@ -10,7 +10,8 @@
 [[noreturn]] void print_usage_and_exit(void) {
     fprintf(stderr,
             "Usage: phobos-seccomp-networksystem [--verbose] [--rules FILE] [--broker ADDRESS:PORT] "
-            "[--allow-ephemeral-listen] [--allow-ephemeral-udp-bind] -- COMMAND [ARGUMENTS...]\n");
+            "[--allow-ephemeral-listen] [--allow-ephemeral-udp-bind] -- COMMAND [ARGUMENTS...]\n"
+            "       phobos-seccomp-networksystem [--verbose] --resolve --resolver ADDRESS[:PORT] -- NAME...\n");
     exit(EXIT_CODE_USAGE);
 }
 
@@ -28,6 +29,18 @@ void parse_arguments(int argument_count, char *arguments[], struct guard_options
         }
         if (strcmp(arguments[index], "--allow-ephemeral-udp-bind") == 0) {
             options->allow_ephemeral_udp_bind = true;
+            continue;
+        }
+        if (strcmp(arguments[index], "--resolve") == 0) {
+            options->resolve = true;
+            continue;
+        }
+        if (strcmp(arguments[index], "--resolver") == 0) {
+            index++;
+            if (index >= argument_count) {
+                print_usage_and_exit();
+            }
+            options->resolver_endpoint = arguments[index];
             continue;
         }
         if (strcmp(arguments[index], "--rules") == 0) {

@@ -920,6 +920,7 @@ cat > "$WORK/dprobe.c" <<'C'
 #define _GNU_SOURCE
 #include <arpa/inet.h>
 #include <errno.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
@@ -1233,6 +1234,49 @@ static int readonly_vector(int port) {
     return 0;
 }
 
+/* Sends one datagram to a host name, which the command resolves as any program does, from
+ * /etc/hosts, and then one to a decoy address on the same port. The first answers where the name
+ * leads, the second shows that a rule for the name is held to its addresses and not to the port. */
+static int name_send(const char *name, int port, const char *decoy) {
+    struct addrinfo hints;
+    struct addrinfo *found = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    char service[16];
+    snprintf(service, sizeof(service), "%d", port);
+    if (getaddrinfo(name, service, &hints, &found) != 0 || found == NULL) {
+        printf("NAME-NOT-RESOLVED\n");
+        return PROBE_REFUSED;
+    }
+    char text[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &((struct sockaddr_in *)found->ai_addr)->sin_addr, text, sizeof(text));
+    int sender = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sendto(sender, "x", 1, 0, found->ai_addr, found->ai_addrlen) < 0) {
+        printf("NAME-REFUSED %s %s\n", text, strerror(errno));
+    } else {
+        printf("NAME-SENT %s\n", text);
+    }
+    struct sockaddr_in other;
+    fill(&other, inet_addr(decoy), port);
+    if (sendto(sender, "x", 1, 0, (struct sockaddr *)&other, sizeof(other)) < 0) {
+        printf("DECOY-REFUSED %s\n", strerror(errno));
+    } else {
+        printf("DECOY-SENT\n");
+    }
+    return 0;
+}
+
+/* Waits a moment on an address and port and says how many datagrams came. */
+static int count_arrivals(const char *address, int port) {
+    int listener = receiver(inet_addr(address), port);
+    printf("RECEIVER-UP\n");
+    fflush(stdout);
+    usleep(3 * RECEIVE_WAIT_MILLISECONDS * 1000);
+    printf("ARRIVED %d\n", drain(listener));
+    return 0;
+}
+
 /* A datagram one byte beyond the 64 KiB the guard copies. */
 static int oversize(int port) {
     int sender = socket(AF_INET, SOCK_DGRAM, 0);
@@ -1290,6 +1334,12 @@ int main(int argc, char **argv) {
     }
     if (argc >= 3 && strcmp(argv[1], "readonly") == 0) {
         return readonly_vector(atoi(argv[2]));
+    }
+    if (argc >= 5 && strcmp(argv[1], "namesend") == 0) {
+        return name_send(argv[2], atoi(argv[3]), argv[4]);
+    }
+    if (argc >= 4 && strcmp(argv[1], "arrivals") == 0) {
+        return count_arrivals(argv[2], atoi(argv[3]));
     }
     if (argc >= 3 && strcmp(argv[1], "oversize") == 0) {
         return oversize(atoi(argv[2]));
@@ -1407,5 +1457,338 @@ for mode in sendto sendmsg sendmmsg connect; do
     bad "by $mode, a destination rewritten while the call runs never reaches the forbidden receiver, and the allowed one still receives" "control: $control; guarded: $out"
   fi
 done
+
+echo
+echo "== the guard's resolve mode gives the addresses of the names a udp rule holds =="
+cat > "$WORK/stubdns.c" <<'C'
+#define _GNU_SOURCE
+#include <arpa/inet.h>
+#include <ctype.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+/* A stub name server for the suite: it answers by the first label of the question, so each name
+ * names the behaviour it wants. The record types it knows are A (1) and AAAA (28). */
+enum { A = 1, AAAA = 28, HEADER = 12, PACKET = 1500, MANY = 20 };
+
+static size_t question_end(const unsigned char *query, size_t length) {
+    size_t at = HEADER;
+    while (at < length && query[at] != 0) {
+        at += (size_t)query[at] + 1;
+    }
+    return at + 5;
+}
+
+static size_t add_record_owned(unsigned char *out, size_t at, const unsigned char *owner, size_t owner_length,
+                               int type, const unsigned char *data, size_t data_length) {
+    if (owner != NULL) {
+        memcpy(out + at, owner, owner_length);
+        at += owner_length;
+    } else {
+        out[at++] = 0xc0;
+        out[at++] = HEADER;
+    }
+    out[at++] = 0;
+    out[at++] = (unsigned char)type;
+    out[at++] = 0;
+    out[at++] = 1;
+    memset(out + at, 0, 3);
+    at += 3;
+    out[at++] = 60;
+    out[at++] = 0;
+    out[at++] = (unsigned char)data_length;
+    memcpy(out + at, data, data_length);
+    return at + data_length;
+}
+
+static size_t add_record(unsigned char *out, size_t at, int type, const unsigned char *data, size_t data_length) {
+    return add_record_owned(out, at, NULL, 0, type, data, data_length);
+}
+
+int main(int argc, char **argv) {
+    int port = atoi(argv[1]);
+    int server = socket(AF_INET, SOCK_DGRAM, 0);
+    struct sockaddr_in local = { .sin_family = AF_INET, .sin_port = htons((unsigned short)port) };
+    local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(server, (struct sockaddr *)&local, sizeof(local)) != 0) {
+        perror("bind");
+        return 1;
+    }
+    printf("STUB-UP\n");
+    fflush(stdout);
+    int late_seen = 0;
+    for (;;) {
+        unsigned char query[PACKET];
+        struct sockaddr_in from;
+        socklen_t from_length = sizeof(from);
+        ssize_t length = recvfrom(server, query, sizeof(query), 0, (struct sockaddr *)&from, &from_length);
+        if (length < HEADER + 5) {
+            continue;
+        }
+        char label[64] = { 0 };
+        memcpy(label, query + HEADER + 1, query[HEADER] < 63 ? query[HEADER] : 63);
+        int type = query[question_end(query, (size_t)length) - 4] * 256 + query[question_end(query, (size_t)length) - 3];
+        size_t end = question_end(query, (size_t)length);
+        unsigned char out[PACKET];
+        memcpy(out, query, end);
+        out[2] = (unsigned char)(0x81 | (query[2] & 0x01));
+        out[3] = 0x80;
+        out[6] = out[7] = out[8] = out[9] = out[10] = out[11] = 0;
+        size_t at = end;
+        int answers = 0;
+        if (strcmp(label, "slow") == 0) {
+            continue;
+        }
+        if (strcmp(label, "late") == 0 && !late_seen) {
+            late_seen = 1;
+            continue;
+        }
+        if (strcmp(label, "wrongid") == 0) {
+            out[1] ^= 0xff;
+        } else if (strcmp(label, "fail") == 0) {
+            out[3] = 0x82;
+        } else if (strcmp(label, "nx") == 0) {
+            out[3] = 0x83;
+        } else if (strcmp(label, "trunc") == 0) {
+            out[2] |= 0x02;
+        } else if (strcmp(label, "garbage") == 0) {
+            at = end;
+            out[7] = 5;
+            out[at++] = 0xc0;
+        } else if (strcmp(label, "badlength") == 0 && type == A) {
+            unsigned char data[3] = { 1, 2, 3 };
+            at = add_record(out, at, A, data, sizeof(data));
+            answers = 1;
+        } else if (strcmp(label, "many") == 0 && type == A) {
+            for (int index = 0; index < MANY; index++) {
+                unsigned char data[4] = { 198, 51, 100, (unsigned char)(index + 1) };
+                at = add_record(out, at, A, data, sizeof(data));
+                answers++;
+            }
+        } else if (strcmp(label, "cname") == 0 && type == A) {
+            unsigned char alias[] = { 5, 'a', 'l', 'i', 'a', 's', 0 };
+            at = add_record(out, at, 5, alias, sizeof(alias));
+            unsigned char data[4] = { 192, 0, 2, 4 };
+            at = add_record_owned(out, at, alias, sizeof(alias), A, data, sizeof(data));
+            answers = 2;
+        } else if (strcmp(label, "foreign") == 0 && type == A) {
+            unsigned char other[] = { 5, 'o', 't', 'h', 'e', 'r', 0 };
+            unsigned char data[4] = { 192, 0, 2, 99 };
+            at = add_record_owned(out, at, other, sizeof(other), A, data, sizeof(data));
+            answers = 1;
+        } else if (strcmp(label, "plain") == 0 || strcmp(label, "case") == 0) {
+            if (type == A) {
+                unsigned char first[4] = { 192, 0, 2, 1 };
+                unsigned char second[4] = { 192, 0, 2, 2 };
+                at = add_record(out, at, A, first, sizeof(first));
+                at = add_record(out, at, A, second, sizeof(second));
+                answers = 2;
+            } else if (type == AAAA) {
+                unsigned char data[16] = { 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+                at = add_record(out, at, AAAA, data, sizeof(data));
+                answers = 1;
+            }
+            if (strcmp(label, "case") == 0) {
+                for (size_t index = HEADER; index < end - 4; index++) {
+                    out[index] = (unsigned char)toupper(out[index]);
+                }
+            }
+        } else if (strcmp(label, "loop") == 0 && type == A) {
+            unsigned char data[4] = { 127, 0, 0, 1 };
+            at = add_record(out, at, A, data, sizeof(data));
+            answers = 1;
+        } else if ((strcmp(label, "v4only") == 0 || strcmp(label, "late") == 0) && type == A) {
+            unsigned char data[4] = { 192, 0, 2, 3 };
+            at = add_record(out, at, A, data, sizeof(data));
+            answers = 1;
+        }
+        out[7] = out[7] ? out[7] : (unsigned char)answers;
+        sendto(server, out, at, 0, (struct sockaddr *)&from, from_length);
+    }
+}
+C
+if ! "$compiler" -O2 -o "$WORK/stubdns" "$WORK/stubdns.c" 2>"$WORK/stubdns-cc.log"; then
+  bad "the stub name server builds" "$(cat "$WORK/stubdns-cc.log")"
+  finish
+fi
+DNS_PORT=39340
+"$WORK/stubdns" "$DNS_PORT" > "$WORK/stubdns.out" 2>&1 &
+stub_pid=$!
+for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do grep -q STUB-UP "$WORK/stubdns.out" 2>/dev/null && break; sleep "$LISTENER_WAIT_SECONDS"; done
+
+# The status the resolve mode ends with when it cannot give every name an address.
+RESOLVE_REFUSED=125
+resolve() {
+  "$WORK/guard" --resolve --resolver "127.0.0.1:${DNS_PORT}" -- "$@" 2>"$WORK/resolve.err"
+}
+resolve_fails_with() {
+  local label="$1"
+  local wanted="$2"
+  shift 2
+  local out
+  local rc
+  out="$(resolve "$@")"
+  rc=$?
+  if [[ $rc -eq "$RESOLVE_REFUSED" && -z "$out" && "$(cat "$WORK/resolve.err")" == *"$wanted"* ]]; then
+    ok "$label"
+  else
+    bad "$label" "rc=$rc out=$out err=$(cat "$WORK/resolve.err")"
+  fi
+}
+
+out="$(resolve plain.test)"
+if [[ "$out" == $'plain.test 192.0.2.1\nplain.test 192.0.2.2\nplain.test 2001:db8::1' ]]; then
+  ok "a name with two IPv4 addresses and one IPv6 address gives all three"
+else
+  bad "a name with two IPv4 addresses and one IPv6 address gives all three" "$out"
+fi
+out="$(resolve v4only.test)"
+if [[ "$out" == "v4only.test 192.0.2.3" ]]; then
+  ok "an empty answer for one record type is not a failure when the other type gave an address"
+else
+  bad "an empty answer for one record type is not a failure when the other type gave an address" "$out"
+fi
+out="$(resolve cname.test)"
+if [[ "$out" == "cname.test 192.0.2.4" ]]; then
+  ok "an alias in the answer is stepped over and the address after it is kept"
+else
+  bad "an alias in the answer is stepped over and the address after it is kept" "$out"
+fi
+out="$(resolve case.test)"
+if [[ "$out" == *"case.test 192.0.2.1"* && "$out" == *"case.test 2001:db8::1"* ]]; then
+  ok "a resolver that changes the case of the question is still understood"
+else
+  bad "a resolver that changes the case of the question is still understood" "$out"
+fi
+out="$(resolve late.test)"
+if [[ "$out" == "late.test 192.0.2.3" ]]; then
+  ok "a first query that is not answered is asked again"
+else
+  bad "a first query that is not answered is asked again" "$out"
+fi
+out="$(resolve plain.test v4only.test)"
+if [[ "$(wc -l <<<"$out")" -eq 4 && "$out" == *"v4only.test 192.0.2.3"* ]]; then
+  ok "several names are resolved in one call, each line naming its name"
+else
+  bad "several names are resolved in one call, each line naming its name" "$out"
+fi
+out="$(resolve many.test)"
+if [[ "$(wc -l <<<"$out")" -eq 16 ]]; then
+  ok "a name with twenty addresses keeps sixteen of them"
+else
+  bad "a name with twenty addresses keeps sixteen of them" "$(wc -l <<<"$out") lines"
+fi
+
+resolve_fails_with "a name that does not exist is refused" "no address was found" nx.test
+resolve_fails_with "a resolver that answers with an error is refused" "answered with an error" fail.test
+resolve_fails_with "a truncated answer is refused rather than used in part" "truncated" trunc.test
+resolve_fails_with "an address that belongs to another name is not taken for the name asked" "no address was found" foreign.test
+resolve_fails_with "an answer that cannot be read is refused" "could not be read" garbage.test
+resolve_fails_with "an address record of the wrong length is refused" "could not be read" badlength.test
+resolve_fails_with "a name that is not answered is refused after the wait" "did not answer in time" slow.test
+resolve_fails_with "an answer with the wrong id is not taken for the answer" "did not answer in time" wrongid.test
+resolve_fails_with "a name that cannot be a DNS question is refused" "cannot be sent" 'bad!name.test'
+resolve_fails_with "one name that fails makes the whole call print nothing, the ones before it included" "cannot resolve nx.test" plain.test nx.test
+
+out="$("$WORK/guard" --resolve --resolver 127.0.0.1:1 -- plain.test 2>&1)"
+rc=$?
+if [[ $rc -eq "$RESOLVE_REFUSED" && "$out" == *"did not answer in time"* ]]; then
+  ok "a resolver nothing listens on is refused after the wait"
+else
+  bad "a resolver nothing listens on is refused after the wait" "rc=$rc out=$out"
+fi
+out="$("$WORK/guard" --resolve --resolver not-an-address -- plain.test 2>&1)"
+rc=$?
+if [[ $rc -eq "$RESOLVE_REFUSED" && "$out" == *"is not an address"* ]]; then
+  ok "a resolver that is a host name is refused"
+else
+  bad "a resolver that is a host name is refused" "rc=$rc out=$out"
+fi
+
+echo
+echo "== through the network layer, a udp rule that names a host is held to the addresses it had at the start =="
+# The layer writes /etc/hosts, so it needs that file writable, as the run-phase image the acceptance
+# suite uses gives; where it is not, these cases are skipped. The Landlock enforcer is a stand-in
+# that runs the command: a udp rule naming a port needs Landlock version 10, which no kernel the
+# project's CI or local runs use has, and the guard is what is being proven here, not the port rules.
+if [[ -w /etc/hosts ]]; then
+  stub_landlock="$WORK/stub-landlock"
+  printf '#!/bin/sh\nwhile [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n' > "$stub_landlock"
+  chmod +x "$stub_landlock"
+  NAME_PORT=39350
+  owned_spec_for() {
+    local directory
+    directory="$(mktemp -d "$WORK/udp-name-spec.XXXXXX")"
+    ( source "${CORE}/phobos-tools-common/phobos-common.sh"; mark_owned_spec_dir "$directory" )
+    printf '%s\n' "$directory"
+  }
+  hosts_before="$(cat /etc/hosts; printf 'x')"
+
+  spec="$(owned_spec_for)"
+  printf 'loop.test %s udp\n' "$NAME_PORT" > "$spec/net.rules"
+  "$WORK/dprobe" arrivals 127.0.0.1 "$NAME_PORT" > "$WORK/arrive-real.out" 2>&1 &
+  real_pid=$!
+  "$WORK/dprobe" arrivals 127.0.0.2 "$NAME_PORT" > "$WORK/arrive-decoy.out" 2>&1 &
+  decoy_pid=$!
+  for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do
+    grep -q RECEIVER-UP "$WORK/arrive-real.out" 2>/dev/null && grep -q RECEIVER-UP "$WORK/arrive-decoy.out" 2>/dev/null && break
+    sleep "$LISTENER_WAIT_SECONDS"
+  done
+  out="$("${CORE}/phobos-networksystem.sh" --connect-guard-bin "$WORK/guard" --landlock-bin "$stub_landlock" \
+    --resolver "127.0.0.1:${DNS_PORT}" "$spec" -- "$WORK/dprobe" namesend loop.test "$NAME_PORT" 127.0.0.2 2>&1)"
+  wait "$real_pid" "$decoy_pid" 2>/dev/null
+  if [[ "$out" == *"NAME-SENT 127.0.0.1"* && "$(cat "$WORK/arrive-real.out")" == *"ARRIVED 1"* ]]; then
+    ok "the command resolves the name from /etc/hosts to the address the layer resolved, and a datagram to it arrives"
+  else
+    bad "the command resolves the name from /etc/hosts to the address the layer resolved, and a datagram to it arrives" "out=$out real=$(cat "$WORK/arrive-real.out")"
+  fi
+  if [[ "$out" == *"DECOY-REFUSED Permission denied"* && "$(cat "$WORK/arrive-decoy.out")" == *"ARRIVED 0"* ]]; then
+    ok "another address on the same port is refused and nothing reaches it, so the rule is held to the name's addresses and not to its port"
+  else
+    bad "another address on the same port is refused and nothing reaches it" "out=$out decoy=$(cat "$WORK/arrive-decoy.out")"
+  fi
+  [[ "$(cat /etc/hosts; printf 'x')" == "$hosts_before" ]] \
+    && ok "once the run has ended, /etc/hosts is byte-identical to what it was before" \
+    || bad "once the run has ended, /etc/hosts is byte-identical to what it was before" "$(grep loop.test /etc/hosts)"
+  [[ ! -e "$spec" ]] && ok "and the run's specification directory is gone, the guard's rules file with it" \
+    || bad "and the run's specification directory is gone, the guard's rules file with it" "$(ls -A "$spec")"
+
+  spec="$(owned_spec_for)"
+  printf 'loop.test %s udp\n' "$NAME_PORT" > "$spec/net.rules"
+  rm -f "$WORK/ran.marker"
+  out="$("${CORE}/phobos-networksystem.sh" --connect-guard-bin "$WORK/guard" --landlock-bin "$stub_landlock" \
+    --resolver 127.0.0.1:1 "$spec" -- touch "$WORK/ran.marker" 2>&1)"
+  rc=$?
+  if [[ $rc -eq 15 && ! -e "$WORK/ran.marker" && "$out" == *"could not be resolved"* ]]; then
+    ok "a resolver that does not answer refuses the run and the command never starts"
+  else
+    bad "a resolver that does not answer refuses the run and the command never starts" "rc=$rc out=$out"
+  fi
+  [[ "$(cat /etc/hosts; printf 'x')" == "$hosts_before" ]] \
+    && ok "a refused run leaves /etc/hosts as it found it" \
+    || bad "a refused run leaves /etc/hosts as it found it" "$(grep loop.test /etc/hosts)"
+
+  if command -v haproxy >/dev/null 2>&1; then
+    spec="$(owned_spec_for)"
+    printf 'LOOP.test 443\nloop.test %s udp\n' "$NAME_PORT" > "$spec/net.rules"
+    out="$("${CORE}/phobos-networksystem.sh" --connect-guard-bin "$WORK/guard" --landlock-bin "$stub_landlock" \
+      --resolver "127.0.0.1:${DNS_PORT}" "$spec" -- grep -i loop.test /etc/hosts 2>&1)"
+    if [[ "$out" == *"127.0.0.1 loop.test"* && "$out" != *"127.0.0.2"* ]]; then
+      ok "a name held by both a tcp and a udp rule, written in another case, is mapped to its real address and gets no placeholder"
+    else
+      bad "a name held by both a tcp and a udp rule, written in another case, is mapped to its real address and gets no placeholder" "$out"
+    fi
+  else
+    skip "a name held by both a tcp and a udp rule gets no placeholder" "haproxy is not installed here"
+  fi
+else
+  skip "the network layer holds a udp name rule to the addresses it resolved to" "/etc/hosts is not writable here"
+fi
+
+kill "$stub_pid" 2>/dev/null
+wait "$stub_pid" 2>/dev/null
 
 finish

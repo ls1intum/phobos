@@ -39,8 +39,15 @@ and the connect guard enforces it for the UDP transport apart from TCP, so a udp
 rule never admits a TCP connection to the same host and port, nor the reverse. UDP
 needs Landlock version 10; on an older kernel a udp rule is refused (PHB-EPOLICY)
 rather than run with UDP left unenforced. There is no egress broker for UDP, whose
-host enforcement rests on the TLS host name, so a udp [connect] rule may name only
-an address, a CIDR, a loopback name or "*", never a DNS host name.
+host enforcement rests on the TLS host name, so a udp [connect] rule that names a
+DNS host is held to the addresses the name had when the run began: the network layer
+asks the resolver given with --resolver once, before the command starts, hands the
+connect guard one rule for each address (at most sixteen) and maps the name to those
+addresses in /etc/hosts for the command. A name that does not resolve refuses the run
+(PHB-ERUNTIME), as does a missing --resolver, an /etc/hosts that already maps the name to a different set of addresses, more than 64 names, and names and ports whose addresses add up to more
+than the 256 rules the guard keeps. An address the name gains later is not followed, and
+an answer is only read for the name asked and the aliases that lead from it. A name with a
+star in it is refused as for tcp.
 
 There is no `openConnections` / `sendData` / `receiveData` toggle: a rule names a
 host, a port and a transport, or it does not.
@@ -85,8 +92,8 @@ Phobos filters outbound stream connect() from outside the process, at the seccom
 and Landlock boundaries, and does not interpose any libc call inside the process.
 On a Landlock version 10 kernel it also enforces UDP ports (connect/send and bind)
 at those boundaries when the policy names them; on an older kernel a udp rule is
-refused rather than left unenforced. Host-level UDP egress (a udp rule may name
-only an address or a range, never a host name) and inbound connections a [accept]
-rule does not front are governed by the container the run is placed in
+refused rather than left unenforced. Host-level UDP egress beyond the allow-list
+and inbound connections a [accept] rule does not front are governed by the
+container the run is placed in
 (`--network none`, or the operator's firewall in a networked posture), as
 SECURITY.md states.

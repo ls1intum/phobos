@@ -36,6 +36,7 @@
 #include <netinet/in.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/random.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
@@ -83,6 +84,9 @@ static constexpr uintptr_t FAKE_IOVEC_POINTER = 0x1000000;      /* msg_iov insid
 static constexpr uintptr_t FAKE_DATA_POINTER = 0x2000000;       /* the data a faked send names, up to FAKE_DATA_SPAN bytes */
 static constexpr uintptr_t FAKE_DATA_SPAN = 0x1000000;          /* how far past FAKE_DATA_POINTER a read still counts as data */
 static constexpr size_t FAKE_DATAGRAM_LENGTH = 16;              /* the length of every segment a faked send names */
+static constexpr uint16_t FAKE_DNS_ID = 0xBEEF;                 /* what the wrapped getrandom hands out, so a case knows the id */
+static constexpr size_t DNS_TEST_HEADER = 12;                   /* the length of a DNS message's header */
+static constexpr size_t DNS_TEST_OPT_RECORD = 11;               /* the EDNS0 record the query ends with */
 
 /* The exit status the wrapped execvp ends the child with, in place of a successful exec. */
 static constexpr int EXEC_STAND_IN_EXIT_STATUS = 200;
@@ -105,6 +109,34 @@ enum recvmsg_fault {
     RECVMSG_WRONG_LEVEL,  /* IPPROTO_IP in place of SOL_SOCKET */
     RECVMSG_WRONG_TYPE,   /* SCM_CREDENTIALS in place of SCM_RIGHTS */
     RECVMSG_WRONG_LENGTH  /* a length with no room for a descriptor */
+};
+
+/* What the wrapped resolver answers a query of one record type with. */
+enum dns_behaviour {
+    DNS_NORMAL,             /* two IPv4 addresses for A, one IPv6 address for AAAA */
+    DNS_NO_RECORDS,         /* no error, and no record */
+    DNS_NXDOMAIN,           /* the name does not exist */
+    DNS_SERVFAIL,           /* the resolver failed */
+    DNS_TRUNCATED,          /* the truncation bit set */
+    DNS_SILENT,             /* no answer at all */
+    DNS_WRONG_ID,           /* an answer to another query */
+    DNS_WRONG_QUESTION,     /* an answer whose question is another name */
+    DNS_NOT_A_RESPONSE,     /* the query echoed back, not marked as a response */
+    DNS_NONSTANDARD_OPCODE, /* a response with an opcode that is not a query */
+    DNS_TWO_QUESTIONS,      /* a response that claims two questions */
+    DNS_MANY,               /* twenty addresses of the asked type */
+    DNS_ALIAS,              /* an alias record, then the addresses */
+    DNS_FOREIGN_CLASS,      /* records of a class other than the Internet one */
+    DNS_OTHER_TYPE,         /* an AAAA record in the answer to an A query, and the other way round */
+    DNS_LABEL_OWNER,        /* the normal answer, its records named by labels, not a pointer */
+    DNS_FOREIGN_OWNER,      /* well formed address records that belong to another name */
+    DNS_ALIAS_CHAIN,        /* the address first, then two aliases that lead to it, in the wrong order */
+    DNS_ALIAS_LOOP,         /* two aliases that lead to each other, and an address for neither */
+    DNS_ALIAS_DEEP,         /* a chain of ten aliases, the address at the end of it */
+    DNS_ALIAS_TARGET_CUT,   /* an alias whose target runs past the end of its data */
+    DNS_TOO_MANY_RECORDS,   /* more records than one answer may hold */
+    DNS_OWNER_WITH_DOT,     /* an address record owned by one label that holds a dot, spelling the name asked */
+    DNS_OWNER_WITH_ZERO     /* an address record owned by labels one of which holds a zero byte */
 };
 
 /* What the wrapped readlink answers for a descriptor's /proc link. */
@@ -219,6 +251,22 @@ struct behaviour {
     int data_unreadable;
     size_t sendto_length;       /* the length argument of a faked sendto */
     socklen_t sendto_address_length;  /* when not zero, the address length argument of a faked sendto */
+    /* the resolve mode's lookups: what each record type is answered with, and what it was asked */
+    int dns_active;             /* set while a resolve case runs, so poll and send know whose they are */
+    int dns_behaviour[2];       /* for A (0) and AAAA (1), a dns_behaviour value */
+    int dns_strays;             /* how many packets that are not the answer arrive before it, per try */
+    int dns_stray_remaining;
+    int dns_cut_to;             /* when not zero, the reply is cut to this many bytes */
+    int dns_count_override;     /* when not negative, the reply's answer count is this */
+    int dns_poke_offset;        /* when not negative, a byte of the first answer is changed */
+    int dns_poke_value;
+    int dns_poke_second;        /* the byte after it, which a pointer needs as its second half */
+    int dns_record_class;       /* when not zero, the class of the records in the reply */
+    int recv_fails;
+    int getrandom_fails;
+    int dns_queries;
+    unsigned char dns_query[512];
+    size_t dns_query_length;
     /* the peer-address read */
     ssize_t process_vm_readv_result;
     /* the outward connection */
@@ -284,6 +332,8 @@ static void reset_behaviour(void) {
     bx->iov_count = 1;
     bx->segment_length = FAKE_DATAGRAM_LENGTH;
     bx->sendto_length = FAKE_DATAGRAM_LENGTH;
+    bx->dns_count_override = -1;
+    bx->dns_poke_offset = -1;
 }
 
 /* ------------------------------------------------------------------- wraps */
@@ -673,6 +723,13 @@ ssize_t __wrap_send(int fd, const void *buffer, size_t length, int flags) {
         errno = ECONNREFUSED;
         return -1;
     }
+    if (bx->dns_active) {
+        bx->dns_queries++;
+        bx->dns_stray_remaining = bx->dns_strays;
+        bx->dns_query_length = length < sizeof(bx->dns_query) ? length : sizeof(bx->dns_query);
+        memcpy(bx->dns_query, buffer, bx->dns_query_length);
+        return (ssize_t)length;
+    }
     size_t take = length;
     if (bx->send_short_once && take > 1) {
         bx->send_short_once = 0;
@@ -740,6 +797,285 @@ ssize_t __wrap_process_vm_writev(pid_t pid, const struct iovec *local, unsigned 
     return (ssize_t)local->iov_len;
 }
 
+/* How long the DNS names in the test answers are: the question, as the query carried it. */
+static size_t dns_question_length(void) {
+    return bx->dns_query_length - DNS_TEST_HEADER - DNS_TEST_OPT_RECORD;
+}
+
+/* Appends one record to a reply: an owner name that points back at the question, the type and
+ * class, a time to live and the data. */
+static bool dns_use_label_owner = false;
+/* When set, the owner of the next records is these bytes, a name written out, not the question. */
+static const unsigned char *dns_owner_bytes = NULL;
+static size_t dns_owner_length = 0;
+
+static size_t dns_add_record(unsigned char *out, size_t at, uint16_t type, uint16_t klass,
+                             const unsigned char *data, size_t data_length) {
+    if (dns_owner_bytes != NULL) {
+        memcpy(out + at, dns_owner_bytes, dns_owner_length);
+        at += dns_owner_length;
+    } else if (dns_use_label_owner) {
+        size_t name_length = 0;
+        while (out[DNS_TEST_HEADER + name_length] != 0) {
+            name_length += (size_t)out[DNS_TEST_HEADER + name_length] + 1;
+        }
+        name_length++;
+        memcpy(out + at, out + DNS_TEST_HEADER, name_length);
+        at += name_length;
+    } else {
+        out[at++] = 0xc0;
+        out[at++] = DNS_TEST_HEADER;
+    }
+    out[at++] = (unsigned char)(type >> 8);
+    out[at++] = (unsigned char)(type & 0xff);
+    out[at++] = (unsigned char)(klass >> 8);
+    out[at++] = (unsigned char)(klass & 0xff);
+    memset(out + at, 0, 3);
+    at += 3;
+    out[at++] = 60;
+    out[at++] = (unsigned char)(data_length >> 8);
+    out[at++] = (unsigned char)(data_length & 0xff);
+    memcpy(out + at, data, data_length);
+    return at + data_length;
+}
+
+/* Builds the answer the case arranged for the query last sent, from that query's own header and
+ * question, so that what the guard checks the answer against is what it asked. */
+static size_t dns_build_reply(unsigned char *out, size_t size) {
+    (void)size;
+    int type_index = bx->dns_query[bx->dns_query_length - DNS_TEST_OPT_RECORD - 3] == 28 ? 1 : 0;
+    int behaviour = bx->dns_behaviour[type_index];
+    uint16_t asked = type_index == 1 ? 28 : 1;
+    size_t end = DNS_TEST_HEADER + dns_question_length();
+    memcpy(out, bx->dns_query, end);
+    out[2] = (unsigned char)(0x80 | (bx->dns_query[2] & 0x01));
+    out[3] = 0x80;
+    memset(out + 6, 0, 6);
+    out[5] = 1;
+    size_t at = end;
+    unsigned int answers = 0;
+    uint16_t klass = bx->dns_record_class != 0 ? (uint16_t)bx->dns_record_class : 1;
+    dns_use_label_owner = behaviour == DNS_LABEL_OWNER;
+    unsigned char v4_first[4] = { 192, 0, 2, 1 };
+    unsigned char v4_second[4] = { 192, 0, 2, 2 };
+    unsigned char v6[16] = { 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+    switch (behaviour) {
+    case DNS_NXDOMAIN:
+        out[3] = 0x83;
+        break;
+    case DNS_SERVFAIL:
+        out[3] = 0x82;
+        break;
+    case DNS_TRUNCATED:
+        out[2] |= 0x02;
+        break;
+    case DNS_WRONG_ID:
+        out[0] ^= 0xff;
+        break;
+    case DNS_WRONG_QUESTION:
+        out[DNS_TEST_HEADER + 1] ^= 0x01;
+        break;
+    case DNS_NOT_A_RESPONSE:
+        out[2] &= (unsigned char)~0x80;
+        break;
+    case DNS_NONSTANDARD_OPCODE:
+        out[2] |= 0x10;
+        break;
+    case DNS_TWO_QUESTIONS:
+        out[5] = 2;
+        break;
+    case DNS_MANY:
+        for (unsigned char index = 0; index < 20; index++) {
+            unsigned char v4[4] = { 198, 51, 100, (unsigned char)(index + 1) };
+            unsigned char many6[16] = { 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (unsigned char)(index + 1) };
+            at = asked == 1 ? dns_add_record(out, at, 1, 1, v4, sizeof(v4))
+                            : dns_add_record(out, at, 28, 1, many6, sizeof(many6));
+            answers++;
+        }
+        break;
+    case DNS_ALIAS: {
+        unsigned char alias[] = { 5, 'a', 'l', 'i', 'a', 's', 0 };
+        at = dns_add_record(out, at, 5, 1, alias, sizeof(alias));
+        answers++;
+        dns_owner_bytes = alias;
+        dns_owner_length = sizeof(alias);
+        at = asked == 1 ? dns_add_record(out, at, 1, 1, v4_first, sizeof(v4_first))
+                        : dns_add_record(out, at, 28, 1, v6, sizeof(v6));
+        dns_owner_bytes = NULL;
+        answers++;
+        break;
+    }
+    case DNS_FOREIGN_OWNER: {
+        unsigned char other[] = { 5, 'o', 't', 'h', 'e', 'r', 0 };
+        dns_owner_bytes = other;
+        dns_owner_length = sizeof(other);
+        at = asked == 1 ? dns_add_record(out, at, 1, 1, v4_first, sizeof(v4_first))
+                        : dns_add_record(out, at, 28, 1, v6, sizeof(v6));
+        dns_owner_bytes = NULL;
+        answers++;
+        break;
+    }
+    case DNS_ALIAS_CHAIN: {
+        unsigned char first_alias[] = { 3, 'o', 'n', 'e', 0 };
+        unsigned char second_alias[] = { 3, 't', 'w', 'o', 0 };
+        dns_owner_bytes = second_alias;
+        dns_owner_length = sizeof(second_alias);
+        at = asked == 1 ? dns_add_record(out, at, 1, 1, v4_first, sizeof(v4_first))
+                        : dns_add_record(out, at, 28, 1, v6, sizeof(v6));
+        dns_owner_bytes = first_alias;
+        dns_owner_length = sizeof(first_alias);
+        at = dns_add_record(out, at, 5, 1, second_alias, sizeof(second_alias));
+        dns_owner_bytes = NULL;
+        at = dns_add_record(out, at, 5, 1, first_alias, sizeof(first_alias));
+        answers += 3;
+        break;
+    }
+    case DNS_ALIAS_LOOP: {
+        unsigned char first_alias[] = { 3, 'o', 'n', 'e', 0 };
+        unsigned char second_alias[] = { 3, 't', 'w', 'o', 0 };
+        at = dns_add_record(out, at, 5, 1, first_alias, sizeof(first_alias));
+        dns_owner_bytes = first_alias;
+        dns_owner_length = sizeof(first_alias);
+        at = dns_add_record(out, at, 5, 1, second_alias, sizeof(second_alias));
+        dns_owner_bytes = second_alias;
+        dns_owner_length = sizeof(second_alias);
+        at = dns_add_record(out, at, 5, 1, first_alias, sizeof(first_alias));
+        dns_owner_bytes = NULL;
+        answers += 3;
+        break;
+    }
+    case DNS_ALIAS_DEEP: {
+        unsigned char names[11][5];
+        for (unsigned char index = 0; index < 11; index++) {
+            names[index][0] = 3;
+            names[index][1] = 'n';
+            names[index][2] = (unsigned char)('a' + index);
+            names[index][3] = 'x';
+            names[index][4] = 0;
+        }
+        at = dns_add_record(out, at, 5, 1, names[0], 5);
+        for (int index = 0; index < 10; index++) {
+            dns_owner_bytes = names[index];
+            dns_owner_length = 5;
+            at = dns_add_record(out, at, 5, 1, names[index + 1], 5);
+        }
+        dns_owner_bytes = names[10];
+        at = asked == 1 ? dns_add_record(out, at, 1, 1, v4_first, sizeof(v4_first))
+                        : dns_add_record(out, at, 28, 1, v6, sizeof(v6));
+        dns_owner_bytes = NULL;
+        answers += 12;
+        break;
+    }
+    case DNS_ALIAS_TARGET_CUT: {
+        unsigned char cut_target[] = { 40, 'a', 'b' };
+        at = dns_add_record(out, at, 5, 1, cut_target, sizeof(cut_target));
+        answers++;
+        break;
+    }
+    case DNS_OWNER_WITH_DOT: {
+        unsigned char dotted[] = { 12, 'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 't', 'e', 's', 't', 0 };
+        dns_owner_bytes = dotted;
+        dns_owner_length = sizeof(dotted);
+        at = asked == 1 ? dns_add_record(out, at, 1, 1, v4_first, sizeof(v4_first))
+                        : dns_add_record(out, at, 28, 1, v6, sizeof(v6));
+        dns_owner_bytes = NULL;
+        answers++;
+        break;
+    }
+    case DNS_OWNER_WITH_ZERO: {
+        unsigned char zeroed[] = { 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 9, 't', 'e', 's', 't', 0, 'e', 'v', 'i', 'l', 0 };
+        dns_owner_bytes = zeroed;
+        dns_owner_length = sizeof(zeroed);
+        at = asked == 1 ? dns_add_record(out, at, 1, 1, v4_first, sizeof(v4_first))
+                        : dns_add_record(out, at, 28, 1, v6, sizeof(v6));
+        dns_owner_bytes = NULL;
+        answers++;
+        break;
+    }
+    case DNS_TOO_MANY_RECORDS:
+        for (int index = 0; index < 65; index++) {
+            at = asked == 1 ? dns_add_record(out, at, 1, 1, v4_first, sizeof(v4_first))
+                            : dns_add_record(out, at, 28, 1, v6, sizeof(v6));
+            answers++;
+        }
+        break;
+    case DNS_OTHER_TYPE:
+        at = asked == 1 ? dns_add_record(out, at, 28, 1, v6, sizeof(v6))
+                        : dns_add_record(out, at, 1, 1, v4_first, sizeof(v4_first));
+        answers++;
+        at = asked == 1 ? dns_add_record(out, at, 1, klass, v4_first, sizeof(v4_first))
+                        : dns_add_record(out, at, 28, klass, v6, sizeof(v6));
+        answers++;
+        break;
+    case DNS_FOREIGN_CLASS:
+        at = asked == 1 ? dns_add_record(out, at, 1, 3, v4_first, sizeof(v4_first))
+                        : dns_add_record(out, at, 28, 3, v6, sizeof(v6));
+        answers++;
+        at = asked == 1 ? dns_add_record(out, at, 1, 1, v4_second, sizeof(v4_second))
+                        : dns_add_record(out, at, 28, 1, v6, sizeof(v6));
+        answers++;
+        break;
+    case DNS_LABEL_OWNER:
+    case DNS_NORMAL:
+        if (asked == 1) {
+            at = dns_add_record(out, at, 1, klass, v4_first, sizeof(v4_first));
+            at = dns_add_record(out, at, 1, klass, v4_second, sizeof(v4_second));
+            answers = 2;
+        } else {
+            at = dns_add_record(out, at, 28, klass, v6, sizeof(v6));
+            answers = 1;
+        }
+        break;
+    default:
+        break;
+    }
+    out[6] = (unsigned char)(answers >> 8);
+    out[7] = (unsigned char)(answers & 0xff);
+    if (bx->dns_count_override >= 0) {
+        out[7] = (unsigned char)bx->dns_count_override;
+    }
+    if (bx->dns_poke_offset >= 0) {
+        out[end + (size_t)bx->dns_poke_offset] = (unsigned char)bx->dns_poke_value;
+        out[end + (size_t)bx->dns_poke_offset + 1] = (unsigned char)bx->dns_poke_second;
+    }
+    if (bx->dns_cut_to > 0 && (size_t)bx->dns_cut_to < at) {
+        at = (size_t)bx->dns_cut_to;
+    }
+    return at;
+}
+
+/* The wrapped recv, for the resolve mode: first any packets that are not the answer, then the
+ * answer the case arranged. */
+ssize_t __wrap_recv(int fd, void *buffer, size_t length, int flags) {
+    (void)fd;
+    (void)flags;
+    if (bx->recv_fails) {
+        errno = ECONNREFUSED;
+        return -1;
+    }
+    unsigned char reply[1500];
+    size_t reply_length = dns_build_reply(reply, sizeof(reply));
+    if (bx->dns_stray_remaining > 0) {
+        bx->dns_stray_remaining--;
+        reply[0] ^= 0xff;
+    }
+    size_t take = reply_length < length ? reply_length : length;
+    memcpy(buffer, reply, take);
+    return (ssize_t)take;
+}
+
+/* The id every query carries, so a case can build the answer that matches it or one that does not. */
+ssize_t __wrap_getrandom(void *buffer, size_t length, unsigned int flags) {
+    (void)flags;
+    if (bx->getrandom_fails) {
+        errno = EAGAIN;
+        return -1;
+    }
+    uint16_t id = FAKE_DNS_ID;
+    memcpy(buffer, &id, length < sizeof(id) ? length : sizeof(id));
+    return (ssize_t)length;
+}
+
 /* The supervise loop waits for POLLIN: hand out a readable turn for each arranged
  * service, an EINTR to exercise the retry, or a poll error, then a hangup that ends
  * the loop. */
@@ -784,6 +1120,14 @@ int __wrap_poll(struct pollfd *fds, nfds_t count, int timeout) {
     (void)timeout;
     (void)count;
     bx->poll_calls++;
+    if (bx->dns_active) {
+        int type_index = bx->dns_query[bx->dns_query_length - DNS_TEST_OPT_RECORD - 3] == 28 ? 1 : 0;
+        if (bx->dns_behaviour[type_index] == DNS_SILENT) {
+            return 0;
+        }
+        fds[0].revents = POLLIN;
+        return 1;
+    }
     if (fds[0].events & POLLIN) {
         return supervise_loop_poll(fds);
     }
@@ -2316,6 +2660,381 @@ static void test_datagram_connect(void) {
           bx->answers == 1 && bx->last_answer_error == 0 && bx->connect_calls == 1);
 }
 
+/* The output the last resolve case wrote, and the status it ended with. */
+static char dns_output[8192];
+
+static int run_resolve(const char *resolver, char *const *names) {
+    bx->dns_active = 1;
+    FILE *out = tmpfile();
+    if (out == NULL) {
+        perror("tmpfile");
+        exit(HARNESS_SETUP_FAILURE);
+    }
+    int status = run_resolve_mode(resolver, names, out);
+    rewind(out);
+    size_t length = fread(dns_output, 1, sizeof(dns_output) - 1, out);
+    dns_output[length] = '\0';
+    fclose(out);
+    bx->dns_active = 0;
+    return status;
+}
+
+static size_t count_lines(const char *text) {
+    size_t lines = 0;
+    for (; *text != '\0'; text++) {
+        if (*text == '\n') {
+            lines++;
+        }
+    }
+    return lines;
+}
+
+/* A resolve case that must end with the setup status and write nothing. */
+static bool resolve_refused(const char *name) {
+    char *names[] = { (char *)name, NULL };
+    int status = run_resolve("192.0.2.53", names);
+    return status == EXIT_CODE_SETUP_ERROR && dns_output[0] == '\0';
+}
+
+static void test_resolver_endpoints(void) {
+    struct sockaddr_storage address;
+    socklen_t length = 0;
+    check("a resolver address alone takes port 53",
+          parse_resolver_endpoint("192.0.2.53", &address, &length) && address.ss_family == AF_INET &&
+              ntohs(((struct sockaddr_in *)&address)->sin_port) == 53 && length == sizeof(struct sockaddr_in));
+    check("a resolver address with a port keeps it",
+          parse_resolver_endpoint("192.0.2.53:5353", &address, &length) &&
+              ntohs(((struct sockaddr_in *)&address)->sin_port) == 5353);
+    check("a bracketed IPv6 resolver with a port is read",
+          parse_resolver_endpoint("[2001:db8::53]:5353", &address, &length) && address.ss_family == AF_INET6 &&
+              ntohs(((struct sockaddr_in6 *)&address)->sin6_port) == 5353 && length == sizeof(struct sockaddr_in6));
+    check("a bracketed IPv6 resolver with no port takes port 53",
+          parse_resolver_endpoint("[2001:db8::53]", &address, &length) &&
+              ntohs(((struct sockaddr_in6 *)&address)->sin6_port) == 53);
+    const char *refused[] = {
+        "", "example.com", "2001:db8::53", "[2001:db8::53", "[]:53", "[2001:db8::53]x", "192.0.2.53:0",
+        "192.0.2.53:abc", "192.0.2.53:", "192.0.2.53:70000", "[2001:db8::53]:", "[2001:db8::53]:0", "[not-an-ip]:53",
+        "[192.0.2.53]:53", ":53", "999.0.0.1", "[2001:db8:2001:db8:2001:db8:2001:db8:2001:db8:2001:db8]:53",
+        "1111111111111111111111111111111111111111111111111111:53"
+    };
+    bool all_refused = true;
+    for (size_t index = 0; index < sizeof(refused) / sizeof(refused[0]); index++) {
+        if (parse_resolver_endpoint(refused[index], &address, &length)) {
+            printf("      accepted: %s\n", refused[index]);
+            all_refused = false;
+        }
+    }
+    check("a resolver that is empty, a name, a bare IPv6 address, unclosed, portless or out of range is refused",
+          all_refused);
+}
+
+static void test_resolve_mode(void) {
+    test_resolver_endpoints();
+    char *one[] = { "example.test", NULL };
+
+    reset_behaviour();
+    check("a name with two IPv4 addresses and one IPv6 address is written, one line each",
+          run_resolve("192.0.2.53:5353", one) == 0 &&
+              strcmp(dns_output, "example.test 192.0.2.1\nexample.test 192.0.2.2\nexample.test 2001:db8::1\n") == 0);
+    check("the resolver is connected to at its port, and asked twice, once for each record type",
+          bx->last_connect_port == 5353 && bx->last_connect_family == AF_INET && bx->dns_queries == 2);
+    const unsigned char *query = bx->dns_query;
+    check("the query carries a random id, asks for recursion, one question and one EDNS0 record",
+          query[0] == 0xBE && query[1] == 0xEF && query[2] == 0x01 && query[5] == 1 && query[11] == 1);
+    check("the question is the name as labels, the type, the Internet class, then the EDNS0 record",
+          memcmp(query + 12, "\x07" "example\x04" "test", 13) == 0 && query[25] == 0 && query[26] == 0 &&
+              query[27] == 28 && query[28] == 0 && query[29] == 1 && query[31] == 0 && query[32] == 41 &&
+              bx->dns_query_length == 12 + 18 + 11);
+
+    reset_behaviour();
+    check("a bracketed IPv6 resolver is connected to over IPv6",
+          run_resolve("[2001:db8::53]:5353", one) == 0 && bx->last_connect_family == AF_INET6 &&
+              bx->last_connect_port == 5353);
+    reset_behaviour();
+    check("a resolver with no port is asked on port 53",
+          run_resolve("192.0.2.53", one) == 0 && bx->last_connect_port == 53);
+
+    reset_behaviour();
+    bx->dns_behaviour[1] = DNS_NO_RECORDS;
+    check("an empty AAAA answer is not a failure when A gave addresses",
+          run_resolve("192.0.2.53", one) == 0 && count_lines(dns_output) == 2);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_NO_RECORDS;
+    check("an empty A answer is not a failure when AAAA gave an address",
+          run_resolve("192.0.2.53", one) == 0 && strcmp(dns_output, "example.test 2001:db8::1\n") == 0);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_NXDOMAIN;
+    check("a name error for one record type is not a failure when the other type gave an address",
+          run_resolve("192.0.2.53", one) == 0 && count_lines(dns_output) == 1);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_NO_RECORDS;
+    bx->dns_behaviour[1] = DNS_NO_RECORDS;
+    check("a name with no address of either type is refused, and nothing is written", resolve_refused("example.test"));
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_NXDOMAIN;
+    bx->dns_behaviour[1] = DNS_NXDOMAIN;
+    check("a name that does not exist is refused", resolve_refused("example.test"));
+
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_SERVFAIL;
+    check("a resolver failure on the A query is refused", resolve_refused("example.test"));
+    reset_behaviour();
+    bx->dns_behaviour[1] = DNS_SERVFAIL;
+    check("a resolver failure on the AAAA query is refused, however good the A answer was",
+          resolve_refused("example.test"));
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_TRUNCATED;
+    check("a truncated answer is refused rather than used in part", resolve_refused("example.test"));
+
+    struct {
+        int behaviour;
+        const char *what;
+    } unanswered[] = {
+        { DNS_SILENT, "a resolver that never answers" },
+        { DNS_WRONG_ID, "an answer with another query's id" },
+        { DNS_WRONG_QUESTION, "an answer to another question" },
+        { DNS_NOT_A_RESPONSE, "a packet that is not marked as a response" },
+        { DNS_NONSTANDARD_OPCODE, "a response with an opcode that is not a query" },
+        { DNS_TWO_QUESTIONS, "a response that claims two questions" },
+    };
+    for (size_t index = 0; index < sizeof(unanswered) / sizeof(unanswered[0]); index++) {
+        reset_behaviour();
+        bx->dns_behaviour[0] = unanswered[index].behaviour;
+        char label[160];
+        snprintf(label, sizeof(label), "%s is refused as timed out, after both tries", unanswered[index].what);
+        check(label, resolve_refused("example.test") && bx->dns_queries == 2);
+    }
+
+    reset_behaviour();
+    bx->dns_strays = 4;
+    check("four packets that are not the answer are set aside and the answer after them is taken",
+          run_resolve("192.0.2.53", one) == 0 && bx->dns_queries == 2);
+    reset_behaviour();
+    bx->dns_strays = 5;
+    check("five packets that are not the answer count as no answer, in both tries",
+          resolve_refused("example.test") && bx->dns_queries == 2);
+    reset_behaviour();
+    bx->recv_fails = 1;
+    check("a receive that fails is no answer either", resolve_refused("example.test"));
+
+    reset_behaviour();
+    set_verbose(true);
+    bx->dns_behaviour[0] = DNS_MANY;
+    check("twenty addresses are cut to sixteen, the rest dropped",
+          run_resolve("192.0.2.53", one) == 0 && count_lines(dns_output) == 16);
+    reset_behaviour();
+    bx->dns_behaviour[1] = DNS_MANY;
+    check("sixteen is the limit for the name as a whole, IPv4 and IPv6 together",
+          run_resolve("192.0.2.53", one) == 0 && count_lines(dns_output) == 16);
+    set_verbose(false);
+
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_ALIAS;
+    bx->dns_behaviour[1] = DNS_ALIAS;
+    check("an alias record is stepped over and the address after it is kept",
+          run_resolve("192.0.2.53", one) == 0 && strcmp(dns_output, "example.test 192.0.2.1\nexample.test 2001:db8::1\n") == 0);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_FOREIGN_OWNER;
+    check("an address record that belongs to another name is not an address of the name asked",
+          run_resolve("192.0.2.53", one) == 0 && strcmp(dns_output, "example.test 2001:db8::1\n") == 0);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_FOREIGN_OWNER;
+    bx->dns_behaviour[1] = DNS_FOREIGN_OWNER;
+    check("an answer holding only records of another name leaves no address, and the run is refused",
+          resolve_refused("example.test"));
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_ALIAS_CHAIN;
+    bx->dns_behaviour[1] = DNS_ALIAS_CHAIN;
+    check("a chain of aliases is followed to its address, whatever order the resolver wrote it in",
+          run_resolve("192.0.2.53", one) == 0 && strcmp(dns_output, "example.test 192.0.2.1\nexample.test 2001:db8::1\n") == 0);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_ALIAS_LOOP;
+    bx->dns_behaviour[1] = DNS_ALIAS_LOOP;
+    check("aliases that lead to each other end the lookup with no address", resolve_refused("example.test") && bx->dns_queries == 2);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_ALIAS_DEEP;
+    bx->dns_behaviour[1] = DNS_ALIAS_DEEP;
+    check("a chain of aliases longer than eight is not followed to its end, so its address is not taken",
+          resolve_refused("example.test"));
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_OWNER_WITH_DOT;
+    check("a record whose one label holds a dot is refused, not read as the name it spells",
+          resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_OWNER_WITH_ZERO;
+    check("a record whose label holds a zero byte is refused, not read as a shorter name",
+          resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_ALIAS_TARGET_CUT;
+    check("an alias whose target runs past its data is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_TOO_MANY_RECORDS;
+    check("an answer with more records than the limit is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_poke_offset = 0;
+    bx->dns_poke_value = 0xc0;
+    bx->dns_poke_second = 30;
+    check("a record name that points at itself is refused, not followed for ever",
+          resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_poke_offset = 0;
+    bx->dns_poke_value = 0xc0;
+    bx->dns_poke_second = 0xff;
+    check("a record name that points past the end of the message is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_poke_offset = 0;
+    bx->dns_poke_value = 63;
+    bx->dns_poke_second = 'x';
+    check("a record name whose label runs past the end of the message is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_poke_offset = 0;
+    bx->dns_poke_value = 0;
+    bx->dns_poke_second = 0;
+    check("a record whose name is the root is not a record of the name asked", resolve_refused("example.test"));
+
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_FOREIGN_CLASS;
+    bx->dns_behaviour[1] = DNS_NO_RECORDS;
+    check("a record of another class than the Internet one is not an address",
+          run_resolve("192.0.2.53", one) == 0 && strcmp(dns_output, "example.test 192.0.2.2\n") == 0);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_OTHER_TYPE;
+    bx->dns_behaviour[1] = DNS_OTHER_TYPE;
+    check("a record of another type in the answer is not an address of the asked type",
+          run_resolve("192.0.2.53", one) == 0 && strcmp(dns_output, "example.test 192.0.2.1\nexample.test 2001:db8::1\n") == 0);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_LABEL_OWNER;
+    bx->dns_behaviour[1] = DNS_LABEL_OWNER;
+    check("records named by labels, not a pointer, are read too", run_resolve("192.0.2.53", one) == 0 && count_lines(dns_output) == 3);
+
+    reset_behaviour();
+    bx->dns_cut_to = 20;
+    check("a reply too short to hold the question is no answer, in both tries",
+          resolve_refused("example.test") && bx->dns_queries == 2);
+
+    reset_behaviour();
+    bx->dns_count_override = 5;
+    check("an answer that claims more records than it holds is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_cut_to = 30 + 1;
+    check("an answer cut inside a record's name is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_cut_to = 30 + 2;
+    check("an answer cut before a record's fixed part is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_cut_to = 30 + 12 + 2;
+    check("an answer cut inside a record's data is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_poke_offset = 0;
+    bx->dns_poke_value = 0x40;
+    check("a record name with a label type nobody uses is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_poke_offset = 11;
+    bx->dns_poke_value = 3;
+    check("an IPv4 record that is not four bytes long is refused", resolve_refused("example.test") && bx->dns_queries == 1);
+    reset_behaviour();
+    bx->dns_behaviour[0] = DNS_NO_RECORDS;
+    bx->dns_poke_offset = 11;
+    bx->dns_poke_value = 15;
+    check("an IPv6 record that is not sixteen bytes long is refused", resolve_refused("example.test") && bx->dns_queries == 2);
+
+    reset_behaviour();
+    bx->socket_result = -1;
+    check("a resolver socket that cannot be made is refused", resolve_refused("example.test"));
+    reset_behaviour();
+    bx->connect_result = -1;
+    bx->connect_errno = ENETUNREACH;
+    check("a resolver that cannot be connected to is refused", resolve_refused("example.test"));
+    reset_behaviour();
+    bx->send_fails = 1;
+    check("a query that cannot be sent is refused", resolve_refused("example.test"));
+    reset_behaviour();
+    bx->getrandom_fails = 1;
+    check("no random id is no query", resolve_refused("example.test"));
+
+    const char *invalid[] = { "", "a..b", "bad!name.test", "-", ".", "x.", };
+    bool invalid_all = true;
+    for (size_t index = 0; index < 3; index++) {
+        reset_behaviour();
+        if (!resolve_refused(invalid[index])) {
+            printf("      sent: %s\n", invalid[index]);
+            invalid_all = false;
+        }
+    }
+    check("an empty name, an empty label and a character no label may hold are never put in a query",
+          invalid_all);
+    char long_label[80];
+    memset(long_label, 'a', 64);
+    long_label[64] = '\0';
+    reset_behaviour();
+    check("a label of 64 characters is refused", resolve_refused(long_label));
+    char long_name[300];
+    memset(long_name, 'a', sizeof(long_name));
+    for (size_t at = 50; at < sizeof(long_name); at += 50) {
+        long_name[at] = '.';
+    }
+    long_name[sizeof(long_name) - 1] = '\0';
+    reset_behaviour();
+    check("a name beyond 253 characters is refused", resolve_refused(long_name));
+    char *dotted[] = { "example.test.", NULL };
+    reset_behaviour();
+    check("a name with a trailing dot is sent as the same question", run_resolve("192.0.2.53", dotted) == 0 &&
+              memcmp(bx->dns_query + 12, "\x07" "example\x04" "test", 13) == 0 && bx->dns_query[25] == 0);
+    char *underscored[] = { "_sip._udp.example-1.test", NULL };
+    reset_behaviour();
+    check("a service name with underscores and a hyphen in a label is sent",
+          run_resolve("192.0.2.53", underscored) == 0);
+
+    reset_behaviour();
+    char *two[] = { "first.test", "second.test", NULL };
+    check("several names are resolved in one call, each line naming its name",
+          run_resolve("192.0.2.53", two) == 0 && count_lines(dns_output) == 6 &&
+              strstr(dns_output, "second.test 192.0.2.2") != NULL && bx->dns_queries == 4);
+    reset_behaviour();
+    bx->dns_behaviour[1] = DNS_SERVFAIL;
+    check("when a later name fails, nothing is written, the earlier names included",
+          !(run_resolve("192.0.2.53", two) == 0) && dns_output[0] == '\0');
+
+    reset_behaviour();
+    char *many_names[RESOLVE_NAMES_MAXIMUM + 2];
+    for (size_t index = 0; index < RESOLVE_NAMES_MAXIMUM + 1; index++) {
+        many_names[index] = "example.test";
+    }
+    many_names[RESOLVE_NAMES_MAXIMUM + 1] = NULL;
+    check("more names than the limit are refused before any is asked",
+          run_resolve("192.0.2.53", many_names) == EXIT_CODE_SETUP_ERROR && bx->dns_queries == 0);
+    char *exactly_limit[RESOLVE_NAMES_MAXIMUM + 1];
+    for (size_t index = 0; index < RESOLVE_NAMES_MAXIMUM; index++) {
+        exactly_limit[index] = "example.test";
+    }
+    exactly_limit[RESOLVE_NAMES_MAXIMUM] = NULL;
+    reset_behaviour();
+    check("exactly the limit of names is resolved", run_resolve("192.0.2.53", exactly_limit) == 0);
+
+    reset_behaviour();
+    check("a resolver that cannot be read is refused before any query",
+          run_resolve("example.com", one) == EXIT_CODE_SETUP_ERROR && bx->dns_queries == 0);
+    reset_behaviour();
+    check("no resolver at all is refused", run_resolve(NULL, one) == EXIT_CODE_SETUP_ERROR);
+
+    struct guard_options parsed;
+    char *resolving[] = { "guard", "--resolve", "--resolver", "192.0.2.53:5353", "--", "example.test", NULL };
+    parse_arguments(6, resolving, &parsed);
+    check("--resolve with --resolver keeps the names after -- as the arguments",
+          parsed.resolve && strcmp(parsed.resolver_endpoint, "192.0.2.53:5353") == 0 &&
+              strcmp(parsed.command[0], "example.test") == 0);
+    char *dangling_resolver[] = { "guard", "--resolver", NULL };
+    check("a --resolver with no value is a usage error", run_main(dangling_resolver) == EXIT_CODE_USAGE);
+    reset_behaviour();
+    bx->dns_active = 1;
+    check("the program in resolve mode ends with the status of the lookup",
+          run_main(resolving) == 0);
+    bx->dns_active = 0;
+    char *plain_parse[] = { "guard", "--", "cmd", NULL };
+    parse_arguments(3, plain_parse, &parsed);
+    check("a normal call is not in resolve mode", !parsed.resolve && parsed.resolver_endpoint == NULL);
+}
+
 /* The datagram sends and connects are made by the supervisor and never continued in the command,
  * so a second thread cannot change the destination after it was judged. */
 static void test_datagram_mediation(void) {
@@ -2907,6 +3626,7 @@ int main(void) {
     test_socket_tracking();
     test_listen_closure();
     test_datagram_mediation();
+    test_resolve_mode();
     test_connect_on_behalf_paths();
     test_broker_handoff();
     test_supervise_loop();

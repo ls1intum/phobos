@@ -73,6 +73,55 @@ name_connect_rules() {
   done < <(sed -E 's/#.*$//' "$rules" 2>/dev/null | sed '/^[[:space:]]*$/d') | sort -u
 }
 
+# Prints, one per line and sorted, the exact host names the udp rows of a net.rules file name, in
+# lower case and once each however they were spelled, since a name is one name whatever its case and
+# must lead to one set of addresses. A datagram carries no TLS host name for the egress broker to
+# check, so these are not the broker's names: the network layer resolves each one once, before the
+# command starts, and holds the rule to the addresses it had then. Assumes the file is the "host port
+# [udp]" form phobos-policysystem.sh writes; a missing file names nothing.
+udp_connect_names() {
+  local rules="$1"
+  local host
+  local proto
+  while read -r host _ proto; do
+    [[ -z "$host" ]] && continue
+    [[ "$proto" == "udp" ]] || continue
+    [[ "$(classify_connect_host "$host")" == "exact" ]] && printf '%s\n' "${host,,}"
+  done < <(sed -E 's/#.*$//' "$rules" 2>/dev/null | sed '/^[[:space:]]*$/d') | sort -u
+}
+
+# Writes the allow-list the connect guard reads when udp rules name hosts: every row of the net.rules
+# file, except that a udp row naming an exact host becomes one udp row for each address the host
+# resolved to, taken from the "NAME ADDRESS" lines of the resolved file. A name with no line there
+# yields no row at all, which denies, so a name that was not resolved can never be read by the guard
+# as a host it cannot tie to an address and so as matching its port alone. Takes the net.rules file,
+# the resolved file, then the file to write. A name matches without regard to case. Assumes
+# phobos-common.sh was sourced.
+expand_udp_name_rules() {
+  local rules="$1"
+  local resolved="$2"
+  local out="$3"
+  local host
+  local port
+  local proto
+  local name
+  local address
+  : > "$out" || return 1
+  while read -r host port proto; do
+    [[ -z "$host" ]] && continue
+    if [[ "$proto" == "udp" && "$(classify_connect_host "$host")" == "exact" ]]; then
+      while read -r name address; do
+        [[ "${name,,}" == "${host,,}" ]] && printf '%s %s udp\n' "$address" "$port" >> "$out"
+      done < "$resolved"
+    elif [[ -n "$proto" ]]; then
+      printf '%s %s %s\n' "$host" "$port" "$proto" >> "$out"
+    else
+      printf '%s %s\n' "$host" "$port" >> "$out"
+    fi
+  done < <(sed -E 's/#.*$//' "$rules" 2>/dev/null | sed '/^[[:space:]]*$/d')
+  return 0
+}
+
 # The loopback placeholder every exact [connect] name resolves to for the graded command, so its
 # getaddrinfo succeeds without a DNS query the guard would refuse. The command then connects to the
 # placeholder, the guard redirects to the broker, and the broker resolves the real address itself
@@ -93,7 +142,9 @@ ensure_final_newline() {
 # Appends one line per name mapping it to the loopback placeholder, each ending in this run's tag
 # as a comment, which the resolver ignores. A name another run or the image already maps still
 # gets a line of this run's own, so that run's clean-up cannot take the mapping away from this one;
-# the same tagged line is not written twice. Assumes the caller holds the lock on the hosts file.
+# the same tagged line is not written twice. A name the file already maps to anything but the
+# placeholder is refused with a report, before anything is written, as is a name another run pinned
+# to real addresses. Assumes the caller holds the lock on the hosts file.
 append_run_hosts_entries() {
   local hosts_file="$1"
   local spec_dir="$2"
@@ -101,6 +152,11 @@ append_run_hosts_entries() {
   local tag
   local name
   local line
+  local wanted=""
+  for name in "$@"; do
+    wanted+="${name} ${PHB_BROKER_PLACEHOLDER_IP}"$'\n'
+  done
+  hosts_accepts "$hosts_file" "$wanted" || return 1
   tag="$(run_hosts_tag "$spec_dir")"
   ensure_final_newline "$hosts_file" || return 1
   for name in "$@"; do
@@ -125,6 +181,139 @@ write_broker_hosts() {
   shift 2
   printf '%s\n' "$hosts_file" > "${spec_dir}/${PHB_SPEC_HOSTS_RECORD}" || return 1
   with_hosts_lock append_run_hosts_entries "$hosts_file" "$spec_dir" "$@"
+}
+
+# Prints "NAME ADDRESS" for the first name whose addresses in the hosts file are not exactly the ones
+# about to be written for it, and answers 0 when there is one, 1 when there is none and 2 when the
+# file could not be read. A name the file already maps to something else would be answered to the
+# command from that line, while the guard holds the rule to the resolved addresses, so the two would
+# disagree and every datagram to the name would be refused; and a name another run has pinned to some
+# addresses must not gain more, which that run's command could then be handed although its own guard
+# denies them. So a name is fine only where the file holds none of it yet, or exactly the addresses to
+# be written, whoever's lines they are: another run's, the image's, a TCP placeholder. Names compare
+# without regard to case, as the resolver does, and an IPv6 address is compared in its full form, so
+# two spellings of one address are one address. Comments are ignored. Takes the hosts file and the
+# "NAME ADDRESS" lines to be written; a missing file has no conflict.
+hosts_conflict() {
+  local hosts_file="$1"
+  local wanted="$2"
+  [[ -f "$hosts_file" ]] || return 1
+  awk 'function full(address,   tail, at, left, right, head_count, tail_count, heads, tails, out, index_, group, missing) {
+         if (address !~ /:/) return address
+         address = tolower(address)
+         at = match(address, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/)
+         if (at) {
+           split(substr(address, at), tail, ".")
+           address = substr(address, 1, at - 1) sprintf("%x:%x", tail[1] * 256 + tail[2], tail[3] * 256 + tail[4])
+         }
+         at = index(address, "::")
+         if (at) {
+           left = substr(address, 1, at - 1)
+           right = substr(address, at + 2)
+           head_count = (left == "") ? 0 : split(left, heads, ":")
+           tail_count = (right == "") ? 0 : split(right, tails, ":")
+           missing = 8 - head_count - tail_count
+         } else {
+           head_count = split(address, heads, ":")
+           tail_count = 0
+           missing = 0
+         }
+         out = ""
+         for (index_ = 1; index_ <= head_count; index_++) { group = heads[index_]; while (length(group) < 4) group = "0" group; out = out group ":" }
+         for (index_ = 1; index_ <= missing; index_++) out = out "0000:"
+         for (index_ = 1; index_ <= tail_count; index_++) { group = tails[index_]; while (length(group) < 4) group = "0" group; out = out group ":" }
+         return out
+       }
+       NR == FNR { want[tolower($1), full($2)] = 1; names[tolower($1)] = 1; shown[tolower($1), full($2)] = $2; next }
+       { sub(/#.*/, ""); if (NF < 2) next
+         for (field = 2; field <= NF; field++) {
+           name = tolower($field)
+           if (name in names) { present[name, full($1)] = 1; seen[name] = 1; shown[name, full($1)] = $1 }
+         } }
+       END {
+         for (key in present) {
+           if (!(key in want)) { split(key, parts, SUBSEP); print parts[1], shown[key]; found = 1; exit }
+         }
+         for (key in want) {
+           split(key, parts, SUBSEP)
+           if ((parts[1] in seen) && !(key in present)) { print parts[1], shown[key]; found = 1; exit }
+         }
+         exit found ? 0 : 1
+       }' <(printf '%s\n' "$wanted") "$hosts_file"
+}
+
+# Answers 0 when the hosts file may take the "NAME ADDRESS" lines, and otherwise says why and answers
+# 1: it maps a name differently, or it could not be read, which is refused too rather than taken for
+# no conflict. Takes the hosts file and the lines to be written.
+hosts_accepts() {
+  local hosts_file="$1"
+  local wanted="$2"
+  local conflict
+  local status
+  conflict="$(hosts_conflict "$hosts_file" "$wanted")" && status=0 || status=$?
+  case "$status" in
+    0)
+      report_hosts_conflict "$hosts_file" "$conflict"
+      return 1
+      ;;
+    1)
+      return 0
+      ;;
+  esac
+  report "${hosts_file} could not be read to check that it maps no name differently from this run; refusing rather than write to it blind. (PHB-ERUNTIME)"
+  return 1
+}
+
+# Says that the hosts file maps a name differently from what is about to be written, which ends the
+# run, naming the name and one address that only one side has. Takes the hosts file and the
+# "NAME ADDRESS" the conflict check printed.
+report_hosts_conflict() {
+  local hosts_file="$1"
+  local conflict="$2"
+  report "${hosts_file} maps '${conflict% *}' to a different set of addresses than this run needs (${conflict#* } is on one side only), so the command and the connect guard of one run or another would disagree about where the name leads. (PHB-ERUNTIME)"
+}
+
+# Appends one line for every "NAME ADDRESS" line of the resolved file, "ADDRESS NAME # tag", so the
+# command resolves a name a udp rule holds to exactly the addresses the guard accepts and needs no
+# DNS of its own. Each line ends in this run's tag as a comment, so remove_run_hosts_entries takes it
+# away with the run's others, and a line already there is not written twice. Unlike the placeholder
+# of a TCP name these are the real addresses: the broker resolves a TCP name itself and ignores the
+# one the command used, so a TCP connection to a real address is bound by the name just the same,
+# while a datagram has to be sent to a real address to arrive anywhere. Assumes the caller holds the
+# lock on the hosts file. A name the file already maps to another address is refused with a report,
+# before anything is written. Takes the hosts file, the specification directory and the resolved lines.
+append_resolved_hosts_entries() {
+  local hosts_file="$1"
+  local spec_dir="$2"
+  local resolved="$3"
+  local tag
+  local name
+  local address
+  local line
+  hosts_accepts "$hosts_file" "$resolved" || return 1
+  tag="$(run_hosts_tag "$spec_dir")"
+  ensure_final_newline "$hosts_file" || return 1
+  while read -r name address; do
+    [[ -z "$name" ]] && continue
+    line="${address} ${name} # ${tag}"
+    grep -qxF -- "$line" "$hosts_file" 2>/dev/null && continue
+    printf '%s\n' "$line" >> "$hosts_file" || return 1
+  done <<< "$resolved"
+  return 0
+}
+
+# Maps the names of the resolved lines to their addresses in the named hosts file. It records the
+# hosts file in the specification directory first, so whichever layer removes that directory also
+# removes these lines, then appends them under the hosts lock. Answers non-zero when the file cannot
+# be recorded or written, or the lock not had in time, so the caller can refuse rather than run
+# with names the command cannot resolve. Assumes phobos-common.sh was sourced and flock(1) is
+# present. Takes the hosts file, the specification directory and the "NAME ADDRESS" lines.
+write_resolved_hosts() {
+  local hosts_file="$1"
+  local spec_dir="$2"
+  local resolved="$3"
+  printf '%s\n' "$hosts_file" > "${spec_dir}/${PHB_SPEC_HOSTS_RECORD}" || return 1
+  with_hosts_lock append_resolved_hosts_entries "$hosts_file" "$spec_dir" "$resolved"
 }
 
 # How often, and how far apart, stop_haproxy_child checks that an HAProxy it asked to stop is

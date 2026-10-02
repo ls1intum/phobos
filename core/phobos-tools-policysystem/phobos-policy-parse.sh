@@ -198,11 +198,11 @@ refuse_unknown_section() {
 # Appends one [connect] line, "allow <host>[:<port>] [udp|tcp]", to the rules file as "host port"
 # for TCP, or "host port udp" for UDP. The transport marker is optional and defaults to tcp, so
 # every existing rule keeps its two-field form and its meaning. A host with a star in it, other
-# than "*" itself, is refused for either transport (refuse_wildcard_host_name). A UDP rule may name only an
-# address, a CIDR, a loopback name or "*": a host name in a UDP rule is refused, because the egress
-# broker enforces a host name through the TLS host name, which is TCP-only, so a UDP host name would
-# rest on its port alone with no host enforcement. A line of any other shape, or an unknown marker,
-# is refused. Assumes it is called plainly, so that the refusal ends the run.
+# than "*" itself, is refused for either transport (refuse_wildcard_host_name). A UDP rule may name an
+# exact host name as well as an address, a CIDR, a loopback name or "*": a datagram carries no TLS
+# host name for the egress broker to check, so the network layer resolves the name once, before the
+# command starts, and holds the rule to the addresses it had then. A line of any other shape, or an
+# unknown marker, is refused. Assumes it is called plainly, so that the refusal ends the run.
 append_connect_rule() {
   local line="$1"
   local rules="$2"
@@ -229,14 +229,6 @@ append_connect_rule() {
   parse_network_target "$target" host port
   refuse_wildcard_host_name "$host"
   if [[ "$proto" == "udp" ]]; then
-    case "$host" in
-      "*" | localhost) ;;
-      *:* | */*) ;;
-      *[!0-9.]*)
-        report "Policy invalid: '${host}' in a udp [connect] rule names a host, which UDP cannot enforce (the egress broker checks TLS host names for TCP only). Name an address, a CIDR or '*'. (PHB-EPOLICY)"
-        exit "${PHB_EPOLICY}" ;;
-      *) ;;
-    esac
     printf '%s %s %s\n' "$host" "$port" "udp" >>"$rules"
   else
     printf '%s %s\n' "$host" "$port" >>"$rules"

@@ -36,9 +36,24 @@ rest exists to take privileges away. None of the following is a vulnerability.
   carry a `udp` transport marker: the guard enforces it for the UDP transport apart from TCP, and
   Landlock's `--connect-udp`/`--bind-udp` (the version-10 UDP rights) are its second, kernel-enforced
   expression. UDP needs Landlock version 10, so a udp rule is refused on an older kernel rather than
-  left unenforced. Host-level UDP egress beyond the allow-list (a udp rule may name only an address
-  or a range, not a host name), and external egress in general, are still a container started with
-  `--network none`.
+  left unenforced. A udp rule may name an exact host: a datagram carries no TLS host name for the
+  egress broker to read, so the network layer resolves the name once, before the command starts,
+  through the resolver the operator gave, hands the guard a rule for each address (at most sixteen) and
+  shows the command the same addresses in `/etc/hosts`. The rule is held to what the name led to at
+  the start of the run, which is a snapshot: an address the name gains later is not reachable, and
+  one it loses stays reachable until the run ends. The lookup is the guard's own, in a mode that
+  runs outside the sandbox before the command, reads the one answer a resolver gives with every
+  length checked, takes an address only from a record that belongs to the name asked or to an alias
+  chain that leads from it, and refuses a truncated or malformed answer, a name that does not resolve
+  and an answer to another question; it asks only the resolver given, never `/etc/resolv.conf`. The
+  name's owner decides which addresses it leads to, as for a TCP name, so a name that leads to a
+  loopback or private address allows datagrams there. A name is mapped in `/etc/hosts` only where the file
+  holds none of it yet or exactly the addresses this run resolved, whoever's lines they are, because
+  otherwise the command, or the command of another run that pinned the name, could be handed an
+  address its own guard denies; the run is refused too where the addresses add up to more rules than
+  the guard keeps. A name written in two cases is resolved once. External
+  egress in general is still a container started with `--network none`, and resolving needs a
+  networked one, so a name in a udp rule assumes the same posture as one in a tcp rule.
 - `docker/prune_phase/` runs the discovery phase, which deliberately breaks a build over and
   over: it hides a directory, runs the tests, and concludes from the failure that the
   directory was needed. Its orchestrator therefore starts processes and interprets their

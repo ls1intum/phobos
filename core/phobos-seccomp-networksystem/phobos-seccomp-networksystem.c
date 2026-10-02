@@ -86,6 +86,7 @@
 #include "phobos-seccomp-networksystem-datagram.h"
 #include "phobos-seccomp-networksystem-diagnostics.h"
 #include "phobos-seccomp-networksystem-options.h"
+#include "phobos-seccomp-networksystem-resolve.h"
 #include "phobos-seccomp-networksystem-rules.h"
 #include "phobos-seccomp-networksystem-supervisor.h"
 
@@ -108,6 +109,9 @@ int main(int argument_count, char *arguments[]) {
     struct guard_options options;
     parse_arguments(argument_count, arguments, &options);
     set_verbose(options.verbose);
+    if (options.resolve) {
+        return run_resolve_mode(options.resolver_endpoint, options.command, stdout);
+    }
     configure_ephemeral_listen(options.allow_ephemeral_listen);
     configure_ephemeral_udp_bind(options.allow_ephemeral_udp_bind);
     if (!load_rules(options.rules_path)) {
