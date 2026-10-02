@@ -249,6 +249,9 @@ fi
 if bind_rules_grant_ephemeral_tcp "${SPEC_DIR}/bind.rules"; then
   guard_command+=( --allow-ephemeral-listen )
 fi
+if ephemeral_udp_bind_granted "${SPEC_DIR}/bind.rules" "$RULES"; then
+  guard_command+=( --allow-ephemeral-udp-bind )
+fi
 guard_command+=( --rules "$RULES" -- )
 
 # The Landlock port rules are the kernel-enforced half of the network boundary, and this

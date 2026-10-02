@@ -34,6 +34,7 @@ trap 'rm -rf "$WORK"' EXIT
 CORE="${HERE}/../../../core"
 MODULES=(
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-child.c"
+  "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-datagram.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-destination.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-diagnostics.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-held-sockets.c"
@@ -71,6 +72,8 @@ WRAPS=(
   -Wl,--wrap=listen
   -Wl,--wrap=getsockname
   -Wl,--wrap=readlink
+  -Wl,--wrap=sendto
+  -Wl,--wrap=process_vm_writev
 )
 
 if [[ "${1:-}" == "--coverage" ]]; then

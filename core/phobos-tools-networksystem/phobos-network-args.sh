@@ -314,27 +314,37 @@ build_bind_args() {
   rm -f "$tcp_ports" "$udp_ports"
 }
 
-# Adds --ephemeral-bind-udp to the named argument array when the policy has any UDP [connect] rule,
-# a wildcard one such as "127.0.0.1 * udp" included, which emits no --connect-udp of its own. The
-# kernel auto-binds an ephemeral local source port for an outgoing datagram, and the network layer
-# now always handles UDP bind, so that auto-bind is gated by BIND_UDP and an allowed send would be
-# denied its source port without a grant for port 0. The grant is the ephemeral one, so on a kernel
-# that cannot handle UDP bind it does nothing and never refuses. A policy with no UDP [connect]
-# rule gains nothing. Takes the argument array by name and the net.rules file.
+# Answers whether a net.rules file holds any UDP [connect] rule, a wildcard one such as
+# "127.0.0.1 * udp" included, which emits no --connect-udp of its own. A missing or empty file
+# holds none. Comments and blank lines are ignored.
+connect_rules_name_udp() {
+  local rules="$1"
+  local proto
+  [[ -n "$rules" && -s "$rules" ]] || return 1
+  while read -r _ _ proto; do
+    if [[ "$proto" == "udp" ]]; then
+      return 0
+    fi
+  done < <(sed -E 's/#.*$//' "$rules" | sed '/^[[:space:]]*$/d')
+  return 1
+}
+
+# Adds --ephemeral-bind-udp to the named argument array when the policy has any UDP [connect] rule.
+# The kernel auto-binds an ephemeral local source port for an outgoing datagram, and the network
+# layer now always handles UDP bind, so that auto-bind is gated by BIND_UDP and an allowed send
+# would be denied its source port without a grant for port 0. The grant is the ephemeral one, so on
+# a kernel that cannot handle UDP bind it does nothing and never refuses. A policy with no UDP
+# [connect] rule gains nothing. Takes the argument array by name and the net.rules file.
 add_udp_ephemeral_bind_if_needed() {
   local -n args_ref="$1"
   local rules="$2"
   local argument
-  local proto
-  local has_udp_connect=0
   for argument in "${args_ref[@]}"; do
     [[ "$argument" == "--ephemeral-bind-udp" ]] && return 0
   done
-  [[ -n "$rules" && -s "$rules" ]] || return 0
-  while read -r _ _ proto; do
-    [[ "$proto" == "udp" ]] && has_udp_connect=1
-  done < <(sed -E 's/#.*$//' "$rules" | sed '/^[[:space:]]*$/d')
-  (( has_udp_connect )) && args_ref+=( --ephemeral-bind-udp )
+  if connect_rules_name_udp "$rules"; then
+    args_ref+=( --ephemeral-bind-udp )
+  fi
   return 0
 }
 
@@ -354,6 +364,27 @@ bind_rules_grant_ephemeral_tcp() {
     fi
   done < "$rules"
   return 1
+}
+
+# Answers whether the policy lets the kernel give a UDP socket a source port of its own choosing:
+# a "* 0 udp" row in bind.rules, or any UDP [connect] rule in net.rules, which is when
+# build_bind_args and add_udp_ephemeral_bind_if_needed grant it to Landlock. The connect guard
+# runs outside Landlock, so the network layer tells it so with --allow-ephemeral-udp-bind, and
+# the guard then lets a datagram connect or send on a socket that was never bound go ahead.
+# Takes the bind.rules and the net.rules file. A missing file grants nothing.
+ephemeral_udp_bind_granted() {
+  local bind_rules="$1"
+  local connect_rules="$2"
+  local port
+  local proto
+  if [[ -n "$bind_rules" && -s "$bind_rules" ]]; then
+    while read -r _ port proto || [[ -n "$port" ]]; do
+      if [[ "$port" == "0" && "$proto" == "udp" ]]; then
+        return 0
+      fi
+    done < "$bind_rules"
+  fi
+  connect_rules_name_udp "$connect_rules"
 }
 
 # Prints the number after --minimum-landlock-version in a tail.flags file, or nothing. That flag

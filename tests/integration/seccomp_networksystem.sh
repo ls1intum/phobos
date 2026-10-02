@@ -462,7 +462,7 @@ else
   bad "an ordinary send on a connected socket still works" "rc=$rc out=$out"
 fi
 
-out="$("$WORK/guard" --rules "$WORK/rules-udp" -- "$WORK/probe" udp 127.0.0.1 "$PORT" 2>&1)"
+out="$("$WORK/guard" --rules "$WORK/rules-udp" --allow-ephemeral-udp-bind -- "$WORK/probe" udp 127.0.0.1 "$PORT" 2>&1)"
 rc=$?
 if [[ $rc -eq 0 && "$out" == *UDP-OK* ]]; then
   ok "a datagram to a destination the udp list names is allowed"
@@ -470,7 +470,7 @@ else
   bad "a datagram to a destination the udp list names is allowed" "rc=$rc out=$out"
 fi
 
-out="$("$WORK/guard" --rules "$WORK/rules-udp" -- "$WORK/probe" udp 127.0.0.1 "$OTHER" 2>&1)"
+out="$("$WORK/guard" --rules "$WORK/rules-udp" --allow-ephemeral-udp-bind -- "$WORK/probe" udp 127.0.0.1 "$OTHER" 2>&1)"
 rc=$?
 if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "a datagram to a destination the udp list does not name is refused"
@@ -478,7 +478,7 @@ else
   bad "a datagram to a destination the udp list does not name is refused" "rc=$rc out=$out"
 fi
 
-out="$("$WORK/guard" --rules "$WORK/rules-udp" -- "$WORK/probe" msg 127.0.0.1 "$PORT" 2>&1)"
+out="$("$WORK/guard" --rules "$WORK/rules-udp" --allow-ephemeral-udp-bind -- "$WORK/probe" msg 127.0.0.1 "$PORT" 2>&1)"
 rc=$?
 if [[ $rc -eq 0 && "$out" == *MSG-OK* ]]; then
   ok "a sendmsg datagram to a destination the udp list names is allowed, so the handoff survived trapping sendmsg"
@@ -486,7 +486,7 @@ else
   bad "a sendmsg datagram to a destination the udp list names is allowed" "rc=$rc out=$out"
 fi
 
-out="$("$WORK/guard" --rules "$WORK/rules-udp" -- "$WORK/probe" msg 127.0.0.1 "$OTHER" 2>&1)"
+out="$("$WORK/guard" --rules "$WORK/rules-udp" --allow-ephemeral-udp-bind -- "$WORK/probe" msg 127.0.0.1 "$OTHER" 2>&1)"
 rc=$?
 if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "a sendmsg datagram to a destination the udp list does not name is refused"
@@ -494,7 +494,7 @@ else
   bad "a sendmsg datagram to a destination the udp list does not name is refused" "rc=$rc out=$out"
 fi
 
-out="$("$WORK/guard" --rules "$WORK/rules-udp" -- "$WORK/probe" msg2 127.0.0.1 "$PORT" 2>&1)"
+out="$("$WORK/guard" --rules "$WORK/rules-udp" --allow-ephemeral-udp-bind -- "$WORK/probe" msg2 127.0.0.1 "$PORT" 2>&1)"
 rc=$?
 if [[ $rc -eq 0 && "$out" == *MSG2-OK* ]]; then
   ok "a sendmsg on a low reused descriptor is still allowed, so the lockout does not over-deny"
@@ -513,7 +513,7 @@ fi
 # No listener runs on $PORT here. A datagram socket's connect only sets the default peer, so it
 # succeeds; the old behaviour turned it into a TCP socket, whose connect to a port with no
 # listener would fail with a refused connection. So CUDP-OK proves the socket stayed a datagram.
-out="$("$WORK/guard" --rules "$WORK/rules-udp" -- "$WORK/probe" cudp 127.0.0.1 "$PORT" 2>&1)"
+out="$("$WORK/guard" --rules "$WORK/rules-udp" --allow-ephemeral-udp-bind -- "$WORK/probe" cudp 127.0.0.1 "$PORT" 2>&1)"
 rc=$?
 if [[ $rc -eq 0 && "$out" == *CUDP-OK* ]]; then
   ok "a connected datagram socket stays a datagram, not turned into TCP"
@@ -521,7 +521,7 @@ else
   bad "a connected datagram socket stays a datagram, not turned into TCP" "rc=$rc out=$out"
 fi
 
-out="$("$WORK/guard" --rules "$WORK/rules-udp" -- "$WORK/probe" cudp 127.0.0.1 "$OTHER" 2>&1)"
+out="$("$WORK/guard" --rules "$WORK/rules-udp" --allow-ephemeral-udp-bind -- "$WORK/probe" cudp 127.0.0.1 "$OTHER" 2>&1)"
 rc=$?
 if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "a connected datagram socket to an unlisted destination is refused at connect"
@@ -539,7 +539,7 @@ printf '127.0.0.1 %s udp\n' "$PORT" > "$WORK/rules-udp-only"
 
 # No listener is needed: a datagram to a port nothing listens on is sent regardless, so a
 # refusal here is the guard's rather than the absence of a peer.
-out="$("$WORK/guard" --rules "$WORK/rules-tcp-only" -- "$WORK/probe" udp 127.0.0.1 "$PORT" 2>&1)"
+out="$("$WORK/guard" --rules "$WORK/rules-tcp-only" --allow-ephemeral-udp-bind -- "$WORK/probe" udp 127.0.0.1 "$PORT" 2>&1)"
 rc=$?
 if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "a tcp rule does not admit a datagram to the same host and port"
@@ -913,5 +913,499 @@ if [[ "$out" == *"RACE-LISTENER-CREATED"* ]]; then
 else
   bad "control: without the guard the same swap does create a listener, so the race really reaches listen()" "$out"
 fi
+
+echo
+echo "== every datagram connect and send is made by the guard itself, from copies, never continued in the command =="
+cat > "$WORK/dprobe.c" <<'C'
+#define _GNU_SOURCE
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
+#include <unistd.h>
+/* The statuses the probe ends with, which the suite reads: the call was refused, or the probe was
+ * called the wrong way. */
+enum probe_status { PROBE_USAGE = 2, PROBE_REFUSED = 10 };
+/* How often the race drains the receivers, so that their buffers never fill and drop datagrams,
+ * how long it waits for the last datagrams to arrive, and how long a receive waits for one. */
+enum { DRAIN_EVERY = 20, SETTLE_MICROSECONDS = 100000, RECEIVE_WAIT_MILLISECONDS = 1000 };
+/* The descriptor an inherited socket is passed on, and the most a receive reads. */
+enum { INHERITED_DESCRIPTOR = 3, RECEIVE_BUFFER = 64 };
+/* A datagram one byte beyond the 64 KiB the guard copies. */
+enum { OVERSIZE_DATAGRAM = 65536 };
+
+static struct sockaddr_in destination;
+static atomic_int race_over;
+static in_addr_t allowed_address;
+static in_addr_t forbidden_address;
+
+/* The thread that shows the guard one address and the kernel another, as fast as it can: it
+ * rewrites the destination in memory while the main thread is sending to it. */
+static void *flip(void *unused) {
+    (void)unused;
+    while (!atomic_load(&race_over)) {
+        *(volatile in_addr_t *)&destination.sin_addr.s_addr = forbidden_address;
+        *(volatile in_addr_t *)&destination.sin_addr.s_addr = allowed_address;
+    }
+    return NULL;
+}
+
+static void fill(struct sockaddr_in *address, in_addr_t host, int port) {
+    memset(address, 0, sizeof(*address));
+    address->sin_family = AF_INET;
+    address->sin_port = htons((unsigned short)port);
+    address->sin_addr.s_addr = host;
+}
+
+static int receiver(in_addr_t host, int port) {
+    int descriptor = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
+    struct sockaddr_in local;
+    fill(&local, host, port);
+    if (bind(descriptor, (struct sockaddr *)&local, sizeof(local)) != 0) {
+        printf("RECEIVER-BIND-FAILED %s\n", strerror(errno));
+        exit(PROBE_USAGE);
+    }
+    return descriptor;
+}
+
+static int drain(int descriptor) {
+    int count = 0;
+    char buffer[RECEIVE_BUFFER];
+    while (recv(descriptor, buffer, sizeof(buffer), 0) > 0) {
+        count++;
+    }
+    return count;
+}
+
+/* One send of one byte to the destination the other thread is flipping, by the named call. */
+static int send_once(int sender, const char *mode) {
+    char payload = 'x';
+    struct iovec vector = { .iov_base = &payload, .iov_len = 1 };
+    struct msghdr header;
+    memset(&header, 0, sizeof(header));
+    header.msg_name = &destination;
+    header.msg_namelen = sizeof(destination);
+    header.msg_iov = &vector;
+    header.msg_iovlen = 1;
+    if (strcmp(mode, "sendto") == 0) {
+        return (int)sendto(sender, &payload, 1, 0, (struct sockaddr *)&destination, sizeof(destination));
+    }
+    if (strcmp(mode, "sendmsg") == 0) {
+        return (int)sendmsg(sender, &header, 0);
+    }
+    if (strcmp(mode, "sendmmsg") == 0) {
+        struct mmsghdr entry;
+        memset(&entry, 0, sizeof(entry));
+        entry.msg_hdr = header;
+        return sendmmsg(sender, &entry, 1, 0);
+    }
+    if (connect(sender, (struct sockaddr *)&destination, sizeof(destination)) != 0) {
+        return -1;
+    }
+    return (int)send(sender, &payload, 1, 0);
+}
+
+/* The race: two receivers share one port, one on an allowed address and one on a forbidden one, so
+ * the port alone cannot tell them apart. Whatever arrives at the forbidden one got past the guard. */
+static int race(const char *mode, int port, int attempts) {
+    allowed_address = inet_addr("127.0.0.1");
+    forbidden_address = inet_addr("127.0.0.2");
+    int allowed = receiver(allowed_address, port);
+    int forbidden = receiver(forbidden_address, port);
+    int sender = socket(AF_INET, SOCK_DGRAM, 0);
+    fill(&destination, allowed_address, port);
+    pthread_t thread;
+    pthread_create(&thread, NULL, flip, NULL);
+    int refused = 0;
+    int to_allowed = 0;
+    int to_forbidden = 0;
+    for (int attempt = 0; attempt < attempts; attempt++) {
+        if (attempt % DRAIN_EVERY == 0) {
+            to_allowed += drain(allowed);
+            to_forbidden += drain(forbidden);
+        }
+        if (send_once(sender, mode) < 0) {
+            refused++;
+        }
+    }
+    atomic_store(&race_over, 1);
+    pthread_join(thread, NULL);
+    usleep(SETTLE_MICROSECONDS);
+    to_allowed += drain(allowed);
+    to_forbidden += drain(forbidden);
+    printf("RACE %s attempts=%d refused=%d allowed=%d forbidden=%d\n", mode, attempts, refused,
+           to_allowed, to_forbidden);
+    return 0;
+}
+
+/* Waits for one datagram on the receiver and answers its length, or -1 when none came. */
+static int receive_length(int descriptor, char *buffer, size_t size) {
+    struct pollfd waiting = { .fd = descriptor, .events = POLLIN, .revents = 0 };
+    if (poll(&waiting, 1, RECEIVE_WAIT_MILLISECONDS) <= 0) {
+        return -1;
+    }
+    return (int)recv(descriptor, buffer, size, 0);
+}
+
+/* Every call that carries a datagram, used the way ordinary programs use them, and the bytes
+ * checked at the other end: that is what the guard must not break. */
+static int roundtrip(int port) {
+    int listener = receiver(inet_addr("127.0.0.1"), port);
+    int sender = socket(AF_INET, SOCK_DGRAM, 0);
+    struct sockaddr_in target;
+    fill(&target, inet_addr("127.0.0.1"), port);
+    char got[RECEIVE_BUFFER];
+    int length;
+
+    if (sendto(sender, "hello", 5, 0, (struct sockaddr *)&target, sizeof(target)) != 5) {
+        printf("ROUNDTRIP-SENDTO-FAILED %s\n", strerror(errno));
+        return 1;
+    }
+    length = receive_length(listener, got, sizeof(got));
+    if (length != 5 || memcmp(got, "hello", 5) != 0) {
+        printf("ROUNDTRIP-SENDTO-WRONG %d\n", length);
+        return 1;
+    }
+
+    struct iovec parts[2] = { { .iov_base = "ab", .iov_len = 2 }, { .iov_base = "cd", .iov_len = 2 } };
+    struct msghdr header;
+    memset(&header, 0, sizeof(header));
+    header.msg_name = &target;
+    header.msg_namelen = sizeof(target);
+    header.msg_iov = parts;
+    header.msg_iovlen = 2;
+    if (sendmsg(sender, &header, 0) != 4) {
+        printf("ROUNDTRIP-SENDMSG-FAILED %s\n", strerror(errno));
+        return 1;
+    }
+    length = receive_length(listener, got, sizeof(got));
+    if (length != 4 || memcmp(got, "abcd", 4) != 0) {
+        printf("ROUNDTRIP-SENDMSG-WRONG %d\n", length);
+        return 1;
+    }
+
+    struct iovec first = { .iov_base = "1", .iov_len = 1 };
+    struct iovec second = { .iov_base = "22", .iov_len = 2 };
+    struct iovec third = { .iov_base = "333", .iov_len = 3 };
+    struct mmsghdr batch[3];
+    memset(batch, 0, sizeof(batch));
+    struct iovec *vectors[3] = { &first, &second, &third };
+    for (int index = 0; index < 3; index++) {
+        batch[index].msg_hdr.msg_name = &target;
+        batch[index].msg_hdr.msg_namelen = sizeof(target);
+        batch[index].msg_hdr.msg_iov = vectors[index];
+        batch[index].msg_hdr.msg_iovlen = 1;
+    }
+    int sent = sendmmsg(sender, batch, 3, 0);
+    if (sent != 3 || batch[0].msg_len != 1 || batch[1].msg_len != 2 || batch[2].msg_len != 3) {
+        printf("ROUNDTRIP-SENDMMSG-FAILED sent=%d lengths=%u,%u,%u %s\n", sent, batch[0].msg_len,
+               batch[1].msg_len, batch[2].msg_len, strerror(errno));
+        return 1;
+    }
+    int total = 0;
+    for (int index = 0; index < 3; index++) {
+        total += receive_length(listener, got, sizeof(got));
+    }
+    if (total != 6) {
+        printf("ROUNDTRIP-SENDMMSG-WRONG %d\n", total);
+        return 1;
+    }
+
+    int connected = socket(AF_INET, SOCK_DGRAM, 0);
+    if (connect(connected, (struct sockaddr *)&target, sizeof(target)) != 0 ||
+        send(connected, "conn", 4, 0) != 4) {
+        printf("ROUNDTRIP-CONNECT-FAILED %s\n", strerror(errno));
+        return 1;
+    }
+    length = receive_length(listener, got, sizeof(got));
+    if (length != 4 || memcmp(got, "conn", 4) != 0) {
+        printf("ROUNDTRIP-CONNECT-WRONG %d\n", length);
+        return 1;
+    }
+    printf("ROUNDTRIP-OK\n");
+    return 0;
+}
+
+/* One datagram on a socket that was never bound, to the destination: the kernel binds a source
+ * port for it, which only a policy that grants an ephemeral bind lets through. */
+static int unbound(int port) {
+    int sender = socket(AF_INET, SOCK_DGRAM, 0);
+    struct sockaddr_in target;
+    fill(&target, inet_addr("127.0.0.1"), port);
+    if (sendto(sender, "x", 1, 0, (struct sockaddr *)&target, sizeof(target)) < 0) {
+        printf("UNBOUND-REFUSED %s\n", strerror(errno));
+        return PROBE_REFUSED;
+    }
+    printf("UNBOUND-OK\n");
+    return 0;
+}
+
+/* A sendmsg that carries ancillary data, which can steer a datagram. */
+static int ancillary(int port) {
+    int sender = socket(AF_INET, SOCK_DGRAM, 0);
+    struct sockaddr_in target;
+    fill(&target, inet_addr("127.0.0.1"), port);
+    char payload = 'x';
+    struct iovec vector = { .iov_base = &payload, .iov_len = 1 };
+    union {
+        char buffer[CMSG_SPACE(sizeof(int))];
+        struct cmsghdr alignment;
+    } control;
+    memset(&control, 0, sizeof(control));
+    struct msghdr header;
+    memset(&header, 0, sizeof(header));
+    header.msg_name = &target;
+    header.msg_namelen = sizeof(target);
+    header.msg_iov = &vector;
+    header.msg_iovlen = 1;
+    header.msg_control = control.buffer;
+    header.msg_controllen = sizeof(control.buffer);
+    struct cmsghdr *entry = CMSG_FIRSTHDR(&header);
+    entry->cmsg_level = IPPROTO_IP;
+    entry->cmsg_type = IP_TOS;
+    entry->cmsg_len = CMSG_LEN(sizeof(int));
+    int tos = 0;
+    memcpy(CMSG_DATA(entry), &tos, sizeof(tos));
+    if (sendmsg(sender, &header, 0) < 0) {
+        printf("ANCILLARY-REFUSED %s\n", strerror(errno));
+        return PROBE_REFUSED;
+    }
+    printf("ANCILLARY-OK\n");
+    return 0;
+}
+
+/* A sendmsg that names no destination on a socket that was never bound. The kernel binds the
+ * socket before it notices there is nowhere to send to, so the port the socket ends up with says
+ * whether the call reached the kernel. */
+static int nodest(void) {
+    int sender = socket(AF_INET, SOCK_DGRAM, 0);
+    char payload = 'x';
+    struct iovec vector = { .iov_base = &payload, .iov_len = 1 };
+    struct msghdr header;
+    memset(&header, 0, sizeof(header));
+    header.msg_iov = &vector;
+    header.msg_iovlen = 1;
+    ssize_t result = sendmsg(sender, &header, 0);
+    int failure = errno;
+    struct sockaddr_in bound;
+    socklen_t length = sizeof(bound);
+    memset(&bound, 0, sizeof(bound));
+    getsockname(sender, (struct sockaddr *)&bound, &length);
+    printf("NODEST result=%d errno=%s port=%s\n", (int)result, strerror(failure),
+           ntohs(bound.sin_port) == 0 ? "none" : "bound");
+    return 0;
+}
+
+/* A sendmmsg whose vector sits in memory the command can read but not write, so the lengths cannot
+ * be written back. The kernel sends the first message and then reports the fault, and the guard
+ * has to report the same, and send the same, as the kernel does. */
+static int readonly_vector(int port) {
+    int listener = receiver(inet_addr("127.0.0.1"), port);
+    int sender = socket(AF_INET, SOCK_DGRAM, 0);
+    struct sockaddr_in target;
+    fill(&target, inet_addr("127.0.0.1"), port);
+    long page = sysconf(_SC_PAGESIZE);
+    struct mmsghdr *batch = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    static struct iovec parts[3];
+    static char payloads[3][2] = { "a", "b", "c" };
+    for (int index = 0; index < 3; index++) {
+        parts[index].iov_base = payloads[index];
+        parts[index].iov_len = 1;
+        batch[index].msg_hdr.msg_name = &target;
+        batch[index].msg_hdr.msg_namelen = sizeof(target);
+        batch[index].msg_hdr.msg_iov = &parts[index];
+        batch[index].msg_hdr.msg_iovlen = 1;
+    }
+    mprotect(batch, (size_t)page, PROT_READ);
+    int result = sendmmsg(sender, batch, 3, 0);
+    int failure = errno;
+    usleep(SETTLE_MICROSECONDS);
+    printf("READONLY result=%d errno=%s arrived=%d\n", result, result < 0 ? strerror(failure) : "none",
+           drain(listener));
+    return 0;
+}
+
+/* A datagram one byte beyond the 64 KiB the guard copies. */
+static int oversize(int port) {
+    int sender = socket(AF_INET, SOCK_DGRAM, 0);
+    struct sockaddr_in target;
+    fill(&target, inet_addr("127.0.0.1"), port);
+    static char data[OVERSIZE_DATAGRAM];
+    if (sendto(sender, data, sizeof(data), 0, (struct sockaddr *)&target, sizeof(target)) < 0) {
+        printf("OVERSIZE-REFUSED %s\n", strerror(errno));
+        return PROBE_REFUSED;
+    }
+    printf("OVERSIZE-OK\n");
+    return 0;
+}
+
+/* A datagram to a socket the guard did not create: the descriptor was inherited from outside. */
+static int inherited(int descriptor, int port) {
+    struct sockaddr_in target;
+    fill(&target, inet_addr("127.0.0.1"), port);
+    if (sendto(descriptor, "x", 1, 0, (struct sockaddr *)&target, sizeof(target)) < 0) {
+        printf("INHERITED-REFUSED %s\n", strerror(errno));
+        return PROBE_REFUSED;
+    }
+    printf("INHERITED-OK\n");
+    return 0;
+}
+
+/* Creates a bound datagram socket, passes it on as descriptor 3 through the guard to the command,
+ * as a socket inherited from outside would be. */
+static int holder(char **arguments) {
+    int outside = socket(AF_INET, SOCK_DGRAM, 0);
+    struct sockaddr_in local;
+    fill(&local, inet_addr("127.0.0.1"), 0);
+    bind(outside, (struct sockaddr *)&local, sizeof(local));
+    dup2(outside, INHERITED_DESCRIPTOR);
+    execl(arguments[0], arguments[0], "--rules", arguments[1], "--", arguments[2], "inherited", "3",
+          arguments[3], (char *)NULL);
+    return 1;
+}
+
+int main(int argc, char **argv) {
+    if (argc >= 5 && strcmp(argv[1], "race") == 0) {
+        return race(argv[2], atoi(argv[3]), atoi(argv[4]));
+    }
+    if (argc >= 3 && strcmp(argv[1], "roundtrip") == 0) {
+        return roundtrip(atoi(argv[2]));
+    }
+    if (argc >= 3 && strcmp(argv[1], "unbound") == 0) {
+        return unbound(atoi(argv[2]));
+    }
+    if (argc >= 3 && strcmp(argv[1], "ancillary") == 0) {
+        return ancillary(atoi(argv[2]));
+    }
+    if (argc >= 2 && strcmp(argv[1], "nodest") == 0) {
+        return nodest();
+    }
+    if (argc >= 3 && strcmp(argv[1], "readonly") == 0) {
+        return readonly_vector(atoi(argv[2]));
+    }
+    if (argc >= 3 && strcmp(argv[1], "oversize") == 0) {
+        return oversize(atoi(argv[2]));
+    }
+    if (argc >= 4 && strcmp(argv[1], "inherited") == 0) {
+        return inherited(atoi(argv[2]), atoi(argv[3]));
+    }
+    if (argc >= 6 && strcmp(argv[1], "holder") == 0) {
+        return holder(&argv[2]);
+    }
+    fprintf(stderr, "usage: dprobe race <mode> <port> <attempts> | roundtrip|unbound|ancillary|oversize <port> | "
+                    "holder <guard> <rules> <dprobe> <port>\n");
+    return PROBE_USAGE;
+}
+C
+if ! "$compiler" -O2 -pthread -o "$WORK/dprobe" "$WORK/dprobe.c" 2>"$WORK/dprobe-cc.log"; then
+  bad "the datagram probe builds" "$(cat "$WORK/dprobe-cc.log")"
+  finish
+fi
+DGRAM_PORT=39320
+RACE_PORT=39321
+RACE_ATTEMPTS=20000
+printf '127.0.0.1 %s udp\n' "$DGRAM_PORT" > "$WORK/rules-dgram"
+printf '127.0.0.1 %s udp\n' "$RACE_PORT" > "$WORK/rules-race"
+
+out="$("$WORK/guard" --rules "$WORK/rules-dgram" --allow-ephemeral-udp-bind -- "$WORK/dprobe" roundtrip "$DGRAM_PORT" 2>&1)"
+if [[ "$out" == *ROUNDTRIP-OK* ]]; then
+  ok "sendto, sendmsg with two segments, sendmmsg with three messages and a connected send all arrive intact, and sendmmsg reports each length"
+else
+  bad "sendto, sendmsg with two segments, sendmmsg with three messages and a connected send all arrive intact" "$out"
+fi
+
+out="$("$WORK/guard" --rules "$WORK/rules-dgram" -- "$WORK/dprobe" unbound "$DGRAM_PORT" 2>&1)"
+rc=$?
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"UNBOUND-REFUSED Permission denied"* ]]; then
+  ok "a datagram on a socket that was never bound is refused when the policy grants no ephemeral bind"
+else
+  bad "a datagram on a socket that was never bound is refused when the policy grants no ephemeral bind" "rc=$rc out=$out"
+fi
+
+out="$("$WORK/guard" --rules "$WORK/rules-dgram" --allow-ephemeral-udp-bind -- "$WORK/dprobe" unbound "$DGRAM_PORT" 2>&1)"
+if [[ "$out" == *UNBOUND-OK* ]]; then
+  ok "with --allow-ephemeral-udp-bind the same datagram is sent"
+else
+  bad "with --allow-ephemeral-udp-bind the same datagram is sent" "$out"
+fi
+
+control="$("$WORK/dprobe" nodest 2>&1)"
+out="$("$WORK/guard" --rules "$WORK/rules-dgram" -- "$WORK/dprobe" nodest 2>&1)"
+granted="$("$WORK/guard" --rules "$WORK/rules-dgram" --allow-ephemeral-udp-bind -- "$WORK/dprobe" nodest 2>&1)"
+if [[ "$control" == *"errno=Destination address required port=bound"* ]]; then
+  if [[ "$out" == *"errno=Permission denied port=none"* && "$granted" == *"errno=Destination address required port=bound"* ]]; then
+    ok "a send that names no destination still cannot give an unbound socket a port nobody granted, though the kernel would (control: $control)"
+  else
+    bad "a send that names no destination still cannot give an unbound socket a port nobody granted" "control: $control; guarded: $out; granted: $granted"
+  fi
+else
+  skip "a send that names no destination still cannot give an unbound socket a port nobody granted" "without the guard the kernel did not bind it either (${control})"
+fi
+
+control="$("$WORK/dprobe" readonly "$DGRAM_PORT" 2>&1)"
+out="$("$WORK/guard" --rules "$WORK/rules-dgram" --allow-ephemeral-udp-bind -- "$WORK/dprobe" readonly "$DGRAM_PORT" 2>&1)"
+if [[ "$control" == "READONLY result=-1 errno=Bad address arrived=1" && "$out" == "$control" ]]; then
+  ok "a sendmmsg whose lengths cannot be written back sends one message and reports EFAULT, exactly as the kernel does"
+else
+  bad "a sendmmsg whose lengths cannot be written back sends one message and reports EFAULT, exactly as the kernel does" "control: $control; guarded: $out"
+fi
+
+out="$("$WORK/guard" --rules "$WORK/rules-dgram" --allow-ephemeral-udp-bind -- "$WORK/dprobe" ancillary "$DGRAM_PORT" 2>&1)"
+rc=$?
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"ANCILLARY-REFUSED Permission denied"* ]]; then
+  ok "a sendmsg with ancillary data is refused, it can steer a datagram past the destination check"
+else
+  bad "a sendmsg with ancillary data is refused, it can steer a datagram past the destination check" "rc=$rc out=$out"
+fi
+
+out="$("$WORK/guard" --rules "$WORK/rules-dgram" --allow-ephemeral-udp-bind -- "$WORK/dprobe" oversize "$DGRAM_PORT" 2>&1)"
+rc=$?
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"OVERSIZE-REFUSED Message too long"* ]]; then
+  ok "a datagram beyond 64 KiB is refused with EMSGSIZE, as the kernel would"
+else
+  bad "a datagram beyond 64 KiB is refused with EMSGSIZE, as the kernel would" "rc=$rc out=$out"
+fi
+
+out="$("$WORK/dprobe" holder "$WORK/guard" "$WORK/rules-dgram" "$WORK/dprobe" "$DGRAM_PORT" 2>&1)"
+if [[ "$out" == *"INHERITED-REFUSED Permission denied"* ]]; then
+  ok "a datagram socket the guard did not create, here one inherited from outside, cannot send to a destination"
+else
+  bad "a datagram socket the guard did not create, here one inherited from outside, cannot send to a destination" "$out"
+fi
+
+# The race. A second thread rewrites the destination in memory while the main thread sends, and
+# two receivers share the port, one on the allowed address and one on a forbidden one, so only
+# the guard can keep a datagram from the second. Each call is measured without the guard first:
+# where that run never reaches the forbidden receiver, this machine cannot show the race at all
+# (a single processor, say) and the guarded run would prove nothing, so it is skipped, as the
+# checks above skip what the environment refuses by itself.
+race_count() {
+  sed -n "s/.*$2=\([0-9][0-9]*\).*/\1/p" <<<"$1"
+}
+for mode in sendto sendmsg sendmmsg connect; do
+  control="$("$WORK/dprobe" race "$mode" "$RACE_PORT" "$RACE_ATTEMPTS" 2>&1)"
+  leaked="$(race_count "$control" forbidden)"
+  if [[ -z "$leaked" || "$leaked" -eq 0 ]]; then
+    skip "a rewritten destination never reaches the forbidden receiver by $mode" "without the guard it never did either (${control}), so the race is not reachable here"
+    continue
+  fi
+  out="$("$WORK/guard" --rules "$WORK/rules-race" --allow-ephemeral-udp-bind -- "$WORK/dprobe" race "$mode" "$RACE_PORT" "$RACE_ATTEMPTS" 2>&1)"
+  forbidden="$(race_count "$out" forbidden)"
+  allowed="$(race_count "$out" allowed)"
+  refused="$(race_count "$out" refused)"
+  if [[ "$forbidden" == "0" && -n "$allowed" && "$allowed" -gt 0 && -n "$refused" && "$refused" -gt 0 ]]; then
+    ok "by $mode, a destination rewritten while the call runs never reaches the forbidden receiver, and the allowed one still receives (control without the guard leaked $leaked)"
+  else
+    bad "by $mode, a destination rewritten while the call runs never reaches the forbidden receiver, and the allowed one still receives" "control: $control; guarded: $out"
+  fi
+done
 
 finish

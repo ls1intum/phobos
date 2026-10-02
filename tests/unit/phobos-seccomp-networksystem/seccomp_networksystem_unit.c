@@ -79,6 +79,10 @@ static constexpr uint32_t FAKE_COMMAND_PID = 12345;             /* the pid of ev
 static constexpr pid_t FAKE_CHILD_PID = 99;                     /* what the wrapped fork returns on the parent path */
 static constexpr uint64_t FAKE_ADDRESS_POINTER = 0x4000;        /* a command pointer to an address or a message vector */
 static constexpr uintptr_t FAKE_MESSAGE_NAME_POINTER = 0x5000;  /* msg_name inside a faked sendmmsg entry */
+static constexpr uintptr_t FAKE_IOVEC_POINTER = 0x1000000;      /* msg_iov inside a faked message header, beyond any faked sendmmsg vector */
+static constexpr uintptr_t FAKE_DATA_POINTER = 0x2000000;       /* the data a faked send names, up to FAKE_DATA_SPAN bytes */
+static constexpr uintptr_t FAKE_DATA_SPAN = 0x1000000;          /* how far past FAKE_DATA_POINTER a read still counts as data */
+static constexpr size_t FAKE_DATAGRAM_LENGTH = 16;              /* the length of every segment a faked send names */
 
 /* The exit status the wrapped execvp ends the child with, in place of a successful exec. */
 static constexpr int EXEC_STAND_IN_EXIT_STATUS = 200;
@@ -168,6 +172,7 @@ struct behaviour {
     int msg_name_missing;
     int addr_read_seen;
     unsigned int mmsg_count;
+    int mmsg_vlen_zero;
     int id_valid_seen;
     int id_valid_fail_at;
     int notif_recv_family;
@@ -190,6 +195,30 @@ struct behaviour {
     int getsockname_result;
     int getsockname_family;
     uint16_t getsockname_port;
+    /* the datagrams the supervisor sends itself */
+    int sendto_result;          /* 0: the whole length goes; above 0: that many bytes; below 0: fail */
+    int sendto_errno;
+    int sendto_calls;
+    int sendto_eagain_first;    /* how many calls fail with EAGAIN before one is let go */
+    int sendto_eintr_once;
+    size_t last_sendto_length;
+    int last_sendto_flags;
+    socklen_t last_sendto_name_length;
+    uint16_t last_sendto_port;
+    int fcntl_getfl_value;
+    int last_connect_descriptor;
+    int writev_fail_at;         /* the 1-based write-back that fails, and every one after it; 0 never */
+    int writev_short;           /* when not zero, a write-back that reports fewer bytes than asked */
+    int writev_calls;
+    unsigned int written_lengths[8];
+    int iov_count;              /* the segments a faked message header names */
+    size_t segment_length;      /* the length of each of them */
+    size_t message_iovlen;      /* when not zero, msg_iovlen claims this instead */
+    int message_control;        /* when not zero, the header carries ancillary data */
+    int iov_unreadable;
+    int data_unreadable;
+    size_t sendto_length;       /* the length argument of a faked sendto */
+    socklen_t sendto_address_length;  /* when not zero, the address length argument of a faked sendto */
     /* the peer-address read */
     ssize_t process_vm_readv_result;
     /* the outward connection */
@@ -200,6 +229,7 @@ struct behaviour {
     uint16_t last_connect_port;
     int poll_result;
     int poll_eintr_once;
+    int poll_calls;
     short poll_revents;
     int getsockopt_result;
     int getsockopt_so_error;
@@ -249,7 +279,11 @@ static void reset_behaviour(void) {
     socket_types_reset_for_tests();
     held_sockets_reset_for_tests();
     ephemeral_listen_reset_for_tests();
+    ephemeral_udp_bind_reset_for_tests();
     bx->getsockname_family = AF_INET;
+    bx->iov_count = 1;
+    bx->segment_length = FAKE_DATAGRAM_LENGTH;
+    bx->sendto_length = FAKE_DATAGRAM_LENGTH;
 }
 
 /* ------------------------------------------------------------------- wraps */
@@ -461,6 +495,25 @@ ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned l
     if (bx->process_vm_readv_result == 0) {
         return 0;
     }
+    uintptr_t remote_base = (uintptr_t)remote->iov_base;
+    if (remote_base == FAKE_IOVEC_POINTER) {
+        if (bx->iov_unreadable) {
+            return 0;
+        }
+        struct iovec *segments = local->iov_base;
+        for (size_t index = 0; index < local->iov_len / sizeof(struct iovec); index++) {
+            segments[index].iov_base = (void *)(FAKE_DATA_POINTER + index * FAKE_DATAGRAM_LENGTH);
+            segments[index].iov_len = bx->segment_length;
+        }
+        return (ssize_t)local->iov_len;
+    }
+    if (remote_base >= FAKE_DATA_POINTER && remote_base < FAKE_DATA_POINTER + FAKE_DATA_SPAN) {
+        if (bx->data_unreadable) {
+            return 0;
+        }
+        memset(local->iov_base, 0xAB, local->iov_len);
+        return (ssize_t)local->iov_len;
+    }
     if (bx->mmsg_mode && local->iov_len == sizeof(struct mmsghdr)) {
         struct mmsghdr batch_entry;
         memset(&batch_entry, 0, sizeof(batch_entry));
@@ -468,6 +521,9 @@ ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned l
             batch_entry.msg_hdr.msg_name = (void *)FAKE_MESSAGE_NAME_POINTER;
             batch_entry.msg_hdr.msg_namelen = sizeof(struct sockaddr_in);
         }
+        batch_entry.msg_hdr.msg_iov = (struct iovec *)FAKE_IOVEC_POINTER;
+        batch_entry.msg_hdr.msg_iovlen = bx->message_iovlen != 0 ? bx->message_iovlen : (size_t)bx->iov_count;
+        batch_entry.msg_hdr.msg_controllen = bx->message_control ? 8 : 0;
         memcpy(local->iov_base, &batch_entry, local->iov_len);
         return (ssize_t)local->iov_len;
     }
@@ -478,6 +534,9 @@ ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned l
             header.msg_name = (void *)FAKE_MESSAGE_NAME_POINTER;
             header.msg_namelen = sizeof(struct sockaddr_in);
         }
+        header.msg_iov = (struct iovec *)FAKE_IOVEC_POINTER;
+        header.msg_iovlen = bx->message_iovlen != 0 ? bx->message_iovlen : (size_t)bx->iov_count;
+        header.msg_controllen = bx->message_control ? 8 : 0;
         memcpy(local->iov_base, &header, local->iov_len);
         return (ssize_t)local->iov_len;
     }
@@ -529,12 +588,11 @@ int __wrap_socket(int domain, int type, int protocol) {
 
 int __wrap_fcntl(int fd, int command, ...) {
     (void)fd;
-    (void)command;
     if (bx->fcntl_fails) {
         errno = EINVAL;
         return -1;
     }
-    return 0;
+    return command == F_GETFL ? bx->fcntl_getfl_value : 0;
 }
 
 int __wrap_listen(int fd, int backlog) {
@@ -585,7 +643,7 @@ ssize_t __wrap_readlink(const char *path, char *buffer, size_t size) {
 }
 
 int __wrap_connect(int fd, const struct sockaddr *address, socklen_t length) {
-    (void)fd;
+    bx->last_connect_descriptor = fd;
     bx->connect_calls++;
     if (address != NULL && length >= (socklen_t)sizeof(struct sockaddr_in)) {
         bx->last_connect_family = address->sa_family;
@@ -625,6 +683,61 @@ ssize_t __wrap_send(int fd, const void *buffer, size_t length, int flags) {
         bx->captured_header_length += take;
     }
     return (ssize_t)take;
+}
+
+/* The datagram the supervisor sends itself: what it was asked to send is recorded, and the answer
+ * is the one a case arranged. */
+ssize_t __wrap_sendto(int fd, const void *buffer, size_t length, int flags,
+                      const struct sockaddr *address, socklen_t address_length) {
+    (void)fd;
+    (void)buffer;
+    bx->sendto_calls++;
+    bx->last_sendto_length = length;
+    bx->last_sendto_flags = flags;
+    bx->last_sendto_name_length = address == NULL ? 0 : address_length;
+    if (address != NULL && address->sa_family == AF_INET) {
+        bx->last_sendto_port = ntohs(((const struct sockaddr_in *)address)->sin_port);
+    } else if (address != NULL && address->sa_family == AF_INET6) {
+        bx->last_sendto_port = ntohs(((const struct sockaddr_in6 *)address)->sin6_port);
+    }
+    if (bx->sendto_eintr_once) {
+        bx->sendto_eintr_once = 0;
+        errno = EINTR;
+        return -1;
+    }
+    if (bx->sendto_eagain_first > 0) {
+        bx->sendto_eagain_first--;
+        errno = EAGAIN;
+        return -1;
+    }
+    if (bx->sendto_result < 0) {
+        errno = bx->sendto_errno;
+        return -1;
+    }
+    return bx->sendto_result > 0 ? bx->sendto_result : (ssize_t)length;
+}
+
+/* The length of a sent message written back into the command's vector: recorded, in order. */
+ssize_t __wrap_process_vm_writev(pid_t pid, const struct iovec *local, unsigned long liovcnt,
+                                 const struct iovec *remote, unsigned long riovcnt,
+                                 unsigned long flags) {
+    (void)pid;
+    (void)liovcnt;
+    (void)remote;
+    (void)riovcnt;
+    (void)flags;
+    int call = bx->writev_calls++;
+    if (bx->writev_fail_at != 0 && call + 1 >= bx->writev_fail_at) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (bx->writev_short) {
+        return 0;
+    }
+    if (call < (int)(sizeof(bx->written_lengths) / sizeof(bx->written_lengths[0]))) {
+        memcpy(&bx->written_lengths[call], local->iov_base, sizeof(unsigned int));
+    }
+    return (ssize_t)local->iov_len;
 }
 
 /* The supervise loop waits for POLLIN: hand out a readable turn for each arranged
@@ -670,6 +783,7 @@ static int connect_deadline_poll(struct pollfd *fds) {
 int __wrap_poll(struct pollfd *fds, nfds_t count, int timeout) {
     (void)timeout;
     (void)count;
+    bx->poll_calls++;
     if (fds[0].events & POLLIN) {
         return supervise_loop_poll(fds);
     }
@@ -709,17 +823,21 @@ int __wrap_ioctl(int fd, unsigned long request, ...) {
         req->data.nr = bx->notif_recv_nr;
         uint64_t address_length = bx->notif_recv_family == AF_INET6 ? sizeof(struct sockaddr_in6)
                                                                     : sizeof(struct sockaddr_in);
+        req->data.args[0] = bx->notif_recv_target_fd;
         if (bx->notif_recv_nr == __NR_socket) {
             req->data.args[0] = (uint64_t)bx->notif_socket_domain;
             req->data.args[1] = (uint64_t)bx->notif_socket_type;
             req->data.args[2] = (uint64_t)bx->notif_socket_protocol;
         } else if (bx->notif_recv_nr == __NR_sendto) {
+            req->data.args[1] = FAKE_DATA_POINTER;
+            req->data.args[2] = bx->sendto_length;
             req->data.args[3] = bx->notif_send_flags;
             req->data.args[4] = bx->notif_recv_family == 0 ? 0 : FAKE_ADDRESS_POINTER;
-            req->data.args[5] = bx->notif_recv_family == 0 ? 0 : address_length;
+            req->data.args[5] = bx->notif_recv_family == 0 ? 0
+                                : (bx->sendto_address_length != 0 ? bx->sendto_address_length : address_length);
         } else if (bx->notif_recv_nr == __NR_sendmmsg) {
             req->data.args[1] = FAKE_ADDRESS_POINTER;
-            req->data.args[2] = bx->mmsg_count ? bx->mmsg_count : 1;
+            req->data.args[2] = bx->mmsg_vlen_zero ? 0 : (bx->mmsg_count ? bx->mmsg_count : 1);
             req->data.args[3] = bx->notif_send_flags;
         } else if (bx->notif_recv_nr == __NR_sendmsg) {
             req->data.args[1] = FAKE_ADDRESS_POINTER;
@@ -1055,7 +1173,10 @@ static constexpr uint64_t HELD_UNIX_INODE = 9003;                /* a held UNIX 
 static constexpr uint64_t NEVER_HELD_INODE = 9004;               /* a socket the supervisor never created */
 static constexpr uint64_t CREATED_UNIX_INODE = 9005;             /* the UNIX socket the guard creates */
 static constexpr uint64_t CREATED_SEQPACKET_INODE = 9006;        /* the sequenced-packet socket the guard creates */
+static constexpr uint64_t HELD_DATAGRAM_INODE = 9101;            /* a held datagram socket the supervisor sends on */
 static constexpr int HELD_DESCRIPTOR = 700;                      /* a stand-in for the supervisor's own descriptor */
+static constexpr int HELD_DATAGRAM_DESCRIPTOR = 710;             /* a stand-in for its descriptor for that datagram socket */
+static constexpr uint16_t FAKE_SOURCE_PORT = 40000;              /* the port a held datagram socket is bound to */
 static constexpr int FAKE_BACKLOG = 5;                           /* the backlog a listen asks for */
 static constexpr uint16_t FAKE_BOUND_PORT = 8080;                /* the port a held socket is bound to */
 
@@ -1139,9 +1260,9 @@ static void test_service_paths(void) {
           bx->connect_calls == 1 && bx->addfd_calls == 1 && bx->last_answer_error == 0);
 }
 
-/* The supervisor decides socket() and the send syscalls, not only connect. These drive each
- * new branch through the notification dispatcher: a socket kind refused, a socket kind allowed,
- * TCP Fast Open refused, and a datagram judged by its destination. */
+/* The supervisor decides socket() and the send syscalls, not only connect. These drive the
+ * socket kinds it refuses and allows, and a syscall it does not trap, through the dispatcher. The
+ * datagram sends have their own cases, in test_datagram_mediation. */
 static void test_egress_syscalls(void) {
     reset_behaviour();
     bx->notif_recv_nr = __NR_socket;
@@ -1176,185 +1297,14 @@ static void test_egress_syscalls(void) {
               lookup_socket_type(CREATED_TCP_INODE) == FD_TYPE_STREAM);
 
     reset_behaviour();
-    bx->notif_recv_nr = __NR_sendto;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 443;
-    bx->notif_send_flags = MSG_FASTOPEN;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "443", false);
+    set_verbose(true);
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_UNIX;
+    bx->notif_socket_type = SOCK_DGRAM;
+    bx->notif_send_result = -1;
     service_once();
-    check("a TCP Fast Open send is refused even to a listed destination",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendto;
-    bx->process_vm_readv_result = 1;
-    service_once();
-    check("a datagram with no destination is a connected send and continues",
-          bx->answers == 1 && bx->last_answer_error == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendto;
-    bx->notif_recv_family = AF_UNIX;
-    bx->process_vm_readv_result = 1;
-    service_once();
-    check("a datagram to a non-INET address continues untouched",
-          bx->answers == 1 && bx->last_answer_error == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendto;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 53;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53", true);
-    service_once();
-    check("a datagram to a listed destination continues",
-          bx->answers == 1 && bx->last_answer_error == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendto;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 9999;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53", true);
-    service_once();
-    check("a datagram to a destination the list does not name is refused",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendto;
-    bx->notif_recv_family = AF_INET;
-    bx->process_vm_readv_result = 0;
-    service_once();
-    check("a datagram whose address cannot be read is refused",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmsg;
-    bx->msg_mode = 1;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 53;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53", true);
-    service_once();
-    check("a sendmsg to a listed destination continues",
-          bx->answers == 1 && bx->last_answer_error == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmsg;
-    bx->msg_mode = 1;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 9999;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53", true);
-    service_once();
-    check("a sendmsg to a destination the list does not name is refused",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmsg;
-    bx->msg_mode = 1;
-    bx->msg_name_missing = 1;
-    bx->process_vm_readv_result = 1;
-    service_once();
-    check("a sendmsg with no destination is a connected send and continues",
-          bx->answers == 1 && bx->last_answer_error == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmsg;
-    bx->notif_send_flags = MSG_FASTOPEN;
-    bx->msg_mode = 1;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 53;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53", true);
-    service_once();
-    check("a sendmsg with TCP Fast Open is refused even to a listed destination",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmsg;
-    bx->process_vm_readv_result = 0;
-    service_once();
-    check("a sendmsg whose header cannot be read is refused",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmsg;
-    bx->msg_mode = 1;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 53;
-    bx->process_vm_readv_result = 1;
-    bx->id_valid_fail_at = 1;
-    service_once();
-    check("a sendmsg whose notification turns invalid after the header read is dropped",
-          bx->answers == 0);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmsg;
-    bx->msg_mode = 1;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 53;
-    bx->process_vm_readv_result = 1;
-    bx->id_valid_fail_at = 2;
-    service_once();
-    check("a sendmsg whose notification turns invalid after the address read is dropped",
-          bx->answers == 0);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 53;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53", true);
-    service_once();
-    check("a sendmmsg batch to a listed destination continues",
-          bx->answers == 1 && bx->last_answer_error == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 9999;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53", true);
-    service_once();
-    check("a sendmmsg batch naming a disallowed destination is refused whole",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->process_vm_readv_result = -1;
-    service_once();
-    check("a sendmmsg whose header cannot be read is refused",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->mmsg_name_missing = 1;
-    bx->process_vm_readv_result = 1;
-    service_once();
-    check("a sendmmsg batch of connected sends continues",
-          bx->answers == 1 && bx->last_answer_error == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->mmsg_addr_short = 1;
-    bx->process_vm_readv_result = 1;
-    service_once();
-    check("a sendmmsg entry whose address cannot be read is refused",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
+    set_verbose(false);
+    check("a continue whose notify send fails is tolerated", bx->answers == 1);
 
     reset_behaviour();
     bx->notif_recv_nr = __NR_getpid;
@@ -1368,56 +1318,7 @@ static void test_egress_syscalls(void) {
     bx->notif_send_result = -1;
     service_once();
     set_verbose(false);
-    check("a continue whose notify send fails is tolerated", bx->answers == 1);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendto;
-    bx->notif_recv_family = AF_INET;
-    bx->process_vm_readv_result = 1;
-    bx->notif_id_valid_result = -1;
-    service_once();
-    check("a sendto whose notification turns invalid is dropped", bx->answers == 0);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->mmsg_name_missing = 1;
-    bx->mmsg_count = 2000;
-    bx->process_vm_readv_result = 1;
-    service_once();
-    check("a sendmmsg batch is capped and still continues",
-          bx->answers == 1 && bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->process_vm_readv_result = 1;
-    bx->id_valid_fail_at = 1;
-    service_once();
-    check("a sendmmsg whose notification turns invalid before the header check is dropped",
-          bx->answers == 0);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->process_vm_readv_result = 1;
-    bx->id_valid_fail_at = 2;
-    service_once();
-    check("a sendmmsg whose notification turns invalid after the address read is dropped",
-          bx->answers == 0);
-
-    reset_behaviour();
-    bx->notif_recv_nr = __NR_sendmmsg;
-    bx->mmsg_mode = 1;
-    bx->mmsg_hetero = 1;
-    bx->mmsg_count = 2;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 53;
-    bx->process_vm_readv_result = 1;
-    remember_rule("127.0.0.1", "53", true);
-    service_once();
-    check("a sendmmsg batch is refused when a later entry names a disallowed destination",
-          bx->answers == 1 && bx->last_answer_error == -EACCES);
+    check("an answer whose notify send fails is tolerated", bx->answers == 1);
 }
 
 /* The guard creates each INET socket itself and records its type, so a later connect can tell a
@@ -1485,12 +1386,15 @@ static void test_socket_tracking(void) {
     bx->notif_recv_target_fd = 6;
     bx->process_vm_readv_result = 1;
     bx->readlink_inode = TRACKED_DATAGRAM_INODE;
+    bx->getsockname_port = FAKE_SOURCE_PORT;
     record_socket_type(TRACKED_DATAGRAM_INODE, FD_TYPE_DGRAM);
+    hold_socket(TRACKED_DATAGRAM_INODE, HELD_DATAGRAM_DESCRIPTOR);
     remember_rule("127.0.0.1", "53", true);
     service_once();
-    check("a connect on a datagram socket is checked then let through, not injected",
-          bx->answers == 1 && bx->last_answer_error == 0 && bx->connect_calls == 0 &&
-              bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+    check("a connect on a datagram socket is made by the supervisor on its own descriptor, not injected or continued",
+          bx->answers == 1 && bx->last_answer_error == 0 && bx->connect_calls == 1 &&
+              bx->last_connect_descriptor == HELD_DATAGRAM_DESCRIPTOR && bx->addfd_calls == 0 &&
+              bx->last_answer_flags != SECCOMP_USER_NOTIF_FLAG_CONTINUE);
 
     reset_behaviour();
     bx->notif_recv_family = AF_INET;
@@ -1626,9 +1530,9 @@ static void test_listen_closure(void) {
     bx->notif_socket_type = SOCK_DGRAM;
     bx->readlink_inode = CREATED_UDP_INODE;
     service_once();
-    check("a datagram socket is tracked but never held, it cannot listen",
+    check("a datagram socket is tracked and held, because every datagram it sends is sent by the supervisor",
           bx->answers == 1 && lookup_socket_type(CREATED_UDP_INODE) == FD_TYPE_DGRAM &&
-              held_sockets_count_for_tests() == 0);
+              held_socket_descriptor(CREATED_UDP_INODE) == FAKE_OUTWARD_SOCKET_DESCRIPTOR);
 
     reset_behaviour();
     bx->notif_recv_nr = __NR_socket;
@@ -1801,6 +1705,17 @@ static void test_listen_closure(void) {
               held_sockets_count_for_tests() == HELD_SOCKET_CAPACITY);
 
     reset_behaviour();
+    for (size_t inode = 1; inode <= HELD_SOCKET_CAPACITY; inode++) {
+        hold_socket(inode, FIRST_TABLE_DESCRIPTOR + (int)inode);
+    }
+    check("using a held socket answers its descriptor",
+          use_held_socket(1) == FIRST_TABLE_DESCRIPTOR + 1);
+    hold_socket(HELD_SOCKET_CAPACITY + 1, NEW_TABLE_DESCRIPTOR);
+    check("a socket in use is the last to be evicted, the least recently used goes instead",
+          held_socket_descriptor(1) == FIRST_TABLE_DESCRIPTOR + 1 && held_socket_descriptor(2) < 0 &&
+              held_socket_descriptor(3) == FIRST_TABLE_DESCRIPTOR + 3);
+
+    reset_behaviour();
     hold_socket(HELD_BOUND_INODE, HELD_DESCRIPTOR);
     hold_socket(HELD_BOUND_INODE, HELD_DESCRIPTOR + 1);
     check("holding an inode again replaces its entry",
@@ -1827,6 +1742,589 @@ static void test_listen_closure(void) {
     check("the listened set is a ring that forgets its oldest entry first",
           !was_listened(FIRST_LISTENED_INODE) && was_listened(FIRST_LISTENED_INODE + 1) &&
               was_listened(FIRST_LISTENED_INODE + LISTENED_SOCKET_CAPACITY));
+}
+
+/* A datagram socket the supervisor created and holds, bound to a source port, and the next
+ * notification pointed at a send, from the command's descriptor 6, on the socket that inode names. */
+static void arrange_held_datagram(int syscall_number) {
+    bx->notif_recv_nr = syscall_number;
+    bx->notif_recv_target_fd = 6;
+    bx->readlink_inode = HELD_DATAGRAM_INODE;
+    bx->getsockname_family = AF_INET;
+    bx->getsockname_port = FAKE_SOURCE_PORT;
+    bx->process_vm_readv_result = 1;
+    record_socket_type(HELD_DATAGRAM_INODE, FD_TYPE_DGRAM);
+    hold_socket(HELD_DATAGRAM_INODE, HELD_DATAGRAM_DESCRIPTOR);
+}
+
+/* The same, sending to 127.0.0.1 on this port, which a UDP rule names. */
+static void arrange_datagram_send(int syscall_number, uint16_t port) {
+    arrange_held_datagram(syscall_number);
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = port;
+    bx->msg_mode = syscall_number == __NR_sendmsg;
+    bx->mmsg_mode = syscall_number == __NR_sendmmsg;
+    remember_rule("127.0.0.1", "53", true);
+}
+
+/* Whether the answer was an error of this kind and the supervisor sent nothing. */
+static bool refused_with(int error) {
+    return bx->answers == 1 && bx->last_answer_error == -error && bx->sendto_calls == 0 &&
+           bx->last_answer_flags != SECCOMP_USER_NOTIF_FLAG_CONTINUE;
+}
+
+/* Whether the supervisor sent exactly this many datagrams, answered with this value, and never
+ * continued the call in the command. */
+static bool sent_and_answered(int datagrams, int64_t value) {
+    return bx->answers == 1 && bx->last_answer_error == 0 && bx->last_answer_val == value &&
+           bx->sendto_calls == datagrams && bx->last_answer_flags != SECCOMP_USER_NOTIF_FLAG_CONTINUE;
+}
+
+static void test_datagram_sendto(void) {
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    service_once();
+    check("a sendto to a listed destination is sent by the supervisor from its own copy, to that port",
+          sent_and_answered(1, FAKE_DATAGRAM_LENGTH) && bx->last_sendto_length == FAKE_DATAGRAM_LENGTH &&
+              bx->last_sendto_port == 53 && bx->last_sendto_name_length == sizeof(struct sockaddr_in) &&
+              (bx->last_sendto_flags & MSG_NOSIGNAL) && (bx->last_sendto_flags & MSG_DONTWAIT));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_recv_family = AF_INET6;
+    remember_rule("2001:db8::1", "53", true);
+    service_once();
+    check("a sendto to a listed IPv6 destination is sent too, to that port",
+          sent_and_answered(1, FAKE_DATAGRAM_LENGTH) && bx->last_sendto_port == 53 &&
+              bx->last_sendto_name_length == sizeof(struct sockaddr_in6));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_length = 0;
+    service_once();
+    check("an empty datagram is sent, and nothing is read from the command for it",
+          sent_and_answered(1, 0) && bx->last_sendto_length == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 9999);
+    service_once();
+    check("a sendto to a destination the list does not name is refused and nothing is sent",
+          refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_recv_family = AF_UNIX;
+    service_once();
+    check("a sendto to a UNIX address is refused, where it used to be let through", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_send_flags = MSG_FASTOPEN;
+    service_once();
+    check("a send with TCP Fast Open is refused even to a listed destination", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_send_flags = MSG_OOB;
+    service_once();
+    check("a send with a flag the supervisor cannot pass on is refused with EOPNOTSUPP",
+          refused_with(EOPNOTSUPP));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_send_flags = MSG_MORE | MSG_CONFIRM | MSG_DONTROUTE;
+    service_once();
+    check("the flags the supervisor can pass on go to its own send",
+          sent_and_answered(1, FAKE_DATAGRAM_LENGTH) &&
+              (bx->last_sendto_flags & (MSG_MORE | MSG_CONFIRM | MSG_DONTROUTE)) ==
+                  (MSG_MORE | MSG_CONFIRM | MSG_DONTROUTE));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_recv_family = 0;
+    service_once();
+    check("a sendto with no destination is a send on the connected socket, with no name",
+          sent_and_answered(1, FAKE_DATAGRAM_LENGTH) && bx->last_sendto_name_length == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_address_length = sizeof(struct sockaddr_storage) + 1;
+    service_once();
+    check("an address longer than any socket address is refused with EINVAL", refused_with(EINVAL));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->process_vm_readv_result = 0;
+    service_once();
+    check("a sendto whose address cannot be read is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->data_unreadable = 1;
+    service_once();
+    check("a sendto whose data cannot be read is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_length = 65536;
+    service_once();
+    check("a datagram beyond 64 KiB is refused with EMSGSIZE", refused_with(EMSGSIZE));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_length = 65535;
+    service_once();
+    check("a datagram of exactly 64 KiB less one is sent",
+          sent_and_answered(1, 65535) && bx->last_sendto_length == 65535);
+}
+
+static void test_datagram_provenance(void) {
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    release_held_socket(HELD_DATAGRAM_INODE);
+    service_once();
+    check("a send on a datagram socket the supervisor no longer holds is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    record_socket_type(HELD_DATAGRAM_INODE, FD_TYPE_STREAM);
+    service_once();
+    check("a sendto with a destination on a stream socket is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->readlink_kind = READLINK_PIPE;
+    service_once();
+    check("a send on a descriptor that is not a socket is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->getsockname_port = 0;
+    service_once();
+    check("a send on a socket bound to no port is refused when the policy grants no ephemeral bind",
+          refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->getsockname_port = 0;
+    configure_ephemeral_udp_bind(true);
+    service_once();
+    check("a send on a socket bound to no port goes ahead when the policy grants an ephemeral bind",
+          sent_and_answered(1, FAKE_DATAGRAM_LENGTH));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->getsockname_family = AF_INET6;
+    bx->getsockname_port = FAKE_SOURCE_PORT;
+    service_once();
+    check("a socket bound to an IPv6 port may send", sent_and_answered(1, FAKE_DATAGRAM_LENGTH));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->getsockname_family = AF_UNIX;
+    service_once();
+    check("a socket of another family than IPv4 and IPv6 is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->getsockname_result = -1;
+    service_once();
+    check("a socket whose address the kernel cannot report is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_recv_family = 0;
+    bx->getsockname_port = 0;
+    service_once();
+    check("a send with no destination on a socket bound to no port is refused too, the kernel would bind it first",
+          refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_recv_family = 0;
+    configure_ephemeral_udp_bind(true);
+    bx->getsockname_port = 0;
+    service_once();
+    check("a send with no destination on an unbound socket goes ahead when the policy grants an ephemeral bind",
+          sent_and_answered(1, FAKE_DATAGRAM_LENGTH));
+
+    reset_behaviour();
+    check("a socket nobody holds has no descriptor to use",
+          use_held_socket(HELD_DATAGRAM_INODE) == -1 && use_held_socket(0) == -1);
+}
+
+static void test_datagram_kernel_answers(void) {
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_result = -1;
+    bx->sendto_errno = ECONNREFUSED;
+    service_once();
+    check("an error the kernel gives the supervisor's send is the command's answer",
+          bx->answers == 1 && bx->last_answer_error == -ECONNREFUSED && bx->sendto_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_result = 7;
+    service_once();
+    check("a send the kernel took in part is answered with the count it took",
+          sent_and_answered(1, 7));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_eintr_once = 1;
+    service_once();
+    check("a send the kernel interrupts is repeated", sent_and_answered(2, FAKE_DATAGRAM_LENGTH));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_eagain_first = 1;
+    bx->poll_result = 1;
+    bx->poll_revents = POLLOUT;
+    service_once();
+    check("a blocking socket that cannot take the datagram is waited on once, then the send is made",
+          sent_and_answered(2, FAKE_DATAGRAM_LENGTH) && bx->poll_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_eagain_first = 2;
+    bx->poll_result = 1;
+    bx->poll_revents = POLLOUT;
+    service_once();
+    check("a socket still full after the wait is answered EAGAIN, with one wait and no second one",
+          bx->answers == 1 && bx->last_answer_error == -EAGAIN && bx->sendto_calls == 2 &&
+              bx->poll_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_eagain_first = 1;
+    bx->poll_result = 0;
+    service_once();
+    check("a socket that stays full for the whole wait is answered EAGAIN",
+          bx->answers == 1 && bx->last_answer_error == -EAGAIN && bx->sendto_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_eagain_first = 1;
+    bx->fcntl_getfl_value = O_NONBLOCK;
+    service_once();
+    check("a non-blocking socket that cannot take the datagram is answered EAGAIN with no wait",
+          bx->answers == 1 && bx->last_answer_error == -EAGAIN && bx->sendto_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_eagain_first = 1;
+    bx->notif_send_flags = MSG_DONTWAIT;
+    service_once();
+    check("a send the command asked not to block is answered EAGAIN with no wait",
+          bx->answers == 1 && bx->last_answer_error == -EAGAIN && bx->sendto_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_eagain_first = 1;
+    bx->fcntl_fails = 1;
+    service_once();
+    check("a socket whose mode cannot be read is never waited on",
+          bx->answers == 1 && bx->last_answer_error == -EAGAIN && bx->sendto_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_eagain_first = 1;
+    bx->poll_eintr_once = 1;
+    bx->poll_result = 0;
+    service_once();
+    check("a wait that is interrupted is answered EAGAIN too, so the supervisor never stalls",
+          bx->answers == 1 && bx->last_answer_error == -EAGAIN);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->id_valid_fail_at = 1;
+    service_once();
+    check("a sendto whose notification turns invalid after the address read is dropped, nothing sent",
+          bx->answers == 0 && bx->sendto_calls == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->id_valid_fail_at = 2;
+    service_once();
+    check("a sendto whose notification turns invalid after the data read is dropped, nothing sent",
+          bx->answers == 0 && bx->sendto_calls == 0);
+}
+
+static void test_datagram_sendmsg(void) {
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->iov_count = 3;
+    service_once();
+    check("a sendmsg to a listed destination is sent as one datagram of every segment",
+          sent_and_answered(1, 3 * FAKE_DATAGRAM_LENGTH) &&
+              bx->last_sendto_length == 3 * FAKE_DATAGRAM_LENGTH && bx->last_sendto_port == 53);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 9999);
+    service_once();
+    check("a sendmsg to a destination the list does not name is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->msg_name_missing = 1;
+    service_once();
+    check("a sendmsg with no destination is a send on the connected socket, with no name",
+          sent_and_answered(1, FAKE_DATAGRAM_LENGTH) && bx->last_sendto_name_length == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->iov_count = 0;
+    service_once();
+    check("a sendmsg of no segments sends an empty datagram", sent_and_answered(1, 0));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->message_control = 1;
+    service_once();
+    check("a sendmsg with ancillary data is refused, it can steer a datagram", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->message_iovlen = 1025;
+    service_once();
+    check("a sendmsg of more segments than the kernel takes is refused with EMSGSIZE",
+          refused_with(EMSGSIZE));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->iov_count = 2;
+    bx->segment_length = 40000;
+    service_once();
+    check("a sendmsg whose segments together exceed 64 KiB is refused with EMSGSIZE",
+          refused_with(EMSGSIZE));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->iov_unreadable = 1;
+    service_once();
+    check("a sendmsg whose segment list cannot be read is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->iov_unreadable = 1;
+    bx->id_valid_fail_at = 2;
+    service_once();
+    check("a sendmsg whose notification turns invalid before the segment list is read is dropped",
+          bx->answers == 0 && bx->sendto_calls == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->notif_send_flags = MSG_FASTOPEN;
+    service_once();
+    check("a sendmsg with TCP Fast Open is refused even to a listed destination", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->process_vm_readv_result = 0;
+    service_once();
+    check("a sendmsg whose header cannot be read is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->id_valid_fail_at = 1;
+    service_once();
+    check("a sendmsg whose notification turns invalid after the header read is dropped",
+          bx->answers == 0 && bx->sendto_calls == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    release_held_socket(HELD_DATAGRAM_INODE);
+    service_once();
+    check("a sendmsg on a socket the supervisor does not hold is refused, not continued",
+          refused_with(EACCES));
+}
+
+static void test_datagram_sendmmsg(void) {
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->mmsg_count = 3;
+    service_once();
+    check("a sendmmsg batch to a listed destination is sent message by message, and the count answered",
+          sent_and_answered(3, 3) && bx->writev_calls == 3 &&
+              bx->written_lengths[0] == FAKE_DATAGRAM_LENGTH &&
+              bx->written_lengths[2] == FAKE_DATAGRAM_LENGTH);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->mmsg_count = 2000;
+    bx->mmsg_name_missing = 1;
+    service_once();
+        check("a sendmmsg count beyond the kernel's limit is cut down to it", sent_and_answered(1024, 1024));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->mmsg_count = 3;
+    bx->writev_fail_at = 1;
+    service_once();
+    check("a first length that cannot be written back is the batch's error, EFAULT, as in the kernel",
+          bx->answers == 1 && bx->last_answer_error == -EFAULT && bx->sendto_calls == 1 &&
+              bx->writev_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->mmsg_count = 3;
+    bx->writev_fail_at = 2;
+    service_once();
+    check("a later length that cannot be written back ends the batch, and that message is not counted",
+          bx->answers == 1 && bx->last_answer_error == 0 && bx->last_answer_val == 1 &&
+              bx->sendto_calls == 2 && bx->writev_calls == 2);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->mmsg_count = 2;
+    bx->writev_short = 1;
+    service_once();
+    check("a length written in part counts as not written",
+          bx->answers == 1 && bx->last_answer_error == -EFAULT && bx->sendto_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->mmsg_count = 9;
+    service_once();
+    check("only the first eight written lengths are recorded by the test, all nine are written",
+          sent_and_answered(9, 9) && bx->writev_calls == 9);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->mmsg_hetero = 1;
+    bx->mmsg_count = 2;
+    service_once();
+    check("a later message to a destination the list does not name ends the batch, the count stands",
+          bx->answers == 1 && bx->last_answer_error == 0 && bx->last_answer_val == 1 &&
+              bx->sendto_calls == 1);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 9999);
+    service_once();
+    check("a first message to a destination the list does not name is the batch's error",
+          refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->mmsg_vlen_zero = 1;
+    service_once();
+    check("a batch of no messages sends nothing and answers zero",
+          bx->answers == 1 && bx->last_answer_error == 0 && bx->last_answer_val == 0 &&
+              bx->sendto_calls == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->process_vm_readv_result = 0;
+    service_once();
+    check("a sendmmsg whose entry cannot be read is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->id_valid_fail_at = 1;
+    service_once();
+    check("a sendmmsg whose notification turns invalid after an entry read is dropped",
+          bx->answers == 0 && bx->sendto_calls == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->id_valid_fail_at = 2;
+    service_once();
+    check("a sendmmsg whose notification turns invalid while its message is judged is dropped",
+          bx->answers == 0 && bx->sendto_calls == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->message_control = 1;
+    service_once();
+    check("a sendmmsg message with ancillary data is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    bx->notif_send_flags = MSG_FASTOPEN;
+    service_once();
+    check("a sendmmsg with TCP Fast Open is refused", refused_with(EACCES));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmmsg, 53);
+    release_held_socket(HELD_DATAGRAM_INODE);
+    service_once();
+    check("a sendmmsg on a socket the supervisor does not hold is refused", refused_with(EACCES));
+}
+
+static void test_datagram_connect(void) {
+    reset_behaviour();
+    arrange_held_datagram(__NR_connect);
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    remember_rule("127.0.0.1", "53", true);
+    service_once();
+    check("a datagram connect to a listed destination is made on the supervisor's own descriptor",
+          bx->answers == 1 && bx->last_answer_error == 0 && bx->connect_calls == 1 &&
+              bx->last_connect_descriptor == HELD_DATAGRAM_DESCRIPTOR && bx->last_connect_port == 53 &&
+              bx->addfd_calls == 0 && bx->last_answer_flags != SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    reset_behaviour();
+    arrange_held_datagram(__NR_connect);
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 9999;
+    remember_rule("127.0.0.1", "53", true);
+    service_once();
+    check("a datagram connect to a destination the list does not name is refused",
+          bx->answers == 1 && bx->last_answer_error == -EACCES && bx->connect_calls == 0);
+
+    reset_behaviour();
+    arrange_held_datagram(__NR_connect);
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->connect_result = -1;
+    bx->connect_errno = ENETUNREACH;
+    remember_rule("127.0.0.1", "53", true);
+    service_once();
+    check("an error the kernel gives the supervisor's connect is the command's answer",
+          bx->answers == 1 && bx->last_answer_error == -ENETUNREACH && bx->connect_calls == 1);
+
+    reset_behaviour();
+    arrange_held_datagram(__NR_connect);
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    remember_rule("127.0.0.1", "53", true);
+    release_held_socket(HELD_DATAGRAM_INODE);
+    service_once();
+    check("a datagram connect on a socket the supervisor does not hold is refused, not continued",
+          bx->answers == 1 && bx->last_answer_error == -EACCES && bx->connect_calls == 0 &&
+              bx->last_answer_flags != SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    reset_behaviour();
+    arrange_held_datagram(__NR_connect);
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->getsockname_port = 0;
+    remember_rule("127.0.0.1", "53", true);
+    service_once();
+    check("a datagram connect on a socket bound to no port is refused without an ephemeral bind grant",
+          bx->answers == 1 && bx->last_answer_error == -EACCES && bx->connect_calls == 0);
+
+    reset_behaviour();
+    arrange_held_datagram(__NR_connect);
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->getsockname_port = 0;
+    configure_ephemeral_udp_bind(true);
+    remember_rule("127.0.0.1", "53", true);
+    service_once();
+    check("a datagram connect on a socket bound to no port goes ahead with an ephemeral bind grant",
+          bx->answers == 1 && bx->last_answer_error == 0 && bx->connect_calls == 1);
+}
+
+/* The datagram sends and connects are made by the supervisor and never continued in the command,
+ * so a second thread cannot change the destination after it was judged. */
+static void test_datagram_mediation(void) {
+    test_datagram_sendto();
+    test_datagram_provenance();
+    test_datagram_kernel_answers();
+    test_datagram_sendmsg();
+    test_datagram_sendmmsg();
+    test_datagram_connect();
 }
 
 /* Every way a connect made on the command's behalf can end. A poll result of 0 is a
@@ -2011,9 +2509,14 @@ static void test_argument_errors(void) {
     char *ephemeral[] = { "guard", "--allow-ephemeral-listen", "--", "cmd", NULL };
     parse_arguments(4, ephemeral, &parsed);
     check("--allow-ephemeral-listen is read", parsed.allow_ephemeral_listen);
+    char *ephemeral_udp[] = { "guard", "--allow-ephemeral-udp-bind", "--", "cmd", NULL };
+    parse_arguments(4, ephemeral_udp, &parsed);
+    check("--allow-ephemeral-udp-bind is read", parsed.allow_ephemeral_udp_bind);
     char *plain[] = { "guard", "--", "cmd", NULL };
     parse_arguments(3, plain, &parsed);
     check("an unbound socket may not listen unless the option is given", !parsed.allow_ephemeral_listen);
+    check("an unbound datagram socket may not connect or send unless the option is given",
+          !parsed.allow_ephemeral_udp_bind);
 
     char *dangling_broker[] = { "guard", "--broker", NULL };
     check("a --broker with no value is a usage error", run_main(dangling_broker) == EXIT_CODE_USAGE);
@@ -2028,6 +2531,8 @@ static void test_argument_errors(void) {
  * compare the accumulator with a constant, test bits of it, and return. Anything else is a
  * form this filter does not use, and answering zero for it makes the case fail rather than
  * quietly pass. Assumes a case has already run the child, so a filter was captured. */
+static uint64_t filter_fifth_argument = 0;
+
 static uint32_t run_captured_filter(const struct sock_filter *program, unsigned short length,
                                     uint32_t audit_arch, int syscall_number,
                                     uint64_t first_argument) {
@@ -2036,6 +2541,7 @@ static uint32_t run_captured_filter(const struct sock_filter *program, unsigned 
     data.arch = audit_arch;
     data.nr = syscall_number;
     data.args[0] = first_argument;
+    data.args[4] = filter_fifth_argument;
     uint32_t accumulator = 0;
     for (unsigned short at = 0; at < length; at++) {
         const struct sock_filter *instruction = &program[at];
@@ -2231,8 +2737,15 @@ static void test_egress_filter(void) {
           filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_socket) == SECCOMP_RET_USER_NOTIF);
     check("listen is trapped to the supervisor, which runs it itself",
           filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_listen) == SECCOMP_RET_USER_NOTIF);
-    check("sendto is trapped to the supervisor",
+    filter_fifth_argument = FAKE_ADDRESS_POINTER;
+    check("a sendto that names a destination is trapped to the supervisor",
           filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_sendto) == SECCOMP_RET_USER_NOTIF);
+    filter_fifth_argument = (uint64_t)1 << 32;
+    check("a sendto whose address pointer has only its high word set is trapped, not read as null",
+          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_sendto) == SECCOMP_RET_USER_NOTIF);
+    filter_fifth_argument = 0;
+    check("a sendto with no destination is the send of a connected socket and is allowed",
+          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_sendto) == SECCOMP_RET_ALLOW);
     check("sendmmsg is trapped to the supervisor",
           filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_sendmmsg) == SECCOMP_RET_USER_NOTIF);
     check("sendmsg on the bootstrap descriptor is allowed, so the handoff is not parked",
@@ -2393,6 +2906,7 @@ int main(void) {
     test_egress_syscalls();
     test_socket_tracking();
     test_listen_closure();
+    test_datagram_mediation();
     test_connect_on_behalf_paths();
     test_broker_handoff();
     test_supervise_loop();
