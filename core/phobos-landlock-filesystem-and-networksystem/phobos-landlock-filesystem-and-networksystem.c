@@ -53,6 +53,19 @@ static void add_path_rules(int ruleset_descriptor, int landlock_version,
     }
 }
 
+/* ------------------------------------- stage: let the filesystem ruleset beside this one decide */
+
+/* To the kernel, a layer that handles no filesystem right also handles no REFER, and a layer that
+ * does not handle REFER refuses every rename and hard link between two directories, whatever the
+ * layers above it allow: stacked under a filesystem ruleset it turned every such call into EXDEV.
+ * So a network-only ruleset handles REFER and nothing else of the filesystem, and grants it on the
+ * root, which leaves it enforcing exactly what it enforced before and leaves the decision to the
+ * filesystem ruleset. */
+static void allow_reparenting_everywhere(int ruleset_descriptor, int landlock_version) {
+    struct path_rule root = {.path = "/", .referable = true};
+    add_path_rule(ruleset_descriptor, landlock_version, &root);
+}
+
 /* ------------------------------------------------ stage: add the port rules */
 
 static void add_port_rules(int ruleset_descriptor, const struct options *options) {
@@ -122,7 +135,8 @@ int main(int argument_count, char *arguments[]) {
                                 udp_rules_wanted(&options));
 
     /* With --no-filesystem this ruleset governs the network alone, so it handles no filesystem
-     * right and carries no path rules; it composes by intersection with a separate filesystem
+     * right but REFER, which it grants everywhere (see allow_reparenting_everywhere), and carries
+     * no other path rule; it composes by intersection with a separate filesystem
      * ruleset a later layer applies. Otherwise it handles the filesystem as before. Scoping is
      * applied either way, inside create_ruleset. */
     uint64_t handled_filesystem =
@@ -131,6 +145,14 @@ int main(int argument_count, char *arguments[]) {
         handled_network_access(&options) | close_bind_access(&options, landlock_version);
 
     report_unenforceable_rights(landlock_version, handled_filesystem != 0);
+
+    /* Only a ruleset that exists for another reason needs REFER: one with nothing else to hold is
+     * not created at all, and a layer that is never created cannot refuse anything. */
+    bool reparenting_only = options.no_filesystem && landlock_version >= FIRST_VERSION_WITH_REFER &&
+                            (handled_network != 0 || scoped_for_version(landlock_version) != 0);
+    if (reparenting_only) {
+        handled_filesystem = LANDLOCK_ACCESS_FILESYSTEM_REFER;
+    }
     if (options.close_bind) {
         report_bind_not_closed(landlock_version);
     }
@@ -148,6 +170,8 @@ int main(int argument_count, char *arguments[]) {
     int ruleset_descriptor = create_ruleset(landlock_version, handled_filesystem, handled_network);
     if (!options.no_filesystem) {
         add_path_rules(ruleset_descriptor, landlock_version, &options);
+    } else if (reparenting_only) {
+        allow_reparenting_everywhere(ruleset_descriptor, landlock_version);
     }
     add_port_rules(ruleset_descriptor, &options);
     add_ephemeral_bind_rules(ruleset_descriptor, &options, handled_network);
