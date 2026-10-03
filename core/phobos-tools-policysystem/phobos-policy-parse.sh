@@ -47,7 +47,7 @@ set_parsed_limit() {
   local -n limit_ref="$1"
   local -n disabled_ref="${1}_DISABLED"
   local key="$2"
-  local value="${3//[[:space:]]/}"
+  local value="$3"
   if [[ ! "$value" =~ ^[0-9]+$ ]]; then
     report "Policy invalid: ${key} '${value}' must be a non-negative whole number. (PHB-EPOLICY)"
     exit "${PHB_EPOLICY}"

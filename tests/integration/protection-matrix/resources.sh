@@ -174,9 +174,7 @@ for value in "nofile=abc" "nofile=-1" "nofile=" "nofile=1.5" "mem_mb=99999999999
 done
 
 c_split="$(cfg_limits split "cpu=5 5")"
-run_pm --config "$c_split" -- "$P" getrlimit
-known_defect "a limit value with a space inside it is refused, not read as the digits run together" \
-  "set_parsed_limit strips every space from the value, so 'cpu=5 5' is accepted as 55 (README.md, defect 2)" \
-  "$(holds_if test "$PM_STATUS" = 0 -a "$(rlimit cpu)" = "55 55")"
+run_pm --config "$c_split" -- "$P" cwd
+if (( PM_STATUS == PHB_EPOLICY )) && ! grep -q '^START' "$PM_OUT"; then ok "a limit value with a space inside it is refused, not read as the digits run together"; else bad "a limit value with a space inside it is refused" "$(pm_describe)"; fi
 
 finish

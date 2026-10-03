@@ -88,9 +88,7 @@ in the sense of `SECURITY.md`.
    and Landlock refuses every reparenting that a stacked ruleset does not handle. Making that ruleset
    handle the right and grant it on `/` would not widen the filesystem ruleset beside it, but that
    needs measuring before it is trusted. Found in `filesystem.sh`.
-2. **A space inside a limit value is dropped.** `cpu=5 5` is read as `cpu=55`, because
-   `set_parsed_limit` strips every space rather than the ends. The other malformed values are refused.
-   Trimming only the ends fixes it. Found in `resources.sh`.
+2. **A space inside a limit value was dropped.** Fixed: `cpu=5 5` is now refused like every other malformed value.
 3. **A signal sent to `phobos.sh` never reaches the command.** `SIGTERM` with the timeout layer on,
    and `SIGHUP` either way, end the wrapper and remove the specification directory but leave the
    command running until its own limit. `SIGTERM` with no timeout layer is not acted on at all while

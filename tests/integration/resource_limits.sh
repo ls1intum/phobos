@@ -46,7 +46,9 @@ echo "== an invalid resource value is a policy error =="
 for body in '[limits]
 mem_mb=abc' '[limits]
 nproc=-1' '[limits]
-nofile=1.5'; do
+nofile=1.5' '[limits]
+cpu=5 5' '[limits]
+mem_mb=1 024'; do
   out="$(parse_limits "$body")"
   rc=$?
   if [[ "$out" == *"PHB-EPOLICY"* ]]; then
