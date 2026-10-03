@@ -258,7 +258,7 @@ jobs:
             phobos-run-phase:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/network-cleanup-test.sh
 
-      # The protection matrix: seven suites that hold the whole of phobos.sh to what it promises, each
+      # The protection matrix: eleven suites that hold the whole of phobos.sh to what it promises, each
       # in a step of its own so one run names every suite that broke. --memory and --pids-limit are
       # cgroup limits, not privileges, so the ordinary-container rule above still holds.
 
@@ -327,6 +327,42 @@ jobs:
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/lifecycle.sh
+
+      # Every shape of a policy line through phobos.sh: what is accepted, what is refused with
+      # which status, the spelling of a timeout and every limit read back from the kernel.
+      - name: Every shape of a policy line is judged as the parser should
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+            phobos-run-phase:ci \
+            bash /tests/integration/protection-matrix/policy-syntax.sh
+
+      # The network layer at its edges: where a range ends, the port boundaries, special
+      # addresses, IPv6 spellings, non-blocking connects, socket kinds and a destination
+      # rewritten during a TCP connect.
+      - name: The network layer holds at the edges of ranges, ports and socket kinds
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+            phobos-run-phase:ci \
+            bash /tests/integration/protection-matrix/network-edge.sh
+
+      # The filesystem layer at its edges: links, dot-dot, magic links, path descriptors, rights
+      # on files and the root, odd names and a link swapped while it is opened.
+      - name: The filesystem layer holds against links, dot-dot, magic links and swaps
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+            phobos-run-phase:ci \
+            bash /tests/integration/protection-matrix/filesystem-edge.sh
+
+      # Each limit met through the call that meets it, and the limits Phobos does not set.
+      - name: Each resource limit holds through the call that meets it
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+            phobos-run-phase:ci \
+            bash /tests/integration/protection-matrix/resources-edge.sh
 
   # Mutation testing installs clang and mull into a container and then runs the suite
   # once per mutant, which is minutes rather than seconds. Weekly and on request, so it

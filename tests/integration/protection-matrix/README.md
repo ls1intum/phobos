@@ -56,6 +56,10 @@ own on exit, so no suite depends on another and none leaves the image changed.
 | `combinations.sh` | all sixteen subsets of switched-off layers, one witness per layer in one run each, `--no-restriction` against all four switches, flag spellings, order and repetition, concurrent runs, and a nested `phobos.sh` that cannot widen its outer sandbox |
 | `cli.sh` | the manual and usage errors, arguments that arrive unchanged, standard streams, the denial report, commands that cannot start, the environment, the override options, tail flags, the base policy, odd policy files, and the specification directory kept out of the command's reach |
 | `lifecycle.sh` | nothing left behind after every way a run can end, the hosts file restored, the hosts lock bounded, and what a signal sent to `phobos.sh` does |
+| `policy-syntax.sh` | every shape of a policy line judged through `phobos.sh`: which `[connect]`, `[bind]` and `[accept]` lines are accepted and which are refused with which status, the spelling of a timeout, every limit read back from the kernel, and the section headers |
+| `network-edge.sh` | where a CIDR range ends, the port boundaries, special addresses, IPv6 spellings, non-blocking connects, odd address lengths, which kinds of socket can be made, a TCP destination rewritten while the connect runs, and the rules that are accepted and do not mean what they say |
+| `filesystem-edge.sh` | names that try to leave a granted tree (links, dot-dot, magic links, path descriptors, the working directory), what a right on a file, a directory and the root does, nested and odd policy entries, long and strange names, the calls Landlock does not cover, and a link swapped while it is opened |
+| `resources-edge.sh` | each limit met through the call that meets it (descriptors, pipes, sockets, threads, file mappings, the data segment, growing a file), the limits Phobos does not set, and a sleeping command that uses no processor time |
 
 ## What each of the eleven promises is checked by
 
@@ -78,10 +82,11 @@ suites.
 
 ## Defects the suites found
 
-None of these lets a command reach something it was not granted. They are ordinary bugs, not
-vulnerabilities, in the sense of `SECURITY.md`. A fixed one is marked as such and is an ordinary check
-in its suite now. One is still open, and that one is a `known_defect`: the suite skips it while it
-holds and fails when it is fixed, so whoever fixes it turns it into an ordinary check.
+A fixed one is marked as such and is an ordinary check in its suite now. Three are open, and each of
+those is a `known_defect`: the suite skips it while it holds and fails when it is fixed, so whoever
+fixes it turns it into an ordinary check. They are ordinary bugs in the sense of `SECURITY.md`, not
+attacks: a command cannot use any of them to reach something it is not granted, except through a policy
+line with a typo in it, which is the fourth entry's case, and a policy is operator-trusted input.
 
 1. **Moving a file between directories failed under the default layers.** Fixed: the network layer's own ruleset now handles the reparenting right and grants it on the root, so it no longer refuses what the filesystem ruleset allows.
 2. **A space inside a limit value was dropped.** Fixed: `cpu=5 5` is now refused like every other malformed value.
@@ -90,6 +95,16 @@ holds and fails when it is fixed, so whoever fixes it turns it into an ordinary 
    command running until its own limit. `SIGTERM` with no timeout layer is not acted on at all while
    the command runs, because the shell that waits for it defers the signal. The layers need to pass the
    signal on to the command. Found in `lifecycle.sh`.
+4. **A malformed IPv4 literal in `[connect]` opens the port to every address.** `allow 256.1.1.1:80`,
+   `1.2.3:80`, `1.2.3.4.5:80`, `127.1:80` and `2130706433:80` are accepted without a resolver and the
+   guard then holds them to the port alone, so any address on that port passes. A typo in an address fails
+   open. Refusing a literal that is not a valid dotted quad, or reading the others as the address they
+   spell, fixes it. Found in `network-edge.sh`.
+5. **Three more `[connect]` spellings are accepted and match nothing.** A range with prefix length 0
+   (`0.0.0.0/0`) admits no address instead of all of them, a prefix out of range (`/33`, `/-1`) is accepted
+   and admits nothing, and a host with an empty port (`127.0.0.1:`) is accepted and admits nothing. All
+   three fail closed, but silently. Found in `network-edge.sh`.
+
 An orphaned descendant that outlives a command which has already exited was suspected to be a fifth
 and is not one: the run waits for the process group and ends it at the limit. `timeout.sh` pins that.
 
@@ -120,6 +135,13 @@ The second group is behaviour nothing documents, found while writing the suites,
    one connect guard. With `-nnr` it starts and cannot widen what the outer policy hid.
 5. **`chroot` works** for a process that holds `CAP_SYS_CHROOT`, root in a container by default. Landlock
    does not restrict it, and the directory chosen is still subject to the ruleset.
+6. **A netlink datagram socket can be made.** The guard refuses raw and packet sockets, not netlink. The suite
+   checks only that the socket can be made; what a command can then do with it is not checked.
+7. **A `[connect]` rule for `localhost` covers the whole loopback range and `::1`**, not only `127.0.0.1`,
+   although `core/phobos-tools-policysystem/config_doc.txt` says it is held to that exact address.
+8. **Three more things Landlock does not cover:** a hard link made before the run inside a granted tree to a
+   file outside it can be read, a watch for changes (inotify) can be placed on a file outside every tree, and
+   `getxattr`, `listxattr`, `lstat` and `statx` work on one.
 
 ## What these suites do not cover
 
