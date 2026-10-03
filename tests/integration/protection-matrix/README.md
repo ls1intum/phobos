@@ -78,9 +78,10 @@ suites.
 
 ## Defects the suites found
 
-None of these lets a command reach something it was not granted. Each is a `known_defect`, so the
-suite is green while it holds and red when it is fixed. They are ordinary bugs, not vulnerabilities,
-in the sense of `SECURITY.md`.
+None of these lets a command reach something it was not granted. They are ordinary bugs, not
+vulnerabilities, in the sense of `SECURITY.md`. A fixed one is marked as such and is an ordinary check
+in its suite now. One is still open, and that one is a `known_defect`: the suite skips it while it
+holds and fails when it is fixed, so whoever fixes it turns it into an ordinary check.
 
 1. **Moving a file between directories failed under the default layers.** Fixed: the network layer's own ruleset now handles the reparenting right and grants it on the root, so it no longer refuses what the filesystem ruleset allows.
 2. **A space inside a limit value was dropped.** Fixed: `cpu=5 5` is now refused like every other malformed value.
