@@ -166,7 +166,12 @@ reads_back "nofile=64" nofile "64 64" "[limits]" "nofile=64"
 reads_back "nofile=0064, read in base ten" nofile "64 64" "[limits]" "nofile=0064"
 reads_back "nofile=010, which is ten and not eight" nofile "10 10" "[limits]" "nofile=010"
 reads_back "nofile=16" nofile "16 16" "[limits]" "nofile=16"
-reads_back "nofile=1048576" nofile "1048576 1048576" "[limits]" "nofile=1048576"
+hard_nofile="$(ulimit -Hn)"
+if [[ "$hard_nofile" =~ ^[0-9]+$ ]] && (( hard_nofile >= 64 )); then
+  reads_back "nofile equal to the container's own hard limit, ${hard_nofile}" nofile "${hard_nofile} ${hard_nofile}" "[limits]" "nofile=${hard_nofile}"
+else
+  skip "nofile equal to the container's own hard limit" "the container reports ${hard_nofile}, which is not a number to name"
+fi
 reads_back "fsize_mb=1" fsize "$((1 * MB)) $((1 * MB))" "[limits]" "fsize_mb=1"
 reads_back "fsize_mb=010, which is ten megabytes" fsize "$((10 * MB)) $((10 * MB))" "[limits]" "fsize_mb=010"
 reads_back "fsize_mb=1024" fsize "$((1024 * MB)) $((1024 * MB))" "[limits]" "fsize_mb=1024"
