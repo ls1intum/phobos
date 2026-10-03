@@ -1,0 +1,8 @@
+{
+    "label": "Technologies on which Phobos is built",
+    "position": 5,
+    "link": {
+        "type": "generated-index",
+        "description": "The kernel mechanisms and the programs Phobos is assembled from."
+    }
+}

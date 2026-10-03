@@ -1,0 +1,32 @@
+# Pull request validation for the documentation site.
+#
+# Builds documentation/ without publishing anything, so a broken link, a writing-rule finding
+# or a type error is caught on the pull request rather than on the deploy.
+#
+# There is no push trigger. deploy-documentation.yml runs the same reusable build on a push to
+# main, so one here would run the whole build, Playwright included, a second time for every
+# documentation merge, under a different concurrency group.
+name: Documentation CI
+
+on:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - 'documentation/**'
+      - '.github/workflows/documentation.yml'
+      - '.github/workflows/documentation-ci.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: documentation-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  documentation:
+    uses: ./.github/workflows/documentation.yml
+    permissions:
+      contents: read
+    with:
+      upload_pages_artifact: false

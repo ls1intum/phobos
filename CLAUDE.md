@@ -170,7 +170,6 @@ core/                      the sandbox itself
     phobos-spec-dir.sh     the specification directory and its lifetime
   phobos-tools-policysystem/
     phobos-policy-parse.sh one cfg in, the parsed state and the specification files out
-    config_doc.txt         the configuration format, documented
   phobos-tools-filesystem/
     phobos-rights.sh       a parsed policy to the --rights= arguments phobos-landlock-filesystem-and-networksystem takes
   phobos-tools-networksystem/
