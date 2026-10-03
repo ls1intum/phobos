@@ -42,6 +42,8 @@ pm_setup() {
   mkdir -p "$PM"/{ro,rw,rw2,none,work,bin,cfg,out,exec,tmp}
   gcc-14 -std=gnu23 -O2 -Wall -Wextra -o "$PM/bin/pprobe" "${PM_HERE}/probe.c" -pthread 2>"$PM/out/cc.log" \
     || { bad "the probe builds" "$(cat "$PM/out/cc.log")"; return 1; }
+  gcc-14 -std=gnu23 -O2 -Wall -Wextra -o "$PM/bin/pedge" "${PM_HERE}/edge.c" -pthread 2>"$PM/out/cc-edge.log" \
+    || { bad "the second probe builds" "$(cat "$PM/out/cc-edge.log")"; return 1; }
   gcc-14 -std=gnu23 -O2 -static -o "$PM/exec/pprobe-static" "${PM_HERE}/probe.c" -pthread 2>/dev/null \
     || { bad "the static probe builds"; return 1; }
   cp "$PM/exec/pprobe-static" "$PM/ro/pprobe-static"

@@ -89,7 +89,7 @@ run them by hand.
 
 ## The protection matrix, run by `build.yml` inside the run-phase image
 
-Seven suites in `tests/integration/protection-matrix/` hold the whole of `phobos.sh` to what it
+Eleven suites in `tests/integration/protection-matrix/` hold the whole of `phobos.sh` to what it
 promises, each in a step of its own. They run in an ordinary container with `--network none`, plus
 `--memory` and `--pids-limit`, which are cgroup caps and not privileges. Every denial has an
 unprotected control and a run with only its layer switched off, a check whose control fails is
@@ -108,6 +108,10 @@ the kernel lacks, a missing tool or too few processor cores.
 | `combinations.sh` | all sixteen subsets of switched-off layers, with one witness per layer in each |
 | `cli.sh` | the command line, streams, overrides, tail flags and odd policy files |
 | `lifecycle.sh` | nothing is left behind after any ending of a run, a signal sent to `phobos.sh` is pinned as it is (it never reaches the command, a known defect) |
+| `policy-syntax.sh` | every shape of a policy line, accepted or refused with its status, and every limit read back from the kernel |
+| `network-edge.sh` | range ends, port boundaries, special addresses, IPv6 spellings, socket kinds, a TCP destination rewritten during connect |
+| `filesystem-edge.sh` | links, dot-dot, magic links, rights on files and the root, odd names, a link swapped while it is opened |
+| `resources-edge.sh` | each limit met through the call that meets it, and the limits Phobos does not set |
 
 ## The environment variables the suites read
 
