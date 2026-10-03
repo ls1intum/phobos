@@ -87,6 +87,28 @@ run them by hand.
 | `scoping-test.sh` | Landlock scoping: a sandboxed process can neither signal a process outside its domain nor reach an abstract UNIX socket there |
 | `seccomp-networksystem-test.sh` | the connect guard inside the image: an allowed destination connects, a forbidden one is refused, neither can be redirected, and a rule for one transport admits nothing on the other |
 
+## The protection matrix, run by `build.yml` inside the run-phase image
+
+Seven suites in `tests/integration/protection-matrix/` hold the whole of `phobos.sh` to what it
+promises, each in a step of its own. They run in an ordinary container with `--network none`, plus
+`--memory` and `--pids-limit`, which are cgroup caps and not privileges. Every denial has an
+unprotected control and a run with only its layer switched off, a check whose control fails is
+skipped rather than passed, and a limit the documentation admits is asserted as it is. A skip there
+is an open defect, named in the suite's own README, which turns red the moment it is fixed, or a check
+that cannot run here and says why: a control the container's seccomp profile blocks, a Landlock version
+the kernel lacks, a missing tool or too few processor cores.
+`tests/integration/protection-matrix/README.md` says how they are built and what they do not cover.
+
+| Suite | What it proves |
+| --- | --- |
+| `filesystem.sh` | each filesystem right on its own, what it does not grant, inheritance by children, escape attempts, and the documented gaps |
+| `network.sh` | TCP and UDP connect, the destination race, bind and listen closed, `[accept]` filtering, and host names through the egress broker |
+| `timeout.sh` | a run and everything it started ends at the limit, and no process escapes the group |
+| `resources.sh` | every limit is set, read back, enforced, inherited, merged and validated |
+| `combinations.sh` | all sixteen subsets of switched-off layers, with one witness per layer in each |
+| `cli.sh` | the command line, streams, overrides, tail flags and odd policy files |
+| `lifecycle.sh` | nothing is left behind after any ending of a run, a signal sent to `phobos.sh` is pinned as it is (it never reaches the command, a known defect) |
+
 ## The environment variables the suites read
 
 | Variable | Read by | Meaning |
