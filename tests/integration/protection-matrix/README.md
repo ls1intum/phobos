@@ -123,7 +123,7 @@ The second group is behaviour nothing documents, found while writing the suites,
 
 1. **A tail flags file that does not exist is ignored**, so a minimum Landlock version in the real
    file would be lost without a word. The tail flags are operator-trusted input.
-2. **A relative path in a policy is resolved against the directory `phobos.sh` runs in.**
+2. **A relative path in a policy is resolved against the directory `phobos.sh` runs in.** Fixed: it is refused.
 3. **The denial report counts text.** A line the command prints on standard error that happens to
    contain the words is counted, and the report is a hint, not a measure.
 4. **A nested `phobos.sh` with its network layer on is refused**, because one process tree can have only

@@ -240,8 +240,8 @@ printf '[read]\n  \t%s/ro dir/   # trailing comment\n' "$PM" > "$PM/cfg/trim.cfg
 run_pm --config "$PM/cfg/trim.cfg" -- "$P" read "$PM/ro dir/f.txt"
 if grep -q 'CONTENT SPACE' "$PM_OUT"; then ok "leading tabs, a trailing slash and a trailing comment do not change the path"; else bad "whitespace, slash and comment" "$(pm_describe)"; fi
 printf '[read]\r\n%s\r\n' "$PM/ro" > "$PM/cfg/crlf.cfg"
-run_pm --config "$PM/cfg/crlf.cfg" -- "$P" read "$PM/ro/data.txt"
-if grep -q 'CONTENT READ-OK' "$PM_OUT"; then ok "a policy file with Windows line endings still grants its path, so the carriage return is not part of the path"; else bad "a CRLF policy file" "$(pm_describe)"; fi
+run_pm --config "$PM/cfg/crlf.cfg" -- "$P" cwd
+if ! grep -q '^START' "$PM_OUT" && (( PM_STATUS == PHB_EPOLICY )) && grep -q 'carriage return' "$PM_ERR"; then ok "a policy file with Windows line endings is refused, naming the line, rather than losing every path to a carriage return"; else bad "a policy file with Windows line endings is refused, naming the line, rather than losing every path to a carriage return" "$(pm_describe)"; fi
 printf '[read]\n%s/does-not-exist\n' "$PM" > "$PM/cfg/missing.cfg"
 run_pm --config "$PM/cfg/missing.cfg" -- "$P" cwd
 if (( PM_STATUS == 0 )); then ok "a path that does not exist is skipped, not an error, and grants nothing"; else bad "a missing path is skipped" "$(pm_describe)"; fi
@@ -256,11 +256,8 @@ printf '[read]\n%s/work/../ro\n' "$PM" > "$PM/cfg/dotdot.cfg"
 run_pm --config "$PM/cfg/dotdot.cfg" -- "$P" read "$PM/ro/data.txt"
 if grep -q 'CONTENT READ-OK' "$PM_OUT"; then ok "dot-dot segments in a policy path are resolved"; else bad "dot-dot segments" "$(pm_describe)"; fi
 printf '[read]\nro\n' > "$PM/cfg/relative.cfg"
-( cd "$PM" && run_pm --config "$PM/cfg/relative.cfg" -- "$P" read "$PM/ro/data.txt" )
-from_parent_ok=$(grep -q 'CONTENT READ-OK' "$PM_OUT" && op_ok open; echo $?)
 run_pm --config "$PM/cfg/relative.cfg" -- "$P" read "$PM/ro/data.txt"
-from_work_denied=$(grep -q '^START' "$PM_OUT" && op_failed_with open $DENIED_ERRNOS; echo $?)
-gap_case "a relative path in a policy is resolved against the directory phobos.sh runs in, so the same file grants a directory from one place and nothing from another" "README.md of this suite, limits found, observation 2" "$(( from_parent_ok == 0 && from_work_denied == 0 ? 0 : 1 ))"
+if ! grep -q '^START' "$PM_OUT" && (( PM_STATUS == PHB_EPOLICY )) && grep -q 'not an absolute path' "$PM_ERR"; then ok "a relative path in a policy is refused, so the same file cannot grant a directory from one place and nothing from another"; else bad "a relative path in a policy is refused, so the same file cannot grant a directory from one place and nothing from another" "$(pm_describe)"; fi
 mkdir -p "$PM/many"
 many_cfg="$PM/cfg/many.cfg"
 printf '[read]\n' > "$many_cfg"
