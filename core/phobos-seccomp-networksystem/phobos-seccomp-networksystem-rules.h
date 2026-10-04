@@ -58,9 +58,10 @@ bool address_within(const struct in6_addr *address, const struct in6_addr *netwo
                     int prefix_length);
 
 /* Whether one rule's host covers this destination address. A range holds the address to its
- * network. An IP literal, and the name "localhost", are held to the exact address; any other
- * hostname is one this guard cannot tie to an address, so its host is not enforced here and the
- * rule rests on its port alone, with the egress broker checking the host name. */
+ * network. An IP literal is held to the exact address and the name "localhost" to the loopback
+ * range, every 127.x.x.x address and ::1; any other hostname is one this guard cannot tie to an
+ * address, so its host is not enforced here and the rule rests on its port alone, with the egress
+ * broker checking the host name. */
 bool rule_host_matches(const struct connect_rule *rule, int family, const void *address);
 
 /* Whether the allow-list permits a connection to this destination on the given transport. An

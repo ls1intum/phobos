@@ -22,8 +22,8 @@ rest exists to take privileges away. None of the following is a vulnerability.
   connection itself from outside the sandboxed process, so for `connect` it is a boundary a
   raw system call cannot step around, enforcing the `[connect]` allow-list by host and port.
   It reads the destination address of the connect, so it holds a rule that names an IP literal
-  (and the name `localhost`) to that exact address, a rule that names an IP range to that
-  network, and a rule that names a DNS hostname it cannot tie to an address there to its port
+  to that exact address, the name `localhost` to the loopback range (every `127.x.x.x` address and
+  `::1`), a rule that names an IP range to that network, and a rule that names a DNS hostname it cannot tie to an address there to its port
   alone. Such a hostname rule's host is enforced by the egress broker, an HAProxy the network
   layer starts automatically for such a rule and that checks the TLS host name the guard cannot
   see; the network layer refuses an exact-name rule when no resolver is given, so an instructor
