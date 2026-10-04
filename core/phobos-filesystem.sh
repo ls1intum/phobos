@@ -119,7 +119,7 @@ if (( ${#CONFIGS[@]} > 0 )); then
   shift
   build_owned_spec_from_configs "$HERE" "$SPEC_PARENT" "$TAIL_FLAGS_FILE_OPT" "${CONFIGS[@]}"
   set +e
-  bash "${BASH_SOURCE[0]}" "${LAYER_FLAGS[@]}" "$BUILT_SPEC_DIR" -- "$@"
+  run_forwarding_signals bash "${BASH_SOURCE[0]}" "${LAYER_FLAGS[@]}" "$BUILT_SPEC_DIR" -- "$@"
   rc=$?
   set -e
   exit "$rc"
@@ -147,8 +147,9 @@ trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 # This layer runs the command as a child and waits on it, so its stderr can be watched for
 # denials. An outer timeout (phobos-timeoutsystem.sh) group-kills on expiry and escalates to SIGKILL
 # only while GNU timeout's own child is still alive, so this layer ignores SIGTERM and stays
-# until the command it waits on is gone. The command is put back to the default disposition
-# just before it runs, so the graceful SIGTERM still reaches the command itself.
+# until the command it waits on is gone. While it waits, run_forwarding_signals passes a SIGTERM,
+# SIGHUP, SIGINT or SIGQUIT it receives on to the command, which has the default disposition, so a
+# caller that cancels the run reaches the command and the layer still stays to clean up.
 trap '' TERM
 
 READ="${SPEC_DIR}/read.paths"
@@ -182,14 +183,14 @@ if [[ -n "$RESOURCES_LAYER_OPT" ]]; then
 fi
 
 # With --no-landlock the filesystem restriction is off, so run the command without Landlock.
-# Run it in a subshell that restores the default SIGTERM disposition and exec's it, so the
-# command stands in as this layer's child: an outer timeout's kill escalation reaches it, while
-# this layer keeps ignoring SIGTERM and stays to remove the specification directory.
+# Run it as this layer's child with the default signal dispositions, so an outer timeout's kill
+# escalation and the signals this layer passes on reach it, while this layer keeps ignoring
+# SIGTERM between them and stays to remove the specification directory.
 if (( NO_LANDLOCK )); then
   debug_log filesystem "filesystem layer disabled; run" "${limit_prefix[@]}" "${CMD[@]}"
 
   set +e
-  ( trap - TERM; exec "${limit_prefix[@]}" "${CMD[@]}" )
+  run_forwarding_signals "${limit_prefix[@]}" "${CMD[@]}"
   rc=$?
   set -e
   exit "$rc"
@@ -231,16 +232,17 @@ debug_log filesystem "run" "${limit_prefix[@]}" "${LANDLOCK}" "${args[@]}" -- "$
 exec {denial_counts}<> <(:)
 exec {filtered_stderr}> >(tee -p >(count_denials >&"$denial_counts") >&2)
 
-# The command runs in a subshell that restores the default SIGTERM disposition and exec's the
-# resource layer, when there is one, and phobos-landlock-filesystem-and-networksystem, so phobos-landlock-filesystem-and-networksystem and the command it
-# runs are one process an outer timeout's kill escalation reaches directly, while this layer
-# ignores SIGTERM and waits so it can report the denials. The timeout itself, when set, is
-# phobos-timeoutsystem.sh's.
+# The command runs as this layer's child, started through the resource layer, when there is one,
+# and phobos-landlock-filesystem-and-networksystem, which exec's it, so they and the command are
+# one process that an outer timeout's kill escalation and the signals passed on reach directly,
+# while this layer ignores SIGTERM between them and waits so it can report the denials. The
+# timeout itself, when set, is phobos-timeoutsystem.sh's. The two variables hand the helper the
+# command's standard error and the descriptors it must not inherit, instead of a redirection on
+# the call: that would be this shell's own standard error for as long as the helper runs, and
+# bash reports a child that died of a signal there, into a pipe whose reader the same signal
+# may have killed, and so ends this layer with SIGPIPE.
 set +e
-(
-  trap - TERM
-  exec "${limit_prefix[@]}" "${LANDLOCK}" "${args[@]}" -- "${CMD[@]}"
-) 2>&"$filtered_stderr" {filtered_stderr}>&- {denial_counts}>&-
+PHB_FORWARD_STDERR_FD="$filtered_stderr" PHB_FORWARD_CLOSE_FDS="$filtered_stderr $denial_counts" run_forwarding_signals "${limit_prefix[@]}" "${LANDLOCK}" "${args[@]}" -- "${CMD[@]}"
 rc=$?
 set -e
 exec {filtered_stderr}>&-

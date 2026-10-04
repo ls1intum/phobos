@@ -202,51 +202,63 @@ fi
 
 echo
 echo "== a signal sent to phobos.sh =="
-# signal_case SIGNAL CONFIG SECONDS: starts a run of a command that sleeps that long, signals the process phobos.sh
-# became, waits three seconds and reports in SIGNAL_STARTED, SIGNAL_ENDED (phobos.sh is gone), SIGNAL_DIRS (the
-# specification directories left) and SIGNAL_ALIVE (the command still runs). It then removes what is left.
+# signal_case SIGNAL CONFIG COMMAND...: starts a run of the command, signals the process phobos.sh became, waits three
+# seconds and reports in SIGNAL_STARTED, SIGNAL_ENDED (phobos.sh is gone), SIGNAL_STATUS (what it answered),
+# SIGNAL_DIRS (the specification directories left) and SIGNAL_ALIVE (the command still runs). The command's own
+# marker line is the word it prints when it is ready, SIGNAL_MARKER. It then removes what is left. SIGINT needs
+# the run started with that signal at its default, which a shell does not give a background command, and the same for SIGQUIT.
+SIGNAL_MARKER=SLEEPING
 signal_case() {
   local signal="$1"
   local config="$2"
-  local seconds="$3"
+  shift 2
   rm -rf "${SPEC_PARENT:?}"/*
   : > "$PM/out/signalled.out"
-  phobos.sh --spec-parent "$SPEC_PARENT" --tail-flags-file "$PM/tail.flags" --config "$config" -- "$P" sleep "$seconds" > "$PM/out/signalled.out" 2> "$PM/out/signalled.err" < /dev/null &
+  ( trap - INT QUIT; exec phobos.sh --spec-parent "$SPEC_PARENT" --tail-flags-file "$PM/tail.flags" --config "$config" -- "$@" ) > "$PM/out/signalled.out" 2> "$PM/out/signalled.err" < /dev/null &
   local pid=$!
-  disown "$pid"
   SIGNAL_STARTED=1
-  wait_for_line "$PM/out/signalled.out" SLEEPING 100 || SIGNAL_STARTED=0
+  wait_for_line "$PM/out/signalled.out" "$SIGNAL_MARKER" 100 || SIGNAL_STARTED=0
   kill -"$signal" "$pid"
   sleep 3
   if kill -0 "$pid" 2> /dev/null; then SIGNAL_ENDED=0; else SIGNAL_ENDED=1; fi
   SIGNAL_DIRS="$(spec_dirs)"
-  if pgrep -f -- "$P sleep $seconds" > /dev/null; then SIGNAL_ALIVE=1; else SIGNAL_ALIVE=0; fi
-  pkill -KILL -f "$P sleep $seconds" 2> /dev/null
+  if pgrep -f -- "$*" > /dev/null; then SIGNAL_ALIVE=1; else SIGNAL_ALIVE=0; fi
+  pkill -KILL -f -- "$*" 2> /dev/null
   kill -KILL "$pid" 2> /dev/null
+  SIGNAL_STATUS=0
+  wait "$pid" 2> /dev/null || SIGNAL_STATUS=$?
   sleep 1
   pkill -KILL -f 'phobos-seccomp|phobos-networksystem|phobos-filesystem|phobos-timeoutsystem' 2> /dev/null
   rm -rf "${SPEC_PARENT:?}"/*
 }
-signal_case TERM "$c_ok" 20
-if [[ "$SIGNAL_STARTED" == 1 && "$SIGNAL_ENDED" == 1 && "$SIGNAL_DIRS" == 0 ]]; then ok "SIGTERM to a run with a timeout layer ends phobos.sh and removes the specification directory"; else bad "SIGTERM with a timeout layer" "started ${SIGNAL_STARTED}, ended ${SIGNAL_ENDED}, ${SIGNAL_DIRS} directories"; fi
-known_defect "SIGTERM to a run with a timeout layer leaves the command running until its limit" \
-  "the wrapper that waits on GNU timeout dies of the signal without passing it on (README.md, defect 3)" \
-  "$(holds_if test "$SIGNAL_STARTED" = 1 -a "$SIGNAL_ALIVE" = 1)"
-signal_case HUP "$c_ok" 21
-if [[ "$SIGNAL_STARTED" == 1 && "$SIGNAL_ENDED" == 1 && "$SIGNAL_DIRS" == 0 ]]; then ok "SIGHUP to a run with a timeout layer ends phobos.sh and removes the specification directory"; else bad "SIGHUP with a timeout layer" "started ${SIGNAL_STARTED}, ended ${SIGNAL_ENDED}, ${SIGNAL_DIRS} directories"; fi
-known_defect "SIGHUP to a run with a timeout layer leaves the command running" \
-  "the layers die of the hangup without passing it on (README.md, defect 3)" \
-  "$(holds_if test "$SIGNAL_STARTED" = 1 -a "$SIGNAL_ALIVE" = 1)"
-signal_case HUP "$c_none" 22
-if [[ "$SIGNAL_STARTED" == 1 && "$SIGNAL_ENDED" == 1 && "$SIGNAL_DIRS" == 0 ]]; then ok "SIGHUP to a run with no timeout layer ends phobos.sh and removes the specification directory"; else bad "SIGHUP with no timeout layer" "started ${SIGNAL_STARTED}, ended ${SIGNAL_ENDED}, ${SIGNAL_DIRS} directories"; fi
-known_defect "SIGHUP to a run with no timeout layer leaves the command running" \
-  "the layers die of the hangup without passing it on (README.md, defect 3)" \
-  "$(holds_if test "$SIGNAL_STARTED" = 1 -a "$SIGNAL_ALIVE" = 1)"
-signal_case TERM "$c_none" 23
-known_defect "SIGTERM to a run with no timeout layer is not acted on while the command runs: the wrapper waits for it, and the command and the specification directory stay" \
-  "the shell that waits for the command defers the signal until the command ends (README.md, defect 3)" \
-  "$(holds_if test "$SIGNAL_STARTED" = 1 -a "$SIGNAL_ENDED" = 0 -a "$SIGNAL_ALIVE" = 1 -a "$SIGNAL_DIRS" = 1)"
-signal_case KILL "$c_none" 24
-gap_case "SIGKILL to phobos.sh cannot be cleaned up after: its specification directory is left, as is the command" "the signal cannot be caught" "$(holds_if test "$SIGNAL_STARTED" = 1 -a "$SIGNAL_DIRS" = 1 -a "$SIGNAL_ALIVE" = 1)"
-
+# signal_ends TITLE SIGNAL NUMBER CONFIG SECONDS: the signal ends the run at once with 128 plus its number, the command
+# is gone and no specification directory is left.
+signal_ends() {
+  local title="$1"
+  local signal="$2"
+  local number="$3"
+  local config="$4"
+  local seconds="$5"
+  SIGNAL_MARKER=SLEEPING
+  signal_case "$signal" "$config" "$P" sleep "$seconds"
+  if [[ "$SIGNAL_STARTED" == 1 && "$SIGNAL_ENDED" == 1 && "$SIGNAL_ALIVE" == 0 && "$SIGNAL_DIRS" == 0 && "$SIGNAL_STATUS" == $(( 128 + number )) ]]; then
+    ok "$title"
+  else
+    bad "$title" "started ${SIGNAL_STARTED}, ended ${SIGNAL_ENDED}, command alive ${SIGNAL_ALIVE}, ${SIGNAL_DIRS} directories, status ${SIGNAL_STATUS} (wanted $(( 128 + number )))"
+  fi
+}
+signal_ends "SIGTERM to a run with a timeout layer reaches the command: the run ends, answers 143 and leaves nothing" TERM 15 "$c_ok" 20
+signal_ends "SIGHUP to a run with a timeout layer reaches the command" HUP 1 "$c_ok" 21
+signal_ends "SIGINT to a run with a timeout layer reaches the command" INT 2 "$c_ok" 22
+signal_ends "SIGQUIT to a run with a timeout layer reaches the command" QUIT 3 "$c_ok" 23
+signal_ends "SIGTERM to a run with no timeout layer reaches the command" TERM 15 "$c_none" 24
+signal_ends "SIGHUP to a run with no timeout layer reaches the command" HUP 1 "$c_none" 25
+signal_ends "SIGINT to a run with no timeout layer reaches the command" INT 2 "$c_none" 26
+signal_ends "SIGQUIT to a run with no timeout layer reaches the command" QUIT 3 "$c_none" 27
+SIGNAL_MARKER=TRAPPING
+signal_case TERM "$c_ok" "$P" trapterm 20
+gap_case "a command that ignores SIGTERM is not ended by the signal passed on to it, and the run goes on" "the manual, SIGNALS" "$(holds_if test "$SIGNAL_STARTED" = 1 -a "$SIGNAL_ENDED" = 0 -a "$SIGNAL_ALIVE" = 1)"
+SIGNAL_MARKER=SLEEPING
+signal_case KILL "$c_none" "$P" sleep 28
+gap_case "SIGKILL to phobos.sh cannot be passed on: its specification directory is left, as is the command" "the signal cannot be caught" "$(holds_if test "$SIGNAL_STARTED" = 1 -a "$SIGNAL_DIRS" = 1 -a "$SIGNAL_ALIVE" = 1)"
 finish

@@ -160,6 +160,9 @@ static constexpr uint32_t FOREIGN_AUDIT_ARCH = 0xdead0000;
 /* What the wrapped calls should do, and what they were handed. The record lives in
  * shared memory because a case that ends in exit() runs in a forked child of the
  * test while the assertions are made by the parent. */
+/* Room for the handler of every signal number the supervisor installs one for. */
+static constexpr int SIGNAL_SLOTS = 64;
+
 struct behaviour {
     /* seccomp NEW_LISTENER (via syscall) */
     long seccomp_listener_result;
@@ -302,6 +305,13 @@ struct behaviour {
     int recorded_child_status;
     int waitpid_eintr_once;
     int calloc_fails;
+    /* signal and kill: the handlers the supervisor installed, and what they then sent */
+    void (*signal_handler[SIGNAL_SLOTS])(int);
+    int kill_calls;
+    int last_kill_pid;
+    int last_kill_signal;
+    unsigned int kill_signal_mask;
+    int signals_at_reap;
 };
 
 static struct behaviour *bx;
@@ -458,9 +468,18 @@ int __wrap_prctl(int option, ...) {
 }
 
 void (*__wrap_signal(int signum, void (*handler)(int)))(int) {
-    (void)signum;
-    (void)handler;
+    if (signum > 0 && signum < SIGNAL_SLOTS) {
+        bx->signal_handler[signum] = handler;
+    }
     return NULL;
+}
+
+int __wrap_kill(pid_t pid, int signum) {
+    bx->kill_calls++;
+    bx->last_kill_pid = (int)pid;
+    bx->last_kill_signal = signum;
+    bx->kill_signal_mask |= 1u << signum;
+    return 0;
 }
 
 int __wrap_execvp(const char *file, char *const argv[]) {
@@ -475,6 +494,14 @@ int __wrap_execvp(const char *file, char *const argv[]) {
 
 pid_t __wrap_waitpid(pid_t pid, int *status, int options) {
     (void)options;
+    if (bx->signals_at_reap) {
+        bx->signals_at_reap = 0;
+        for (int number = 1; number < SIGNAL_SLOTS; number++) {
+            if (bx->signal_handler[number] != nullptr) {
+                bx->signal_handler[number](number);
+            }
+        }
+    }
     if (bx->waitpid_eintr_once) {
         bx->waitpid_eintr_once = 0;
         errno = EINTR;
@@ -1255,6 +1282,40 @@ static int run_main(char *const argv[]) {
     pid_t child = __real_fork();
     if (child == 0) {
         _exit(sut_main(count, (char **)argv));
+    }
+    int status = 0;
+    __real_waitpid(child, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+/* The exit status signals_taken_and_passed_on answers when every signal was taken, passed on while the
+ * command existed, and no longer passed on once it was reaped. */
+static constexpr int SIGNALS_PASSED_ON = 42;
+
+/* Runs the guard's main in a forked child of the test, as run_main does, with the four signals delivered to
+ * the supervisor at the moment it reaps the command, and then, in that same child because the command it
+ * remembers is that child's own, delivers them once more after main has returned. Answers SIGNALS_PASSED_ON
+ * when the first delivery made one kill of the command for each signal, and the second made none, since the
+ * command was gone by then and its number may belong to another process; 1 otherwise. */
+static int signals_taken_and_passed_on(char *const argv[]) {
+    constexpr unsigned int WANTED = (1u << SIGTERM) | (1u << SIGHUP) | (1u << SIGINT) | (1u << SIGQUIT);
+    int count = 0;
+    while (argv[count] != NULL) {
+        count++;
+    }
+    bx->signals_at_reap = 1;
+    pid_t child = __real_fork();
+    if (child == 0) {
+        sut_main(count, (char **)argv);
+        if (bx->kill_calls != 4 || bx->last_kill_pid != FAKE_CHILD_PID || bx->kill_signal_mask != WANTED) {
+            _exit(1);
+        }
+        for (int number = 1; number < SIGNAL_SLOTS; number++) {
+            if (bx->signal_handler[number] != nullptr) {
+                bx->signal_handler[number](number);
+            }
+        }
+        _exit(bx->kill_calls == 4 ? SIGNALS_PASSED_ON : 1);
     }
     int status = 0;
     __real_waitpid(child, &status, 0);
@@ -3599,6 +3660,11 @@ static void test_parent_paths(void) {
     bx->waitpid_eintr_once = 1;
     check("a parent supervises and then reaps the child, mapping its status",
           run_main(argv) == 0);
+
+    reset_behaviour();
+    bx->fork_result = FAKE_CHILD_PID;
+    check("the supervisor takes SIGTERM, SIGHUP, SIGINT and SIGQUIT, passes each on to the command while it exists and to no one once it is reaped",
+          signals_taken_and_passed_on(argv) == SIGNALS_PASSED_ON);
 }
 
 /* Runs every case. stdout is line-buffered so a forked test-child never inherits a

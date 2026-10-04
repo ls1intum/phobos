@@ -24,6 +24,9 @@ PHB_TIMEOUT_EXPIRED_EXIT=124
 PHB_TIMEOUT_KILLED_EXIT=137
 # How long GNU timeout lets a command ignore SIGTERM before it sends SIGKILL.
 PHB_KILL_AFTER_SECONDS=5
+# How often a layer looks whether the command it waits for has ended, in seconds. It looks rather than
+# blocks in wait, see run_forwarding_signals.
+PHB_SIGNAL_POLL_SECONDS=0.1
 
 # How long the filesystem layer waits, after the command has ended, for the denial counts. A
 # process the command left behind can keep its stderr, and so the counter, alive; the layer
