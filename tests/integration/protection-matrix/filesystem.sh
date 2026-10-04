@@ -136,7 +136,8 @@ c_nopath="$(cfg nopath <<EOF2
 $PM/does-not-exist
 EOF2
 )"
-deny_case "a policy path that does not exist grants nothing" fs "$c_nopath" open "$DENIED_ERRNOS" -- "$P" read "$PM/ro/data.txt"
+run_pm --config "$c_nopath" -- "$P" read "$PM/ro/data.txt"
+if ! grep -q '^START' "$PM_OUT" && (( PM_STATUS == PHB_EPOLICY )) && grep -q 'does not exist on this system' "$PM_ERR"; then ok "a policy path that does not exist is refused, since its rule would grant nothing"; else bad "a policy path that does not exist is refused, since its rule would grant nothing" "$(pm_describe)"; fi
 c_file="$(cfg file <<EOF2
 [read]
 $PM/ro/data.txt

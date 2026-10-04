@@ -356,6 +356,10 @@ stop_haproxy_child() {
 # exact name. For an exact name the broker resolves the ClientHello's
 # host name through the "phobosdns" resolver into a variable, sets the destination to it, and
 # refuses when it does not resolve, so the connection can only reach the name's own address; this
+# is done only for a connection to the port the rule names, because the broker keeps the
+# destination port it was given, and a connection the guard let through on another port, under
+# another rule, would otherwise carry that port to the name; names are grouped by port, one acl
+# pair for each; this
 # needs the resolvers section build_haproxy_conf emits, which the network layer guarantees by
 # refusing an exact-name rule with no resolver. An address rule is
 # accepted the moment its destination matches, so a connection with no ClientHello does not wait
@@ -365,11 +369,16 @@ stop_haproxy_child() {
 haproxy_allow_rules() {
   local rules="$1"
   local host
+  local port
   local proto
-  local -a names=()
+  local key
+  local tag
+  local condition
+  local -A names_by_port=()
+  local -a conditions=()
   local -a addresses=()
   local any_host=0
-  while read -r host _ proto; do
+  while read -r host port proto; do
     [[ -z "$host" ]] && continue
     [[ "$proto" == "udp" ]] && continue
     case "$(classify_connect_host "$host")" in
@@ -382,7 +391,7 @@ haproxy_allow_rules() {
         fi
         ;;
       invalid) refuse_wildcard_host_name "$host" ;;
-      exact) names+=("$host") ;;
+      exact) names_by_port["${port:-*}"]+=" ${host}" ;;
     esac
   done < <(sed -E 's/#.*$//' "$rules" 2>/dev/null | sed '/^[[:space:]]*$/d')
 
@@ -391,20 +400,29 @@ haproxy_allow_rules() {
     printf '    default_backend to_dst\n'
     return 0
   fi
-  if (( ${#names[@]} > 0 )); then
-    printf '    acl exact_sni req.ssl_sni -m str -i %s\n' "$(printf '%s\n' "${names[@]}" | sort -u | tr '\n' ' ' | sed 's/ $//')"
-    printf '    tcp-request content do-resolve(txn.hostip,phobosdns,ipv4) req.ssl_sni if exact_sni\n'
-    printf '    tcp-request content set-dst var(txn.hostip) if exact_sni { var(txn.hostip) -m found }\n'
-    printf '    tcp-request content reject if exact_sni !{ var(txn.hostip) -m found }\n'
-  fi
+  while read -r key; do
+    [[ -z "$key" ]] && continue
+    tag="p${key}"
+    [[ "$key" == "*" ]] && tag="pany"
+    condition="exact_sni_${tag}"
+    printf '    acl exact_sni_%s req.ssl_sni -m str -i %s\n' "$tag" "$(printf '%s\n' ${names_by_port[$key]} | sort -u | tr '\n' ' ' | sed 's/ $//')"
+    if [[ "$key" != "*" ]]; then
+      printf '    acl exact_port_%s dst_port %s\n' "$tag" "$key"
+      condition="exact_sni_${tag} exact_port_${tag}"
+    fi
+    printf '    tcp-request content do-resolve(txn.hostip,phobosdns,ipv4) req.ssl_sni if %s\n' "$condition"
+    printf '    tcp-request content set-dst var(txn.hostip) if %s { var(txn.hostip) -m found }\n' "$condition"
+    printf '    tcp-request content reject if %s !{ var(txn.hostip) -m found }\n' "$condition"
+    conditions+=("$condition")
+  done < <(printf '%s\n' "${!names_by_port[@]}" | sort)
   if (( ${#addresses[@]} > 0 )); then
     printf '    acl allowed_dst dst -m ip %s\n' "$(printf '%s\n' "${addresses[@]}" | sort -u | tr '\n' ' ' | sed 's/ $//')"
     printf '    tcp-request content accept if allowed_dst\n'
   fi
   printf '    tcp-request content accept if { req.ssl_hello_type 1 }\n'
-  if (( ${#names[@]} > 0 )); then
-    printf '    use_backend to_dst if exact_sni\n'
-  fi
+  for condition in "${conditions[@]}"; do
+    printf '    use_backend to_dst if %s\n' "$condition"
+  done
   if (( ${#addresses[@]} > 0 )); then
     printf '    use_backend to_dst if allowed_dst\n'
   fi

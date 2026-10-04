@@ -67,13 +67,15 @@ check "the base read right is kept"                 "/usr" "$(cat "$NSPEC/read.p
 check "the base execute right is not removed"       "/usr" "$(cat "$NSPEC/execute.paths")"
 # An exercise may grant a right, and name a path, the base did not: the model is additive.
 WSPEC="$(fresh_spec)"
-printf '[write]\n/usr\n[read]\n/opt/extra\n' > "$WORK/widen.cfg"
+EXTRA="$WORK/extra"
+mkdir -p "$EXTRA"
+printf '[write]\n/usr\n[read]\n%s\n' "$EXTRA" > "$WORK/widen.cfg"
 out="$(bash "$CORE_X/phobos-policysystem.sh" --spec-dir "$WSPEC" --config "$WORK/widen.cfg" 2>&1)"
 rc=$?
 if [[ "$rc" -eq 0 ]]; then ok "an exercise widening the sandbox is accepted (additive model)"; else bad "an exercise widening the sandbox is accepted (additive model)" "exit 0" "exit $rc: $out"; fi
 check "the exercise adds write on a base path"      "/usr"       "$(grep -Fx /usr "$WSPEC/write.paths")"
 check "the base write path is still present"         "$WRITABLE"  "$(grep -Fx "$WRITABLE" "$WSPEC/write.paths")"
-check "the exercise adds a path the base did not"    "/opt/extra" "$(grep -Fx /opt/extra "$WSPEC/read.paths")"
+check "the exercise adds a path the base did not"    "$EXTRA" "$(grep -Fx "$EXTRA" "$WSPEC/read.paths")"
 
 echo
 echo "== phobos-policysystem.sh refuses when there is no base policy =="

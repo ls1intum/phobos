@@ -523,6 +523,34 @@ refuse_relative_path() {
   refuse_cfg "${line@Q} in [${section}] is not an absolute path. Write the whole path from /, because ~, variables, quotes and names relative to a directory are not expanded"
 }
 
+# Refuses a path line that holds a wildcard character, in a section that names filesystem paths. A
+# path is taken as written, so /usr/lib/jvm/* would name one entry whose name is a star, which is
+# almost never the set of files the line was written to name, and the rule would grant something
+# other than what was meant, without a word. Takes the line and the section. Assumes it is
+# called plainly, so that the refusal ends the run.
+refuse_wildcard_path() {
+  local line="$1"
+  local section="$2"
+  [[ "$line" != *[\*\?\[]* ]] && return 0
+  refuse_cfg "${line@Q} in [${section}] holds a wildcard character, and a path is taken as written, so it would name the one entry with that literal name and not the files it looks like it matches. Name the directory or the file itself"
+}
+
+# Refuses a [read] or [execute] path line that names nothing on this system. Landlock can only
+# anchor a rule on a path that exists, so the rule for a missing one is left out and the run goes
+# on without the access the line was written to give. A typo in a path therefore showed up as a
+# command that could not read or execute, far from the line. Asked of exercise configurations
+# only: a shipped base policy names paths a given image may not have, and is written to fit more
+# than one. The sections that change things are not asked, because the filesystem layer creates
+# a missing path they name. The path has to exist when the specification is built, so one that the
+# command is meant to create must be made first or reached through an existing parent. Takes the
+# line and the section. Assumes it is called plainly, so that the refusal ends the run.
+refuse_missing_path() {
+  local line="$1"
+  local section="$2"
+  [[ -e "$line" ]] && return 0
+  refuse_cfg "${line@Q} in [${section}] does not exist on this system, so the rule would grant nothing. Check the spelling, or remove the line if the path is not needed here"
+}
+
 # Refuses a cfg this program cannot read as a file of lines, before any line is parsed: the path given
 # is empty, names nothing, a link to nothing, a directory or another kind of file, or a file this user
 # may not read. Each is said as what it is, since "not found" for a directory sends the reader looking
@@ -577,10 +605,12 @@ refuse_binary_cfg() {
 # the [connect] and [bind] rules into net.rules and bind.rules, all in a fresh directory, and
 # the [limits] section into the PARSED_* values. Sets PARSED_FS_DIR, PARSED_NET_FILE and
 # PARSED_BIND_FILE to what it wrote. Everything from a "#" is a comment. An unknown section, a
-# malformed line and any content before the first section are refused (PHB-EPOLICY). Assumes
-# it is called plainly, not in a subshell, so that a refusal ends the run.
+# malformed line and any content before the first section are refused (PHB-EPOLICY). A second
+# argument, any non-empty word, says the cfg is an exercise configuration, whose [read] and [execute] paths must exist.
+# Assumes it is called plainly, not in a subshell, so that a refusal ends the run.
 parse_cfg_policy() {
   local cfg="$1"
+  local exercise="${2:-}"
   local tdir
   local line
   local number=0
@@ -616,7 +646,10 @@ parse_cfg_policy() {
       continue
     fi
     case "$sec" in
-      read|execute|write|create|delete|create-ipc|create-symlink|restructure) refuse_relative_path "$line" "$sec" ;;
+      read|execute|write|create|delete|create-ipc|create-symlink|restructure)
+        refuse_relative_path "$line" "$sec"
+        refuse_wildcard_path "$line" "$sec"
+        if [[ -n "$exercise" && ( "$sec" == "read" || "$sec" == "execute" ) ]]; then refuse_missing_path "$line" "$sec"; fi ;;
     esac
     case "$sec" in
       read)    printf '%s\n' "$line" >>"$rd" ;;

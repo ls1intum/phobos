@@ -244,14 +244,14 @@ run_pm --config "$PM/cfg/crlf.cfg" -- "$P" cwd
 if ! grep -q '^START' "$PM_OUT" && (( PM_STATUS == PHB_EPOLICY )) && grep -q 'carriage return' "$PM_ERR"; then ok "a policy file with Windows line endings is refused, naming the line, rather than losing every path to a carriage return"; else bad "a policy file with Windows line endings is refused, naming the line, rather than losing every path to a carriage return" "$(pm_describe)"; fi
 printf '[read]\n%s/does-not-exist\n' "$PM" > "$PM/cfg/missing.cfg"
 run_pm --config "$PM/cfg/missing.cfg" -- "$P" cwd
-if (( PM_STATUS == 0 )); then ok "a path that does not exist is skipped, not an error, and grants nothing"; else bad "a missing path is skipped" "$(pm_describe)"; fi
+if ! grep -q '^START' "$PM_OUT" && (( PM_STATUS == PHB_EPOLICY )) && grep -q 'does not exist on this system' "$PM_ERR"; then ok "a path that does not exist is refused, since its rule would grant nothing"; else bad "a path that does not exist is refused, since its rule would grant nothing" "$(pm_describe)"; fi
 ln -sfn "$PM/ro" "$PM/link-to-ro"
 printf '[read]\n%s\n' "$PM/link-to-ro" > "$PM/cfg/symlink.cfg"
 run_pm --config "$PM/cfg/symlink.cfg" -- "$P" read "$PM/ro/data.txt"
 if grep -q 'CONTENT READ-OK' "$PM_OUT"; then ok "a symbolic link in a policy grants the directory it points to"; else bad "a symbolic link in a policy" "$(pm_describe)"; fi
 printf '[read]\n%s/r*\n' "$PM" > "$PM/cfg/glob.cfg"
 run_pm --config "$PM/cfg/glob.cfg" -- "$P" read "$PM/ro/data.txt"
-if op_failed_with open $DENIED_ERRNOS; then ok "a star in a policy path is a literal name, not a pattern"; else bad "a star in a path is literal" "$(pm_describe)"; fi
+if ! grep -q '^START' "$PM_OUT" && (( PM_STATUS == PHB_EPOLICY )) && grep -q 'holds a wildcard character' "$PM_ERR"; then ok "a star in a policy path is refused, since a path is taken as written"; else bad "a star in a policy path is refused, since a path is taken as written" "$(pm_describe)"; fi
 printf '[read]\n%s/work/../ro\n' "$PM" > "$PM/cfg/dotdot.cfg"
 run_pm --config "$PM/cfg/dotdot.cfg" -- "$P" read "$PM/ro/data.txt"
 if grep -q 'CONTENT READ-OK' "$PM_OUT"; then ok "dot-dot segments in a policy path are resolved"; else bad "dot-dot segments" "$(pm_describe)"; fi

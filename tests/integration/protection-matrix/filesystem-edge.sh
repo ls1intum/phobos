@@ -263,7 +263,8 @@ for name in "with space" "ünï" "-dash" "dot.dir"; do
   reads "a directory named '${name}' can be granted and read" "$PM/cfg/odd.cfg" "ODD-${name%% *}" -- "$P" read "$PM/odd/${name}/f.txt"
 done
 printf '[read]\n%s/odd/hash#x\n' "$PM" > "$PM/cfg/odd.cfg"
-deny_case "a directory with a hash in its name cannot be granted, since the rest of the line is a comment" fs "$PM/cfg/odd.cfg" open "$DENIED_ERRNOS" -- "$P" read "$PM/odd/hash#x/f.txt"
+run_pm --config "$PM/cfg/odd.cfg" -- "$P" read "$PM/odd/hash#x/f.txt"
+if ! grep -q '^START' "$PM_OUT" && (( PM_STATUS == PHB_EPOLICY )) && grep -q 'does not exist on this system' "$PM_ERR"; then ok "a directory with a hash in its name cannot be granted: the rest of the line is a comment, so the path that is left does not exist and is refused"; else bad "a directory with a hash in its name cannot be granted: the rest of the line is a comment, so the path that is left does not exist and is refused" "$(pm_describe)"; fi
 long_name="$(printf 'n%.0s' $(seq 1 255))"
 printf 'LONG\n' > "$PM/ro/$long_name"
 reads "a file name of 255 characters is the longest there is, and is readable" "$c_ro" "LONG" -- "$P" read "$PM/ro/$long_name"
@@ -291,7 +292,7 @@ reads "dot and dot-dot in the entry are resolved first" "$PM/cfg/spell.cfg" "REA
 ln -sfn "$PM/none/does-not-exist" "$PM/dangling"
 printf '[read]\n%s\n%s\n' "$PM/ro" "$PM/dangling" > "$PM/cfg/spell.cfg"
 run_pm --config "$PM/cfg/spell.cfg" -- "$P" read "$PM/ro/data.txt"
-if grep -q 'CONTENT READ-OK' "$PM_OUT"; then ok "an entry that is a dangling link is skipped and grants nothing"; else bad "a dangling link entry is skipped" "$(pm_describe)"; fi
+if ! grep -q '^START' "$PM_OUT" && (( PM_STATUS == PHB_EPOLICY )) && grep -q 'does not exist on this system' "$PM_ERR"; then ok "an entry that is a dangling link is refused, since it names nothing"; else bad "an entry that is a dangling link is refused, since it names nothing" "$(pm_describe)"; fi
 printf '[read]\n%s\n' "$PM/ro/link-to-data" > "$PM/cfg/spell.cfg"
 reads "an entry that is a link to a file grants that file" "$PM/cfg/spell.cfg" "READ-OK" -- "$P" read "$PM/ro/data.txt"
 
