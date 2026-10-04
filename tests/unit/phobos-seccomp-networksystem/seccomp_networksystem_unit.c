@@ -1311,6 +1311,21 @@ static void test_rule_parsing(void) {
     remember_rule("*", "443", false);
     check("the bare star host is kept", connect_rules_count_for_tests() == 1);
     reset_behaviour();
+    remember_rule("256.1.1.1", "443", false);
+    remember_rule("1.2.3", "443", false);
+    remember_rule("127.1", "443", false);
+    remember_rule("2130706433", "443", false);
+    remember_rule("::1::2", "443", false);
+    remember_rule("fe80::1%eth0", "443", true);
+    remember_rule("1.2.3.4.5", "443", false);
+    check("a host written like an address that is not one is dropped, never read as a host name", connect_rules_count_for_tests() == 0);
+    remember_rule("1password.example", "443", false);
+    remember_rule("cafe.example", "443", false);
+    remember_rule("10.0.0.0/8", "443", false);
+    remember_rule("::1", "443", false);
+    remember_rule("127.0.0.1", "443", false);
+    check("a host name that holds digits, an address, a range and an IPv6 address are kept", connect_rules_count_for_tests() == 5);
+    reset_behaviour();
     for (size_t i = 0; i < MAXIMUM_RULES + RULE_TABLE_OVERFLOW; i++) {
         remember_rule("127.0.0.1", "443", false);
     }
@@ -1326,6 +1341,10 @@ static bool permits_v4(const char *ip, uint16_t port) {
 static void test_policy_matching(void) {
     reset_behaviour();
     check("an empty allow-list denies every connect", !permits_v4("9.9.9.9", 443));
+
+    reset_behaviour();
+    remember_rule("256.1.1.1", "443", false);
+    check("a rule for an address that is not one admits no address, not every address on its port", !permits_v4("127.0.0.9", 443));
 
     reset_behaviour();
     remember_rule("127.0.0.1", "443", false);

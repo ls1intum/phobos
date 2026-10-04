@@ -123,6 +123,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/unit/phobos-tools-networksystem/network_policy.sh
 
+      # Which spellings of an address, a range and a port a [connect] line may use: each right one
+      # is accepted and each almost-right one refused, since the guard would read it as a host name
+      # and open its port to every address.
+      - name: The spellings of an address in a connect rule
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/phobos-tools-policysystem/address_literals.sh
+
       - name: The connect guard enforces the allow-list by host and port
         if: ${{ !cancelled() }}
         run: bash tests/integration/seccomp_networksystem.sh

@@ -43,6 +43,19 @@ static constexpr int IPV4_FIRST_OCTET_SHIFT = 24;
 static struct connect_rule connect_rules[MAXIMUM_RULES];
 static size_t connect_rule_count = 0;
 
+/* Whether a host is written like an IP address, digits and dots only or with a colon in it, which a
+ * host name never is, yet is not one inet_pton can read. Read as a host name instead it would match
+ * every address on its port, so such a rule is dropped, which denies. */
+static bool is_unreadable_address(const char *host) {
+    bool digits_and_dots = host[0] != '\0' && strspn(host, "0123456789.") == strlen(host);
+    if (!digits_and_dots && strchr(host, ':') == nullptr) {
+        return false;
+    }
+    struct in_addr v4;
+    struct in6_addr v6;
+    return inet_pton(AF_INET, host, &v4) != 1 && inet_pton(AF_INET6, host, &v6) != 1;
+}
+
 void remember_rule(const char *host, const char *port_text, bool is_udp) {
     if (connect_rule_count >= MAXIMUM_RULES || strlen(host) >= MAXIMUM_HOST) {
         log_verbose("dropping the rule '%s %s': the table is full or the host is too long",
@@ -52,6 +65,11 @@ void remember_rule(const char *host, const char *port_text, bool is_udp) {
     if (strchr(host, '*') != nullptr && strcmp(host, "*") != 0) {
         log_verbose("dropping the rule '%s %s': a wildcard host name cannot be enforced, and read as "
                     "an unknown name it would match every address on its port", host, port_text);
+        return;
+    }
+    if (strchr(host, '/') == nullptr && is_unreadable_address(host)) {
+        log_verbose("dropping the rule '%s %s': it is written like an address but is not one, and read "
+                    "as a host name it would match every address on its port", host, port_text);
         return;
     }
     struct connect_rule *rule = &connect_rules[connect_rule_count];
