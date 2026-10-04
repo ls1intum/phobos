@@ -141,10 +141,15 @@ if [[ "$(tr '\n' ' ' < "$out")" == "READY GOT LATE STATUS 5 " ]]; then ok "the h
 echo
 echo "== a process number is told from the process that held it =="
 odd_name=$'x (y) z\n1 2 ) 3'
-cp "$(command -v sleep)" "${WORK}/${odd_name}"
-"${WORK}/${odd_name}" 5 &
+printf '#!/bin/sh\nsleep 5\n' > "${WORK}/${odd_name}"
+chmod +x "${WORK}/${odd_name}"
+"${WORK}/${odd_name}" &
 odd=$!
-until [[ -r "/proc/${odd}/stat" && "$(tr '\0' ' ' < "/proc/${odd}/cmdline")" == *"x (y) z"* ]]; do sleep 0.02; done
+polls=0
+until [[ "$(cat "/proc/${odd}/comm" 2> /dev/null)" == "x (y) z"* ]] || (( polls >= 100 )); do
+  sleep 0.02
+  polls=$(( polls + 1 ))
+done
 if process_start_ticks "$odd" && [[ "$REPLY" =~ ^[0-9]+$ ]]; then ok "the start time of a process whose name holds spaces, brackets and a newline is read: ${REPLY}"; else bad "the start time is read for an odd name" "a number" "$REPLY"; fi
 odd_start="$REPLY"
 if process_start_ticks "$$" && [[ "$REPLY" != "$odd_start" || "$$" == "$odd" ]]; then ok "and it differs from this shell's"; else bad "start times differ" "different" "$REPLY"; fi
