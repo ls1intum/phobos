@@ -195,6 +195,162 @@ refuse_unknown_section() {
   esac
 }
 
+# Whether the text is an IPv4 address in dotted-quad form: four decimal numbers from 0 to 255,
+# none with a leading zero, which is the one spelling the connect guard reads as an address. Any
+# other spelling it reads as a host name and holds to its port alone, so one that merely looks like
+# an address, such as 1.2.3 or 127.1, would open the port to every address. Needs no environment.
+is_ipv4_literal() {
+  local text="$1"
+  local octet='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+  [[ "$text" =~ ^${octet}\.${octet}\.${octet}\.${octet}$ ]]
+}
+
+# Whether every group of a colon-separated list is one to four hexadecimal digits, the last of them
+# an IPv4 address when the second argument says it may be. Takes the list and "yes" or "no" for a
+# closing IPv4 address; prints the number of 16-bit groups the list takes, and fails for a list with
+# an empty or a malformed group, one that ends in a colon included. Assumes it runs in a command
+# substitution.
+count_ipv6_groups() {
+  local list="$1"
+  local last_may_be_ipv4="$2"
+  local -a groups=()
+  local group
+  local total=0
+  local position=0
+  [[ -z "$list" ]] && { printf '0\n'; return 0; }
+  [[ "$list" != *: ]] || return 1
+  IFS=: read -ra groups <<< "$list"
+  for group in "${groups[@]}"; do
+    position=$(( position + 1 ))
+    if [[ "$group" =~ ^[0-9A-Fa-f]{1,4}$ ]]; then
+      total=$(( total + 1 ))
+    elif [[ "$last_may_be_ipv4" == yes && position -eq ${#groups[@]} ]] && is_ipv4_literal "$group"; then
+      total=$(( total + 2 ))
+    else
+      return 1
+    fi
+  done
+  printf '%s\n' "$total"
+}
+
+# Whether the text is an IPv6 address: groups of hexadecimal digits separated by single colons, at
+# most one "::" standing for a run of zero groups, and optionally an IPv4 address in the last two
+# places. A zone such as %eth0 is not part of the address the guard compares, so it is refused. The
+# connect guard reads anything it cannot parse as a host name, so an address that is almost right
+# would open the port to every address. Assumes it runs where count_ipv6_groups is defined.
+is_ipv6_literal() {
+  local text="$1"
+  local head
+  local tail
+  local head_groups
+  local tail_groups
+  [[ "$text" == *:* && "$text" =~ ^[0-9A-Fa-f:.]+$ && "$text" != *:::* ]] || return 1
+  if [[ "$text" == *::* ]]; then
+    head="${text%%::*}"
+    tail="${text#*::}"
+    [[ "$tail" != *::* ]] || return 1
+    head_groups="$(count_ipv6_groups "$head" no)" || return 1
+    tail_groups="$(count_ipv6_groups "$tail" yes)" || return 1
+    (( head_groups + tail_groups <= 7 ))
+  else
+    head_groups="$(count_ipv6_groups "$text" yes)" || return 1
+    (( head_groups == 8 ))
+  fi
+}
+
+# Prints the eight 16-bit groups of an IPv6 address that is_ipv6_literal accepted, written out in full
+# and separated by spaces, with the "::" filled in with zero groups and a closing IPv4 address turned
+# into its two groups. The groups keep the hexadecimal spelling they had. Assumes the address is valid
+# and that it runs in a command substitution.
+expand_ipv6_groups() {
+  local text="${1,,}"
+  local head
+  local tail
+  local -a head_groups=()
+  local -a tail_groups=()
+  local -a octets=()
+  local -a all=()
+  if [[ "$text" =~ ^(.*:)([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    IFS=. read -ra octets <<< "${BASH_REMATCH[2]}"
+    text="${BASH_REMATCH[1]}$(printf '%x:%x' $(( octets[0] * 256 + octets[1] )) $(( octets[2] * 256 + octets[3] )))"
+  fi
+  if [[ "$text" == *::* ]]; then
+    head="${text%%::*}"
+    tail="${text#*::}"
+    [[ -z "$head" ]] || IFS=: read -ra head_groups <<< "$head"
+    [[ -z "$tail" ]] || IFS=: read -ra tail_groups <<< "$tail"
+    all=( "${head_groups[@]}" )
+    while (( ${#all[@]} + ${#tail_groups[@]} < 8 )); do
+      all+=( 0 )
+    done
+    all+=( "${tail_groups[@]}" )
+  else
+    IFS=: read -ra all <<< "$text"
+  fi
+  printf '%s\n' "${all[*]}"
+}
+
+# Whether an IPv6 address that is_ipv6_literal accepted is an IPv4-mapped one, ::ffff:a.b.c.d in any
+# spelling: five zero groups, then ffff. The connect guard keeps a range from such an address only
+# when its prefix reaches past those 96 bits. Assumes it runs where expand_ipv6_groups is defined.
+is_ipv4_mapped_literal() {
+  local -a groups=()
+  local index
+  read -ra groups <<< "$(expand_ipv6_groups "$1")"
+  for index in 0 1 2 3 4; do
+    (( 16#${groups[index]} == 0 )) || return 1
+  done
+  (( 16#${groups[5]} == 16#ffff ))
+}
+
+# Refuses a [connect] host that is written like an address but is not one, a prefix length that
+# has no meaning, and a port that is missing after its colon, each as a policy error. Without it the
+# connect guard drops a bad range or an empty port without a word, so the rule admits nothing, and
+# reads a malformed address as a host name, so the rule admits every address on its port. Takes the
+# host as parse_network_target left it, the port, and the line for the message. A host name, the
+# star, localhost and a well-formed address or range pass. An IPv4-mapped IPv6 range shorter than 96
+# bits is refused too, because the guard drops it. Assumes it is called plainly, so that a
+# refusal ends the run.
+refuse_malformed_address() {
+  local host="$1"
+  local port="$2"
+  local line="$3"
+  local address="$host"
+  local prefix=""
+  local longest=0
+  if [[ -z "$port" ]]; then
+    report "Policy invalid: '${line}' in [connect] names a host and then no port. Write the port, or * for every port. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  if [[ "$host" == */* ]]; then
+    address="${host%%/*}"
+    prefix="${host#*/}"
+  fi
+  if is_ipv4_literal "$address"; then
+    longest=32
+  elif is_ipv6_literal "$address"; then
+    longest=128
+  elif [[ "$host" == */* || "$address" =~ ^[0-9.]+$ || "$address" == *:* ]]; then
+    report "Policy invalid: '${address}' in [connect] is not a valid address. An IPv4 address is four numbers from 0 to 255 with no leading zero, and an IPv6 address has at most one ::. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  else
+    return 0
+  fi
+  [[ "$host" == */* ]] || return 0
+  if [[ ! "$prefix" =~ ^[0-9]+$ ]] || (( ${#prefix} > 3 )) || (( 10#$prefix > longest )); then
+    report "Policy invalid: the prefix length '${prefix}' in '${line}' is not a number from 1 to ${longest} for this address. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  if (( 10#$prefix == 0 )); then
+    report "Policy invalid: '${line}' in [connect] has a prefix length of 0, which would mean every address. Write * as the host for that. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  if (( longest == 128 )) && (( 10#$prefix < 96 )) && is_ipv4_mapped_literal "$address"; then
+    report "Policy invalid: '${line}' in [connect] is an IPv4-mapped range with a prefix length below 96, which would reach past the IPv4 addresses and which the connect guard refuses. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+}
+
 # Appends one [connect] line, "allow <host>[:<port>] [udp|tcp]", to the rules file as "host port"
 # for TCP, or "host port udp" for UDP. The transport marker is optional and defaults to tcp, so
 # every existing rule keeps its two-field form and its meaning. A host with a star in it, other
@@ -228,6 +384,7 @@ append_connect_rule() {
   fi
   parse_network_target "$target" host port
   refuse_wildcard_host_name "$host"
+  refuse_malformed_address "$host" "$port" "$line"
   if [[ "$proto" == "udp" ]]; then
     printf '%s %s %s\n' "$host" "$port" "udp" >>"$rules"
   else

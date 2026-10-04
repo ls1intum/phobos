@@ -91,15 +91,10 @@ input.
 1. **Moving a file between directories failed under the default layers.** Fixed: the network layer's own ruleset now handles the reparenting right and grants it on the root, so it no longer refuses what the filesystem ruleset allows.
 2. **A space inside a limit value was dropped.** Fixed: `cpu=5 5` is now refused like every other malformed value.
 3. **A signal sent to `phobos.sh` never reached the command.** Fixed: every layer that waits passes `SIGTERM`, `SIGHUP`, `SIGINT` and `SIGQUIT` on to what it waits for, and the connect guard passes them to its command. A command that ignores `SIGTERM` still goes on until its limit, and `SIGKILL` cannot be passed on.
-4. **A malformed IPv4 literal in `[connect]` opens the port to every address.** `allow 256.1.1.1:80`,
-   `1.2.3:80`, `1.2.3.4.5:80`, `127.1:80` and `2130706433:80` are accepted without a resolver and the
-   guard then holds them to the port alone, so any address on that port passes. A typo in an address fails
-   open. Refusing a literal that is not a valid dotted quad, or reading the others as the address they
-   spell, fixes it. Found in `network-edge.sh`.
-5. **Three more `[connect]` spellings are accepted and match nothing.** A range with prefix length 0
-   (`0.0.0.0/0`) admits no address instead of all of them, a prefix out of range (`/33`, `/-1`) is accepted
-   and admits nothing, and a host with an empty port (`127.0.0.1:`) is accepted and admits nothing. All
-   three fail closed, but silently. Found in `network-edge.sh`.
+4. **A malformed IPv4 literal in `[connect]` opened the port to every address.** Fixed: the parser refuses an
+   address written like one and not one, and the guard drops such a rule instead of reading it as a name.
+5. **Three more `[connect]` spellings were accepted and matched nothing.** Fixed: a prefix length of 0, one out
+   of range, and a host with an empty port are refused as policy errors, and the message for 0 points to `*`.
 
 An orphaned descendant that outlives a command which has already exited was suspected to be a fifth
 and is not one: the run waits for the process group and ends it at the limit. `timeout.sh` pins that.
@@ -133,8 +128,8 @@ The second group is behaviour nothing documents, found while writing the suites,
    does not restrict it, and the directory chosen is still subject to the ruleset.
 6. **A netlink datagram socket can be made.** The guard refuses raw and packet sockets, not netlink. The suite
    checks only that the socket can be made; what a command can then do with it is not checked.
-7. **A `[connect]` rule for `localhost` covers the whole loopback range and `::1`**, not only `127.0.0.1`,
-   although `core/phobos-tools-policysystem/config_doc.txt` says it is held to that exact address.
+7. **A `[connect]` rule for `localhost` covers the whole loopback range and `::1`**, not only `127.0.0.1`.
+   `SECURITY.md`, the README and `config_doc.txt` say so; they once said it was held to one address.
 8. **Three more things Landlock does not cover:** a hard link made before the run inside a granted tree to a
    file outside it can be read, a watch for changes (inotify) can be placed on a file outside every tree, and
    `getxattr`, `listxattr`, `lstat` and `statx` work on one.
