@@ -82,11 +82,11 @@ suites.
 
 ## Defects the suites found
 
-A fixed one is marked as such and is an ordinary check in its suite now. Three are open, and each of
-those is a `known_defect`: the suite skips it while it holds and fails when it is fixed, so whoever
-fixes it turns it into an ordinary check. They are ordinary bugs in the sense of `SECURITY.md`, not
-attacks: a command cannot use any of them to reach something it is not granted, except through a policy
-line with a typo in it, which is the fourth entry's case, and a policy is operator-trusted input.
+A fixed one is marked as such and is an ordinary check in its suite now. An open one is a `known_defect`: the
+suite skips it while it holds and fails when it is fixed, so whoever fixes it turns it into an ordinary check.
+They are ordinary bugs in the sense of `SECURITY.md`, not attacks: a command cannot use any of them to reach
+something it is not granted, except through a policy line with a typo in it, and a policy is operator-trusted
+input.
 
 1. **Moving a file between directories failed under the default layers.** Fixed: the network layer's own ruleset now handles the reparenting right and grants it on the root, so it no longer refuses what the filesystem ruleset allows.
 2. **A space inside a limit value was dropped.** Fixed: `cpu=5 5` is now refused like every other malformed value.
@@ -95,15 +95,10 @@ line with a typo in it, which is the fourth entry's case, and a policy is operat
    command running until its own limit. `SIGTERM` with no timeout layer is not acted on at all while
    the command runs, because the shell that waits for it defers the signal. The layers need to pass the
    signal on to the command. Found in `lifecycle.sh`.
-4. **A malformed IPv4 literal in `[connect]` opens the port to every address.** `allow 256.1.1.1:80`,
-   `1.2.3:80`, `1.2.3.4.5:80`, `127.1:80` and `2130706433:80` are accepted without a resolver and the
-   guard then holds them to the port alone, so any address on that port passes. A typo in an address fails
-   open. Refusing a literal that is not a valid dotted quad, or reading the others as the address they
-   spell, fixes it. Found in `network-edge.sh`.
-5. **Three more `[connect]` spellings are accepted and match nothing.** A range with prefix length 0
-   (`0.0.0.0/0`) admits no address instead of all of them, a prefix out of range (`/33`, `/-1`) is accepted
-   and admits nothing, and a host with an empty port (`127.0.0.1:`) is accepted and admits nothing. All
-   three fail closed, but silently. Found in `network-edge.sh`.
+4. **A malformed IPv4 literal in `[connect]` opened the port to every address.** Fixed: the parser refuses an
+   address written like one and not one, and the guard drops such a rule instead of reading it as a name.
+5. **Three more `[connect]` spellings were accepted and matched nothing.** Fixed: a prefix length of 0, one out
+   of range, and a host with an empty port are refused as policy errors, and the message for 0 points to `*`.
 
 An orphaned descendant that outlives a command which has already exited was suspected to be a fifth
 and is not one: the run waits for the process group and ends it at the limit. `timeout.sh` pins that.

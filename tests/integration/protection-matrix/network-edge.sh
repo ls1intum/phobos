@@ -283,25 +283,15 @@ done
 
 echo
 echo "== rules that are accepted and do not mean what they say =="
-for literal in 256.1.1.1 1.2.3 1.2.3.4.5 127.1 2130706433; do
+for literal in 256.1.1.1 1.2.3 1.2.3.4.5 127.1 2130706433 01.2.3.4; do
   rule_run "allow ${literal}:${PORT}" -- "$P" tcp 127.0.0.9 "$PORT"
-  literal_started="$(grep -c '^START' "$PM_OUT")"
-  literal_verdict="$(verdict connect)"
-  known_defect "the address ${literal} is refused as a policy error, or read as the address it spells" \
-    "the rule starts the command (${literal_started}) and the connect to 127.0.0.9 is ${literal_verdict}: the port is open to every address (README.md, defect 4)" \
-    "$(holds_if test "$literal_started" = 1 -a "$literal_verdict" = passed)"
+  if ! grep -q '^START' "$PM_OUT" && (( PM_STATUS == PHB_EPOLICY )); then ok "the address ${literal}, written like one and not one, is refused as a policy error, not read as a name that opens the port to every address"; else bad "the address ${literal} is refused as a policy error" "$(pm_describe)"; fi
 done
-rule_run "allow 0.0.0.0/0:${PORT}" -- "$P" tcp 127.0.0.1 "$PORT"
-slash_zero="$(verdict connect)"
-rule_run "allow 127.0.0.1/33:${PORT}" -- "$P" tcp 127.0.0.1 "$PORT"
-slash_wide="$(verdict connect)"
-known_defect "a range with prefix length 0 admits every address, and an out-of-range prefix is refused as a policy error" \
-  "0.0.0.0/0 admits nothing (${slash_zero}) and /33 is accepted and admits nothing (${slash_wide}) (README.md, defect 5)" \
-  "$(holds_if test "$slash_zero" = refused -a "$slash_wide" = refused)"
-rule_run "allow 127.0.0.1:" -- "$P" tcp 127.0.0.1 "$PORT"
-empty_port="$(verdict connect)"
-known_defect "a rule that names a host and an empty port is refused as a policy error" \
-  "it is accepted and admits nothing (${empty_port}) (README.md, defect 5)" \
-  "$(holds_if test "$empty_port" = refused)"
+for rule in "allow 0.0.0.0/0:${PORT}" "allow [::/0]:${PORT}" "allow 127.0.0.1/33:${PORT}" "allow 127.0.0.1/-1:${PORT}" "allow 127.0.0.1/abc:${PORT}" "allow [::1/129]:${PORT}" "allow 127.0.0.1:" "allow [::1]:"; do
+  rule_run "$rule" -- "$P" tcp 127.0.0.1 "$PORT"
+  if ! grep -q '^START' "$PM_OUT" && (( PM_STATUS == PHB_EPOLICY )); then ok "the rule '${rule}' is refused as a policy error, not accepted to admit nothing"; else bad "the rule '${rule}' is refused as a policy error" "$(pm_describe)"; fi
+done
+rule_run "allow *:${PORT}" -- "$P" tcp 127.0.0.9 "$PORT"
+if [[ "$(verdict connect)" == passed ]]; then ok "and the star, which the refusal of a prefix of 0 points to, admits every address on its port"; else bad "the star admits every address on its port" "$(pm_describe)"; fi
 
 finish
