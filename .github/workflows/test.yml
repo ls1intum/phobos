@@ -96,6 +96,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/harness_self_test.sh
 
+      # What every layer waits through: a signal sent to the layer reaches the command, the status is
+      # the command's own, standard input stays the command's and the layer's own traps come back.
+      - name: A layer passes a caller's signals on to its command
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/phobos-tools-common/signals.sh
+
       - name: The timeout contract
         if: ${{ !cancelled() }}
         run: bash tests/unit/phobos-tools-common/timeout_units.sh

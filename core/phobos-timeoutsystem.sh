@@ -114,7 +114,7 @@ if (( ${#CONFIGS[@]} > 0 )); then
   shift
   build_owned_spec_from_configs "$HERE" "$SPEC_PARENT" "$TAIL_FLAGS_FILE_OPT" "${CONFIGS[@]}"
   set +e
-  bash "${BASH_SOURCE[0]}" "${LAYER_FLAGS[@]}" "$BUILT_SPEC_DIR" -- "$@"
+  run_forwarding_signals bash "${BASH_SOURCE[0]}" "${LAYER_FLAGS[@]}" "$BUILT_SPEC_DIR" -- "$@"
   rc=$?
   set -e
   exit "$rc"
@@ -161,12 +161,15 @@ debug_log timeout "run" "${TIMEOUT_BIN}" "--kill-after=${PHB_KILL_AFTER_SECONDS}
 # group, so the kill reaches the command's children too. --kill-after escalates to SIGKILL for
 # a command that ignores SIGTERM. That escalation only fires while GNU timeout's own child is
 # still alive, so the layers below keep themselves alive across SIGTERM (they set the command
-# itself back to the default disposition), and it is the SIGKILL that stops such a command. The
+# itself back to the default disposition), and it is the SIGKILL that stops such a command. A
+# signal sent to this shell is passed on to GNU timeout, which passes it to the whole group, so a
+# caller that cancels the run reaches the command; one that ignores SIGTERM goes on until its
+# limit, as it would under the timeout itself. The
 # group lock is the first process under GNU timeout, so its seccomp filter is inherited by the
 # whole group and nothing in it can leave the group with setsid or setpgid.
 start_microseconds="$(epoch_realtime_microseconds "$EPOCHREALTIME")"
 set +e
-"${TIMEOUT_BIN}" "--kill-after=${PHB_KILL_AFTER_SECONDS}s" "${timeout_sec}s" "${PGROUP_LOCK_BIN}" -- "$@"
+run_forwarding_signals "${TIMEOUT_BIN}" "--kill-after=${PHB_KILL_AFTER_SECONDS}s" "${timeout_sec}s" "${PGROUP_LOCK_BIN}" -- "$@"
 rc=$?
 set -e
 elapsed_microseconds=$(( $(epoch_realtime_microseconds "$EPOCHREALTIME") - start_microseconds ))

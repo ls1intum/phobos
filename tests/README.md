@@ -32,6 +32,7 @@ and no elevated permission.
 | Suite | What it proves | Skips when |
 | --- | --- | --- |
 | `cli_flags.sh` | the command line of `phobos.sh`: the layer switches, the refusal of an unknown option, where the command's own arguments begin, the exit statuses, and that every `PHB_` name a script reads is one something assigns | never |
+| `signals.sh` | `run_forwarding_signals`, which every layer waits through: SIGTERM, SIGHUP, SIGINT and SIGQUIT sent to the layer reach its command, the status is the command's own (exit codes, a killed command, a command that handles the signal), standard input stays the command's, the layer's own traps are put back exactly (an ignored TERM, a trap whose text names another signal), and a job started before the command is never signalled | never |
 | `timeout_units.sh` | the timeout contract: how a value is parsed, merged and canonicalised, and when a status counts as a timeout | never |
 | `timeout_escalation.sh` | a command that ignores SIGTERM is still stopped, by the `--kill-after` escalation | GNU `timeout` or a C compiler is absent. A probe that does not compile is a failure, not a skip |
 | `limit_merge.sh` | the timeout and the resource limits merge across configurations: zero disables and wins, otherwise the largest value | never |

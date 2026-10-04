@@ -90,11 +90,7 @@ input.
 
 1. **Moving a file between directories failed under the default layers.** Fixed: the network layer's own ruleset now handles the reparenting right and grants it on the root, so it no longer refuses what the filesystem ruleset allows.
 2. **A space inside a limit value was dropped.** Fixed: `cpu=5 5` is now refused like every other malformed value.
-3. **A signal sent to `phobos.sh` never reaches the command.** `SIGTERM` with the timeout layer on,
-   and `SIGHUP` either way, end the wrapper and remove the specification directory but leave the
-   command running until its own limit. `SIGTERM` with no timeout layer is not acted on at all while
-   the command runs, because the shell that waits for it defers the signal. The layers need to pass the
-   signal on to the command. Found in `lifecycle.sh`.
+3. **A signal sent to `phobos.sh` never reached the command.** Fixed: every layer that waits passes `SIGTERM`, `SIGHUP`, `SIGINT` and `SIGQUIT` on to what it waits for, and the connect guard passes them to its command. A command that ignores `SIGTERM` still goes on until its limit, and `SIGKILL` cannot be passed on.
 4. **A malformed IPv4 literal in `[connect]` opened the port to every address.** Fixed: the parser refuses an
    address written like one and not one, and the guard drops such a rule instead of reading it as a name.
 5. **Three more `[connect]` spellings were accepted and matched nothing.** Fixed: a prefix length of 0, one out

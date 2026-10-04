@@ -103,6 +103,13 @@ left in the environment cannot change which binary applies the sandbox)
                               filesystem layer is then group-killed with the command, and
                               the filesystem layer otherwise.
 
+SIGNALS
+  A SIGTERM, SIGHUP, SIGINT or SIGQUIT sent to phobos.sh is passed on to the command, and the run
+  ends when the command does, once the layers have cleaned up. phobos.sh then answers 128 plus the
+  signal's number, as the command did. A command that ignores the signal goes on until its time
+  limit, and SIGKILL cannot be passed on, so a caller that must end a run at once kills the whole
+  process group.
+
 EXIT STATUS
   0 to 255  the command's own status, passed through unchanged
   2         phobos.sh was called the wrong way (PHB_EXIT_USAGE)
