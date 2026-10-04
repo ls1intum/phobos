@@ -33,7 +33,7 @@ classify_connect_host() {
     printf 'any\n'
   elif [[ "$host" == *"*"* ]]; then
     printf 'invalid\n'
-  elif [[ "$host" == "localhost" || "$host" == *"/"* || "$host" == *:* || "$host" =~ ^[0-9.]+$ ]]; then
+  elif [[ "$host" == "localhost" || "$host" == *"/"* || "$host" == *:* || "$host" =~ ^[[:digit:].]+$ ]]; then
     printf 'address\n'
   else
     printf 'exact\n'

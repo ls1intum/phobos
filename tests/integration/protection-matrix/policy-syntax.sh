@@ -144,10 +144,10 @@ refused "[accept] without the word from" "$PHB_EPOLICY" "[bind]" "allow 9090" "[
 
 echo
 echo "== [limits]: the timeout spelling =="
-for value in 5 5.000 007 0 0.000 99999999999 99999999999999999999; do
+for value in 5 5.000 007 0 0.000 99999999999 999999999999999; do
   accepted "timeout=${value}" "[limits]" "timeout=${value}"
 done
-for value in 5.0 5.00 5.0000 .5 5. -5 +5 1e3 5s ""; do
+for value in 5.0 5.00 5.0000 .5 5. -5 +5 1e3 5s "" 1000000000000000 99999999999999999999 18446744073709551616; do
   refused "timeout=${value}" "$PHB_EPOLICY" "[limits]" "timeout=${value}"
 done
 accepted "spaces around the equals sign" "[limits]" "timeout = 5"
@@ -216,7 +216,7 @@ for header in "[read]" "[execute]" "[write]" "[create]" "[delete]" "[create-ipc]
 done
 accepted "a header followed by a comment" "[read] # a comment" "$PM/ro"
 accepted "the same section twice" "[read]" "$PM/ro"
-accepted "a line that is only the two brackets, which is a path that does not exist" "[]"
+refused "a line that is only the two brackets, which is a path that is not absolute" "$PHB_EPOLICY" "[]"
 refused "an unknown section after a known one" "$PHB_EPOLICY" "[read]" "[unknown]"
 printf '%s\n' "$PM/ro" > "$PM/cfg/nosection.cfg"
 run_pm --config "$PM/cfg/nosection.cfg" -- "$P" cwd

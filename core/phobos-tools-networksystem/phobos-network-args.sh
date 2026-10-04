@@ -14,8 +14,11 @@
 refuse_unusable_port() {
   local host="$1"
   local port="$2"
-  [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] && (( port <= PHB_HIGHEST_PORT )) && return 0
-  report "Policy invalid: '${host}:${port}' names no usable port. (PHB-EPOLICY)"
+  [[ "$port" =~ ^[123456789][[:digit:]]{0,4}$ ]] && (( port <= PHB_HIGHEST_PORT )) && return 0
+  local rule="${host}:${port}"
+  local where=""
+  if [[ -n "${PARSE_LOCATION:-}" ]]; then where=" Found in ${PARSE_LOCATION}."; fi
+  report "Policy invalid: ${rule@Q} names no usable port.${where} (PHB-EPOLICY)"
   exit "${PHB_EPOLICY}"
 }
 
@@ -89,7 +92,7 @@ refuse_mixed_network_wildcard() {
   local ports_file="$1"
   local wildcard_file="$2"
   [[ -s "$wildcard_file" && -s "$ports_file" ]] || return 0
-  report "Policy unenforceable: '$(cat "$wildcard_file")' names no port, so Landlock cannot express it, while other rules do name one. A half-enforced network policy would look stricter than it is. (PHB-EPOLICY)"
+  report "Policy unenforceable: '$(cat "$wildcard_file")' names no port, so Landlock cannot express it, while other rules do name one. A half-enforced network policy would look stricter than it is. The rule without a port may come from a base policy rather than from your configuration, since every configuration is merged with the base. (PHB-EPOLICY)"
   exit "${PHB_EPOLICY}"
 }
 
@@ -101,7 +104,9 @@ refuse_mixed_network_wildcard() {
 refuse_wildcard_host_name() {
   local host="$1"
   [[ "$host" == *"*"* && "$host" != "*" ]] || return 0
-  report "Policy invalid: '${host}' in [connect] is a wildcard host name. A name is enforced by resolving it, which a wildcard cannot be, so it would only match the name the command presents and constrain nothing about where it connects. Name the exact host, an address, a CIDR range or '*'. (PHB-EPOLICY)"
+  local where=""
+  if [[ -n "${PARSE_LOCATION:-}" ]]; then where=" Found in ${PARSE_LOCATION}."; fi
+  report "Policy invalid: ${host@Q} in [connect] is a wildcard host name. A name is enforced by resolving it, which a wildcard cannot be, so it would only match the name the command presents and constrain nothing about where it connects. Name the exact host, an address, a CIDR range or '*'.${where} (PHB-EPOLICY)"
   exit "${PHB_EPOLICY}"
 }
 
@@ -399,7 +404,7 @@ tail_minimum_landlock_version() {
   [[ -n "$tail_file" && -f "$tail_file" ]] || return 0
   read -ra words < <(tr '\n' ' ' < "$tail_file") || true
   for (( index = 0; index + 1 < ${#words[@]}; index++ )); do
-    if [[ "${words[$index]}" == "--minimum-landlock-version" && "${words[$((index + 1))]}" =~ ^[0-9]+$ ]]; then
+    if [[ "${words[$index]}" == "--minimum-landlock-version" && "${words[$((index + 1))]}" =~ ^[[:digit:]]+$ ]]; then
       printf '%s\n' "${words[$((index + 1))]}"
       return 0
     fi

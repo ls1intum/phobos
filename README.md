@@ -150,6 +150,11 @@ own right, so a program tree that must be both readable and executable is listed
 `[connect]` line and any content before the first section are refused (PHB-EPOLICY) rather
 than ignored, so a typo cannot silently drop a restriction.
 
+The same goes for a path that does not start with `/` (`~`, variables and quotes are not expanded, and a
+relative name would depend on the directory the run is started in), Windows line endings, a byte order mark,
+a NUL byte, and a number with more than 18 digits (15 digits of seconds for a timeout), which the shell's
+arithmetic would read as another number. Each refusal says what is wrong and names the file, and the line wherever one line is at fault.
+
 - `[read]`: one path per line, granted read.
 - `[execute]`: one path per line, granted execute. A program tree needs both `[read]` and `[execute]`; a pure data tree needs only `[read]`.
 - `[write]`: one path per line, granted write into an existing file (and truncate).

@@ -66,6 +66,12 @@ PHB_KILOBYTES_PER_MEGABYTE=1024
 # The largest megabyte value whose kilobytes, or 1024-byte blocks, still fit the shell's signed
 # 64-bit arithmetic: (2^63 - 1) / 1024. A larger one would wrap to a small or negative limit.
 PHB_LARGEST_MEGABYTES=8796093022207
+# The most digits a resource limit may have, and the most a timeout may have in its whole seconds. Bash
+# arithmetic is 64 bits wide and wraps without a word, so a longer number would be read as another one:
+# a limit of 2^64 plus five as five, one of 2^64 as zero, which switches the limit off. Eighteen digits
+# stay below 2^63, and a timeout of fifteen digits of seconds is below 2^63 once it is in milliseconds.
+PHB_LARGEST_LIMIT_DIGITS=18
+PHB_LARGEST_TIMEOUT_SECOND_DIGITS=15
 
 # The highest TCP port there is; the lowest is 1.
 PHB_HIGHEST_PORT=65535
