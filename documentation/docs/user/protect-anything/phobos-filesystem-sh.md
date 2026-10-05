@@ -95,8 +95,9 @@ ancestor's rights therefore states a restriction that will not hold, and the run
 rights, with neither side a subset, are the ordinary shape of a workspace and stay allowed;
 the effective set is the union.
 
-A read or execute path that does not exist is dropped quietly, because a system path absent
-from this image is not a policy error. A changeable path that does not exist is kept, so
+This layer drops a read or execute path that does not exist quietly, because the shipped base
+policies name system paths an image can lack. A task configuration never gets that far with
+one: the policy program refuses it when it builds the specification. A changeable path that does not exist is kept, so
 `phobos-landlock-filesystem-and-networksystem` refuses it with a clear message rather than the run failing later.
 
 ## Counting denials

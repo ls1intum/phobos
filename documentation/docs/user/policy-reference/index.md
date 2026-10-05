@@ -105,10 +105,10 @@ Every section page shows the same file and marks its own section in red, so that
 in order walks the file from top to bottom. It is a catalogue rather than a working
 configuration, and three of its entries are worth knowing about before you copy one:
 
-- **A stream `[connect]` rule with a concrete port collides with both shipped base policies.**
-  Each names three loopback rules with no port, and a section may not mix a wildcard with a
-  concrete port on one transport, so the run ends with `PHB-EPOLICY`. A task configuration can
-  only widen, so the base policy has to name its loopback ports concretely first.
+- **A stream `[connect]` rule with a concrete port sits beside the loopback rules of both
+  shipped base policies.** Each names three loopback rules with no port. The run starts, and the
+  connect guard alone enforces the port, because Landlock cannot keep loopback open on every
+  port and close the rest.
 - **The exact host name needs `--resolver`**, or the network layer refuses the run.
 - **The two `udp` rules need a Landlock version 10 kernel**, and `phobos-landlock-filesystem-and-networksystem` refuses them
   on an older one.
@@ -129,10 +129,34 @@ then each `--config` in the order given, then the tail flags.
 ## Line endings are load-bearing
 
 Every text file is stored with a line feed alone. The path sets are read line by line, and a
-carriage return at the end of a line becomes part of the path: a read or execute path then
-names nothing that exists and is dropped, and a write path is created under the wrong name, so
-the run silently loses access the policy granted. The repository's `.gitattributes` keeps it
-that way; check with `git ls-files --eol | grep crlf`.
+carriage return at the end of a line becomes part of the path. A read or execute path then
+names nothing that exists and drops out, and a write path gets created under the wrong name, so
+the run silently loses access the policy granted. Phobos refuses a configuration file with a
+carriage return in a line and names the line. The repository's `.gitattributes` keeps its own
+files that way; check with `git ls-files --eol | grep crlf`. A layer run on its own over a
+specification directory reads the path files without that check.
+
+## What Phobos refuses in a file, and how it says so
+
+A configuration that is wrong ends the run with `PHB-EPOLICY` before the command starts. The
+message says what is wrong. For a fault on one line it names the file and the line, and it quotes
+what it found, so a control character or a byte that is not text reaches the terminal as an
+escape. A fault in the whole file, such as a byte order mark, names the file alone.
+
+| What it finds | Why it refuses |
+| --- | --- |
+| a path that does not start with `/`, including `~`, `$HOME` and a quoted path | a relative name depends on the directory the run started in, and Phobos does not expand `~`, variables or quotes |
+| a path with `*`, `?` or `[` in it | Phobos takes a path as written, so the line names the one entry with that literal name and not the files it looks like it matches |
+| a `[read]` or `[execute]` path that does not exist, in a task configuration | Landlock anchors a rule only on a path that exists, so the rule grants nothing without a word |
+| a carriage return, a byte order mark or a NUL byte | each changes what a path or a number reads as, without a word |
+| a resource limit with more than 18 significant digits, or a timeout with more than 15 significant digits in its seconds part | the shell's arithmetic wraps and reads it as another number, 2^64 as 0 |
+| a file that is a directory, a link to nothing, not a regular file or not readable | the message says which, and does not say "not found" |
+
+The check for a missing path applies to task configurations only. The shipped base policies are
+written to fit more than one image, so they may name a path an image lacks. It asks `[read]` and
+`[execute]` only: the sections that change things, `[write]`, `[create]` and the like, create a
+missing path they name. Make a path first when only the command creates it and `[read]` or
+`[execute]` names it.
 
 ## Further reading
 

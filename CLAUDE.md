@@ -168,6 +168,7 @@ core/                      the sandbox itself
     phobos-paths.sh        the two canonical forms a path is compared in
     phobos-time.sh         the timeout contract: how a value is spelled and compared
     phobos-spec-dir.sh     the specification directory and its lifetime
+    phobos-signals.sh      passing a caller's signal on to the command a layer waits for
   phobos-tools-policysystem/
     phobos-policy-parse.sh one cfg in, the parsed state and the specification files out
   phobos-tools-filesystem/

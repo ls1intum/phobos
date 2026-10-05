@@ -64,7 +64,8 @@ outside that:
   given, on the Transmission Control Protocol only.
 - **Everything on a kernel below Landlock version 10**, where the UDP rights do not exist. A
   `udp` rule is refused on such a kernel rather than left unenforced, so the run stops instead
-  of running with an unenforced rule.
+  of running with an unenforced rule. The exception is a `udp` rule beside a `udp` loopback rule
+  with no port, which the guard alone holds on every kernel.
 
 A deployment that wants no network at all starts the container with `--network none`, under
 which only loopback exists. A deployment that needs `[accept]` gives that up and has to provide

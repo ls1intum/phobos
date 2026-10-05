@@ -127,7 +127,8 @@ no `udp` connect rule gains nothing.
 
 ## Notes
 
-**A datagram bind needs Landlock version 10**, the same as a datagram connect.
+**A datagram bind needs Landlock version 10**, the same as a datagram connect that names a port
+on its own.
 
 **A kernel too old to close bind leaves it open and says so.** Below Landlock version 4 for TCP
 and version 10 for UDP, the enforcer prints a warning on every run, and the container's network

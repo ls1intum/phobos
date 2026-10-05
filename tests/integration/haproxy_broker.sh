@@ -386,13 +386,53 @@ else
   bad "a plain loopback connection is forwarded under a localhost rule" "the loopback upstream was not reached; broker=$(cat "$spec_lh/${PHB_SPEC_SCRATCH}/broker.log" 2>/dev/null)"
 fi
 
+# A name is held to its own port. The guard hands every connection it allows to the broker, which keeps
+# the destination port it was given, so a connection the guard let through on another port under a
+# loopback rule, with the allowed name in its ClientHello, must not carry that port to the name: here
+# the name resolves to REAL_IP, which listens on the other port too, and a bypass would reach it
+# instead of the loopback address the command aimed at.
+OTHER_PORT=39512
+spec_mx="$WORK/spec-mx"
+mkdir -p "$spec_mx"
+printf 'localhost *\nallowed.example %s\n' "$UPORT" > "$spec_mx/net.rules"
+"$WORK/upstream" "$REAL_IP" "$OTHER_PORT" "$WORK/bypass.marker" > "$WORK/bypass.out" 2>&1 &
+bypass_pid=$!
+"$WORK/upstream" "$LOOPBACK_IP" "$OTHER_PORT" "$WORK/aimed.marker" > "$WORK/aimed.out" 2>&1 &
+aimed_pid=$!
+for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do grep -q UPSTREAM-LISTENING "$WORK/bypass.out" 2>/dev/null && break; sleep "$LISTENER_WAIT_SECONDS"; done
+for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do grep -q UPSTREAM-LISTENING "$WORK/aimed.out" 2>/dev/null && break; sleep "$LISTENER_WAIT_SECONDS"; done
+mx_endpoint=""
+mx_broker_pid=""
+start_egress_broker "$spec_mx" "$spec_mx/net.rules" "$haproxy_bin" "127.0.0.1:${DNSPORT}" mx_endpoint mx_broker_pid
+rm -f "$WORK/bypass.marker" "$WORK/aimed.marker"
+"$WORK/guard" --rules "$spec_mx/net.rules" --broker "$mx_endpoint" -- \
+  timeout 3 openssl s_client -connect "${LOOPBACK_IP}:${OTHER_PORT}" -servername allowed.example -quiet < /dev/null \
+  > "$WORK/mx.client.out" 2>&1 || true
+sleep 0.6
+if [[ -f "$WORK/aimed.marker" && ! -f "$WORK/bypass.marker" ]]; then
+  ok "an allowed name in the ClientHello of a connection allowed on another port does not carry that port to the name"
+else
+  bad "an allowed name does not carry another port to its address" "aimed=$([[ -f "$WORK/aimed.marker" ]] && echo yes || echo no) bypass=$([[ -f "$WORK/bypass.marker" ]] && echo yes || echo no); broker=$(cat "$spec_mx/${PHB_SPEC_SCRATCH}/broker.log" 2>/dev/null)"
+fi
+rm -f "$WORK/real.marker" "$WORK/decoy.marker"
+"$WORK/guard" --rules "$spec_mx/net.rules" --broker "$mx_endpoint" -- \
+  timeout 3 openssl s_client -connect "${DECOY_IP}:${UPORT}" -servername allowed.example -quiet < /dev/null \
+  > "$WORK/mx.client.out" 2>&1 || true
+sleep 0.6
+if [[ -f "$WORK/real.marker" && ! -f "$WORK/decoy.marker" ]]; then
+  ok "and on the port the rule names the same name still reaches the address it resolves to"
+else
+  bad "the name still reaches its address on its own port" "real=$([[ -f "$WORK/real.marker" ]] && echo yes || echo no) decoy=$([[ -f "$WORK/decoy.marker" ]] && echo yes || echo no)"
+fi
+stop_haproxy_child "$mx_broker_pid"
+kill "$bypass_pid" "$aimed_pid" 2> /dev/null || true
+
 # The whole network layer, end to end: it writes the placeholder to /etc/hosts, starts the broker
 # with the resolver, and the command then resolves the name with no DNS, connects, and reaches the
 # address the broker resolves. Once the run has ended, the layer has stopped the broker and the
 # placeholder line is gone, leaving /etc/hosts as it found it. The rule names only the host and its
-# port: mixing it with a loopback wildcard rule (no port) is refused as unenforceable, because
-# Landlock expresses ports, not hosts, so a wildcard alongside a concrete port would be
-# half-enforced. The directory is marked as one Phobos owns, as phobos.sh marks its own, so the
+# port: beside a loopback wildcard rule (no port) the port would get no Landlock rule, since
+# Landlock expresses ports, not hosts, and the connect guard alone would enforce it. The directory is marked as one Phobos owns, as phobos.sh marks its own, so the
 # layer's clean-up treats it as the run's. It writes /etc/hosts, so it needs that file writable, as
 # the run-phase image the acceptance suite uses gives; where it is not, this one case is skipped.
 if [[ -w /etc/hosts ]]; then

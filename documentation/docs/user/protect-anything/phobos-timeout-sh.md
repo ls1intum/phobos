@@ -45,7 +45,9 @@ signals the whole group, so the kill reaches the command's children too.
 **`--kill-after=5s`.** A command that ignores `SIGTERM` is stopped by the `SIGKILL` that
 follows. That escalation only fires while the timeout's own child is still alive, which is why
 the layers below keep themselves alive across `SIGTERM` and put the command itself back to the
-default disposition before running it.
+default disposition before running it. The layer passes a signal sent to it, as opposed to
+the group, on to GNU `timeout`, which passes it to the whole group, so a caller that cancels a
+run reaches the command.
 
 **`phobos-seccomp-timeoutsystem` first.** The lock installs a seccomp filter that refuses `setsid` and
 `setpgid` and then becomes the rest of the chain, so the filter is inherited by the whole group

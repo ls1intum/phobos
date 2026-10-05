@@ -40,7 +40,8 @@ usually makes writable.
 | `phobos-time.sh` | how a timeout is spelled, merged and compared |
 | `phobos-constants.sh` | the exit statuses and the other shared numbers |
 | `phobos-log.sh` | reporting, and the denial counter |
-| `phobos-common.sh` | the aggregate every caller sources, which sources the eight above |
+| `phobos-signals.sh` | passing a caller's signals on to the command a layer waits for |
+| `phobos-common.sh` | the aggregate every caller sources, which sources the nine above |
 
 `phobos-common.sh` has no include guard on purpose: sourcing it has to keep resetting
 `PHB_DEBUG_ENABLED`, so that the environment can never switch debugging on.
@@ -55,6 +56,28 @@ it, and both are refusals rather than skips:
 - **A name the glob matched that is not a readable file** ends the run too. Skipping it would
   build a policy from the bases that happened to be readable, which is a narrower sandbox
   reported as a working one.
+
+## What the parser refuses, and where it says so
+
+`parse_cfg_policy` reads a file line by line, and most refusals about one line go through
+`refuse_cfg`, which says what is wrong and ends the message with `Found in <file>, line <n>`.
+`refuse_unusable_port` and `refuse_wildcard_host_name` report directly, and add the same
+location while the parser is reading.
+It quotes the value with `${value@Q}`, so a control character or a byte that is not text
+reaches the terminal as an escape. Some refusals name no line: a byte order mark, a NUL byte,
+an unusable file, and a port checked in `phobos-network-args.sh` outside the parse loop.
+Before the first line, `refuse_binary_cfg` looks for a byte order mark and a NUL byte. Each
+line then faces three refusals: a carriage return, a path that does not start with `/`, and a
+path with `*`, `?` or `[`. A task configuration faces a fourth, a `[read]` or `[execute]` path
+that does not exist. `phobos-policysystem.sh` asks `refuse_unusable_cfg_file` first, so a directory, a
+link to nothing or an unreadable file is said to be that. A refusal ends the run before the
+specification gets written, and the parser's scratch files exist by then.
+
+Every digit class is POSIX (`[[:digit:]]`, `[[:xdigit:]]`) or an explicit list. In a UTF-8
+locale `[0-9]` matched Arabic-Indic digits, and an address written in them passed as an address
+that the connect guard then read as a name. The parser further bounds a number by its digits
+before any arithmetic, because bash arithmetic wraps without a word. `PHB_LARGEST_LIMIT_DIGITS`
+is 18 and `PHB_LARGEST_TIMEOUT_SECOND_DIGITS` is 15.
 
 ## The merge
 
@@ -79,7 +102,7 @@ either way, or the specification carries something that is silently dropped.
 
 | Check | What it refuses |
 | --- | --- |
-| `refuse_unenforceable_network_rules` | a wildcard host name, a port outside 1 to 65535, an external host with no port, a loopback wildcard beside a concrete port |
+| `refuse_unenforceable_network_rules` | a wildcard host name, a port outside 1 to 65535, an external host with no port. A loopback wildcard beside a concrete port is accepted: the guard alone enforces the port, and `emit_connect_port_args` logs which ports |
 | `refuse_unenforceable_accept_rules` | a public port below 1024, a public port the command may bind, a backend port `[bind]` does not name, two rules fronting one public port |
 | `refuse_spec_dir_under_write_path` | a specification directory beneath any write, create, delete, inter-process communication (IPC), symbolic-link or restructure path |
 

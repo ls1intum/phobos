@@ -104,9 +104,15 @@ onwards, and neither the command nor anything it starts can regain the access.
 
 ## Notes
 
-**A read path that does not exist is dropped without a word.** A system path absent from this
-image is not a policy error, so the entry disappears rather than ending the run. A changeable
-path is treated the other way round: see [`[write]`](write.md).
+**Phobos refuses a read path that does not exist in a task configuration.** Landlock anchors a
+rule only on a path that exists, so the rule grants nothing, and a typo otherwise shows up as a
+command that cannot read, far from the line. The message names the file and the line. The
+shipped base policies stay exempt: the authors wrote them for more than one image, so they can
+name a system path this one lacks, and Phobos drops that entry without a word. A changeable
+path goes the other way round: see [`[write]`](write.md).
+
+**Phobos refuses a path with `*`, `?` or `[` in it.** It takes a path as written, so a pattern
+names the one entry with that literal name and not the files it looks like it matches.
 
 **Reading is not executing.** A program tree needs both `[read]` and `[execute]`; a pure data
 tree needs only `[read]`. An interpreted script needs `[read]` on the script and `[execute]` on

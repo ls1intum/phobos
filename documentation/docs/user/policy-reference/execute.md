@@ -103,7 +103,9 @@ base policies name the same system trees in both sections for exactly this reaso
 **An interpreter is the executable, the script is the data.** Running `python3 build.py` needs
 `[execute]` on the interpreter and `[read]` on the script.
 
-**An execute path that does not exist is dropped without a word**, the same way a read path is.
+**Phobos refuses an execute path that does not exist in a task configuration**, and one with
+`*`, `?` or `[` in it anywhere, the same way it refuses a read path. A shipped base policy can
+name an execute path the image lacks, and Phobos drops that entry without a word.
 
 ## Further reading
 

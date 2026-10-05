@@ -25,8 +25,9 @@ The simplest version names an address and a port:
 allow 192.0.2.10:443
 ```
 
-The connect guard holds that rule to that exact address, and Landlock enforces the port in the
-kernel besides.
+The connect guard holds that rule to that exact address. Landlock enforces the port in the
+kernel besides, unless the policy carries a loopback rule with no port: see the warning under
+Notes.
 
 Where the service rotates its addresses, name the range:
 
@@ -92,21 +93,17 @@ allow [::1]
 allow localhost
 ```
 
-A stream rule with a concrete port, added on top of one of those, ends the run before the
-command starts:
+A stream rule with a concrete port, added on top of one of those, starts the run. Landlock
+cannot keep loopback open on every port and close the rest, so it gets no kernel rule, and the
+connect guard alone holds the port, by host and port. The network layer says so on standard
+error and names the port:
 
 ```text
-Policy unenforceable: '127.0.0.1:*' names no port, so Landlock cannot express it, while other
-rules do name one. A half-enforced network policy would look stricter than it is. (PHB-EPOLICY)
+network: the tcp ports 443 named beside it get no Landlock rule either, since Landlock cannot keep loopback open on every port and close the rest, so the connect guard alone enforces them, by host and port
 ```
 
-A task configuration can only widen, so it cannot take the wildcard away. Reaching an external
-host over a stream therefore needs the base policy for that runtime environment to name its
-loopback ports concretely, which is a change to the shipped policy rather than to your
-configuration.
-
-Two rules are unaffected. A datagram rule does not collide, because the two transports are
-collected apart, and neither does a [`[bind]`](/user/policy-reference/bind) rule.
+The two transports are separate, and a [`[bind]`](/user/policy-reference/bind) rule is not
+affected.
 :::
 
 - A name rule assumes a networked container, so it cannot work under `--network none`. The
@@ -114,8 +111,10 @@ collected apart, and neither does a [`[bind]`](/user/policy-reference/bind) rule
 - Phobos refuses a wildcard-label rule, `allow *.example.org:443`, with `PHB-EPOLICY`. A
   wildcard cannot resolve to an address, so the broker could only compare it with the name the
   sandboxed command presents. Name each host exactly.
-- A datagram rule, `allow 203.0.113.53:53 udp`, needs Landlock version 10. It may name a host,
+- A datagram rule, `allow 203.0.113.53:53 udp`, needs Landlock version 10, except beside a udp
+  loopback rule with no port, where the guard alone holds it. It can name a host,
   `allow dns.example.org:53 udp`, which is resolved once before the command starts through
   `--resolver` and held to the addresses it had then.
-- Mixing a loopback rule with no port and a rule with a concrete port in one section is
-  refused: one would be kernel-enforced and the other would not.
+- Phobos accepts a loopback rule with no port beside a rule with a concrete port. Landlock cannot
+  keep loopback open on every port and close the rest, so the connect guard alone enforces the
+  port, and the run's log names it.

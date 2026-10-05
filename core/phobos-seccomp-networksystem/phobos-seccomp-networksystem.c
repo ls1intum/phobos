@@ -100,11 +100,42 @@
 
 /* ------------------------------------------------------------------ the call */
 
+/* The command the supervisor passes a caller's signals on to, and the signals it passes on. */
+static pid_t command_to_signal = 0;
+static constexpr int FORWARDED_SIGNALS[] = { SIGTERM, SIGHUP, SIGINT, SIGQUIT };
+
+/* Passes a signal the supervisor received on to the command. The supervisor itself does not stop:
+ * it stays until the command is gone, to reap it and map its status. */
+static void forward_signal_to_command(int number) {
+    pid_t target = command_to_signal;
+    if (target > 0) {
+        kill(target, number);
+    }
+}
+
+/* Waits for the command to end, still passing signals on while it runs, then reaps it with the
+ * four signals blocked and forgets it before they are let in again. Reaping frees the process
+ * number for reuse, and a signal handled after that would be sent to whichever process took it. The
+ * command is waited for without being reaped first, so until the last step its number is still its
+ * own. */
+static void reap_command(pid_t child, const sigset_t *forwarded, int *status) {
+    siginfo_t ended;
+    sigset_t outside;
+    while (waitid(P_PID, (id_t)child, &ended, WEXITED | WNOWAIT) < 0 && errno == EINTR) {
+    }
+    sigprocmask(SIG_BLOCK, forwarded, &outside);
+    while (waitpid(child, status, 0) < 0 && errno == EINTR) {
+    }
+    command_to_signal = 0;
+    sigprocmask(SIG_SETMASK, &outside, nullptr);
+}
+
 /* Loads the rules, forks the sandboxed child and supervises it until it is gone, then ends
- * with its status. The supervisor ignores SIGTERM so that, as an outer timeout's direct child,
- * it stays alive until the command it waits on is gone. The kill escalation then reaches the
- * command, which was forked before and so keeps the default disposition; SIGTERM is ignored
- * only after the fork for that reason. */
+ * with its status. The supervisor passes SIGTERM, SIGHUP, SIGINT and SIGQUIT on to the command
+ * and does not stop of them, so that a caller that cancels the run reaches the command and so
+ * that, as an outer timeout's direct child, it stays alive until the command it waits on is gone.
+ * The kill escalation then reaches the command, which was forked before and so keeps the default
+ * disposition; the signals are taken only after the fork for that reason. */
 int main(int argument_count, char *arguments[]) {
     struct guard_options options;
     parse_arguments(argument_count, arguments, &options);
@@ -132,25 +163,36 @@ int main(int argument_count, char *arguments[]) {
         return EXIT_CODE_SETUP_ERROR;
     }
 
+    sigset_t forwarded;
+    sigset_t before_fork;
+    sigemptyset(&forwarded);
+    for (size_t index = 0; index < sizeof(FORWARDED_SIGNALS) / sizeof(FORWARDED_SIGNALS[0]); index++) {
+        sigaddset(&forwarded, FORWARDED_SIGNALS[index]);
+    }
+    sigprocmask(SIG_BLOCK, &forwarded, &before_fork);
     pid_t child = fork();
     if (child < 0) {
         report_failure("fork: %s", strerror(errno));
         return EXIT_CODE_SETUP_ERROR;
     }
     if (child == 0) {
+        sigprocmask(SIG_SETMASK, &before_fork, nullptr);
         close(pair[0]);
         run_child(pair[1], options.command);
     }
 
-    signal(SIGTERM, SIG_IGN);
+    command_to_signal = child;
+    for (size_t index = 0; index < sizeof(FORWARDED_SIGNALS) / sizeof(FORWARDED_SIGNALS[0]); index++) {
+        signal(FORWARDED_SIGNALS[index], forward_signal_to_command);
+    }
+    sigprocmask(SIG_SETMASK, &before_fork, nullptr);
 
     close(pair[1]);
     int notify_descriptor = receive_descriptor(pair[0]);
     close(pair[0]);
     if (notify_descriptor < 0) {
         int status = 0;
-        while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
-        }
+        reap_command(child, &forwarded, &status);
         report_failure("the sandboxed command could not be supervised; refusing to run it");
         int code = exit_code_from_status(status);
         return code == 0 ? EXIT_CODE_SETUP_ERROR : code;
@@ -160,7 +202,6 @@ int main(int argument_count, char *arguments[]) {
     close(notify_descriptor);
 
     int status = 0;
-    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
-    }
+    reap_command(child, &forwarded, &status);
     return exit_code_from_status(status);
 }

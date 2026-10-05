@@ -60,23 +60,24 @@ Name a concrete port. Only a loopback host may leave it out.
 
 ### A loopback wildcard sits beside a concrete port
 
-```
-Policy unenforceable: '127.0.0.1:*' names no port, so Landlock cannot express it, while other
-rules do name one. A half-enforced network policy would look stricter than it is. (PHB-EPOLICY)
-```
+This is not an error. The run starts, and the network layer says on standard error:
 
-Mixing them would leave one rule kernel-enforced and the other not, which reads stricter than
-it is.
+```
+network: '127.0.0.1:*' names no port; the Landlock network layer stays off, and the connect guard filters this run
+network: the tcp ports 443 named beside it get no Landlock rule either, since Landlock cannot keep loopback open on every port and close the rest, so the connect guard alone enforces them, by host and port
+```
 
 **The wildcard is usually not yours.** Both shipped base policies name three loopback rules
 with no port, `allow 127.0.0.1:*`, `allow [::1]` and `allow localhost`, so any task
-configuration that adds a stream rule with a concrete port collides with them. A task
-configuration can only widen, so it cannot take the wildcard away: reaching an external host
-over a stream needs the base policy for that runtime environment to name its loopback ports
-concretely.
+configuration that adds a stream rule with a concrete port ends up beside them. Landlock
+cannot keep loopback open on every port and close the rest. The port you named therefore has
+no kernel rule, and the connect guard enforces it alone, by host and port, while the network
+layer is on. The second line names these ports, so you see a port you expected the kernel to
+hold.
 
-A datagram rule does not collide, because the two transports are judged apart, and neither
-does a `[bind]` rule.
+The two transports are separate. On every kernel the guard alone holds a udp rule that names a
+port beside a udp loopback wildcard, so it needs no Landlock version 10. The same rule on its
+own does need it.
 
 ### A `[bind]` rule names an address
 
@@ -132,7 +133,8 @@ carry the program's own prefix and none of the `PHB-` codes.
 ```
 
 A `udp` rule is refused rather than left unenforced. Either run on a kernel that carries the
-version 10 rights or drop the rule. The same status and prefix carry every other refusal from
+version 10 rights or drop the rule. A `udp` rule beside a `udp` loopback rule with no port is the
+exception: the guard alone holds it, on any kernel. The same status and prefix carry every other refusal from
 that program, `--minimum-landlock-version` among them.
 
 ## PHB-ERUNTIME: something Phobos needs is missing

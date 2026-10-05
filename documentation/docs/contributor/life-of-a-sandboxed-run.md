@@ -121,13 +121,26 @@ execs the command.
 
 ## Signals, and who stays alive
 
-Three properties hold the chain together, and each is easy to break:
+Four properties hold the chain together, and each is easy to break:
 
 - **The layers that wait ignore `SIGTERM`.** GNU `timeout` signals the whole process group, and
   the escalation to `SIGKILL` only fires while the timeout's own child is still alive. The
   layers below therefore stay up across `SIGTERM` and restore the default disposition for the
   command itself, in a subshell, just before running it. The `SIGKILL` then reaches a command
   that ignored the `SIGTERM`.
+- **The layers pass a signal sent to `phobos.sh` on to the command.** A shell that waits for a
+  child acts on a trapped signal only after the child ends, and a shell without a trap dies of
+  the signal and leaves the command running. Every layer that waits therefore waits through
+  `run_forwarding_signals` in `phobos-signals.sh`. It passes `SIGTERM`, `SIGHUP`, `SIGINT` and
+  `SIGQUIT` on to its child, and the connect guard's supervisor passes them to its command. A
+  command that dies of the signal ends the run with 128 plus its number, and the run cleans up.
+  The helper returns whatever status its child ends with, so a handler that exits normally
+  gives that status. It polls for the child's end with `sleep` and does not block in `wait`,
+  because bash can wait for a child it has already reaped when a signal and the child's end
+  coincide. Before it signals, it compares the child's start time from `/proc`, which makes
+  a reused process number unlikely to be signalled. Where `/proc` cannot be read it checks the
+  number alone. A command that ignores `SIGTERM` runs to its limit, and `SIGKILL` cannot be
+  passed on.
 - **The filesystem layer's wait for the denial counts is bounded**, and stays below the
   escalation, so `timeout` never escalates while the layer is still waiting.
 - **A timeout is a timeout only where the status and the clock agree.** GNU `timeout` passes a

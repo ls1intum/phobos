@@ -75,7 +75,8 @@ The guard enforces a rule by the address and the port it can see:
 
 | The rule names | The guard holds it to |
 | --- | --- |
-| an address literal, or the name `localhost` | that exact address |
+| an address literal | that exact address |
+| the name `localhost` | the whole loopback range, every `127.x.x.x` address and `::1` |
 | a range in Classless Inter-Domain Routing (CIDR) notation | that network |
 | a host name in a stream rule it cannot tie to an address | its port alone, with the host left to the broker |
 | a host name in a `udp` rule | the addresses the name had when the run began |
@@ -168,10 +169,12 @@ a refusal. A missing Landlock program ends the run with `PHB-ERUNTIME`.
 Two details are worth knowing before a policy surprises you:
 
 - **A rule that names no port cannot be expressed.** Only a loopback host may omit its port. A
-  section made only of those leaves that transport's port layer off, and the layer says so; the
+  section that holds one leaves that transport's port layer off, and the layer says so; the
   guard still filters the run. An external host with no port is refused with `PHB-EPOLICY`.
-- **A wildcard beside a concrete port is refused.** Mixing them would make one rule
-  kernel-enforced and the other not, which reads stricter than it is.
+- **A concrete port beside such a rule gets no Landlock rule either.** Landlock cannot keep
+  loopback open on every port and close the rest, so the guard alone enforces that port, by
+  host and port, and the layer logs the ports this applies to. For udp the rule
+  needs no Landlock version 10 either.
 
 A `udp` `[connect]` rule brings `--ephemeral-bind-udp` with it, for the source port the kernel
 auto-binds to an outgoing datagram. Without it, an allowed send would be denied its own source

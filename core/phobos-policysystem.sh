@@ -135,7 +135,7 @@ export PHOBOS_SCRATCH
 
 # Every --config must name a file that exists.
 for c in "${cfgs[@]}"; do
-  [[ -f "$c" ]] || { echo "Config not found: $c" >&2; exit "${PHB_EPOLICY}"; }
+  refuse_unusable_cfg_file "$c"
 done
 
 # Every Base*.cfg beside this script, in the order the shell sorts a glob, which is the order
@@ -152,8 +152,8 @@ shopt -s nullglob
 base_cfgs=( "${HERE}"/Base*.cfg )
 shopt -u nullglob
 for candidate in "${base_cfgs[@]}"; do
-  [[ -f "$candidate" ]] && continue
-  report "Policy invalid: '${candidate}' matches Base*.cfg but is not a readable file, so the base policy cannot be built. (PHB-EPOLICY)"
+  [[ -f "$candidate" && -r "$candidate" ]] && continue
+  report "Policy invalid: ${candidate@Q} matches Base*.cfg but is not a readable file, so the base policy cannot be built. (PHB-EPOLICY)"
   exit "${PHB_EPOLICY}"
 done
 if [[ ${#base_cfgs[@]} -eq 0 ]]; then
@@ -224,7 +224,8 @@ effective_limit() {
 # Folds one cfg into the policy being built: its filesystem sections are unioned into the
 # directory, its [connect] and [bind] rules into the two files, and its [limits] into the
 # pooled state. The base policy and every exercise config go through this same call, which is
-# what makes the model additive in every dimension. Assumes it is called plainly, not in a
+# what makes the model additive in every dimension. A sixth argument, any non-empty word, marks an
+# exercise configuration, whose [read] and [execute] paths must exist. Assumes it is called plainly, not in a
 # subshell, because parse_cfg_policy refuses a malformed cfg by ending the run and because
 # merge_limits writes the pooled state this shell holds.
 fold_cfg_into() {
@@ -233,8 +234,9 @@ fold_cfg_into() {
   local net_file="$3"
   local bind_file="$4"
   local accept_file="$5"
+  local exercise="${6:-}"
   local merged
-  parse_cfg_policy "$cfg"
+  parse_cfg_policy "$cfg" "$exercise"
   fs_union_dir "$fs_dir" "$PARSED_FS_DIR"
   merged="$(mktemp -p "$PHOBOS_SCRATCH")"
   net_union "$merged" "$net_file" "$PARSED_NET_FILE"
@@ -281,7 +283,7 @@ for r in ${PHB_FS_RIGHTS}; do cp "${base_dir}/${r}.paths" "${eff_dir}/${r}.paths
 cp "$base_net" "$eff_net"; cp "$base_bind" "$eff_bind"; cp "$base_accept" "$eff_accept"
 
 for c in "${cfgs[@]}"; do
-  fold_cfg_into "$c" "$eff_dir" "$eff_net" "$eff_bind" "$eff_accept"
+  fold_cfg_into "$c" "$eff_dir" "$eff_net" "$eff_bind" "$eff_accept" exercise
 done
 
 # A run given no exercise configuration reaches no network at all. Done here, after the base

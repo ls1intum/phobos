@@ -35,7 +35,7 @@ version 2 header naming the destination the command meant. The broker then decid
 
 | The rule names | What the broker does |
 | --- | --- |
-| an exact name | resolves the name itself, through the `phobosdns` resolver, sets the destination to that address, and rejects the connection where the name does not resolve |
+| an exact name | for a connection to the port the rule names, resolves the name itself, through the `phobosdns` resolver, sets the destination to that address, and rejects the connection where the name does not resolve |
 | an address or a range | accepts as soon as the destination matches, so a connection with no ClientHello does not wait out the inspection delay |
 | `*` | accepts everything and forwards to the header's destination |
 
@@ -50,8 +50,13 @@ Each exact name is mapped to a loopback placeholder in `/etc/hosts` first, so th
 name resolution succeeds without a query the guard would refuse. The broker does not consult
 that file: it asks the resolver.
 
-The port was already enforced by the guard before the redirect, so the broker decides the host
-alone.
+The broker keeps the destination port it was given. It therefore applies a name to a connection
+only when the destination port is the one the rule names. The generator writes one pair of
+access control lists per port, a name list and `dst_port`, and routes only a connection that
+matches both. The guard lets a connection through on any port some rule names. Without the
+pairing, a connection allowed on one port under an address rule, with an allowed name in its
+ClientHello, carries that port to the name's address. A loopback rule with no port opens that
+route on every port.
 
 ## Role two: the inbound filter
 
@@ -76,8 +81,8 @@ a backend port `[bind]` does not name is refused as well.
 
 ## What neither role is
 
-The broker is not a boundary on its own. It rests on the connect guard having vetted the port
-and redirected the connection; a command that could reach the network without going through the
+The broker is not a boundary on its own. It rests on the connect guard having vetted the
+destination and redirected the connection; a command that could reach the network without going through the
 guard would not meet the broker at all.
 
 The inbound filter is defence in depth. It sees only the connections that arrive at it, and

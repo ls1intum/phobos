@@ -12,7 +12,7 @@
 # millisecond precision written as exactly three decimal places.
 # GNU timeout receives the value with an explicit seconds suffix, so no unit
 # conversion happens after this point.
-PHB_TIMEOUT_PATTERN='^[0-9]+(\.[0-9]{3})?$'
+PHB_TIMEOUT_PATTERN='^[[:digit:]]+(\.[[:digit:]]{3})?$'
 
 # A timeout in whole milliseconds, so two spellings of one value compare as numbers rather
 # than as text. The pattern guarantees a digit before the point and exactly three after it,
@@ -50,13 +50,13 @@ epoch_realtime_microseconds() {
 # them, ends with the same 137 as the escalation, so the status alone decides nothing: only a
 # 124 or a 137 that came no earlier than the timeout is one. The time is the wall clock
 # (EPOCHREALTIME), so a clock stepped backwards during a run can make a real expiry look too
-# short and be passed through without PHB-ETIMEOUT; the run itself is never extended by it.
+# short and be passed through without PHB-ETIMEOUT; the run itself is never extended by it. The two are
+# compared in whole milliseconds, which is exact because a timeout is a whole number of them, and
+# which keeps a timeout of the largest accepted size from overflowing as microseconds.
 run_reached_timeout() {
   local status="$1"
   local elapsed_microseconds="$2"
   local timeout_value="$3"
-  local limit_microseconds
   (( status == PHB_TIMEOUT_EXPIRED_EXIT || status == PHB_TIMEOUT_KILLED_EXIT )) || return 1
-  limit_microseconds=$(( $(timeout_to_ms "$timeout_value") * PHB_MICROSECONDS_PER_MILLISECOND ))
-  (( elapsed_microseconds >= limit_microseconds ))
+  (( elapsed_microseconds / PHB_MICROSECONDS_PER_MILLISECOND >= $(timeout_to_ms "$timeout_value") ))
 }

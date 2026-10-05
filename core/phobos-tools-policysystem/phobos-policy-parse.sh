@@ -15,6 +15,24 @@
 # delete and refer together, so a policy that names it may rename and move within the tree.
 PHB_FS_RIGHTS="read execute write create delete ipc symlink refer"
 
+# Where parse_cfg_policy is, as "<file>, line <number>", while it reads a line; empty otherwise.
+PARSE_LOCATION=""
+
+# Ends the run with PHB-EPOLICY and a message that says what is wrong with the line being read and
+# where it is, so that a policy of a hundred lines does not have to be searched for the one the
+# message quotes. Takes the text without a closing full stop. Assumes it is called plainly, so that
+# the refusal ends the run. A line is quoted with ${line@Q}, which shows a control character or a
+# byte that is not text as an escape instead of sending it to the terminal.
+refuse_cfg() {
+  local text="${1%.}"
+  if [[ -n "$PARSE_LOCATION" ]]; then
+    report "Policy invalid: ${text}. Found in ${PARSE_LOCATION}. (PHB-EPOLICY)"
+  else
+    report "Policy invalid: ${text}. (PHB-EPOLICY)"
+  fi
+  exit "${PHB_EPOLICY}"
+}
+
 # Merges one configured timeout value into PARSED_TIMEOUT and PARSED_TIMEOUT_DISABLED, which
 # parse_cfg_policy resets per call. The rule is the same within a file and across files:
 # every spelling of zero (0, 0.000, ...) disables the timeout and wins over any finite value, and otherwise
@@ -25,8 +43,12 @@ PHB_FS_RIGHTS="read execute write create delete ipc symlink refer"
 set_parsed_timeout() {
   local value="$1"
   if [[ ! "$value" =~ $PHB_TIMEOUT_PATTERN ]]; then
-    report "Policy invalid: timeout '${value}' must be seconds, either whole or with exactly three decimals. (PHB-EPOLICY)"
-    exit "${PHB_EPOLICY}"
+    refuse_cfg "timeout ${value@Q} must be seconds, either whole or with exactly three decimals"
+  fi
+  local seconds="${value%%.*}"
+  seconds="${seconds#"${seconds%%[!0]*}"}"
+  if (( ${#seconds} > PHB_LARGEST_TIMEOUT_SECOND_DIGITS )); then
+    refuse_cfg "timeout ${value@Q} has more than ${PHB_LARGEST_TIMEOUT_SECOND_DIGITS} digits of seconds, which is not a time but a number the arithmetic would read as another one. Write 0 to switch the timeout off"
   fi
   if [[ -z "${value//[0.]/}" ]]; then
     PARSED_TIMEOUT_DISABLED=1
@@ -47,10 +69,13 @@ set_parsed_limit() {
   local -n limit_ref="$1"
   local -n disabled_ref="${1}_DISABLED"
   local key="$2"
-  local value="${3//[[:space:]]/}"
-  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
-    report "Policy invalid: ${key} '${value}' must be a non-negative whole number. (PHB-EPOLICY)"
-    exit "${PHB_EPOLICY}"
+  local value="$3"
+  if [[ ! "$value" =~ ^[[:digit:]]+$ ]]; then
+    refuse_cfg "${key} ${value@Q} must be a non-negative whole number"
+  fi
+  local significant="${value#"${value%%[!0]*}"}"
+  if (( ${#significant} > PHB_LARGEST_LIMIT_DIGITS )); then
+    refuse_cfg "${key} ${value@Q} has more than ${PHB_LARGEST_LIMIT_DIGITS} digits, which is more than a limit can be applied with and which the arithmetic would read as another number. Write 0 to switch the limit off"
   fi
   if (( 10#$value == 0 )); then
     disabled_ref=1
@@ -112,9 +137,8 @@ read_limits_conf() {
   done < "$file"
   for key in mem_mb nproc nofile fsize_mb cpu; do
     value="${limits_ref[$key]}"
-    if [[ -n "$value" && ! "$value" =~ ^[0-9]+$ ]]; then
-      report "Policy invalid: resource limit '${key}=${value}' is not a whole number. (PHB-EPOLICY)"
-      exit "${PHB_EPOLICY}"
+    if [[ -n "$value" && ! "$value" =~ ^[[:digit:]]+$ ]]; then
+      refuse_cfg "resource limit '${key}=${value}' is not a whole number"
     fi
   done
 }
@@ -137,8 +161,7 @@ parse_network_target() {
     host_ref="${host_ref%]}"
     port_ref="*"
   elif [[ "$target" == \[* ]]; then
-    report "Policy invalid: '${target}' in [connect] opens a bracket it does not close. (PHB-EPOLICY)"
-    exit "${PHB_EPOLICY}"
+    refuse_cfg "${target@Q} in [connect] opens a bracket it does not close"
   else
     local colons="${target//[^:]/}"
     if (( ${#colons} >= PHB_IPV6_MINIMUM_COLONS )); then
@@ -188,11 +211,161 @@ reset_parsed_limits() {
 # Assumes it is called plainly, not in a subshell, so that the refusal ends the run.
 refuse_unknown_section() {
   local section="$1"
-  local cfg="$2"
   case "$section" in
     read|execute|write|create|delete|create-ipc|create-symlink|restructure|connect|bind|accept|limits) ;;
-    *) report "Policy invalid: unknown section '[${section}]' in ${cfg}. (PHB-EPOLICY)"; exit "${PHB_EPOLICY}" ;;
+    *) refuse_cfg "unknown section ${section@Q}; the sections are [read], [execute], [write], [create], [delete], [create-ipc], [create-symlink], [restructure], [connect], [bind], [accept] and [limits]" ;;
   esac
+}
+
+# Whether the text is an IPv4 address in dotted-quad form: four decimal numbers from 0 to 255,
+# none with a leading zero, which is the one spelling the connect guard reads as an address. Any
+# other spelling it reads as a host name and holds to its port alone, so one that merely looks like
+# an address, such as 1.2.3 or 127.1, would open the port to every address. Needs no environment.
+is_ipv4_literal() {
+  local text="$1"
+  local octet='(25[012345]|2[01234][[:digit:]]|1[[:digit:]][[:digit:]]|[123456789]?[[:digit:]])'
+  [[ "$text" =~ ^${octet}\.${octet}\.${octet}\.${octet}$ ]]
+}
+
+# Whether every group of a colon-separated list is one to four hexadecimal digits, the last of them
+# an IPv4 address when the second argument says it may be. Takes the list and "yes" or "no" for a
+# closing IPv4 address; prints the number of 16-bit groups the list takes, and fails for a list with
+# an empty or a malformed group, one that ends in a colon included. Assumes it runs in a command
+# substitution.
+count_ipv6_groups() {
+  local list="$1"
+  local last_may_be_ipv4="$2"
+  local -a groups=()
+  local group
+  local total=0
+  local position=0
+  [[ -z "$list" ]] && { printf '0\n'; return 0; }
+  [[ "$list" != *: ]] || return 1
+  IFS=: read -ra groups <<< "$list"
+  for group in "${groups[@]}"; do
+    position=$(( position + 1 ))
+    if [[ "$group" =~ ^[[:xdigit:]]{1,4}$ ]]; then
+      total=$(( total + 1 ))
+    elif [[ "$last_may_be_ipv4" == yes && position -eq ${#groups[@]} ]] && is_ipv4_literal "$group"; then
+      total=$(( total + 2 ))
+    else
+      return 1
+    fi
+  done
+  printf '%s\n' "$total"
+}
+
+# Whether the text is an IPv6 address: groups of hexadecimal digits separated by single colons, at
+# most one "::" standing for a run of zero groups, and optionally an IPv4 address in the last two
+# places. A zone such as %eth0 is not part of the address the guard compares, so it is refused. The
+# connect guard reads anything it cannot parse as a host name, so an address that is almost right
+# would open the port to every address. Assumes it runs where count_ipv6_groups is defined.
+is_ipv6_literal() {
+  local text="$1"
+  local head
+  local tail
+  local head_groups
+  local tail_groups
+  [[ "$text" == *:* && "$text" =~ ^[[:xdigit:]:.]+$ && "$text" != *:::* ]] || return 1
+  if [[ "$text" == *::* ]]; then
+    head="${text%%::*}"
+    tail="${text#*::}"
+    [[ "$tail" != *::* ]] || return 1
+    head_groups="$(count_ipv6_groups "$head" no)" || return 1
+    tail_groups="$(count_ipv6_groups "$tail" yes)" || return 1
+    (( head_groups + tail_groups <= 7 ))
+  else
+    head_groups="$(count_ipv6_groups "$text" yes)" || return 1
+    (( head_groups == 8 ))
+  fi
+}
+
+# Prints the eight 16-bit groups of an IPv6 address that is_ipv6_literal accepted, written out in full
+# and separated by spaces, with the "::" filled in with zero groups and a closing IPv4 address turned
+# into its two groups. The groups keep the hexadecimal spelling they had. Assumes the address is valid
+# and that it runs in a command substitution.
+expand_ipv6_groups() {
+  local text="${1,,}"
+  local head
+  local tail
+  local -a head_groups=()
+  local -a tail_groups=()
+  local -a octets=()
+  local -a all=()
+  if [[ "$text" =~ ^(.*:)([[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+)$ ]]; then
+    IFS=. read -ra octets <<< "${BASH_REMATCH[2]}"
+    text="${BASH_REMATCH[1]}$(printf '%x:%x' $(( octets[0] * 256 + octets[1] )) $(( octets[2] * 256 + octets[3] )))"
+  fi
+  if [[ "$text" == *::* ]]; then
+    head="${text%%::*}"
+    tail="${text#*::}"
+    [[ -z "$head" ]] || IFS=: read -ra head_groups <<< "$head"
+    [[ -z "$tail" ]] || IFS=: read -ra tail_groups <<< "$tail"
+    all=( "${head_groups[@]}" )
+    while (( ${#all[@]} + ${#tail_groups[@]} < 8 )); do
+      all+=( 0 )
+    done
+    all+=( "${tail_groups[@]}" )
+  else
+    IFS=: read -ra all <<< "$text"
+  fi
+  printf '%s\n' "${all[*]}"
+}
+
+# Whether an IPv6 address that is_ipv6_literal accepted is an IPv4-mapped one, ::ffff:a.b.c.d in any
+# spelling: five zero groups, then ffff. The connect guard keeps a range from such an address only
+# when its prefix reaches past those 96 bits. Assumes it runs where expand_ipv6_groups is defined.
+is_ipv4_mapped_literal() {
+  local -a groups=()
+  local index
+  read -ra groups <<< "$(expand_ipv6_groups "$1")"
+  for index in 0 1 2 3 4; do
+    (( 16#${groups[index]} == 0 )) || return 1
+  done
+  (( 16#${groups[5]} == 16#ffff ))
+}
+
+# Refuses a [connect] host that is written like an address but is not one, a prefix length that
+# has no meaning, and a port that is missing after its colon, each as a policy error. Without it the
+# connect guard drops a bad range or an empty port without a word, so the rule admits nothing, and
+# reads a malformed address as a host name, so the rule admits every address on its port. Takes the
+# host as parse_network_target left it, the port, and the line for the message. A host name, the
+# star, localhost and a well-formed address or range pass. An IPv4-mapped IPv6 range shorter than 96
+# bits is refused too, because the guard drops it. Assumes it is called plainly, so that a
+# refusal ends the run.
+refuse_malformed_address() {
+  local host="$1"
+  local port="$2"
+  local line="$3"
+  local address="$host"
+  local prefix=""
+  local longest=0
+  if [[ -z "$port" ]]; then
+    refuse_cfg "${line@Q} in [connect] names a host and then no port. Write the port, or * for every port"
+  fi
+  if [[ "$host" == */* ]]; then
+    address="${host%%/*}"
+    prefix="${host#*/}"
+  fi
+  if is_ipv4_literal "$address"; then
+    longest=32
+  elif is_ipv6_literal "$address"; then
+    longest=128
+  elif [[ "$host" == */* || "$address" =~ ^[[:digit:].]+$ || "$address" == *:* ]]; then
+    refuse_cfg "${address@Q} in [connect] is not a valid address. An IPv4 address is four numbers from 0 to 255 with no leading zero, and an IPv6 address has at most one ::"
+  else
+    return 0
+  fi
+  [[ "$host" == */* ]] || return 0
+  if [[ ! "$prefix" =~ ^[[:digit:]]+$ ]] || (( ${#prefix} > 3 )) || (( 10#$prefix > longest )); then
+    refuse_cfg "the prefix length ${prefix@Q} in ${line@Q} is not a number from 1 to ${longest} for this address"
+  fi
+  if (( 10#$prefix == 0 )); then
+    refuse_cfg "${line@Q} in [connect] has a prefix length of 0, which would mean every address. Write * as the host for that"
+  fi
+  if (( longest == 128 )) && (( 10#$prefix < 96 )) && is_ipv4_mapped_literal "$address"; then
+    refuse_cfg "${line@Q} in [connect] is an IPv4-mapped range with a prefix length below 96, which would reach past the IPv4 addresses and which the connect guard refuses"
+  fi
 }
 
 # Appends one [connect] line, "allow <host>[:<port>] [udp|tcp]", to the rules file as "host port"
@@ -209,8 +382,7 @@ append_connect_rule() {
   local host=""
   local port="*"
   if [[ ! "$line" =~ ^allow[[:space:]]+(.+)$ ]]; then
-    report "Policy invalid: '${line}' in [connect] is not an 'allow <host>[:<port>] [udp|tcp]' line. (PHB-EPOLICY)"
-    exit "${PHB_EPOLICY}"
+    refuse_cfg "${line@Q} in [connect] is not an 'allow <host>[:<port>] [udp|tcp]' line"
   fi
   local -a fields=()
   read -ra fields <<< "${BASH_REMATCH[1]}"
@@ -219,15 +391,15 @@ append_connect_rule() {
   if (( ${#fields[@]} == 2 )); then
     proto="${fields[1]}"
   elif (( ${#fields[@]} > 2 )); then
-    report "Policy invalid: '${line}' in [connect] has trailing words; use 'allow <host>[:<port>] [udp|tcp]'. (PHB-EPOLICY)"
-    exit "${PHB_EPOLICY}"
+    refuse_cfg "${line@Q} in [connect] has trailing words; use 'allow <host>[:<port>] [udp|tcp]'"
   fi
   if [[ "$proto" != "tcp" && "$proto" != "udp" ]]; then
-    report "Policy invalid: '${proto}' in [connect] is not a transport; use 'udp' or 'tcp'. (PHB-EPOLICY)"
-    exit "${PHB_EPOLICY}"
+    refuse_cfg "${proto@Q} in [connect] is not a transport; use 'udp' or 'tcp'"
   fi
   parse_network_target "$target" host port
   refuse_wildcard_host_name "$host"
+  refuse_malformed_address "$host" "$port" "$line"
+  [[ "$port" == "*" ]] || refuse_unusable_port "$host" "$port"
   if [[ "$proto" == "udp" ]]; then
     printf '%s %s %s\n' "$host" "$port" "udp" >>"$rules"
   else
@@ -241,16 +413,15 @@ append_connect_rule() {
 # keeps its two-field form and its meaning. Landlock's bind right is per-port and cannot narrow to a
 # local address, so a rule that names an address is refused: a listener's reachability is governed
 # by [accept] and the container's network isolation, not by the bind address. The stored host is
-# always "*", which build_bind_args ignores. The port range is checked downstream by
-# refuse_unusable_port. An unknown marker is refused. Assumes it is called plainly, so that a
+# always "*", which build_bind_args ignores. The port range is checked here, so that the refusal names
+# the line, and again downstream by refuse_unusable_port. An unknown marker is refused. Assumes it is called plainly, so that a
 # refusal ends the run.
 append_bind_rule() {
   local line="$1"
   local rules="$2"
   local bind_target
   if [[ ! "$line" =~ ^allow[[:space:]]+(.+)$ ]]; then
-    report "Policy invalid: '${line}' in [bind] is not an 'allow <port> [udp|tcp]' line. (PHB-EPOLICY)"
-    exit "${PHB_EPOLICY}"
+    refuse_cfg "${line@Q} in [bind] is not an 'allow <port> [udp|tcp]' line"
   fi
   local -a fields=()
   read -ra fields <<< "${BASH_REMATCH[1]}"
@@ -259,17 +430,15 @@ append_bind_rule() {
   if (( ${#fields[@]} == 2 )); then
     proto="${fields[1]}"
   elif (( ${#fields[@]} > 2 )); then
-    report "Policy invalid: '${line}' in [bind] has trailing words; use 'allow <port> [udp|tcp]'. (PHB-EPOLICY)"
-    exit "${PHB_EPOLICY}"
+    refuse_cfg "${line@Q} in [bind] has trailing words; use 'allow <port> [udp|tcp]'"
   fi
   if [[ "$proto" != "tcp" && "$proto" != "udp" ]]; then
-    report "Policy invalid: '${proto}' in [bind] is not a transport; use 'udp' or 'tcp'. (PHB-EPOLICY)"
-    exit "${PHB_EPOLICY}"
+    refuse_cfg "${proto@Q} in [bind] is not a transport; use 'udp' or 'tcp'"
   fi
-  if [[ ! "$bind_target" =~ ^[0-9]+$ ]]; then
-    report "Policy invalid: '${bind_target}' in [bind] is not a bare port; [bind] takes only a port number, because Landlock enforces a bind by port and cannot narrow to a local address. Name the port alone, and govern a listener's reachability with [accept]. (PHB-EPOLICY)"
-    exit "${PHB_EPOLICY}"
+  if [[ ! "$bind_target" =~ ^[[:digit:]]+$ ]]; then
+    refuse_cfg "${bind_target@Q} in [bind] is not a bare port; [bind] takes only a port number, because Landlock enforces a bind by port and cannot narrow to a local address. Name the port alone, and govern a listener's reachability with [accept]"
   fi
+  refuse_unusable_bind_port "*" "$bind_target"
   if [[ "$proto" == "udp" ]]; then
     printf '%s %s %s\n' "*" "$bind_target" "udp" >>"$rules"
   else
@@ -294,25 +463,22 @@ append_accept_rule() {
   local srcs
   local src
   local any=0
-  if [[ ! "$line" =~ ^expose[[:space:]]+([0-9]+)[[:space:]]+to[[:space:]]+([0-9]+)[[:space:]]+from[[:space:]]*(.*)$ ]]; then
-    report "Policy invalid: '${line}' in [accept] is not an 'expose <public-port> to <backend-port> from <source>[, <source>...]' line. (PHB-EPOLICY)"
-    exit "${PHB_EPOLICY}"
+  if [[ ! "$line" =~ ^expose[[:space:]]+([[:digit:]]+)[[:space:]]+to[[:space:]]+([[:digit:]]+)[[:space:]]+from[[:space:]]*(.*)$ ]]; then
+    refuse_cfg "${line@Q} in [accept] is not an 'expose <public-port> to <backend-port> from <source>[, <source>...]' line"
   fi
   h="${BASH_REMATCH[1]}"
   p="${BASH_REMATCH[2]}"
   srcs="${BASH_REMATCH[3]}"
-  if [[ ! "$h" =~ ^[1-9][0-9]{0,4}$ || ! "$p" =~ ^[1-9][0-9]{0,4}$ ]] || (( h > 65535 || p > 65535 )); then
-    report "Policy invalid: '${line}' in [accept] names a port that is not a whole number from 1 to 65535. (PHB-EPOLICY)"
-    exit "${PHB_EPOLICY}"
+  if [[ ! "$h" =~ ^[123456789][[:digit:]]{0,4}$ || ! "$p" =~ ^[123456789][[:digit:]]{0,4}$ ]] || (( h > 65535 || p > 65535 )); then
+    refuse_cfg "${line@Q} in [accept] names a port that is not a whole number from 1 to 65535"
   fi
   local IFS=','
   for src in $srcs; do
     src="${src#"${src%%[![:space:]]*}"}"
     src="${src%"${src##*[![:space:]]}"}"
     [[ -z "$src" ]] && continue
-    if [[ ! "$src" =~ ^[0-9a-fA-F:./]+$ ]]; then
-      report "Policy invalid: '${src}' in [accept] is not an IP address or CIDR. (PHB-EPOLICY)"
-      exit "${PHB_EPOLICY}"
+    if [[ ! "$src" =~ ^[[:xdigit:]:./]+$ ]]; then
+      refuse_cfg "${src@Q} in [accept] is not an IP address or CIDR"
     fi
     printf '%s %s %s\n' "$h" "$p" "$src" >>"$rules"
     any=1
@@ -341,7 +507,96 @@ read_limits_line() {
   elif [[ "$line" =~ ^cpu[[:space:]]*=[[:space:]]*(.*)$ ]]; then
     set_parsed_limit PARSED_LIMIT_CPU cpu "${BASH_REMATCH[1]}"
   else
-    report "Policy invalid: '${line}' in [${section}] is not a known limit; use timeout=, mem_mb=, nproc=, nofile=, fsize_mb= or cpu=. (PHB-EPOLICY)"
+    refuse_cfg "${line@Q} in [${section}] is not a known limit; use timeout=, mem_mb=, nproc=, nofile=, fsize_mb= or cpu="
+  fi
+}
+
+# Refuses a path line that does not start with a slash, in a section that names filesystem paths. A
+# relative name would be made absolute against whatever directory the run was started in, so the same
+# policy would grant different paths from one place to another, and ~, $HOME and quotes are not
+# expanded, so they would be taken for the name of a directory. Takes the line and the section.
+# Assumes it is called plainly, so that the refusal ends the run.
+refuse_relative_path() {
+  local line="$1"
+  local section="$2"
+  [[ "$line" == /* ]] && return 0
+  refuse_cfg "${line@Q} in [${section}] is not an absolute path. Write the whole path from /, because ~, variables, quotes and names relative to a directory are not expanded"
+}
+
+# Refuses a path line that holds a wildcard character, in a section that names filesystem paths. A
+# path is taken as written, so /usr/lib/jvm/* would name one entry whose name is a star, which is
+# almost never the set of files the line was written to name, and the rule would grant something
+# other than what was meant, without a word. Takes the line and the section. Assumes it is
+# called plainly, so that the refusal ends the run.
+refuse_wildcard_path() {
+  local line="$1"
+  local section="$2"
+  [[ "$line" != *[\*\?\[]* ]] && return 0
+  refuse_cfg "${line@Q} in [${section}] holds a wildcard character, and a path is taken as written, so it would name the one entry with that literal name and not the files it looks like it matches. Name the directory or the file itself"
+}
+
+# Refuses a [read] or [execute] path line that names nothing on this system. Landlock can only
+# anchor a rule on a path that exists, so the rule for a missing one is left out and the run goes
+# on without the access the line was written to give. A typo in a path therefore showed up as a
+# command that could not read or execute, far from the line. Asked of exercise configurations
+# only: a shipped base policy names paths a given image may not have, and is written to fit more
+# than one. The sections that change things are not asked, because the filesystem layer creates
+# a missing path they name. The path has to exist when the specification is built, so one that the
+# command is meant to create must be made first or reached through an existing parent. Takes the
+# line and the section. Assumes it is called plainly, so that the refusal ends the run.
+refuse_missing_path() {
+  local line="$1"
+  local section="$2"
+  [[ -e "$line" ]] && return 0
+  refuse_cfg "${line@Q} in [${section}] does not exist on this system, so the rule would grant nothing. Check the spelling, or remove the line if the path is not needed here"
+}
+
+# Refuses a cfg this program cannot read as a file of lines, before any line is parsed: the path given
+# is empty, names nothing, a link to nothing, a directory or another kind of file, or a file this user
+# may not read. Each is said as what it is, since "not found" for a directory sends the reader looking
+# for a typo that is not there. Takes the path. Assumes it is called plainly, so that the refusal ends
+# the run.
+refuse_unusable_cfg_file() {
+  local cfg="$1"
+  if [[ -z "$cfg" ]]; then
+    report "Policy invalid: --config was given an empty path, so there is no configuration to read. (PHB-EPOLICY)"
+  elif [[ -L "$cfg" && ! -e "$cfg" ]]; then
+    report "Policy invalid: the configuration ${cfg@Q} is a symbolic link to nothing. (PHB-EPOLICY)"
+  elif [[ ! -e "$cfg" ]]; then
+    report "Policy invalid: the configuration ${cfg@Q} does not exist. (PHB-EPOLICY)"
+  elif [[ -d "$cfg" ]]; then
+    report "Policy invalid: the configuration ${cfg@Q} is a directory, and a configuration is a file. (PHB-EPOLICY)"
+  elif [[ ! -f "$cfg" ]]; then
+    report "Policy invalid: the configuration ${cfg@Q} is not a regular file. (PHB-EPOLICY)"
+  elif [[ ! -r "$cfg" ]]; then
+    report "Policy invalid: the configuration ${cfg@Q} cannot be read by this user. (PHB-EPOLICY)"
+  else
+    return 0
+  fi
+  exit "${PHB_EPOLICY}"
+}
+
+# Refuses a cfg that starts with a UTF-8 byte order mark or holds a NUL byte, which no editor writes
+# on purpose into a policy. The mark would make the first header read as text before any section, and
+# bash drops a NUL without a word, so a path would be read as one with the byte left out.
+# Takes the path of a readable file. Assumes it is called plainly, so that the refusal ends the run.
+refuse_binary_cfg() {
+  local cfg="$1"
+  local first_bytes
+  local with_nul
+  local without_nul
+  if ! { first_bytes="$(head -c 3 < "$cfg" | od -An -tx1 | tr -d ' \n')" \
+    && with_nul="$(wc -c < "$cfg")" \
+    && without_nul="$(tr -d '\000' < "$cfg" | wc -c)"; } 2>/dev/null; then
+    report "Policy invalid: ${cfg@Q} could not be examined with head, od, tr and wc, which this program needs to tell a text file from another. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  if [[ "$first_bytes" == "efbbbf" ]]; then
+    report "Policy invalid: ${cfg@Q} starts with a UTF-8 byte order mark. Save the file as UTF-8 without one. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  if (( with_nul != without_nul )); then
+    report "Policy invalid: ${cfg@Q} holds a NUL byte, so it is not a text file. (PHB-EPOLICY)"
     exit "${PHB_EPOLICY}"
   fi
 }
@@ -350,12 +605,15 @@ read_limits_line() {
 # the [connect] and [bind] rules into net.rules and bind.rules, all in a fresh directory, and
 # the [limits] section into the PARSED_* values. Sets PARSED_FS_DIR, PARSED_NET_FILE and
 # PARSED_BIND_FILE to what it wrote. Everything from a "#" is a comment. An unknown section, a
-# malformed line and any content before the first section are refused (PHB-EPOLICY). Assumes
-# it is called plainly, not in a subshell, so that a refusal ends the run.
+# malformed line and any content before the first section are refused (PHB-EPOLICY). A second
+# argument, any non-empty word, says the cfg is an exercise configuration, whose [read] and [execute] paths must exist.
+# Assumes it is called plainly, not in a subshell, so that a refusal ends the run.
 parse_cfg_policy() {
   local cfg="$1"
+  local exercise="${2:-}"
   local tdir
   local line
+  local number=0
   local sec=""
   tdir="$(new_parse_directory)"
   local rd="${tdir}/read.paths"
@@ -371,16 +629,28 @@ parse_cfg_policy() {
   local acc="${tdir}/accept.rules"
   : >"$rd"; : >"$ex"; : >"$wr"; : >"$cr"; : >"$de"; : >"$ipc"; : >"$sym"; : >"$ref"; : >"$net"; : >"$bind"; : >"$acc"
   reset_parsed_limits
+  refuse_binary_cfg "$cfg"
   while IFS= read -r line || [[ -n "$line" ]]; do
+    number=$(( number + 1 ))
+    PARSE_LOCATION="${cfg@Q}, line ${number}"
+    if [[ "$line" == *$'\r'* ]]; then
+      refuse_cfg "this line contains a carriage return, which a Windows line ending leaves at its end and which would become part of the value. Save the file with LF line endings"
+    fi
     line="${line%%#*}"
     line="${line#"${line%%[![:space:]]*}"}"
     line="${line%"${line##*[![:space:]]}"}"
     [[ -z "$line" ]] && continue
     if [[ "$line" =~ ^\[(.+)\]$ ]]; then
       sec="${BASH_REMATCH[1]}"
-      refuse_unknown_section "$sec" "$cfg"
+      refuse_unknown_section "$sec"
       continue
     fi
+    case "$sec" in
+      read|execute|write|create|delete|create-ipc|create-symlink|restructure)
+        refuse_relative_path "$line" "$sec"
+        refuse_wildcard_path "$line" "$sec"
+        if [[ -n "$exercise" && ( "$sec" == "read" || "$sec" == "execute" ) ]]; then refuse_missing_path "$line" "$sec"; fi ;;
+    esac
     case "$sec" in
       read)    printf '%s\n' "$line" >>"$rd" ;;
       execute) printf '%s\n' "$line" >>"$ex" ;;
@@ -395,10 +665,10 @@ parse_cfg_policy() {
       accept)  append_accept_rule "$line" "$acc" ;;
       limits)  read_limits_line "$line" "$sec" ;;
       "")
-        report "Policy invalid: '${line}' appears before any [section] in ${cfg}. (PHB-EPOLICY)"
-        exit "${PHB_EPOLICY}" ;;
+        refuse_cfg "${line@Q} appears before any [section] header" ;;
     esac
   done <"$cfg"
+  PARSE_LOCATION=""
   PARSED_FS_DIR="$tdir"
   PARSED_NET_FILE="$net"
   PARSED_BIND_FILE="$bind"

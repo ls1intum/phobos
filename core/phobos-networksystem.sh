@@ -152,7 +152,7 @@ if (( ${#CONFIGS[@]} > 0 )); then
   shift
   build_owned_spec_from_configs "$HERE" "$SPEC_PARENT" "$TAIL_FLAGS_FILE_OPT" "${CONFIGS[@]}"
   set +e
-  bash "${BASH_SOURCE[0]}" "${LAYER_FLAGS[@]}" "$BUILT_SPEC_DIR" -- "$@"
+  run_forwarding_signals bash "${BASH_SOURCE[0]}" "${LAYER_FLAGS[@]}" "$BUILT_SPEC_DIR" -- "$@"
   rc=$?
   set -e
   exit "$rc"
@@ -169,7 +169,8 @@ trap 'end_network_layer "$?"' EXIT
 # A timeout sends TERM to the whole process group, this layer included. Ignoring it lets the
 # layer outlive that TERM and still stop its HAProxy children and remove its /etc/hosts lines;
 # every process it starts gets TERM back at its default, so the guard's command, and HAProxy, are
-# still ended by it. A SIGKILL escalation ends this layer too, together with HAProxy in the same
+# still ended by it, and a signal this layer receives is passed on to the guard, which passes it
+# on to its command. A SIGKILL escalation ends this layer too, together with HAProxy in the same
 # group, and the timeout layer's own clean-up, outside the group, then removes the lines.
 trap '' TERM
 
@@ -347,10 +348,11 @@ fi
 command_tail=( "${landlock_prefix[@]}" "${port_args[@]}" -- "${command_tail[@]}" )
 
 # The guard runs as a child rather than replacing this shell, so the EXIT trap is still here to
-# clean up once it ends; its status, the command's own, is passed through unchanged.
+# clean up once it ends; its status, the command's own, is passed through unchanged, and a signal
+# sent to this shell is passed on to it while it runs.
 debug_log network "run" "${guard_command[@]}" "${command_tail[@]}"
 set +e
-( trap - TERM; exec "${guard_command[@]}" "${command_tail[@]}" )
+run_forwarding_signals "${guard_command[@]}" "${command_tail[@]}"
 rc=$?
 set -e
 exit "$rc"

@@ -304,6 +304,10 @@ check "attribution: 124 before the timeout is the command's"   "passed-through" 
 check "attribution: 137 before the timeout is the command's"   "passed-through" "$(reached "$PHB_TIMEOUT_KILLED_EXIT" 0 2)"
 check "attribution: another status is never a timeout"         "passed-through" "$(reached 1 "$((TWO_SECONDS_MICROSECONDS * 3))" 2)"
 check "attribution: milliseconds of the timeout count"         "passed-through" "$(reached "$PHB_TIMEOUT_EXPIRED_EXIT" "$TWO_SECONDS_MICROSECONDS" 2.001)"
+check "attribution: the largest timeout a cfg may name is not reached after a minute" "passed-through" "$(reached "$PHB_TIMEOUT_KILLED_EXIT" 60000000 999999999999999.999)"
+check "attribution: nor after a year, which as microseconds would wrap if it were multiplied" "passed-through" "$(reached "$PHB_TIMEOUT_EXPIRED_EXIT" 31536000000000 999999999999999.999)"
+check "attribution: the exact millisecond counts, one microsecond less does not" "passed-through" "$(reached "$PHB_TIMEOUT_EXPIRED_EXIT" 2000999 2.001)"
+check "attribution: the exact millisecond counts, at it does" "timeout" "$(reached "$PHB_TIMEOUT_EXPIRED_EXIT" 2001000 2.001)"
 
 microseconds_of() {
   bash -c 'source "$1/phobos-tools-common/phobos-common.sh"; epoch_realtime_microseconds "$2"' _ "$CORE" "$1"

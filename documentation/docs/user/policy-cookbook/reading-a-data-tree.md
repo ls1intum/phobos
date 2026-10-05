@@ -58,8 +58,8 @@ right away further down a path.
 
 ## Notes
 
-- A read path that does not exist is dropped without a word, because a system path absent from
-  this image is not a policy error. A fragment naming a path that is never created therefore
-  fails at run time with `EACCES` rather than at parse time. Check the path exists.
+- A read path that does not exist ends the run with `PHB-EPOLICY` in a task configuration, and
+  the message names the file and the line. The shipped base policies are exempt, because they
+  name system paths an image can lack. Check the path exists when the run is built.
 - Reaching a pathname UNIX socket beneath the tree rides with this right, through
   `RESOLVE_UNIX` on Landlock version 9 and later.

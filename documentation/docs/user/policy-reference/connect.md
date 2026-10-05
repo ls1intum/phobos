@@ -102,9 +102,10 @@ no port.
 
 A loopback host may omit its port, and no other host may. Landlock enforces ports rather than
 hosts, so an external host with no port cannot be expressed at all, and the run is refused with
-`PHB-EPOLICY` rather than started with a rule nothing enforces. Mixing a loopback wildcard with
-a concrete port in the same section is refused for the same reason: one rule would be
-kernel-enforced and the other would not.
+`PHB-EPOLICY` rather than started with a rule nothing enforces. Phobos accepts a concrete port
+beside a loopback wildcard in the same section. Landlock cannot keep loopback open on every
+port and close the rest, so the layer stays off for that transport. The connect guard alone
+enforces the port, by host and port, and the network layer logs the ports concerned.
 
 A port is a whole number from 1 to 65535. `host:0` names no port that exists and is a policy
 mistake, never a licence to switch the port layer off.
@@ -129,11 +130,13 @@ expression of the same ports.
 A `udp` rule is handed to Landlock as `--connect-udp`, which is the `CONNECT_SEND_UDP` right
 and covers both connecting a datagram socket and sending a datagram. The connect guard enforces
 it for the datagram transport apart from the stream one, so a `udp` rule never admits a stream
-connection to the same host and port, nor the reverse.
+connection to the same host and port, nor the reverse. Landlock cannot express a `udp` rule that
+names a port beside a `udp` loopback rule with no port, so that rule gets no `--connect-udp`.
+The guard alone holds it, and it needs no Landlock version 10.
 
 Two limits come with it:
 
-- **It needs Landlock version 10.** On an older kernel `phobos-landlock-filesystem-and-networksystem` refuses the run with
+- **It needs Landlock version 10 wherever Phobos emits `--connect-udp`.** On an older kernel `phobos-landlock-filesystem-and-networksystem` refuses the run with
   `[phobos-landlock-filesystem-and-networksystem] UDP network rules require Landlock version 10` and exit status 125, rather
   than running with the transport left unenforced.
 - **A host name in it is resolved once, at the start.** Host enforcement for a stream rests on the
@@ -157,11 +160,11 @@ error before it starts the broker.
 when Phobos reads the policy, and so does a hand-written `net.rules` that holds one. Write one
 rule per host, or an address range for a service whose addresses rotate.
 
-**A concrete stream port collides with the shipped base policies.** Both of them name three
-loopback rules with no port, and a section may not mix a wildcard with a concrete port on one
-transport. A task configuration can only widen, so adding `allow 192.0.2.10:443` on top of one
-of them ends the run with `PHB-EPOLICY`; the base policy has to name its loopback ports
-concretely first. A datagram rule is judged apart and does not collide.
+**A concrete stream port beside the shipped base policies has no kernel rule.** Both of them
+name three loopback rules with no port. Phobos accepts `allow 192.0.2.10:443` on top of one of
+them, and the connect guard alone enforces the port, by host and port, while the network layer
+is on. The run's log names the port. A udp rule that names a port beside a udp loopback
+wildcard needs no Landlock version 10 either.
 
 **There is no separate toggle for opening, sending and receiving.** A rule names a host, a port
 and a transport, or it does not.
