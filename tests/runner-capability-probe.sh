@@ -10,6 +10,7 @@
 #   runner-capability-probe.sh --report           survey, always exits 0
 #   runner-capability-probe.sh --assert-landlock  0 enforced, 1 not, 3 cannot tell
 #   runner-capability-probe.sh --assert-bwrap     0 sandboxed, 1 not, 3 cannot tell
+#   runner-capability-probe.sh --assert-kvm       0 a guest kernel boots under KVM, 1 not, 3 cannot tell
 #
 # The assert modes are three-valued on purpose. "The machine cannot do this"
 # and "the probe could not find out" call for different responses, and folding
@@ -27,6 +28,11 @@ EXIT_INDETERMINATE=3
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROBE_SOURCE="${HERE}/landlock-filesystem-and-networksystem-capability-probe.c"
 CONTAINER_IMAGE="${PROBE_CONTAINER_IMAGE:-ubuntu:26.04}"
+# How long a guest kernel may take to boot to its end, in seconds, with the host's virtualisation and without.
+KVM_BOOT_SECONDS=90
+SOFTWARE_BOOT_SECONDS=240
+# The memory the guest gets, in megabytes. It never reaches user space, so it needs little.
+GUEST_MEMORY_MB=512
 
 WORK="$(mktemp -d)" || { printf 'cannot create a working directory\n' >&2; exit "${EXIT_INDETERMINATE}"; }
 cleanup() { rm -rf "${WORK}"; }
@@ -301,6 +307,143 @@ assert_bwrap() {
   return "${EXIT_UNAVAILABLE}"
 }
 
+# The QEMU binary, machine type and serial console for this host's architecture, one per line, or nothing
+# where this probe does not know the architecture.
+guest_description() {
+  case "$(uname -m)" in
+    x86_64) printf '%s\n' qemu-system-x86_64 q35 ttyS0 ;;
+    aarch64) printf '%s\n' qemu-system-aarch64 virt ttyAMA0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The kernel image this host booted, readable by this user, copied into the working directory when it is not,
+# or nothing where it cannot be had. Ubuntu keeps /boot/vmlinuz-* unreadable to an ordinary user.
+host_kernel_image() {
+  local image
+  image="/boot/vmlinuz-$(uname -r)"
+  [[ -e "${image}" ]] || return 1
+  if [[ -r "${image}" ]]; then
+    printf '%s' "${image}"
+    return 0
+  fi
+  sudo -n cp "${image}" "${WORK}/vmlinuz" 2>/dev/null || return 1
+  sudo -n chmod a+r "${WORK}/vmlinuz" 2>/dev/null || return 1
+  printf '%s' "${WORK}/vmlinuz"
+}
+
+# Whether this user can open /dev/kvm, as a word for a report line.
+kvm_access_word() {
+  if [[ ! -e /dev/kvm ]]; then
+    printf 'there is no /dev/kvm'
+  elif [[ -r /dev/kvm && -w /dev/kvm ]]; then
+    printf 'yes, without sudo'
+  elif sudo -n true 2>/dev/null; then
+    printf 'only through sudo'
+  else
+    printf 'no'
+  fi
+}
+
+# Boots the host's own kernel under QEMU with the accelerator named by $1, kvm or tcg, for at most $2 seconds,
+# with the guest's serial console in ${WORK}/guest-$1.log. The kernel has no root file system to mount, so a
+# kernel that came up ends in a panic, which is how it is known to have run, and QEMU then exits because of
+# -no-reboot. Prints the seconds it took. Assumes guest_description and host_kernel_image have answered.
+boot_guest() {
+  local accelerator="$1"
+  local limit="$2"
+  local -a description=()
+  local kernel
+  local runner=""
+  local started="${SECONDS}"
+  readarray -t description < <(guest_description)
+  kernel="$(host_kernel_image)" || return 1
+  if [[ "${accelerator}" == "kvm" && ! ( -r /dev/kvm && -w /dev/kvm ) ]]; then
+    runner="sudo -n"
+  fi
+  # The runner prefix is a command word on purpose, so it is left to split.
+  # shellcheck disable=SC2086
+  timeout "${limit}" ${runner} "${description[0]}" -machine "${description[1]},accel=${accelerator}" -cpu "$([[ "${accelerator}" == kvm ]] && printf host || printf max)" \
+    -m "${GUEST_MEMORY_MB}" -nographic -no-reboot -kernel "${kernel}" \
+    -append "console=${description[2]} panic=-1" >"${WORK}/guest-${accelerator}.log" 2>&1
+  printf '%s' "$(( SECONDS - started ))"
+}
+
+# Whether the last guest log shows a kernel that came up and then stopped for want of a root: the verdict word
+# yes, or no, with the first lines of the log on standard output when it is no.
+guest_came_up() {
+  local log="${WORK}/guest-$1.log"
+  if grep -q 'Linux version' "${log}" 2>/dev/null && grep -q 'Kernel panic' "${log}" 2>/dev/null; then
+    printf 'yes'
+  else
+    printf 'no'
+  fi
+}
+
+# The virtualisation as the machine offers it and as QEMU can use it, with the software fallback timed beside it.
+report_kvm() {
+  hdr "Virtualisation"
+  fact "/dev/kvm" "$([[ -e /dev/kvm ]] && ls -l /dev/kvm | awk '{print $1, $3, $4}' || printf 'absent')"
+  fact "opened by this user" "$(kvm_access_word)"
+  if [[ "$(uname -m)" == "x86_64" ]]; then
+    fact "cpu virtualisation flag" "$(grep -m1 -o -w -E 'vmx|svm' /proc/cpuinfo || printf 'none listed')"
+  fi
+  fact "qemu" "$(value_of "$(guest_description | head -1)" --version)"
+  if ! guest_description >/dev/null || ! command -v "$(guest_description | head -1)" >/dev/null 2>&1; then
+    fact "boot test" "not run: no qemu for this architecture"
+    return
+  fi
+  if ! host_kernel_image >/dev/null; then
+    fact "boot test" "not run: the host's kernel image cannot be read"
+    return
+  fi
+  if [[ -e /dev/kvm ]]; then
+    local seconds
+    seconds="$(boot_guest kvm "${KVM_BOOT_SECONDS}")"
+    fact "guest under KVM came up" "$(guest_came_up kvm), after ${seconds} s"
+  fi
+  local software
+  software="$(boot_guest tcg "${SOFTWARE_BOOT_SECONDS}")"
+  fact "guest in software came up" "$(guest_came_up tcg), after ${software} s"
+}
+
+# A guest kernel has to boot under KVM, or a newer kernel than the runner's cannot be tried in a virtual machine.
+assert_kvm() {
+  hdr "Assert: a virtual machine boots under KVM"
+  if ! guest_description >/dev/null; then
+    unknown "this probe knows no QEMU for $(uname -m)"
+    return "${EXIT_INDETERMINATE}"
+  fi
+  local binary
+  binary="$(guest_description | head -1)"
+  if ! command -v "${binary}" >/dev/null 2>&1; then
+    unknown "${binary} is not installed, so nothing was measured"
+    return "${EXIT_INDETERMINATE}"
+  fi
+  if [[ ! -e /dev/kvm ]]; then
+    bad "there is no /dev/kvm on this machine"
+    return "${EXIT_UNAVAILABLE}"
+  fi
+  if ! host_kernel_image >/dev/null; then
+    unknown "the host's kernel image cannot be read, so there is nothing to boot"
+    return "${EXIT_INDETERMINATE}"
+  fi
+  local seconds
+  seconds="$(boot_guest kvm "${KVM_BOOT_SECONDS}")"
+  if [[ "$(guest_came_up kvm)" == "yes" ]]; then
+    ok "a guest kernel booted under KVM in ${seconds} s (access: $(kvm_access_word))"
+    return "${EXIT_AVAILABLE}"
+  fi
+  if grep -q -i -E 'could not access KVM|failed to initialize kvm|Permission denied' "${WORK}/guest-kvm.log"; then
+    bad "QEMU could not use KVM"
+    sed 's/^/    /' "${WORK}/guest-kvm.log" | head -10
+    return "${EXIT_UNAVAILABLE}"
+  fi
+  unknown "the guest did not come up in ${KVM_BOOT_SECONDS} s and QEMU gave no reason"
+  sed 's/^/    /' "${WORK}/guest-kvm.log" | tail -15
+  return "${EXIT_INDETERMINATE}"
+}
+
 # One line naming the verdict, so a log reader never has to decode a number.
 announce() {
   case "$1" in
@@ -314,7 +457,7 @@ announce() {
 # The lines of this file's header comment that are its usage text, and the status a call made
 # the wrong way ends with.
 USAGE_FIRST_LINE=2
-USAGE_LAST_LINE=20
+USAGE_LAST_LINE=21
 EXIT_USAGE=2
 
 usage() {
@@ -327,6 +470,7 @@ case "${1:-}" in
     report_machine
     report_landlock
     report_bwrap
+    report_kvm
     printf '\nA survey only. Nothing here fails the run; use the assert modes for that.\n'
     ;;
   --assert-landlock)
@@ -335,6 +479,10 @@ case "${1:-}" in
     ;;
   --assert-bwrap)
     assert_bwrap
+    announce "$?"
+    ;;
+  --assert-kvm)
+    assert_kvm
     announce "$?"
     ;;
   *)
