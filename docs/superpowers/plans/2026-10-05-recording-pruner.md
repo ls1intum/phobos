@@ -103,7 +103,7 @@ Results:
   3. Splitting strace's argument list by counting angle brackets breaks on `->` in a `-yy` socket decoration (`3<TCP:[a:1->b:2]>`) and on `=>` in strace's in-out length notation (`[128 => 16]`, printed for `getsockname` and `accept` also under `-y`): every later argument merged into one and the TLS host name was missed. Task R2.1 adds both cases to the shared parser's tests, which matters for PR 162 too.
   4. A spec directory beneath a write path is refused (`PHB-EPOLICY`), so the acceptance gate builds its specification under `/var/tmp`, never `/tmp`.
 - **Overhead.** Interactive: the recorded steps took 3 to 19 ms against under 2 ms bare, invisible at a keyboard; a recorded session left 800 log lines (115 kB), and the snapshot of the image's 24 530 paths took 0.14 to 0.30 s and 1.6 MB. Non-interactive, median of three runs each, measured twice: `javac` plus `java` of one class 0.255 to 0.277 s bare, 0.409 to 0.420 s with `--seccomp-bpf` (1.5x to 1.6x), 0.692 to 0.718 s without it (2.6x to 2.7x); `cat` of 5000 small files 0.055 s bare, 0.93 to 1.02 s with `--seccomp-bpf` (17x to 19x), 2.86 to 3.03 s without it (52x to 55x). A call-heavy build therefore records much more slowly than it runs; an interactive session does not notice.
-- **Two findings about the grading layers, outside this plan's scope** (A.19): Ctrl+C kills the `tee` that relays the command's standard error (F1), and with any `[connect]` name rule present a loopback connection whose server speaks first waits about 5 s in the egress broker (F2).
+- **Two findings about the grading layers**, F1 and F2, each fixed by its own pull request against `core/` (A.19).
 
 ## A.5 Architecture
 
@@ -147,7 +147,8 @@ A recording lives in one directory, by default under `./var/tmp/recordings/<name
   sessions/<n>/trace          the strace log
   sessions/<n>/session.json   command, start and end time, exit status, interactive (stdin a terminal),
                               container id, kernel, Landlock ABI, strace version, uid, the snapshot it belongs to
-  snapshots/<container>.txt   every path that existed before the first session in that container, with its type
+  snapshots/<container>.txt   every path that existed before the first session in that container, with its
+                              fingerprint (type; mode, size and modification time of a file; target of a link)
   snapshots/<container>.hosts that container's /etc/hosts at the same moment (A.8.3)
   policy.cfg                  written by generate
   record.json                 written by generate: every grant with the calls behind it, every widening,
@@ -244,7 +245,7 @@ A successful call whose effect on Landlock the mapping does not state is never s
 - **Per-run names.** PR 162's clause 2 accepts a component as a per-run name when it is seen to change between runs or is the refusing process's own id. The recorder passes the set of every process and thread id its sessions' traces show (it records the whole process tree), so `/proc/<pid>/...` of any process of the session, the parent reading its child's status included, is a per-run name from a single session; `/proc/self` and `/proc/thread-self` arrive already resolved by `-yy` and are rewritten by PR 162's `rewrite_self` when a path argument is used. Merging sessions (A.12) adds the clause 2 evidence across sessions as PR 162 does across runs.
 - **Existed before.** The snapshot lists every path outside `/proc` and `/sys` when the container's first session starts (0.14 to 0.30 s in the spike); a `record.Need` on a path not in it belongs to an object the sessions created, and `grants_for` moves it to the nearest pre-existing ancestor, as PR 162 does for the run's own files. That covers the case the request asks about: **a `[read]` or `[execute]` need on a path that did not exist before the session is never written as that path**, so the parser's refusal of a missing `[read]`/`[execute]` path cannot arise from it. `generate` checks the invariant (every `[read]`/`[execute]` row is in the snapshot) before rendering and fails with the offending rows rather than writing them, and the acceptance gate then confirms it against the real parser. Paths that existed and were deleted by a session (the spike's `old.txt`) are in the snapshot and exist again in a fresh container.
 - **Created files with a stable name**, such as `/root/.python_history`, follow the same rule: `[create]` and `[write]` on the nearest pre-existing ancestor. That is wider than the one file (A.13), and the alternative of naming the file in `[write]` so that the filesystem layer creates it empty before the run was rejected (A.18): it changes what the program sees at start (a lock file that exists means "locked"), and it would make the two pruners disagree.
-- **Directory listings.** Listing a directory needs `READ_DIR` on it, which Phobos only grants together with `READ_FILE` through `[read]`. Inside a fine-grained root that makes every file beneath readable; `cfgfile.render` writes a comment above such a row ("listed by the session; [read] cannot grant listing alone"), and Q2 asks whether that is acceptable or calls for a sandbox change.
+- **Directory listings (decision 13).** Listing a directory needs `READ_DIR` on it, which Phobos only grants together with `READ_FILE` through `[read]`, and Markus decided against a list-only section. So the recorder grants `[read]` on a directory a session listed, also inside a fine-grained root, where that makes every file beneath the directory readable although the session read none of them. That is the one place where a fine-grained root is not file by file, and each such entry says so in a comment `cfgfile.render` writes above it, for example `# listed by the session: [read] on a directory also makes every file beneath /etc/ssl/certs readable; Phobos has no list-only right`. `record.json` lists these entries among the widenings with the number of files beneath each.
 - **Canonical paths, wildcards, hierarchy.** As PR 162: realpath of the object (from `-yy`), a path holding `*`, `?`, `[` or a newline goes to its parent and is listed, a nested strict subset is raised to its ancestor's rights. The recorder widens PR 162's newline rule to every control character (bytes below 0x20 and 0x7f) and to bytes that are not valid UTF-8, since a carriage return in a path line silently loses the grant (AGENTS.md) and a policy is a text file.
 - **Observed text is untrusted.** Paths, host names, DNS answers and TLS host names come from the program and from the network, so nothing observed is written into `policy.cfg` unchecked. A path line must pass the rule above. A host name in a rule must match the DNS grammar (`names.valid_hostname`: labels of 1 to 63 letters, digits and hyphens, not starting or ending with a hyphen, at most 253 characters in all, lower-cased, no trailing dot, not an address); one that does not is never a rule, its address is used instead, and the rejected name is listed in `record.json` only. A comment never carries observed text verbatim: `cfgfile.comment_text` writes every byte outside printable ASCII as `\xHH`, so no observed value can end a comment line and become a rule. Unit fixtures cover a ClientHello whose server name holds `\n[write]\n/`, a DNS answer for such a name and a file name with a carriage return, and the resulting policy has no line the parser reads as a section or a rule from them.
 - **The working directory.** The recorder runs the program in the tail's `--chdir` (`/var/tmp/testing-dir` in the shipped `TailPhobos.cfg`), read from `${PHOBOS_HOME}/TailPhobos.cfg`, so the paths it records under the exercise directory are the paths grading uses.
@@ -346,7 +347,7 @@ Nothing in `layer_record/` knows a language. The fine-grained roots and the per-
 | Per-run names on their smallest stable directory | permissive (every entry of `/proc` or `/dev/pts` the uid may open) | PR 162's rule, shared; commented in the policy |
 | Nearest pre-existing ancestor for created objects, stable names included | permissive (write to existing siblings) | temporary names differ per run; materialising a stable name would change what the program sees |
 | Source parent given the destination's sections on a move | permissive on the source | Landlock refuses the move otherwise |
-| `[read]` on a listed directory in a fine-grained root | permissive (all files beneath) | Phobos has no list-only right (Q2) |
+| `[read]` on a listed directory in a fine-grained root | permissive (all files beneath) | Phobos has no list-only right, and none is added (decision 13); each such entry carries a comment |
 | Datagram connects that sent nothing not granted | restrictive | glibc's ranking copes with a refusal (measured) |
 | A non-blocking connect granted only when seen to complete | restrictive | a connection that failed while recording was handled by the program without the network |
 | A host name that fails the DNS grammar is never a rule | restrictive (the address is held instead) | observed text must not shape the policy's syntax |
@@ -358,7 +359,11 @@ Nothing in `layer_record/` knows a language. The fine-grained roots and the per-
 
 ## A.14 The acceptance criterion: replay with no denial, and both directions
 
-- **Replay.** `phobos-record check -- <command>` runs in a fresh container from the same image (it refuses the recording's own container, by the container id in `session.json`, unless `--same-container` is given, and then says the result is weaker). It copies the exercise afresh, writes an overlay configuration `[limits]` `timeout=0` (GNU timeout puts the command in a process group of its own, which is never the terminal's foreground group, so an interactive command would be stopped by `SIGTTIN` on its first read; measured), and runs `strace -DDD -f ... phobos.sh [--resolver <r>] --config policy.cfg --config <overlay> -- <command>` with the prune image's empty base. With `--script` the session is typed from the file; without it the person repeats the session. The overlay is never written into `policy.cfg`.
+- **Replay.** `phobos-record check -- <command>` runs by default in a fresh container from the same image. A tool inside a container cannot start one, so the fresh container is the caller's: `docker compose --profile record run --rm record check ...` creates a new container for every invocation, and that is the documented way to run it. `check` does not take freshness on trust; it verifies it against a **starting-state fingerprint**. The snapshot records, beside each path and its type, the regular file's size, mode and modification time in nanoseconds, a symbolic link's target, and a directory's mode (not its modification time, which the exercise copy itself changes). After copying the exercise afresh (with its files' times kept, as `shutil.copytree` does) and before the replay, `check` takes the same fingerprint of the container, with the same exclusions: `/proc`, `/sys`, the recordings directory, per-run names, and the three files Docker writes into every container itself (`/etc/hostname`, `/etc/hosts`, `/etc/resolv.conf`). It compares that fingerprint with the one of the recording's first session:
+  - an equal fingerprint, in a container no session of the recording ran in: mode `fresh-container`, meaning exactly that the container's starting state matches the recording's as far as the fingerprint sees. A change that keeps a file's size and modification time (a tool can replace a file and preserve its times) is not detected; the recorder serves the instructor's own reference program, and the fingerprint guards against leftovers, not against an adversary;
+  - the recording's own container (its id is in `session.json`), or a container whose fingerprint differs (a path added, removed, or changed in type, size, mode, time or target): refused with status 3, naming the container or up to 20 differing paths with what differs, unless `--same-container` is given, the explicit opt-in of decision 12. With it the replay runs in mode `same-container` (the recording's own container) or `changed-container` (another container whose starting state differs), and `check` prints before and after the replay `Warning: this check does not run in a fresh container. Files the recording or an earlier run left behind can make it pass where a fresh container would fail.`
+
+  The summary line and `check-<n>/check.json` record the mode, so a pass is never reported without saying which it was. It copies the exercise afresh, writes an overlay configuration `[limits]` `timeout=0` (GNU timeout puts the command in a process group of its own, which is never the terminal's foreground group, so an interactive command would be stopped by `SIGTTIN` on its first read; measured), and runs `strace -DDD -f ... phobos.sh [--resolver <r>] --config policy.cfg --config <overlay> -- <command>` with the prune image's empty base. With `--script` the session is typed from the file; without it the person repeats the session. The overlay is never written into `policy.cfg`.
 - **What counts as a regression: an access signature, not a call name.** The replay's refusals are found with PR 162's `attribute.denials` (the in-domain process tree, errno filtering, and its layer classification). Each refused call is then turned into its **object-specific** pairs by this plan's own mapping (A.6.1 and A.6.3, `needs.pairs_of_call`), applied as if the call had succeeded: a cross-directory rename gives `(source parent, delete)`, `(source parent, restructure)`, `(destination parent, create)` and `(destination parent, restructure)`, never the product of both parents with every section; a network refusal gives the endpoint with its transport; a fixed operation gives its own pair (`("unix:/var/run/nscd/socket", "connect")`, `("setsid", "call")`). The recording's successful calls become pairs through the same function before any generalisation, so both sides are spelt alike. Each refusal is then exactly one of:
   - a **regression**, when any of its pairs was needed by a call that succeeded in some recorded session, whatever layer refused it. A fixed refusal of an operation that succeeded while recording (a UNIX connect that worked bare and is refused by the guard) is a regression too: the program as recorded cannot run under the grading layers, and `check` says so in those words;
   - **harmless fixed**, when PR 162 classifies it `fixed` and no recorded session performed it successfully (the spike's `nscd` connects, which failed while recording too);
@@ -366,7 +371,7 @@ Nothing in `layer_record/` knows a language. The fine-grained roots and the per-
 
   `check` fails on any regression.
 - **The replay must have run the session, or the check fails.** No refusal is not enough. `check` fails (status 1) when: Phobos stopped the run itself (PR 162's rule: status `2`, `11`, `15` or `125` together with Phobos's own marker before the command started); the trace shows no in-domain `execve` of the command; a scripted `expect` was not met (`pty_script.EXPECT_FAILED`); or the command's exit status differs from every recorded session's status for the same script. For a session the person repeats by hand, `check` prints the recorded and the replayed status and the number of in-domain calls of each, so a replay that stopped early is visible, and says that only a scripted check is a proof.
-- **What it does not compare.** Output equivalence is not checked. In particular, under `phobos.sh` standard error passes through the filesystem layer's relay, which Ctrl+C kills (F1), so a traceback printed after Ctrl+C is missing in a replay; `check` prints that note whenever the script sends Ctrl+C. That is a property of the grading layers, not of the generated policy (A.19).
+- **What it does not compare.** Output equivalence is not checked: `check` judges what the program was allowed to do, not what it printed (see A.19 for the two layer behaviours the spike found).
 - **Forbidden direction.** The integration suites run PR 162's containment checks (`probe.c` under the generated policy): a canary file in a fine-grained root and one outside every recorded directory refused for read, a write into a `[read]`-only directory refused, `connect 10.0.0.1:80` and `bind 8080` refused unless recorded.
 - **Where.** Every suite runs in an ordinary container, offline unless it is the networked suite, which uses a Docker network with no route out (A.15).
 
@@ -414,18 +419,19 @@ Nothing in `layer_record/` knows a language. The fine-grained roots and the per-
 | 10 | `[accept]` as a comment only (A.8.2) | generating `expose ... to ... from`: the public port and the deployment are the instructor's choice |
 | 11 | Limits opt-in, no `timeout` from interactive sessions (A.9) | always deriving all limits: a person's pauses would set the timeout |
 
-## A.19 Findings outside this plan, for Markus
+## A.19 Findings in the grading layers, handled elsewhere
 
-This plan changes nothing under `core/` (Global Constraints), so it does not fix these; it discloses them where they meet the recorder (A.14), makes its suites report them on every run without failing on them (Tasks R4.3 and R5.3), so a later fix shows up, and asks Markus whether each should become a pull request of its own (Q3).
+The spike found two behaviours of the grading layers: Ctrl+C under `phobos.sh` kills the relay of the command's standard error (F1), and with a `[connect]` name rule present a loopback connection whose server speaks first waits about 5 s in the egress broker (F2). Each is fixed by a pull request of its own against `core/`, outside this plan (Markus's decision 14, A.20). This plan neither depends on nor tests either.
 
-- **F1, Ctrl+C silences standard error under `phobos.sh`.** `phobos-filesystem.sh` relays the command's standard error through `tee -p` into `count_denials` (`exec {filtered_stderr}> >(tee -p ...)`). `tee` is in the terminal's foreground process group, so Ctrl+C kills it: Python's `KeyboardInterrupt` traceback was lost and every later write to standard error vanished, while the command itself went on (measured in every replay). It only matters for interactive use, and PR 166 removes `count_denials` (its A.9), which may or may not remove the relay; worth a check there.
-- **F2, a loopback connection waits about 5 s when a name rule exists.** With `allow example.org:443` in the policy, the spike's loopback step took 5.2 to 5.4 s in three networked replays against 0.2 s offline. The trace shows the egress broker (HAProxy) making the onward connection to the loopback server only after an `epoll_pwait` of about 5 s: with a name rule present every allowed connection goes through the broker, which waits for a TLS ClientHello it can inspect, and this server speaks first. A protocol where the server speaks first (SMTP, SSH, a database greeting) would see the delay on every connection.
+## A.20 Markus's decisions on this plan's questions
 
-## A.20 Open questions for Markus
+Markus answered the three questions of the first draft on 2026-10-05:
 
-1. **Fresh container for `check`.** The replay check refuses the recording's own container unless `--same-container` is given. Should the flag exist at all, or should the check only ever run fresh?
-2. **Listing a directory in a fine-grained root.** A listed directory gets `[read]`, which also makes every file beneath readable (A.7). Accept that, as the shipped base already does for `/etc`, or ask for a list-only section, which would be a sandbox change of its own?
-3. **F1 and F2.** Should the stderr relay survive Ctrl+C, and should the broker stop holding connections it cannot inspect (a loopback one, or one whose server speaks first) when a name rule is present? Each would be a separate pull request against `core/`, outside this plan.
+| # | Question | Decision | Rejected alternative, and why |
+| --- | --- | --- | --- |
+| 12 | May `check` run in the recording's own container? | Yes, as an explicit opt-in, `--same-container`. The default stays a fresh container, which `check` verifies against the recording's snapshot rather than assumes; a container that is not fresh (the recording's own, or one whose starting state differs) needs the opt-in, prints a warning that files left behind can make the check pass where a fresh container would fail, and its output and `check.json` record which mode it ran in (A.14). | Only ever fresh: no way to check where a second container is not at hand. A same-container default: a pass could rest on the recording's own leftovers. |
+| 13 | Listing a directory in a fine-grained root | Stay with `[read]`: no list-only section, no sandbox change. The recorder grants `[read]` on a listed directory in a fine-grained root, which makes every file beneath it readable, and says so in a comment above each such entry (A.7). | A list-only section: a change to the sandbox for one access pattern. |
+| 14 | F1 and F2 | Each gets its own pull request against `core/`, handled separately; this plan only refers to them (A.19). | Fixing them here: outside this plan's scope, which changes nothing under `core/`. |
 
 ## A.21 Review record
 
@@ -627,7 +633,10 @@ def test_both_loopback_families_are_localhost_and_udp_keeps_its_marker():
 - Consumes: `strace_parse.RECORD_ARGUMENTS` (R2.1), `generalise.Snapshot` (PR 162, Task 5.1).
 - Produces:
   - `guard.refuse_grading_options(arguments: list[str]) -> None`, `guard.refuse_outside_prune_image(phobos_home: pathlib.Path) -> None`, `guard.refuse_layer_command(command: list[str], phobos_home: pathlib.Path) -> None`, `guard.refuse_when_traced(status_text: str) -> None`, each raising `guard.Refused(status: int, message: str)`; `guard.EXIT_USAGE = 2`, `guard.EXIT_ENVIRONMENT = 3`.
-  - `snapshot.take(path: pathlib.Path, root: pathlib.Path = pathlib.Path("/"), skip: tuple[str, ...] = ("/proc", "/sys")) -> int` (paths written, `<type> <path>` per line, relative to `root` written as absolute, and a copy of `<root>/etc/hosts` beside it with the suffix `.hosts`) and `snapshot.load(path: pathlib.Path) -> generalise.Snapshot`.
+  - `snapshot.take(path: pathlib.Path, root: pathlib.Path = pathlib.Path("/"), skip: tuple[str, ...] = ("/proc", "/sys", "/var/tmp/recordings")) -> int`, per-run names (`/dev/pts/<n>`) left out. Each line is `<fingerprint>\t<path>` (path relative to `root` written as absolute), the fingerprint being `f <mode> <size> <mtime_ns>` for a regular file, `l <target>` for a symbolic link, `d <mode>` for a directory and `o <mode>` for anything else; `take` returns the number of paths written and writes a copy of `<root>/etc/hosts` beside it with the suffix `.hosts`.
+  - `snapshot.DOCKER_MANAGED = ("/etc/hostname", "/etc/hosts", "/etc/resolv.conf")`, the files Docker writes into each container, left out of the fingerprint.
+  - `snapshot.fingerprint(root: pathlib.Path = pathlib.Path("/")) -> dict[str, str]`, the same mapping without writing it and without `DOCKER_MANAGED`, so two fresh containers from one image, with the exercise copied the same way, give equal fingerprints; `check.mode` compares it (Task R4.3).
+  - `snapshot.load(path: pathlib.Path) -> generalise.Snapshot` reads a written snapshot back for generalisation.
   - `observe.tail_chdir(tail_flags: pathlib.Path) -> pathlib.Path`, the `--chdir` of `TailPhobos.cfg`.
   - `observe.record_session(command: list[str], recording: pathlib.Path, workdir: pathlib.Path, script: pathlib.Path | None) -> observe.SessionResult(number: int, status: int, interactive: bool)`, which makes the process a child subreaper, runs `strace -DDD ... -o <session>/trace -- <command>` in `workdir` with the terminal untouched, waits for the command, then reaps every remaining child (the detached tracer among them) before writing `session.json`.
 
@@ -689,8 +698,8 @@ def test_the_snapshot_lists_the_tree_and_keeps_the_hosts_file_beside_it(tmp_path
     out.mkdir()
     snapshot.take(out / "c.txt", root=root)
     listing = (out / "c.txt").read_text().splitlines()
-    assert "f /etc/hosts" in listing
-    assert not any(line.endswith("/proc/1") for line in listing)
+    assert any(line.startswith("f ") and line.endswith("\t/etc/hosts") for line in listing)
+    assert not any(line.endswith("\t/proc/1") for line in listing)
     assert (out / "c.hosts").read_text() == "192.0.2.7 api.phobos.test\n"
 
 
@@ -933,7 +942,7 @@ def test_an_unmapped_file_call_that_succeeded_is_unsupported(snapshot):
 - Consumes: `needs.read_session`, `generalise.per_run_grants`, `generalise.grants_for`, `generalise.compact`, `generalise.normalise_hierarchy`, `cfgfile.Policy`, `cfgfile.render`.
 - Produces:
   - `generate.Recording(sessions: list[SessionNeeds], snapshots: dict[int, Snapshot], meta: list[dict])` read by `generate.load(recording: pathlib.Path) -> Recording`.
-  - `generate.filesystem_grants(recording: Recording) -> tuple[dict[str, frozenset[str]], dict[str, str], list[dict]]`: grants, comments, widenings.
+  - `generate.filesystem_grants(recording: Recording) -> tuple[dict[str, frozenset[str]], dict[str, str], list[dict]]`: grants, comments (path to the comment written above it), widenings (each `{"path": str, "reason": str, "observed": list[str], "files_beneath": int}`).
   - `generate.source_covers_destination(grants: dict[str, frozenset[str]], moves: set[tuple[str, str]]) -> dict[str, frozenset[str]]` (A.6.2).
   - `generate.missing_read_or_execute(grants: dict[str, frozenset[str]], snapshots: dict[int, Snapshot]) -> list[str]`, empty when A.7's invariant holds.
   - `generate.write(recording: pathlib.Path, limits: bool, memory_pinned: bool, gate: Callable[[pathlib.Path], tuple[int, str]] = generate.policysystem_gate) -> int`, writing `policy.cfg` and `record.json` and running the acceptance gate; 0, `generate.EXIT_GATE = 5` with the gate's message, or `generate.EXIT_INCOMPLETE = 6` after writing both files when any session has an unsupported call (A.6.4).
@@ -970,6 +979,22 @@ def test_a_fine_grained_file_stays_a_file():
     recording = recording_from_lines(['16 openat(AT_FDCWD</w>, "/etc/hostname", O_RDONLY) = 3</etc/hostname>'], snapshot=("/etc", "/etc/hostname"))
     grants, _, _ = generate.filesystem_grants(recording)
     assert grants == {"/etc/hostname": frozenset({"read"})}
+
+
+def test_a_listed_directory_in_a_fine_grained_root_gets_read_and_a_comment_that_says_what_that_opens():
+    recording = recording_from_lines([
+        '16 openat(AT_FDCWD</w>, "/etc/ssl/certs", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 3</etc/ssl/certs>',
+        '16 getdents64(3</etc/ssl/certs>, 0x0 /* 3 entries */, 32768) = 80'], snapshot=("/etc", "/etc/ssl", "/etc/ssl/certs", "/etc/ssl/certs/a.pem"))
+    grants, comments, widenings = generate.filesystem_grants(recording)
+    assert grants == {"/etc/ssl/certs": frozenset({"read"})}
+    assert "makes every file beneath /etc/ssl/certs readable" in comments["/etc/ssl/certs"]
+    assert any(widening["path"] == "/etc/ssl/certs" and widening["files_beneath"] == 1 for widening in widenings)
+
+
+def test_a_file_read_in_a_fine_grained_root_gets_no_listing_comment():
+    recording = recording_from_lines(['16 openat(AT_FDCWD</w>, "/etc/hostname", O_RDONLY) = 3</etc/hostname>'], snapshot=("/etc", "/etc/hostname"))
+    _, comments, _ = generate.filesystem_grants(recording)
+    assert "/etc/hostname" not in comments
 
 
 def test_a_file_name_with_a_carriage_return_is_granted_on_its_parent_and_listed():
@@ -1011,7 +1036,9 @@ def test_an_unsupported_call_makes_generate_say_incomplete(tmp_path):
   - `check.Refusal(call: Syscall, denial: Denial, pairs: frozenset[tuple[str, str]])`, a replay refusal found by `attribute.denials`, its pairs from `needs.pairs_of_call` on the refused call (never derived from the denial's object and section sets, whose product would invent pairs).
   - `check.compare(recorded: set[tuple[str, str]], replay: list[Refusal]) -> check.Comparison(regressions: list[Refusal], harmless_fixed: list[Refusal], new_behaviour: list[Refusal])`: a regression when any of its pairs was recorded, whatever its layer; `harmless_fixed` for PR 162's `layer == "fixed"` with no recorded pair; `new_behaviour` otherwise.
   - `check.completed(trace: Trace, command: list[str], status: int, stderr_head: str, recorded_statuses: set[int], script_status: int | None) -> list[str]`, the reasons the replay did not run the session, empty when it did: Phobos's own stop (PR 162's status-and-marker rule of its A.6.4), no in-domain `execve` of the command, `pty_script.EXPECT_FAILED`, a status no recorded session ended with.
-  - `check.run(recording: pathlib.Path, command: list[str], script: pathlib.Path | None, same_container: bool, resolver: str | None) -> int`: 0 only with no regression and an empty `completed` list, `check.EXIT_REGRESSION = 1` otherwise, `guard.EXIT_ENVIRONMENT` in the recording's own container without `same_container`.
+  - `check.mode(recording: pathlib.Path, container_id: str, fingerprint: dict[str, str], same_container: bool) -> str`, `fingerprint` being the current container's starting state from `snapshot.fingerprint` (A.14): `"fresh-container"` when no session of the recording ran in `container_id` and `fingerprint` equals the recording's first one; otherwise `"same-container"` (the recording's own container) or `"changed-container"` (another container whose fingerprint differs) when `same_container` is set, and `guard.Refused(guard.EXIT_ENVIRONMENT, ...)` naming the container or up to 20 differing paths with what differs when it is not (decision 12).
+  - `check.NOT_FRESH_WARNING`, the warning text of A.14, named once.
+  - `check.run(recording: pathlib.Path, command: list[str], script: pathlib.Path | None, same_container: bool, resolver: str | None) -> int`: 0 only with no regression and an empty `completed` list, `check.EXIT_REGRESSION = 1` otherwise, `guard.EXIT_ENVIRONMENT` in the recording's own container without `same_container`. It writes `check-<n>/check.json` with `mode`, the three lists of `Comparison`, the `completed` reasons and the statuses, prints the mode in its summary line, and prints `NOT_FRESH_WARNING` before and after the replay in `same-container` and `changed-container` mode.
 
 - [ ] **Step 1: Failing unit tests.**
 
@@ -1080,17 +1107,73 @@ def test_a_replay_with_another_status_than_every_recording_did_not_run_the_sessi
 def test_a_complete_replay_has_no_reason():
     trace = trace_of('20 landlock_restrict_self(3, 0) = 0', '20 execve("/usr/bin/python3", ["python3"], 0x0 /* 1 var */) = 0')
     assert check.completed(trace, ["python3"], 0, "", {0}, 0) == []
+
+
+START = {"/": "d 0755", "/etc": "d 0755", "/etc/os-release": "f 0644 386 1700000000000000000",
+         "/var/tmp/testing-dir": "d 0755", "/var/tmp/testing-dir/old.txt": "f 0644 4 1700000000000000000"}
+
+
+def test_another_container_with_the_recordings_starting_state_is_fresh(tmp_path):
+    recording = recording_with_session(tmp_path, container_id="aaa", fingerprint=START)
+    assert check.mode(recording, "bbb", START, same_container=False) == "fresh-container"
+
+
+def test_an_added_path_is_not_called_fresh(tmp_path):
+    recording = recording_with_session(tmp_path, container_id="aaa", fingerprint=START)
+    changed = START | {"/var/tmp/testing-dir/out.txt": "f 0644 1 1700000000000000001"}
+    with pytest.raises(guard.Refused) as refused:
+        check.mode(recording, "bbb", changed, same_container=False)
+    assert refused.value.status == guard.EXIT_ENVIRONMENT
+    assert "/var/tmp/testing-dir/out.txt" in refused.value.message
+    assert check.mode(recording, "bbb", changed, same_container=True) == "changed-container"
+
+
+def test_a_modified_file_at_an_existing_path_is_not_called_fresh(tmp_path):
+    recording = recording_with_session(tmp_path, container_id="aaa", fingerprint=START)
+    changed = START | {"/etc/os-release": "f 0644 391 1700000000500000000"}
+    with pytest.raises(guard.Refused) as refused:
+        check.mode(recording, "bbb", changed, same_container=False)
+    assert "/etc/os-release" in refused.value.message
+
+
+def test_the_fingerprint_sees_contents_change_through_size_and_time_and_skips_docker_files(tmp_path):
+    root = tmp_path / "root"
+    (root / "etc").mkdir(parents=True)
+    (root / "etc" / "os-release").write_text("A\n")
+    (root / "etc" / "hostname").write_text("one\n")
+    before = snapshot.fingerprint(root=root)
+    (root / "etc" / "os-release").write_text("AB\n")
+    (root / "etc" / "hostname").write_text("another\n")
+    after = snapshot.fingerprint(root=root)
+    assert before["/etc/os-release"] != after["/etc/os-release"]
+    assert "/etc/hostname" not in before
+
+
+def test_the_recordings_own_container_is_refused_without_the_opt_in(tmp_path):
+    recording = recording_with_session(tmp_path, container_id="aaa", fingerprint=START)
+    with pytest.raises(guard.Refused) as refused:
+        check.mode(recording, "aaa", START, same_container=False)
+    assert refused.value.status == guard.EXIT_ENVIRONMENT
+
+
+def test_the_opt_in_runs_in_the_same_container_and_says_so(tmp_path):
+    recording = recording_with_session(tmp_path, container_id="aaa", fingerprint=START)
+    assert check.mode(recording, "aaa", START, same_container=True) == "same-container"
+    assert "can make it pass where a fresh container would fail" in check.NOT_FRESH_WARNING
 ```
+
+`recording_with_session` writes a recording directory with one `session.json` naming the given container id and a first snapshot whose fingerprint is the given one.
 
 `denials_of` builds `check.Refusal` objects: `attribute.denials(strace_parse.parse_trace(lines), "/w")` for the refusals, each paired with its refused call and `needs.pairs_of_call` of it against a snapshot holding `/a`, `/b`, `/a/x` and `/w`; `trace_of` runs `strace_parse.parse_trace`.
 
-- [ ] **Step 2: Fail. Step 3: Implement**; `run` writes the `timeout=0` overlay to `/var/tmp/phobos-record-overlay.cfg` (outside every write path), runs `strace -DDD -f -qq -yy -o <recording>/check-<n>/trace phobos.sh [--resolver r] --config policy.cfg --config <overlay> -- <command>` in the tail's `--chdir` after copying the exercise afresh, typed by `pty_script.run` when a script is given, then checks `completed` and `compare`, and prints the F1 note when the script sends `ctrl-c`. **Step 4: Pass.**
+- [ ] **Step 2: Fail. Step 3: Implement**; `run` writes the `timeout=0` overlay to `/var/tmp/phobos-record-overlay.cfg` (outside every write path), runs `strace -DDD -f -qq -yy -o <recording>/check-<n>/trace phobos.sh [--resolver r] --config policy.cfg --config <overlay> -- <command>` in the tail's `--chdir` after copying the exercise afresh, typed by `pty_script.run` when a script is given, then checks `completed` and `compare` and writes `check.json`. **Step 4: Pass.**
 - [ ] **Step 5: Write the fixture and the offline suite.** `session.script` drives `python3 -q -i` through the spike's steps (A.4) except the network ones, each step printing an `OK-<n>` marker; `record_offline.sh`, in the prune image with `--network none`:
   1. container A: `phobos-record record --name s --script session.script -- python3 -q -i`, then `phobos-record generate --name s`; both status 0;
-  2. container B: `phobos-record check --name s --script session.script -- python3 -q -i`, status 0, and the report names 0 regressions;
-  3. container B, forbidden direction: PR 162's containment checks under `policy.cfg` (a canary at `/root/phobos-record-canary` and at `/srv/phobos-record-canary/secret` refused for read; a write into `/usr/share/doc` refused; `connect 10.0.0.1:80` and `bind 8080` refused), and `/opt/java/openjdk/release`, read by the session, readable;
-  4. container B, the gate in the other direction: `policy.cfg` with `/var/tmp/testing-dir/never-existed` appended to `[read]` is refused by `phobos-policysystem.sh` with status 11, which shows the gate would have caught a missing path.
-- [ ] **Step 6: Write `record_interactive.sh`**: `bash -i` in a pseudo-terminal (Python's `pty`, as the spike's `drive_session.py`), `phobos-record record --name i -- python3 -q`, then Ctrl+C during `time.sleep(60)` (expect `KeyboardInterrupt` and a working prompt), Ctrl+Z (expect `Stopped`), `fg` (expect the same Python to answer), `exit()`, the recorder's status equal to Python's, and the traceback and a later write to standard error visible in the recording's terminal; a session `sh -c 'sleep 2 & exit 0'` whose trace still holds the `sleep`'s `exit_group`, showing the recorder waited for the tracer. The same keystrokes are then replayed with `check` in a second container: the suite requires 0 regressions and an empty `completed` list, and reports without failing whether the traceback and the later standard error appeared (F1), so a fix of F1 becomes visible in the suite's output.
+  2. container A, still, both directions of decision 12: `phobos-record check --name s --script session.script -- python3 -q -i` without the opt-in ends with status 3 and runs nothing; with `--same-container` it runs, prints the warning of A.14 before and after the replay, and `check.json` records `"mode": "same-container"`;
+  3. container B, new from the image: `phobos-record check --name s --script session.script -- python3 -q -i`, status 0, the report names 0 regressions, prints no warning, and `check.json` records `"mode": "fresh-container"`; then, in a container C that first runs `touch /var/tmp/leftover`, and in a container D that first appends one line to `/etc/os-release` (an existing path), the same command ends with status 3 naming that path, which shows that neither an added nor a modified file lets a changed container be called fresh;
+  4. container B, forbidden direction: PR 162's containment checks under `policy.cfg` (a canary at `/root/phobos-record-canary` and at `/srv/phobos-record-canary/secret` refused for read; a write into `/usr/share/doc` refused; `connect 10.0.0.1:80` and `bind 8080` refused), and `/opt/java/openjdk/release`, read by the session, readable;
+  5. container B, the gate in the other direction: `policy.cfg` with `/var/tmp/testing-dir/never-existed` appended to `[read]` is refused by `phobos-policysystem.sh` with status 11, which shows the gate would have caught a missing path.
+- [ ] **Step 6: Write `record_interactive.sh`**: `bash -i` in a pseudo-terminal (Python's `pty`, as the spike's `drive_session.py`), `phobos-record record --name i -- python3 -q`, then Ctrl+C during `time.sleep(60)` (expect `KeyboardInterrupt` and a working prompt), Ctrl+Z (expect `Stopped`), `fg` (expect the same Python to answer), `exit()`, the recorder's status equal to Python's, and the traceback and a later write to standard error visible in the recording's terminal; a session `sh -c 'sleep 2 & exit 0'` whose trace still holds the `sleep`'s `exit_group`, showing the recorder waited for the tracer. The same keystrokes are then replayed with `check` in a second container: the suite requires 0 regressions and an empty `completed` list.
 - [ ] **Step 7: Run both against the prune image**: `bash tests/integration/record_offline_host.sh phobos-prune-layers:local`, which runs `docker run --rm --network none -v "$PWD:/repo:ro" -v "$PWD/var/tmp/helpers:/var/tmp/helpers:ro" -v "<scratch>:/var/tmp/recordings" --entrypoint bash phobos-prune-layers:local /repo/tests/integration/record_offline.sh <phase>` once with the phase `record` (container A) and once with `replay` (container B), and `bash tests/integration/record_interactive.sh` inside the same image the same way. Expected: every check passed, 0 regressions.
 - [ ] **Step 8: Wire into `build.yml`, lint, commit** the ten paths by name: `Replay a recorded session under the real layers and fail on every refusal of what succeeded`.
 
@@ -1288,7 +1371,7 @@ def test_an_outside_peer_becomes_an_accept_note_and_no_rule():
 - Create: `tests/integration/record_networked.sh`
 - Modify: `.github/workflows/build.yml`
 
-- [ ] **Step 1: Write the suite.** From the job: `docker network create --internal phobos-record-test` (no route out); start the server container on it, read its address; recording container on the same network with `--dns <server>`: a script that opens `https://api.phobos.test/` with `ssl` verification off and prints `OK-E1`, then `generate`. Assert in `policy.cfg`: `allow api.phobos.test:443`, the header line about `--resolver`, no rule naming port 53 uncommented. Replay container on the same network: `check --resolver <server>` with 0 regressions. Forbidden direction in the replay container: a connection to `<server>:8443` and to `api.phobos.test:8443` refused with `EACCES`. The session also starts a loopback server that speaks first (it sends a greeting on accept) and reads the greeting as a client; the suite requires the step to complete and prints its duration in the replay, without failing on it, which reports F2 on every run. Remove the network and the server at the end, by the names this suite gave them only.
+- [ ] **Step 1: Write the suite.** From the job: `docker network create --internal phobos-record-test` (no route out); start the server container on it, read its address; recording container on the same network with `--dns <server>`: a script that opens `https://api.phobos.test/` with `ssl` verification off and prints `OK-E1`, then `generate`. Assert in `policy.cfg`: `allow api.phobos.test:443`, the header line about `--resolver`, no rule naming port 53 uncommented. Replay container on the same network: `check --resolver <server>` with 0 regressions. Forbidden direction in the replay container: a connection to `<server>:8443` and to `api.phobos.test:8443` refused with `EACCES`. Remove the network and the server at the end, by the names this suite gave them only.
 - [ ] **Step 2: Run it locally** (every container ordinary, no capability). Expected: all passed. **Step 3: Wire into `build.yml`, lint (`hadolint`, `shellcheck`, `ruff`, `actionlint`), commit** the four paths: `Prove a recorded host name replays through the egress broker on an isolated network`.
 
 ## PR R6: Several sessions, and the diff
@@ -1401,7 +1484,7 @@ def test_memory_only_when_the_instructor_says_it_is_pinned():
 
 # Part C: Review record
 
-An independent reviewer read this plan against the code it cites, the two sibling plans (PR 162 and PR 166) and the spike's outputs, in three rounds, and signed off explicitly in the third: "I approve the plan as revised."
+An independent reviewer read this plan against the code it cites, the two sibling plans (PR 162 and PR 166) and the spike's outputs. The first draft took three rounds and was approved in the third ("I approve the plan as revised."). Markus's decisions 12 to 14 (A.20) then changed the plan, and that revision was reviewed again in the same session from round 4 on, recorded below; the round 3 approval covers only the earlier revision.
 
 Round 1 did not approve and raised nine points:
 
@@ -1413,8 +1496,14 @@ Round 1 did not approve and raised nine points:
 | high | held ports lost their transport, and a client socket's port counted as held | A.8.1: held endpoints keyed by family, transport and port, from `bind` and `listen` only (R5.2) |
 | high | device ioctl is refused only from Landlock version 5 | partly agreed: every fixed refusal names its layer and version, written against the recorded ABI; pinning a grading ABI stays the operator's tail flag (A.6.3) |
 | high | the mapping missed `O_TMPFILE`, `fexecve`, `openat2` resolve flags, and treated `EINPROGRESS` as success | A.6.1 rows, A.6.4 (unsupported calls make the result incomplete, status 6), `EINPROGRESS` only with seen completion (A.8.1); `RENAME_EXCHANGE` was already a row and gained a test |
-| high | F1 and F2 unresolved | partly agreed: `core/` is out of scope, so both are disclosed in A.14 and A.19, reported (not failed on) by the suites, and Q3 asks Markus |
+| high | F1 and F2 unresolved | partly agreed: `core/` is out of scope; Markus later decided each gets its own pull request against `core/` (decision 14), so this plan only refers to them (A.19) |
 | medium | the safety checks were overstated | A.10 separates the structural guarantee from safeguards against mistakes; `sh phobos.sh` is caught and tested, a wrapper is said not to be |
 | medium | `/etc/hosts` contents were never captured | the snapshot copies it (A.8.3, R3.1) |
 
 Round 2 accepted seven of those and found three gaps: a DNS injection fixture was promised but not listed; pairing every object of a refusal with every section could invent pairs; and a fixed refusal of an operation that had succeeded while recording would have passed the check. All three were fixed: R5.1 gained the DNS fixture and an end-to-end case, refusals are turned into object-specific pairs by the recorder's own mapping (`needs.pairs_of_call`), and fixed operations have pairs of their own, so their refusal is a regression when they worked bare. The reviewer also asked that `EINPROGRESS` completion survive `fork` and descriptor reuse, which A.8.1 now keys by the remote end in the decoration. Round 3 approved.
+
+Round 4 reviewed the revision for decisions 12 to 14. It found the three changes consistent but did not approve: `check` called any container other than the recording's "fresh" without creating or verifying one, so a reused container could be reported as fresh. `check` now verifies freshness itself: before the replay it lists the container's paths with the snapshot's rules and compares them with the recording's first snapshot; only an equal listing in another container is `fresh-container`, and a container whose listing differs is refused, or with the opt-in runs as `changed-container` with the warning (A.14, Task R4.3, and a container C in the offline suite that is refused for one leftover file). The reviewer also asked that this record keep the earlier approval apart from the review of this revision, which the opening paragraph now does.
+
+Round 5 did not approve either: a listing of paths catches an added file but not a modified one. The comparison is now a starting-state fingerprint (type, and for a regular file mode, size and modification time in nanoseconds, a link's target, a directory's mode), with the files Docker writes per container left out; `fresh-container` means exactly that the fingerprint matched, and A.14 states that a change keeping size and modification time is not detected. A unit test and a container D in the offline suite show a modified file at an existing path refused.
+
+Round 6 approved this revision explicitly: "I approve the plan as revised." Its one wording note, that a tool can replace a file and preserve its times so a time reset is not the only cause of an undetected change, is applied in A.14.
