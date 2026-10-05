@@ -73,9 +73,9 @@ test makes is interposed.
 
 | Suite | What it covers | Coverage gate |
 | --- | --- | --- |
-| `unit/run.sh` | `phobos-landlock-filesystem-and-networksystem`: the options, the path rules, the ruleset | none; `unit/mutation.sh` measures this suite weekly instead, because the coverage runtime disturbs the calls it interposes |
-| `unit/seccomp_networksystem_run.sh` | the connect guard: the filter, the supervisor, the socket types, the held sockets and the listen decision, the rules | every line, with `--coverage` |
-| `unit/mutation.sh` | mutation testing of the Landlock suite, weekly | reports a score; it is not a gate |
+| `unit/phobos-landlock-filesystem-and-networksystem/run.sh` | `phobos-landlock-filesystem-and-networksystem`: the options, the path rules, the ruleset | none; `mutation.sh` in the same folder measures this suite instead, because the coverage runtime disturbs the calls it interposes |
+| `unit/phobos-seccomp-networksystem/seccomp_networksystem_run.sh` | the connect guard: the filter, the supervisor, the socket types, the held sockets and the listen decision, the rules | every line, with `--coverage` |
+| `unit/phobos-landlock-filesystem-and-networksystem/mutation.sh` | mutation testing of the Landlock suite, the `mutation` job of `build.yml`, on every change and weekly. It needs clang 20 and mull 0.34.1 in an Ubuntu 26.04 container. A processor-time limit ends a mutant whose loop never ends, whose forked child would otherwise hold the run | reports a score, and fails where no score is reached; it is not a gate on the score |
 
 ## Acceptance suites, run by `build.yml` inside the run-phase image
 
