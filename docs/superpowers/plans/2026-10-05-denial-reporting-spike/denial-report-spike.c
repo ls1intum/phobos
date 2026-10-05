@@ -31,6 +31,7 @@
  *                       [--helper PATH] [--sync-wakeup] -- COMMAND [ARGUMENTS...]
  *   denial-report-spike --probe-nested-listener
  *   denial-report-spike --probe-continue
+ *   denial-report-spike --probe-kernel-refusal
  *   denial-report-spike --quote VALUE
  */
 #define _GNU_SOURCE
@@ -782,6 +783,114 @@ static int probe_continue(void) {
     return supported ? 0 : 1;
 }
 
+/* Installs a listener filter that traps one call, and answers the listener. */
+static int install_listener_for(int number) {
+    struct sock_filter instructions[] = {
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (unsigned int)number, 0, 1),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    };
+    struct sock_fprog program = {
+        .len = (unsigned short)(sizeof(instructions) / sizeof(instructions[0])),
+        .filter = instructions,
+    };
+    int listener = (int)syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_NEW_LISTENER,
+                                &program);
+    if (listener < 0) {
+        fail("listener filter");
+    }
+    return listener;
+}
+
+/* Installs a filter without a listener that answers one call with the given action. */
+static void install_plain_filter(int number, unsigned int action) {
+    struct sock_filter instructions[] = {
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (unsigned int)number, 0, 1),
+        BPF_STMT(BPF_RET | BPF_K, action),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    };
+    struct sock_fprog program = {
+        .len = (unsigned short)(sizeof(instructions) / sizeof(instructions[0])),
+        .filter = instructions,
+    };
+    if (syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, &program) != 0) {
+        fail("plain filter");
+    }
+}
+
+/* Calls setpgid(0, getpgrp()), a no-op when allowed, and prints the result. */
+static void show_setpgid(const char *label) {
+    long result = syscall(SYS_setpgid, 0, getpgrp());
+    printf("%s: setpgid -> %ld (%s)\n", label, result, result < 0 ? strerror(errno) : "allowed");
+    fflush(stdout);
+}
+
+/* Shows how a filter refusal can become a reported refusal without depending on the supervisor:
+ * an older listener-less filter answering USER_NOTIF refuses on its own with ENOSYS; a newer
+ * listener filter answering USER_NOTIF for the same call wins the tie and gets the notification;
+ * when that listener is gone the call is refused with ENOSYS again; and an older ERRNO still
+ * beats a newer USER_NOTIF, which is why an ERRNO refusal can never be reported. */
+static int probe_kernel_refusal(void) {
+    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
+        fail("no_new_privs");
+    }
+    pid_t errno_child = fork();
+    if (errno_child == 0) {
+        install_plain_filter(SYS_setpgid, SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA));
+        int listener = install_listener_for(SYS_setpgid);
+        show_setpgid("older ERRNO, newer USER_NOTIF with a listener nobody serves");
+        close(listener);
+        _exit(0);
+    }
+    waitpid(errno_child, nullptr, 0);
+    install_plain_filter(SYS_setpgid, SECCOMP_RET_USER_NOTIF);
+    show_setpgid("listener-less USER_NOTIF alone");
+    int pair[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pair) != 0) {
+        fail("socketpair");
+    }
+    pid_t child = fork();
+    if (child == 0) {
+        close(pair[0]);
+        int listener = install_listener_for(SYS_setpgid);
+        if (!send_descriptor(pair[1], listener)) {
+            _exit(3);
+        }
+        close(listener);
+        show_setpgid("newer listener filter, supervisor answers EACCES");
+        char go;
+        if (read(pair[1], &go, 1) != 1) {
+            _exit(4);
+        }
+        show_setpgid("newer listener filter, supervisor gone");
+        _exit(0);
+    }
+    close(pair[1]);
+    int listener = receive_descriptor(pair[0]);
+    if (listener < 0) {
+        fail("no listener");
+    }
+    struct seccomp_notif request;
+    memset(&request, 0, sizeof(request));
+    if (ioctl(listener, SECCOMP_IOCTL_NOTIF_RECV, &request) == 0) {
+        struct seccomp_notif_resp response;
+        memset(&response, 0, sizeof(response));
+        response.id = request.id;
+        response.error = -EACCES;
+        if (ioctl(listener, SECCOMP_IOCTL_NOTIF_SEND, &response) != 0) {
+            fail("answer");
+        }
+    }
+    close(listener);
+    if (write(pair[0], "g", 1) != 1) {
+        fail("go");
+    }
+    waitpid(child, nullptr, 0);
+    return 0;
+}
+
 int main(int argument_count, char *arguments[]) {
     enum spike_mode mode = MODE_PLAIN;
     const char *helper_path = nullptr;
@@ -792,6 +901,8 @@ int main(int argument_count, char *arguments[]) {
             return probe_nested_listener();
         } else if (strcmp(arguments[index], "--probe-continue") == 0) {
             return probe_continue();
+        } else if (strcmp(arguments[index], "--probe-kernel-refusal") == 0) {
+            return probe_kernel_refusal();
         } else if (strcmp(arguments[index], "--quote") == 0 && index + 1 < argument_count) {
             char quoted[PATH_MAX * 4 + 8];
             quote(arguments[index + 1], quoted, sizeof(quoted));
