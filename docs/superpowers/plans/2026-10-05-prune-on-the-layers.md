@@ -322,6 +322,19 @@ Filesystem first with the network layer and the limits off, then network with th
 - minimisation: every grant tried once, or the budget spent;
 - done: `verification_runs` consecutive unobserved runs under the final policy with every layer on, all equal to the reference.
 
+### A.6.8 Exercise inputs, and the Maven reference exercise
+
+Every exercise the pruner takes meets one contract, read by `runner.Exercise` (Task 4.2):
+
+- it is a directory `var/tmp/testing-dir/<key>/<exercise>/`, mounted read-only at `/srv/phobos-prune-exercises/<key>/<exercise>` (A.6.1), and copied afresh to `/var/tmp/testing-dir` before every run;
+- it holds an executable `build_script` or `build_script.sh`, which the runner starts with `bash` in `/var/tmp/testing-dir`, and optionally `prune.json` with `report_globs` and `declared_hosts`;
+- its committed copy matches none of its report globs, so a stale report can never stand in for a run (the runner refuses such an exercise before the baseline);
+- every dependency its build resolves is pinned and present in the image before the run, so that under `--network none` a fetch is not a variable (AGENTS.md).
+
+`<key>` is the language argument of `main.py` and of the orchestrator's `--langs`, and the orchestrator unions every exercise of one key into `BaseLanguage-<key>.cfg`. A key therefore stands for one base: a build tool whose base must stay apart gets a key of its own.
+
+The **Maven reference exercise** is the first real input beyond the integration fixture. It is defined once, in the Ares 2 import plan of pull request 163 (`docs/superpowers/plans/2026-10-05-ares2-policy-import.md`, section A.4.3: location, contents, pinned versions, the offline build and its measurements), and is not repeated here; this plan relies only on the contract above and on the exercise's place, `var/tmp/testing-dir/java-maven/maven-reference/` (key `java-maven`), which that plan's pull request 5 creates. Task 8.4 prunes it, and the resulting `BaseLanguage-java-maven.cfg` is what that plan's pull request 6 adopts as its Maven base. That adoption is the separate, reviewed pull request the Global Constraints ask for, and it states every widening.
+
 ## A.7 Which direction each heuristic errs in
 
 AGENTS.md asks for this for every heuristic.
@@ -342,7 +355,7 @@ AGENTS.md asks for this for every heuristic.
 
 ## A.8 Keeping a wrong-reason failure out of the allow-list
 
-1. **The verdict is not an exit status.** It is the exit class plus the per-test outcomes from the JUnit XML reports (`build/test-results/**/*.xml`, `target/surefire-reports/*.xml`, or a glob from the exercise's `prune.json`), plus the existing patterns: `NO-SOURCE` (Gradle reports it with status 0), `INFRA_FAILURE_PATTERNS` from `detect_minimal_fs.sh`. Two runs agree only when the same tests ran with the same outcomes.
+1. **The verdict is not an exit status.** It is the exit class plus the per-test outcomes from the JUnit XML reports (`build/test-results/**/*.xml`, `target/surefire-reports/*.xml`, or a glob from the exercise's `prune.json`), plus the existing patterns: `NO-SOURCE` (Gradle reports it with status 0), `INFRA_FAILURE_PATTERNS` from `detect_minimal_fs.sh`. Two runs agree only when the same tests ran with the same outcomes. Maven has the same trap in two spellings, measured in the run-phase image (Maven 3.9.11, Surefire 3.5.3): a project without tests ends with status 0, `[INFO] No tests to run.` and no report, and `-DskipTests` ends with status 0 and `[INFO] Tests are skipped.`. Both lines set `no_source`, as `NO-SOURCE` does. The Maven reference exercise also passes `-DfailIfNoTests=true`, which turns the first into status 1 and `No tests to run!`, but that only adds a failing status; the verdict still comes from the reports, and a run with no Surefire report has run no tests whatever its status. A Maven run that cannot find a pinned artefact in the seeded local repository ends with status 1 and `... in offline mode and the artifact ... has not been downloaded from it before`: in the unsandboxed baseline that is an infrastructure failure (the image lacks what the exercise pins) and aborts the exercise. Under the layers the line classifies nothing, because a Landlock refusal of a file in the local repository may well surface as the same line: the run is a failed run like any other, so it leads to a grant only through denials attributed to the layer under test (A.6.3), and to an abort when it has none after the unobserved rerun (A.6.4). The `infra_failure` flag is recorded for such a run but never decides it. The `no_source` patterns and the missing-artefact pattern are separate fields and never stand in for each other.
 2. **The baseline is repeated** three times unsandboxed; disagreement aborts the exercise as flaky.
 3. **The permissive layered run** separates "the layers' fixed rules break this exercise" from "the policy is too narrow".
 4. **A grant needs an attributed denial**: in the domain, refused by the layer under test, confirmed by the control replay. A failing run without one is rerun once unobserved; if it still fails, the exercise aborts.
@@ -438,10 +451,12 @@ Each pull request is based on `main` after the previous one merged (or stacked o
 | 5 | `feature/prune-filesystem-stage` | grow loop, generalisation, cfg renderer, minimisation, fixture suite | no |
 | 6 | `feature/prune-network-stage` | network derivation | no |
 | 7 | `feature/prune-limits-stage` | sampler, margins, limit signatures, joint verification, containment checks | no |
-| 8 | `feature/prune-producer-switch` | per-language entry, artefacts, orchestrator merge, compose, docs | no (generated files only) |
+| 8 | `feature/prune-producer-switch` | per-language entry, artefacts, orchestrator merge, compose, docs, the Maven reference prune (Task 8.4) | no (generated files only) |
 | 9 | `feature/retire-bubblewrap-pruner` | remove the Bubblewrap pruner and its tests and probe | no |
 
-Adopting a regenerated `BaseLanguage-java.cfg` into `core/config/` is not part of this plan; it is a later pull request of its own that lists every widening.
+Adopting a regenerated `BaseLanguage-java.cfg` into `core/config/` is not part of this plan; it is a later pull request of its own that lists every widening. The same holds for the Maven base of Task 8.4, which the Ares 2 import plan adopts.
+
+**Ordering against the Ares 2 import plan (pull request 163).** Stated there in A.11, and mirrored here: its pull request 5, the Maven reference exercise, is based on `main`, depends on nothing in either plan, and must land before Task 8.4 of this plan's PR 8 runs; its pull request 6, the Maven base, waits for this plan's PR 8 (whose Task 8.4 produced the base) and for its own pull request 4. The Maven lines of the verdict arrive in this plan's PR 4 (Task 4.1) and need nothing from the other plan. Nothing else in either plan waits for the other, and PRs 2 to 7 of this plan can land before the exercise exists.
 
 ## PR 2: Ask each runner whether ptrace can observe a Landlock denial
 
@@ -791,6 +806,8 @@ def test_a_readable_file_refused_in_the_sandbox_is_landlock_caused(tmp_path):
   - `verdict.read_verdict(status: int, log_text: str, report_paths: list[pathlib.Path]) -> Verdict`.
   - `verdict.same_outcome(first: Verdict, second: Verdict) -> bool`.
   - `verdict.DEFAULT_REPORT_GLOBS = ("build/test-results/**/*.xml", "target/surefire-reports/*.xml")`.
+  - `verdict.NO_SOURCE_PATTERNS = ("NO-SOURCE", "No tests to run", "Tests are skipped.")`, Gradle's line and Maven's two (A.8), the second matching both `No tests to run.` and `No tests to run!`.
+  - `verdict.MAVEN_OFFLINE_MISSING_PATTERN = "in offline mode and the artifact"`, one of the infrastructure patterns, which only the baseline treats as an abort (A.8).
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -818,7 +835,33 @@ def test_a_run_with_no_reports_did_not_run_tests():
 
 def test_status_fourteen_is_a_timeout():
     assert verdict.read_verdict(14, "", []).exit_class == "timeout"
+
+
+def test_maven_without_tests_and_status_zero_is_not_a_success():
+    result = verdict.read_verdict(0, "[INFO] No tests to run.\n[INFO] BUILD SUCCESS\n", [])
+    assert result.no_source
+    assert not result.tests_ran
+
+
+def test_maven_with_skipped_tests_and_status_zero_is_not_a_success():
+    result = verdict.read_verdict(0, "[INFO] Tests are skipped.\n[INFO] BUILD SUCCESS\n", [])
+    assert result.no_source
+    assert not result.tests_ran
+
+
+def test_a_surefire_report_counts_like_any_junit_report(tmp_path):
+    report = junit(tmp_path / "TEST-de.phobos.reference.AdderTest.xml", {"de.phobos.reference.AdderTest.addsTwoNumbers": "passed"})
+    result = verdict.read_verdict(0, "[INFO] BUILD SUCCESS\n", [report])
+    assert result.tests_ran
+    assert not result.no_source
+
+
+def test_a_missing_artefact_in_offline_mode_is_an_infrastructure_failure():
+    log_text = "[ERROR] Cannot access central (https://repo.maven.apache.org/maven2) in offline mode and the artifact org.junit.jupiter:junit-jupiter-engine:jar:5.13.4 has not been downloaded from it before.\n"
+    assert verdict.read_verdict(1, log_text, []).infra_failure
 ```
+
+The Maven log lines are the ones measured in A.8, copied verbatim.
 
 - [ ] **Step 2: Run to see them fail. Step 3: Implement** with `xml.etree.ElementTree` (a `testcase` with a `failure` or `error` child is `failed`, with `skipped` is `skipped`, otherwise `passed`; the test id is `classname.name`); the patterns are copied from `detect_minimal_fs.sh`'s `IGNORABLE_FAILURE_PATTERNS`, `UNIGNORABLE_SUCCESS_PATTERNS` and `INFRA_FAILURE_PATTERNS`, named once as module constants. Bandit flags `xml.etree`; the reports are written by the exercise's own build inside the prune container, so use `defusedxml` only if it is in the image, otherwise add a `# nosec B314` with the reason on the line above, as AGENTS.md requires for a suppression.
 - [ ] **Step 4: Pass, lint, commit** both paths.
@@ -837,7 +880,7 @@ def test_status_fourteen_is_a_timeout():
   - `runner.RunResult(verdict: Verdict, status: int, trace: Trace | None, samples: list | None, wall_seconds: float, log_path: pathlib.Path)`.
   - `runner.run_direct(exercise: Exercise) -> RunResult`.
   - `runner.run_layers(exercise: Exercise, policy: Policy, shape: RunShape) -> RunResult`, which first passes the candidate through the acceptance gate (`phobos-policysystem.sh --spec-dir <temporary> --config <candidate>`) and raises `runner.PrunerDefect(status: int, log_path: pathlib.Path)` when the gate refuses or when the run ends with `2`, `11`, `15` or `125` together with Phobos's own stderr marker for that status (A.6.4).
-  - `runner.Exercise(name: str, workdir: pathlib.Path, build_script: str, report_globs: tuple[str, ...], declared_hosts: tuple[str, ...])`, read from the exercise directory and its optional `prune.json`.
+  - `runner.Exercise(name: str, workdir: pathlib.Path, build_script: str, report_globs: tuple[str, ...], declared_hosts: tuple[str, ...])`, read from the exercise directory and its optional `prune.json` (the contract of A.6.8); `runner.read_exercise` raises `runner.ExerciseRefused(reason: str)` when the directory has no executable build script or its committed copy already matches one of its report globs.
   - `cfgfile.Policy(fs: dict[str, frozenset[str]], connect: tuple[str, ...], bind: tuple[str, ...], limits: dict[str, int])`.
   - `cfgfile.render(policy: Policy) -> str`.
   - `cfgfile.permissive_policy(root: pathlib.Path) -> Policy`.
@@ -873,6 +916,17 @@ def test_the_commands_own_status_without_a_phobos_marker_is_a_verdict(tmp_path, 
     fake = fake_phobos(tmp_path, status=status, stderr="make: *** [all] Error 2")
     result = runner.run_layers(exercise(tmp_path), empty_policy(), runner.RunShape(observe=False, network=True, limits=True, sample=False), phobos=fake)
     assert result.status == status
+
+
+def test_an_exercise_that_already_holds_a_report_is_refused(tmp_path):
+    exercise_dir = tmp_path / "maven-reference"
+    (exercise_dir / "target" / "surefire-reports").mkdir(parents=True)
+    (exercise_dir / "target" / "surefire-reports" / "TEST-Stale.xml").write_text("<testsuite/>")
+    (exercise_dir / "build_script.sh").write_text("exit 0\n")
+    (exercise_dir / "build_script.sh").chmod(0o755)
+    (exercise_dir / "prune.json").write_text('{"report_globs": ["target/surefire-reports/TEST-*.xml"], "declared_hosts": []}')
+    with pytest.raises(runner.ExerciseRefused, match="report"):
+        runner.read_exercise(exercise_dir)
 
 
 def test_the_permissive_policy_keeps_the_specification_parent_out_of_every_write_path(tmp_path):
@@ -1189,6 +1243,24 @@ def test_enomem_counts_only_when_the_unlimited_run_did_not_also_see_it():
 
 - [ ] Steps: write the changes listed in A.12; check every command quoted in them by running it; `ec --no-color`; commit the files by name.
 
+### Task 8.4: Prune the Maven reference exercise
+
+Runs only once pull request 5 of the Ares 2 import plan (the exercise, defined in its A.4.3) is on `main` (Part B, ordering). Its output is that plan's Maven base.
+
+**Files:**
+- Modify: `docker-compose.yaml` (service `prune_java_maven`: the same build, mounts, `network_mode: none` and absence of any capability or privilege as `prune_java` from Task 8.1, with `command: ["--stage", "all", "java-maven"]`; the `orchestrate` service gains `java-maven` in `--langs` and a `depends_on` on `prune_java_maven`)
+
+**Interfaces:**
+- Consumes: the exercise at `var/tmp/testing-dir/java-maven/maven-reference/` and its `prune.json` (A.6.8); `main.py` (Task 8.1); the orchestrator (Task 8.2); the Maven verdict lines (Task 4.1).
+- Produces: `var/tmp/path_sets/java-maven_maven-reference.cfg` and `.json`, and `var/tmp/opt/core/config/BaseLanguage-java-maven.cfg`, which the other plan's pull request 6 adopts unedited. Nothing under `core/` changes here.
+
+- [ ] **Step 1: Check the precondition.** `git log --oneline origin/main -- var/tmp/testing-dir/java-maven/maven-reference` names the other plan's pull request 5; otherwise stop, since the task has no input.
+- [ ] **Step 2: Add the compose service** and the orchestrator change; `yamllint --strict .`.
+- [ ] **Step 3: Run the prune**, from the repository root, in an ordinary container as compose starts it: `docker compose -f docker-compose.yaml run --rm --build prune_java_maven`, then `docker compose -f docker-compose.yaml run --rm --no-deps orchestrate --langs java-maven --path-dir /var/tmp/path_sets --skip-prune`; `--no-deps` keeps `run` from starting `orchestrate`'s dependencies, which would prune the exercise a second time instead of reading the artefacts just written. The stages are those of A.6.4, unchanged: the three unsandboxed baseline runs, the permissive layered run, filesystem, network and limits, the joint verification and the containment checks. Expected: status 0, the two artefacts and the base.
+- [ ] **Step 4: Read the result, not the status.** In `java-maven_maven-reference.json`: the baseline holds both test cases of the exercise, passed, in all three runs, with `tests_ran` true and neither `no_source` nor `infra_failure`; the permissive layered run reports no fixed-rule refusal; every containment check is refused; the widening list says how `/root/.m2/repository` is covered (`/root` is a fine-grained root, A.6.5, so grants there are per file or compacted beneath it, and an artefact the reference never loads stays ungranted, which the other plan records as its question R3); and no write-class right is granted under `/root/.m2`, since an offline run was measured writing nothing there. A write-class grant there is not a failure of this task, but it is a finding the adopting pull request has to explain.
+- [ ] **Step 5: Wrong reasons, both directions.** On two throwaway copies of the exercise under another key (`java-maven-check`), never committed: without `test/`, the baseline aborts with `no_source` and no `.cfg` is written; with `junit-jupiter` pinned to a version the seeded repository lacks, the baseline aborts as an infrastructure failure with the offline line of A.8 and no `.cfg` is written. Meanwhile the unmodified exercise in Step 3 produced its `.cfg`, which is the permitted direction.
+- [ ] **Step 6: Commit** `docker-compose.yaml` by name: `Prune the Maven reference exercise under its own key`. The artefacts are not committed by this task (`/var/tmp/path_sets/` is ignored, and the orchestrator's output under `var/tmp/opt/core/config` stays untracked); the record and the base are attached to this pull request and handed to the other plan's pull request 6.
+
 ## PR 9: Retire the Bubblewrap pruner
 
 Only after Q5 is answered (Python), since the Python prune image still uses Bubblewrap until then.
@@ -1217,3 +1289,5 @@ Round 1 raised six points, all acted on:
 | low | generated configurations proven only in the permitted direction | A.6.4 and Task 7.2: containment checks with canaries, a `[read]`-only write, an unnamed destination and port, and each derived limit |
 
 Round 2 approved, with one low note on the status contract. Acting on it showed that `phobos.sh` passes the command's own status through, so `2`, `11`, `15` and `125` count as a Phobos stop only together with Phobos's own stderr marker (A.6.4, Task 4.2). Two further gaps found while re-reading were fixed in the same round: the exercise sources move out of `/var/tmp/testing-dir`, which the exercise itself now occupies (A.6.1), and `main.py` is created where it is first used (Task 5.3). Round 3 approved all three changes.
+
+A later revision added the Maven reference exercise as an input (A.6.8, the Maven lines of A.8 and Task 4.1, the stale-report refusal of Task 4.2, Task 8.4 and the ordering against the Ares 2 import plan of pull request 163). It was reviewed together with the matching changes to that plan in three rounds: this plan stopped repeating the exercise's build command, which that plan's A.4.3 defines, A.8 now says that under the layers the offline line classifies nothing, and Task 8.4 runs the orchestrator with `--no-deps` so that it does not prune the exercise a second time. The reviewer confirmed the ordering between the two plans has no cycle and approved explicitly: "I approve, no remaining concerns."
