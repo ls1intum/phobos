@@ -19,7 +19,7 @@
 - No `--privileged`, `--cap-add` or `--security-opt` for any suite or for the prune container itself.
 - Never add a bind, a capability or an allowed host to make a test pass.
 - A grant needs an attributed denial; a run that fails without one is never turned into a grant.
-- The pruner never changes `core/` behaviour for a grading run; adopting a regenerated base policy into `core/config/` is a separate, reviewed pull request that states "this now permits X, which it did not permit before" for every widening.
+- The pruner never changes `core/` behaviour for a grading run. The one change under `core/` this plan makes is decision 9's (A.6.11): the connect guard's verbose refusal names the refused endpoint, which changes the text of a log line and no decision. Adopting a regenerated base policy into `core/config/` is a separate, reviewed pull request that states "this now permits X, which it did not permit before" for every widening.
 - Generated configuration must be accepted by `core/phobos-policysystem.sh` as it stands on `main` (absolute paths, no wildcard characters `*`, `?`, `[`, existing `[read]`/`[execute]` paths in an exercise configuration, no nested entry whose rights are a strict subset of an ancestor's).
 - Python code is linted by `ruff check --no-cache .` and, under `var/tmp/helpers`, by `bandit --recursive --ini .bandit --severity-level medium`; shell by `shellcheck -x -S warning`; Dockerfiles by `hadolint --config .hadolint.yaml`; YAML by `yamllint --strict .`; everything by `ec --no-color`.
 - Branch names use an allowed prefix (`feature/`, `ci/`, `docs/`, not `feat/`).
@@ -54,11 +54,11 @@ The constraint is AGENTS.md's: an ordinary container, no `--privileged`, no `--c
 - **Attribution.** The best of all candidates: the kernel names the exact missing right (`blockers=`) and the object (path for the filesystem; the port for the network). It does not name a remote host, because Landlock does not know hosts.
 - **What it needs.** A record has to be read from the audit netlink socket's read-only multicast group `AUDIT_NLGRP_READLOG`, which requires `CAP_AUDIT_READ` in the initial user namespace and is delivered through the initial network namespace only; without an audit daemon the records fall back to the kernel log, which needs `/dev/kmsg` or `syslog(2)` and `CAP_SYSLOG` under `dmesg_restrict`. Audit is not namespaced.
 - **Measured here** (Docker 29.8.1, kernel 7.0.14-linuxkit aarch64, Landlock ABI 8, ordinary container with `--network none`, as root and as uid 65534): binding the audit netlink socket to `AUDIT_NLGRP_READLOG` fails with `EPERM`; `/dev/kmsg` does not exist; `syslog(SYSLOG_ACTION_READ_ALL)` fails with `EPERM`.
-- **Verdict.** Not usable inside an ordinary container. It becomes usable where the pruner owns the kernel, for example in a KVM guest (see PR 161, which asks whether hosted runners can boot one); that is recorded as open question Q6 and as a later, optional second observer, never as the default.
+- **Verdict.** Not usable inside an ordinary container. It becomes usable where the pruner owns the kernel, in a KVM guest. PR 161 (merged) showed that the x86 hosted runners can boot one under KVM and `ubuntu-24.04-arm` cannot; decision 6 adds such a run on x86 as a second, kernel-native observer (A.6.9), never as the default.
 
 ### A.3.2 The Landlock "quiet" flag (ABI 10)
 
-ABI 10 adds `LANDLOCK_ADD_RULE_QUIET` and the ruleset fields `quiet_access_fs`, `quiet_access_net` and `quiet_scoped`, which suppress audit records for chosen objects and rights. It only filters audit output; it does not make a denial observable to anyone who cannot already read audit. It would help an audit-based observer drop known-harmless denials, so it belongs with A.3.1 and Q6. The CI kernels (6.17 and 7.0) offer ABI 7 and 8; ABI 10 needs 7.2.
+ABI 10 adds `LANDLOCK_ADD_RULE_QUIET` and the ruleset fields `quiet_access_fs`, `quiet_access_net` and `quiet_scoped`, which suppress audit records for chosen objects and rights. It only filters audit output; it does not make a denial observable to anyone who cannot already read audit. It would help an audit-based observer drop known-harmless denials, so it belongs with A.3.1 and the KVM run of A.6.9. The CI kernels (6.17 and 7.0) offer ABI 7 and 8; ABI 10 needs 7.2.
 
 ### A.3.3 seccomp user notification on `open`, `openat`, `execve` and the rest
 
@@ -81,7 +81,7 @@ Permission events (`FAN_OPEN_PERM`, `FAN_ACCESS_PERM`) and mount or filesystem m
   - a follow-forks tracer (`PTRACE_O_TRACEFORK|VFORK|CLONE|EXEC`, `PTRACE_GET_SYSCALL_INFO`) around the real chain in the image `phobos-run-phase:ci`, `phobos.sh --config <cfg allowing 127.0.0.1:*> -- bash -c 'cat /var/log/dpkg.log; cat /etc/hostname; exec 3<>/dev/tcp/10.0.0.1/80'`, recorded `openat /var/log/dpkg.log errno=EACCES` (Landlock), `connect 10.0.0.1:80 errno=EACCES` (connect guard), `openat /dev/tty errno=EACCES` and several `AF_UNIX` `connect` refusals (the guard refusing a UNIX-domain connect), while `/etc/hostname` succeeded and the run completed with status 0. The chain's seccomp listener, the group lock and Landlock all kept working under the tracer.
   - The same run's denial counter printed `Sandbox denials: network=0, filesystem=3`, although one of the three "filesystem" lines was the connect guard's network refusal. That is the heuristic of A.3.8 in action.
   - Of the 116 failed system calls recorded in that run, 9 were `EACCES` or `EPERM`; the rest were ordinary `ENOENT` (the `PATH` search), `ENOTDIR` and `ENXIO`, and many came from the layers' own shells before the command started. Attribution therefore has to filter by errno and by process (A.6.1).
-- **Verdict.** Chosen as the observer. `strace` is used rather than a new tracer because it decodes every system call of both architectures (x86_64 still has the legacy `open`, `creat`, `mkdir`, `unlink`, `rename` calls that aarch64 lacks) and every socket address; Q1 asks whether Markus prefers a dedicated C tracer instead.
+- **Verdict.** Chosen as the observer. `strace` is used rather than a new tracer because it decodes every system call of both architectures (x86_64 still has the legacy `open`, `creat`, `mkdir`, `unlink`, `rename` calls that aarch64 lacks) and every socket address. Decision 1 keeps it over a dedicated C tracer (A.14).
 
 ### A.3.6 `LD_PRELOAD`
 
@@ -108,7 +108,7 @@ What `count_denials` in `core/phobos-tools-common/phobos-log.sh` does: it counts
 | eBPF / BPF LSM | yes | yes | exact | yes | `CAP_BPF`, `lsm=bpf` | no |
 | stderr parsing | sometimes | no | no | no | none | yes, heuristic |
 
-Runner Landlock ABIs: the CI kernels are 6.17 (ABI 7) and 7.0 (ABI 8); the local Docker Desktop kernel 7.0.14 reports ABI 8. `RESOLVE_UNIX` (ABI 9) and the UDP rights (ABI 10, kernel 7.2) are therefore never observed on today's runners (Q6).
+Runner Landlock ABIs: the CI kernels are 6.17 (ABI 7) and 7.0 (ABI 8); the local Docker Desktop kernel 7.0.14 reports ABI 8. `RESOLVE_UNIX` (ABI 9) and the UDP rights (ABI 10, kernel 7.2) are therefore never observed on today's runners in an ordinary container; the KVM run of A.6.9 observes them on x86 (decision 6).
 
 ## A.4 "Would that be an idea?"
 
@@ -116,7 +116,7 @@ Runner Landlock ABIs: the CI kernels are 6.17 (ABI 7) and 7.0 (ABI 8); the local
 
 Trade-offs, honestly:
 
-- **Fewer, cheaper runs.** The old pruner runs the whole build once to three times per visited directory, hundreds of builds for a JDK tree. The new loop converges in a handful of grow runs, most of which fail fast, plus a bounded minimisation budget.
+- **Fewer, cheaper runs.** The old pruner runs the whole build once to three times per visited directory, hundreds of builds for a JDK tree. The new loop converges in a handful of grow runs, most of which fail fast, plus a minimisation whose number of runs is bounded by four times the number of grants (A.6.4).
 - **The same sandbox.** Every verdict is taken under the grading layers, so "the prune passed, grading failed" stops being a known gap; a failure that remains is a nondeterministic build or a code path the reference never took.
 - **Tighter rights.** A denial names the right (read, write, create, delete, refer, ipc, symlink, execute), so a path gets that right and no blanket `w`.
 - **New coverage.** Network rules, bind ports and limits are derived instead of hand-written, and an incompatibility with a fixed rule (setsid, UNIX-domain connect, raw sockets, device ioctl) is reported instead of hidden.
@@ -142,14 +142,15 @@ var/tmp/helpers/layer_prune/           Python package, standard library only
   strace_parse.py  strace -f output -> Syscall stream, process tree, in-domain pids
   attribute.py     Syscall -> Denial (layer, operation, object, right), fixed-rule refusals
   control.py       control replays outside the sandbox: is a refusal Landlock's?
-  generalise.py    Denial -> grant (path, sections), compaction, hierarchy normalisation
+  generalise.py    Denial -> grant (path, sections), per-run names, compaction, hierarchy normalisation
   cfgfile.py       grants + network rules + limits -> Phobos .cfg text, and its checks
   network.py       network denials -> [connect] / [bind] rules
   limits.py        samples -> measurements -> [limits] with margins; which limit ended a run
   sampler.py       /proc sampling of the run's process tree
   verdict.py       a run's outcome: exit class, per-test results, NO-SOURCE, infra failure
   runner.py        one run through phobos.sh, with or without the observer and sampler
-  search.py        grow loop and ddmin
+  search.py        grow loop and the minimisation of A.6.4
+  audit.py         Landlock audit records -> Denial, and the cross-check against strace (KVM run only, A.6.9)
   stages.py        the per-exercise pipeline: baseline, filesystem, network, limits, verification
   main.py          per-language entry point, writes the artefacts
 
@@ -215,12 +216,12 @@ Two further rules keep a foreign refusal from becoming a grant:
 prune_exercise(exercise, budget):
     reference = None
     for attempt in 1..3:                                   # B1: unsandboxed baseline
-        run = run_direct(exercise)
+        run = run_reference(exercise)                      # run_direct, or for declared hosts the permissive layered run limited to them
         require run.verdict.tests_ran and not run.verdict.no_source and not run.verdict.infra_failure
         if reference is None: reference = run.verdict
         require same_outcome(run.verdict, reference)        # otherwise: abort "flaky reference"
 
-    permissive = permissive_policy()                         # B2: layers on, everything granted
+    permissive = permissive_policy(exercise.declared_hosts)   # B2: layers on, everything granted; external rules only for declared hosts (decision 11)
     run = run_layers(permissive, observe=True, limits=OFF)
     if not same_outcome(run.verdict, reference):
         abort("incompatible with a fixed rule of the layers", fixed_refusals(run))
@@ -239,19 +240,18 @@ prune_exercise(exercise, budget):
         fs = fs | generalise(denials, snapshot)
     else: abort("did not converge within the grow budget")
     fs = normalise_hierarchy(compact(fs))
-    fs = ddmin_minimise(fs, test=lambda g: same_outcome(run_layers(g, observe=False, network=OFF, limits=OFF).verdict, reference),
-                        budget=budget.minimise_runs)
+    fs = minimise(fs, test=lambda g: same_outcome(run_layers(g, observe=False, network=OFF, limits=OFF).verdict, reference))
 
     # stage 2: network, filesystem fixed, limits off
-    net = NetworkRules.empty()
+    net = NetworkRules.seeded(exercise.declared_hosts)       # empty unless prune.json declares hosts (decision 11)
     for round in 1..budget.network_rounds:
         run = run_layers(fs, net, observe=True, limits=OFF)
         if same_outcome(run.verdict, reference): break
         decision = network_rules(attribute(run.trace), bound_ports(run.trace), exercise.declared_hosts)
-        if decision.refused_external: abort("needs external network", decision.refused_external)
+        if decision.refused_external: abort("needs external network", decision.refused_external)   # undeclared only
         if decision.adds_nothing_to(net): abort("network stage failed without an attributable denial", run)
         net = net | decision
-    net = ddmin_minimise_network(net, ...)
+    net = minimise(net, ...)                                 # drops every rule, declared hosts included, the run does not need
 
     # stage 3: limits
     samples = [run_layers(fs, net, observe=False, limits=OFF, sample=True) for _ in 1..3]
@@ -278,19 +278,35 @@ Every candidate configuration passes the **acceptance gate** before it is run or
 
 The final stage also runs **containment checks** with the protection matrix's `probe.c` under the final configuration, so every generated configuration is proven in both directions, not only by its passing build: a canary file the pruner creates before the first run at `/srv/phobos-prune-canary/secret` and at `/root/phobos-prune-canary`, which no reference touches, must be refused for read; writing into a path the configuration grants only `[read]` must be refused; `connect` to `10.0.0.1:80` and `bind` to port 8080 must be refused unless the configuration names them; and a probe that exceeds each derived limit must be refused or ended. A containment check that passes (the canary is readable) aborts the exercise.
 
-Default budget: `grow_rounds=40`, `network_rounds=10`, `minimise_runs=150`, `verification_runs=3`. A minimisation that exhausts its budget keeps the remaining grants (errs permissive) and says so in the record.
+Default budget: `grow_rounds=40`, `network_rounds=10`, `verification_runs=3`. These are abort conditions: an exhausted grow or network budget aborts the exercise and writes no configuration. The minimisation has no run budget (decision 10).
+
+**Minimisation, without a run budget (decision 10).** `search.minimise(items, passes)` takes the grants as a list of (path, section) pairs, or the network rules as a list of rules, and runs until nothing more can be removed:
+
+1. It tests the nodes of a balanced binary split of the list, top down. For a node it removes the node's grants from the current set and makes two unobserved runs; the removal is kept only when both match the reference. Otherwise the grants go back and, when the node holds more than one grant, its two halves are tested in turn; a single grant whose removal fails is kept.
+2. Every decision is final: a removed grant is never put back, a kept grant is never tried again.
+
+It terminates, and its cost is bounded: every node of the split tree is tested at most once, and a binary tree over `n` leaves has `2n - 1` nodes, so a minimisation makes at most `2n - 1` trials and at most `2(2n - 1) = 4n - 2` runs, a trial whose first run fails taking one. `n` is the number of grants after compaction. What it guarantees unconditionally: it terminates, within that bound, every removal it made was followed by two runs that matched the reference, and every grant it kept failed at least one run when removed from the set of that moment. Minimality rests on one assumption, stated as such: outcomes are monotone, that is, removing grants never turns a failing run into a passing one. Under it, a grant kept because its removal failed from a larger set is still needed in the final, smaller one, so no single grant of the result can be removed. A build can break the assumption, for instance by taking a fallback path that passes only when a further access is denied; then the result may keep a grant a later state would not have needed, which errs permissive and is visible in the record, but it never removes a grant the final verification needs, because that verification decides. The pruner does not retry kept grants to chase such cases, which would give up the bound.
+
+Flaky tests cannot make it oscillate, since nothing is retried; they can only make one decision wrong. A spurious failure keeps a grant that was not needed, which errs permissive and is visible in the record. A spurious pass would remove a needed grant, which is why a removal needs two passing runs, and why the joint verification runs `verification_runs` unobserved runs afterwards: if they fail after a minimisation, the pruner restores every grant that minimisation removed, verifies again and records "minimisation unstable". A reference whose three baseline runs disagree never reaches this point (A.8).
+
+The safety stop is outside the pruner. Every CI job that runs a prune carries a wall-clock limit (`timeout-minutes`, by default 360 minutes, the hosted-runner maximum, lowered per job once real durations are known), and a prune that reaches it fails the job. It cannot leave a partial policy: `main.py` removes the key's earlier artefacts first and writes an exercise's `.cfg` and `.json` only after the joint verification and the containment checks, each to a temporary file renamed into place, and the orchestrator refuses a key with a missing exercise.
 
 ### A.6.5 Per-layer derivation
 
 **Filesystem.**
 
-- *Nearest existing ancestor, not the exact path, and not the blind subtree.* A refused object that existed before the run is granted on its own path when it lies under a fine-grained root (default `/etc`, `/dev`, `/proc`, `/sys`, `/root`, `/home`, `/run`), and on its containing directory otherwise; a directory object is granted on itself. An object the run itself created (absent from the pre-run snapshot of the exercise and write paths) is granted on the nearest ancestor that existed before the run, because the next run creates a differently named temporary file and because an exercise configuration may only name existing `[read]`/`[execute]` paths. Creation, removal and rename are granted on the parent directory, which is what Landlock checks anyway.
+- *Nearest existing ancestor, not the exact path, and not the blind subtree.* A refused object that existed before the run is granted on its own path when it lies under a fine-grained root (`/etc`, `/dev`, `/proc`, `/sys`, `/root`, `/home`, `/run`), always file by file and never compacted there (decision 7), and on its containing directory otherwise; a directory object is granted on itself. An object the run itself created (absent from the pre-run snapshot of the exercise and write paths) is granted on the nearest ancestor that existed before the run, because the next run creates a differently named temporary file and because an exercise configuration may only name existing `[read]`/`[execute]` paths. Creation, removal and rename are granted on the parent directory, which is what Landlock checks anyway.
 - *Write-class rights are never widened beyond what Landlock checks.* `[write]` is granted on the file itself, and `[create]`, `[create-ipc]`, `[create-symlink]`, `[delete]` and `[restructure]` on the directory Landlock checks them on (the parent, or for an object the run created, the nearest pre-existing ancestor). Only `[read]` and `[execute]` are ever generalised to a containing directory or compacted.
-- *What `/root` as a fine-grained root means for a local build-tool repository.* The Maven reference exercise (A.6.8) reads its whole dependency closure from `/root/.m2/repository`: Ares 2 and the libraries it brings, the AspectJ weaver and runtime, the Ares agent and every plugin of the template, each as a POM and most as a jar. Because `/root` is a fine-grained root, every refused file there is granted on its own path, so the first pass yields one `[read]` row per file actually opened, typically several hundred. Compaction then replaces the children of a directory below `/root` once at least `k` of them hold identical rights, and climbs while that keeps holding, so the base ends as a mix of files and version, artefact and group directories under `/root/.m2/repository`. A directory grant made this way also covers files the reference never opened that sit beneath it, for instance a second version of a library in the same artefact directory: that implicit coverage is a widening like any other, listed in the record with the number of unobserved entries it covers (A.6.5, every widening is visible), and the adopting pull request has to assess it. A file outside every such directory that the reference never opened, such as an artefact only a WALA or instrumentation run loads, stays ungranted, and a graded build that needs it fails with `EACCES` rather than reaching it. That is intended, because grading runs in the same image with the same pinned closure; it is also why the Ares 2 import plan checks each `MAVEN` configuration name against the pruned base before shipping its file. Write-class rights under `/root/.m2` are not expected, since an offline Maven run was measured writing nothing there; one that appears is listed in the record like every widening.
-- *Compaction.* When at least `k=3` children of a directory hold identical `[read]`/`[execute]` rights, and the directory is not a fine-grained root and not at depth below 2, the children are replaced by the directory. Never `/`.
-- *Every widening is visible.* For each generalisation and each compaction the record lists the observed objects that caused it and the number of existing entries the wider grant newly covers beyond them, so a reviewer of the generated policy sees exactly where it is wider than the observation. A sibling cannot be "proven denied" under a directory grant, since a directory grant covers its siblings by construction; the protection is the restriction to read-class rights outside fine-grained roots, the review of this list, and Q7.
+- *Per-run names, the one exception inside a fine-grained root (decision 7).* Some names under a fine-grained root differ in every run, so a grant on the observed file could never hold in the next run. A path component is a **per-run name** when both of these hold:
+  1. its position matches one of the kernel-assigned identifiers listed in `generalise.PER_RUN_PATTERNS`, and nothing else: a process id in `/proc/<n>`, a thread id in `/proc/<n>/task/<n>`, a descriptor number in `/proc/<n>/fd/<n>` and `/proc/<n>/fdinfo/<n>`, and a pseudo-terminal number in `/dev/pts/<n>`, where `<n>` is `0` or `[1-9][0-9]*`;
+  2. it is seen to change: the same refused call (the same system call, the same section and the same path apart from that component) appears in two observed runs with different values there, or the value is the process or thread id of the refusing process itself, as the trace records it.
+  A component that matches the table but was seen with one value only, and is not the caller's own id, is no per-run name and is granted file by file. A name that changes but matches no entry of the table is not covered either: a file the run created is handled by the rule for objects the run created above, and anything else is reported, never generalised. A per-run name is granted on the **smallest stable directory**, the parent of the leftmost per-run component (`/proc` for `/proc/<pid>/status`, `/dev/pts` for `/dev/pts/<n>`), with exactly the sections observed, and `cfgfile.render` writes the reason as a comment on the line above it, for example `# per-run name: /proc/<pid>/status, observed as /proc/412/status and /proc/977/status; granted on /proc`. Such a grant covers every entry of that directory the run's uid may open under procfs's and devpts's own permission checks, for instance every process's readable `/proc` entries in the container's process namespace; it is listed in the record as a widening with that count (A.7).
+- *`/proc/self` and `/proc/thread-self` are never written.* They are magic links that procfs resolves, at each lookup, to the process doing the lookup. A Landlock rule is anchored on the inode the enforcer opens (`O_PATH`) while it builds the ruleset, and before that `resolve_symlinks` in `phobos-paths.sh` resolves every path with `realpath --canonicalize-missing` in the policy system's own shell. A rule written on `/proc/self/status` would therefore anchor on that shell's `/proc/<pid>/status`, a process that has exited before the command starts, which an exercise configuration refuses as missing and a base drops; and even a rule resolved in the enforcer would hold only for the enforcer's own process, not for the JVM, a forked test JVM or any other process of the command, each of which has its own `/proc/<pid>`. So before generalisation the pruner rewrites a refused `/proc/self/...` to `/proc/<tgid>/...` and `/proc/thread-self/...` to `/proc/<tgid>/task/<tid>/...`. `strace -f` prefixes each line with the id of the calling thread, which is the thread id, not the process id `/proc/self` resolves to: `strace_parse` therefore keeps `Trace.thread_group`, which maps every thread id to its thread-group id, built from the recorded `clone` and `clone3` calls (a child created with `CLONE_THREAD` joins its creator's thread group, any other child starts its own, keyed by its id), and the rewrite takes the thread id from the line and the thread-group id from that map, never with `os.path.realpath` in the pruner, which would resolve to the pruner's own process. The rewritten path is a per-run name by clause 2 and is granted on `/proc` as above.
+- *What file-by-file means for a local build-tool repository.* The Maven reference exercise (A.6.8) reads its whole dependency closure from `/root/.m2/repository`: Ares 2 and the libraries it brings, the AspectJ weaver and runtime, the Ares agent and every plugin of the template, each as a POM and most as a jar. `/root` is a fine-grained root, so every refused file there is granted on its own path and never compacted (decision 7): the base holds one `[read]` row per file the reference opened, typically several hundred, and nothing it did not open. This errs restrictive for the repository: a jar the reference never opened, such as a second version of a library or an artefact only a WALA or instrumentation run loads, stays ungranted, and a graded build that needs it fails with `EACCES` rather than reaching it. That is intended, because grading runs in the same image with the same pinned closure; it is also why the Ares 2 import plan checks each `MAVEN` configuration name against the pruned base before shipping its file. No name under `/root/.m2/repository` matches the per-run table, so the exception never applies there. Write-class rights under `/root/.m2` are not expected, since an offline Maven run was measured writing nothing there; one that appears is listed in the record like every widening.
+- *Compaction.* When at least `k=3` children of a directory hold identical `[read]`/`[execute]` rights, and the directory lies outside every fine-grained root (it is neither one of them nor beneath one, decision 7) and not at depth below 2, the children are replaced by the directory. Never `/`.
+- *Every widening is visible.* For each generalisation and each compaction the record lists the observed objects that caused it and the number of existing entries the wider grant newly covers beyond them, so a reviewer of the generated policy sees exactly where it is wider than the observation. A sibling cannot be "proven denied" under a directory grant, since a directory grant covers its siblings by construction; the protection is the restriction to read-class rights outside fine-grained roots, file-by-file grants inside them, and the review of this list.
 - *Hierarchy normalisation.* A nested entry whose rights are a strict subset of an ancestor's would be refused by `resolve_rights_hierarchy`. Such an entry is raised to its ancestor's rights rather than dropped: Landlock already grants those rights there, so enforcement does not change, and an exercise configuration that names that exact path keeps folding onto it (AGENTS.md, "A base entry an ancestor already covers is not dead code").
-- *Rights minimisation.* ddmin works on (path, section) pairs, so a path granted `[read]` and `[write]` can lose `[write]` alone.
+- *Rights minimisation.* The minimisation of A.6.4 works on (path, section) pairs, so a path granted `[read]` and `[write]` can lose `[write]` alone.
 - *Canonical paths.* Every grant is written as `os.path.realpath` of the object (Landlock anchors on the inode, and a changeable rule on a symbolic link is refused by the enforcer). A path holding `*`, `?`, `[` or a newline cannot be written; it is generalised to its parent and reported.
 
 **Network.**
@@ -298,8 +314,9 @@ Default budget: `grow_rounds=40`, `network_rounds=10`, `minimise_runs=150`, `ver
 - The record of a refused `connect`, `sendto`, `sendmsg`, `sendmmsg`, `bind` or `listen` carries family, address, port and the socket type (from the preceding `socket` call on that descriptor), so transport is known.
 - *Loopback.* A refused loopback destination whose port was bound by a process of the same run (a recorded successful `bind`/`listen` plus `getsockname`) is a server the run started on a port the kernel chose, which differs per run: it becomes `allow 127.0.0.1:*` or `allow [::1]` or, for both families, `allow localhost`. A loopback destination on a port nobody in the run bound becomes an exact `allow 127.0.0.1:<port>` and is reported, since nothing in a prune container listens there.
 - *Bind.* A `bind` refused on port 0, or a `listen` refused on an unbound socket, becomes `allow 0` (with `udp` for a datagram socket). A refused explicit port becomes `allow <port>` only when it is a loopback service the exercise's own tests start; otherwise it is reported.
-- *External destinations are never granted from an address.* The prune container runs `--network none` (AGENTS.md: a prune must not reach the network for anything it did not intend, pin what a probe build resolves). A refused external destination aborts the exercise ("needs external network") unless the exercise's manifest declares the host. A record holds addresses, not names: libc resolves the name before `connect`, and reversing an address (a CDN, a rotating pool) does not give back the name the exercise meant.
-- *Why a name rule needs a resolver.* The connect guard cannot tie a name to an address, so it holds a name rule to its port; the egress broker (HAProxy) holds it to the name by reading the TLS host name, and for an exact name it resolves the name itself and connects only to the result. Without a resolver it could not pin the name, and the rule would only constrain the port, so `phobos-networksystem.sh` refuses an exact-name rule without `--resolver`. A `udp` name has no TLS host name at all; the network layer resolves it once before the command starts and writes the addresses into `/etc/hosts` (`config_doc.txt`). A declared host is therefore emitted as `allow <name>:<port>` and verified in a networked prune container started with `--resolver`; it is never derived from a `--network none` run. That networked verification is a separate, opt-in compose service (`prune_java_egress`), run only for exercises whose `prune.json` declares hosts, with dependency versions pinned and its own output directory; it can only confirm or refuse the declared rules, it never adds a rule of its own, and the default prune services stay `network_mode: none`.
+- *External destinations are never granted from an address.* The default prune services run `--network none` (AGENTS.md: a prune must not reach the network for anything it did not intend, pin what a probe build resolves). A refused external destination there aborts the exercise ("needs external network"). A record holds addresses, not names: libc resolves the name before `connect`, and reversing an address (a CDN, a rotating pool) does not give back the name the exercise meant.
+- *Declared external hosts are derived, and only those (decision 11).* An exercise that needs an external host declares it in `prune.json`, `"declared_hosts": ["api.example.org:443", "ntp.example.org:123 udp"]`. Such an exercise is pruned by the networked service below, not by a default one. Its network stage starts from one `allow <name>:<port>` rule per declared entry (with `udp` where declared) beside the loopback rules it derives, and the minimisation of A.6.4 then runs over all of them, so a declared host stays only when removing its rule makes the run differ from the reference, and a declared host the run did not need is dropped and reported. A destination no declared rule names is refused by the guard, as in every run; when the verdict then differs, the exercise aborts with "needs external network: undeclared <address>:<port>", and nothing is granted for it. The external rules a prune derives are therefore always a subset of what the instructor declared: this widens nothing beyond what the instructor declared.
+- *Why a name rule needs a resolver.* The connect guard cannot tie a name to an address, so it holds a name rule to its port; the egress broker (HAProxy) holds it to the name by reading the TLS host name, and for an exact name it resolves the name itself and connects only to the result. Without a resolver it could not pin the name, and the rule would only constrain the port, so `phobos-networksystem.sh` refuses an exact-name rule without `--resolver`. A `udp` name has no TLS host name at all; the network layer resolves it once before the command starts and writes the addresses into `/etc/hosts` (`config_doc.txt`). A declared host is therefore emitted as `allow <name>:<port>` and derived in a networked prune container started with `--resolver`, never from a `--network none` run. That is a separate, opt-in compose service per key (`prune_<key>_egress`), run only for exercises whose `prune.json` declares hosts, with dependency versions pinned and its own output directory. Even its reference runs go through the layers: `run_reference` (A.6.4, Task 4.2) makes the three baseline runs of such an exercise under the permissive policy with the declared rules as its only external ones, never with `run_direct`, so no run of the prune, the reference included, can reach an undeclared host. It keeps or drops declared rules and never adds a rule for a host nobody declared, and the default prune services stay `network_mode: none`.
 - *DNS.* A refused `sendto` to port 53 means the exercise resolves names; under `--network none` it is reported with the declared-host rule above, never granted as an address.
 - *`[accept]`* (inbound filtering) cannot be observed in a prune run, which has no outside client; it is never emitted and stays hand-written.
 
@@ -307,7 +324,8 @@ Default budget: `grow_rounds=40`, `network_rounds=10`, `minimise_runs=150`, `ver
 
 - *Measure with every limit off*, under the final filesystem and network policy, three unobserved runs with the sampler. `[limits]` with `timeout=0` and each limit `0` switches them off (README, `[limits]`).
 - *Sampler.* The pruner makes itself a child subreaper (`prctl(PR_SET_CHILD_SUBREAPER)` through `ctypes`) so that daemons the build leaves behind are reparented to it and their final accounting is not lost, and it samples `/proc` every 100 ms for every descendant: `VmPeak` (address space, what `ulimit -v` bounds per process), `utime+stime` per process (what `ulimit -t` bounds per process), the highest open descriptor number (what `ulimit -n` bounds), and the number of tasks owned by the run's uid (what `ulimit -u` bounds, per real uid and counting threads). After the run it records the largest file under the write grants (what `ulimit -f` bounds per file) and the wall-clock time.
-- *Margins* (each configurable, defaults chosen to err permissive, Q3): `timeout = max(60, ceil_to(3 x wall, 30))`, `cpu = max(30, ceil_to(3 x max per-process cpu, 10))`, `mem_mb = max(512, ceil_to(1.5 x max VmPeak, 256))`, `nproc = max(64, 2 x max tasks + 16)`, `nofile = max(256, 2 x (max descriptor + 1))`, `fsize_mb = max(16, ceil_to(2 x largest file, 16))`.
+- *Margins* (decision 3; each configurable): `timeout = max(60, ceil_to(5 x wall, 30))`, `cpu = max(30, ceil_to(5 x max per-process cpu, 10))`, `mem_mb = max(512, ceil_to(2 x max VmPeak, 256))`, `nproc = max(64, 2 x max tasks + 16)`, `nofile = max(256, 2 x (max descriptor + 1))`, `fsize_mb = max(16, ceil_to(2 x largest file, 16))`. Five times the wall clock and CPU time and twice the address space err permissive, more so than the 3x and 1.5x first proposed: a correct solution may be up to five times slower than the reference before a limit ends it, at the price that a runaway one runs longer before it is stopped. The cgroup caps of the container stay the outer wall.
+- *`mem_mb` only with a pinned heap (decision 4).* `mem_mb` is `ulimit -v` (`phobos-resourcesystem.sh`), the virtual address space of each process, not its resident set. A JVM reserves address space far beyond its heap: besides the heap up to `-Xmx`, metaspace, the compressed class space, the code cache and a stack per thread. Without a pinned `-Xmx` the JVM sizes its heap from the memory it sees, so its address space, and a `mem_mb` derived from it, would follow the prune host. `mem_mb` is therefore derived only for an exercise that pins the heap of every JVM it starts, and then from the measured peak address space (`VmPeak`, with that pin in force) times the 2x margin, never from `-Xmx` alone, which would leave out everything outside the heap and end correct runs. Pinning `-Xmx` is Java specific, so it lives only in the exercise, in its own build files that grading uses too, and never in Phobos core or in the pruner: the exercise declares it in `prune.json` (`"heap_pinned": true`), the pruner derives `mem_mb` only then, and otherwise writes no `mem_mb`, so the default of `phobos-constants.sh` applies; the record says which.
 - *Exit statuses are evidence, never proof.* A command can end with `137` or `153` of its own accord, and `phobos-timeoutsystem.sh` passes a command's own `124` or `137` through unchanged. A limit is therefore only raised when all of these hold: the same policy with that limit switched off passed (the measurement runs), the failing run's signature below matches, and the raised value then passes. A raise doubles the value, at most three times; a limit still failing after that aborts the exercise. Nothing in this stage grants access, it only moves a bound that the measurement already placed.
 - *Which limit ended a run* (pinned by the protection matrix, `resources.sh` and `resources-edge.sh`): status `14` is the timeout (`PHB-ETIMEOUT`); status `153` is `SIGXFSZ`, the file size; status `137` is `SIGKILL`, which is the CPU limit (the kernel kills at the hard limit, and `ulimit -t` sets soft and hard alike) when the last sample of some process's CPU time was within one second of `cpu`, and otherwise the container's cgroup OOM killer, which is not a Phobos limit and aborts the exercise; `EMFILE` from `open`, `socket`, `pipe`, `dup` is `nofile`; `EAGAIN` from `clone`, `clone3`, `fork` is `nproc`; `ENOMEM` from `mmap`, `brk`, `clone` is `mem_mb`. The last three are read from a diagnostic observed run and only count when they do not also appear in the run with the limits off (a JVM probes large reservations and falls back on its own).
 - *Base versus exercise.* Limits are merged by "the largest value wins", so a limit in a base configuration is a floor for every exercise. Derived limits are therefore written into the per-exercise configuration only; the base keeps the built-in defaults.
@@ -321,7 +339,7 @@ Filesystem first with the network layer and the limits off, then network with th
 
 - grow: the verdict equals the reference; denials that remain in a passing run are harmless and reported, never granted;
 - abort: a failure without an attributable denial after one unobserved rerun, a grow, network or limit budget exhausted, a flaky baseline, an incompatible fixed rule, an external destination not declared;
-- minimisation: every grant tried once, or the budget spent;
+- minimisation: the binary split of A.6.4 is complete, after at most `4n - 2` runs; the result is 1-minimal only under the monotonicity assumption stated there, and otherwise may keep a grant a later state would not have needed; there is no run budget, only the CI job's wall-clock stop, which fails the prune;
 - done: `verification_runs` consecutive unobserved runs under the final policy with every layer on, all equal to the reference.
 
 ### A.6.8 Exercise inputs, and the Maven reference exercise
@@ -331,11 +349,36 @@ Every exercise the pruner takes meets one contract, read by `runner.Exercise` (T
 - it is a directory `var/tmp/testing-dir/<key>/<exercise>/`, mounted read-only at `/srv/phobos-prune-exercises/<key>/<exercise>` (A.6.1), and copied afresh to `/var/tmp/testing-dir` before every run;
 - it holds an executable `build_script` or `build_script.sh`, which the runner starts with `bash` in `/var/tmp/testing-dir`, and optionally `prune.json` with `report_globs` and `declared_hosts`;
 - its committed copy matches none of its report globs, so a stale report can never stand in for a run (the runner refuses such an exercise before the baseline);
+- it may declare `"heap_pinned": true` in `prune.json` when it pins the heap of every JVM it starts in its own build files, which grading uses too; only then is `mem_mb` derived (decision 4);
+- an exercise that builds with Gradle runs it with `--no-daemon` (decision 8). That and the heap pin are Java rules: they live in the exercise's build script and build files, and neither the pruner nor Phobos core adds or checks them;
 - every dependency its build resolves is pinned and present before the run in the run-phase image itself, not only in the prune image, so that under `--network none` a fetch is not a variable (AGENTS.md) and grading later reads the same bytes the prune observed. The prune image is built `FROM` the run-phase image and adds nothing under `/root/.m2` or any other build-tool cache (Task 3.1), so the two hold identical artefacts by construction. A base that names `/root/.m2/repository/.../x-1.0.jar` is only right for an image that holds exactly that file: an image with another version would be refused that version with `EACCES`, and one without it would make the base name a path that does not exist.
 
 `<key>` is the language argument of `main.py` and of the orchestrator's `--langs`, and the orchestrator unions every exercise of one key into `BaseLanguage-<key>.cfg`. A key therefore stands for one base: a build tool whose base must stay apart gets a key of its own.
 
 The **Maven reference exercise** is the first real input beyond the integration fixture. It is defined once, in the Ares 2 import plan of pull request 163 (`docs/superpowers/plans/2026-10-05-ares2-policy-import.md`, section A.4.3: its shape, taken from Artemis's Java Maven test template with Ares 2, the pinned versions, the pre-loaded repository and the measurements), and is not repeated here. This plan relies only on the contract above, on the exercise's place, `var/tmp/testing-dir/java-maven/maven-reference/` (key `java-maven`), and on two facts that plan establishes: the run-phase image is Artemis's JDK 25 Maven image (its pull request 5), and its local Maven repository holds every artefact the exercise resolves, checked against a committed SHA-256 manifest, `docker/run_phase/java/maven-repository.sha256` (its pull request 6, which also adds the exercise). Task 8.4 prunes it, and the resulting `BaseLanguage-java-maven.cfg` is what that plan's pull request 7 adopts as its Maven base. That adoption is the separate, reviewed pull request the Global Constraints ask for, and it states every widening.
+
+### A.6.9 The KVM run: a second, kernel-native observer (decision 6)
+
+The ordinary-container prune of A.6.1 to A.6.8 stays the default path and the only one that writes an exercise's configuration. A KVM run is added beside it, on x86 only.
+
+- **Kernel prerequisites.** Booting is not enough: the guest kernel must be built with `CONFIG_SECURITY_LANDLOCK=y` and `CONFIG_AUDIT=y`, booted with `landlock` in `lsm=` and with `audit=1`, and no audit daemon may consume the records first. The job proves this before any prune run, inside the guest: `landlock_create_ruleset` must report version 10 or later, and a deliberate Landlock refusal (the probe of Task 2.1, reading a file under an empty ruleset) must produce exactly one `AUDIT_LANDLOCK_ACCESS` record that the pruner reads back. If either fails, the job stops as indeterminate, never as a pass.
+- **Where.** PR 161 (merged) added `runner-capability-probe.sh --assert-kvm` and showed that QEMU boots a guest under KVM on the x86 hosted runners (`ubuntu-24.04`, `ubuntu-26.04`) and not on `ubuntu-24.04-arm`. The KVM run is a job on an x86 runner that asserts KVM first, then boots a guest with a pinned Linux 7.2 kernel (Landlock version 10) under QEMU, its root file system exported from the prune image (`docker export`), so the same layers, the same enforcers and the same artefacts run on the newer kernel. The kernel is pinned by version and SHA-256; whether it is an upstream build cached by the workflow or a distribution package is decided in its pull request.
+- **First addition, a second observer.** Inside the guest the pruner owns the kernel and runs in its initial namespaces, so it can read Landlock's audit records (`AUDIT_LANDLOCK_ACCESS`, A.3.1), which name the missing right (`blockers=`) and the object exactly. `audit.py` turns each record into a denial, and the job checks the strace attribution against them over the same runs: every Landlock denial strace attributed must have an audit record for the same object whose blockers map to the same section of A.6.2. A mismatch fails the KVM job with both records attached, because it means A.6.2's derivation of a right from a call is wrong for that call; audit denials with no strace counterpart are reported. The audit observer never grants anything by itself.
+- **Second addition, the rights today's container kernels do not handle.** The CI kernels (ABI 7 and 8) never deny what Landlock version 9 and 10 add, in particular UDP bind to an explicit port (`BIND_UDP`), so the default path cannot observe it. The KVM run repeats the joint verification and the containment checks of A.6.4 under the default path's configuration on ABI 10; a denial there of a right above ABI 8 that makes the verdict differ is granted by the rules of A.6.5 (for UDP bind, a `[bind] allow <port> udp` row under the same loopback-service condition as TCP), and only such rows: any other difference between the two kernels fails the job instead. Those rows go into a separate artefact, `<key>_<exercise>.abi10.cfg`, each with a comment naming the KVM run; PR 12 teaches the orchestrator to fold it into that exercise's configuration before the union, so the rows reach `BaseLanguage-<key>.cfg`, and to cross-check its SHA-256 against the KVM record as it does for the `.cfg` and `.json`. The handoff is one workflow run, `prune-kvm.yml`, for one key on one commit: its first job runs the default prune in an ordinary container on an x86 runner and uploads the `.cfg` and `.json` artefacts; its second, the KVM job, downloads them, verifies under ABI 10 and uploads `<key>_<exercise>.abi10.cfg` with its record `<key>_<exercise>.abi10.json`, which names the SHA-256 of the `.cfg` it verified; its third runs the orchestrator over both sets in one `path_sets` directory and uploads `BaseLanguage-<key>.cfg`. The orchestrator refuses an `.abi10.cfg` whose record names another `.cfg` than the one beside it. A base meant to carry ABI 10 rows is adopted from that third job's output, and the adopting pull request links the workflow run. Without a KVM run the artefact is absent and nothing else changes. A base generated or adopted before PR 12, such as the Maven base of the Ares 2 import plan, holds no such rows: it is complete for kernels up to ABI 9, and on an ABI 10 kernel it fails closed for an explicit UDP bind the exercise needs (the network layer handles UDP bind whenever it runs), never open. Such a base is pruned again and its adoption repeated once PR 12 has merged and a KVM run has produced rows for it; none of the earlier adoptions waits for PR 12.
+- **arm64.** `ubuntu-24.04-arm` has no KVM, so arm64 is pruned on the default path only, on the runner's own kernel (7.0, ABI 8), which is the grading kernel's ABI there: a right that kernel does not handle is not enforced on it either, so nothing an arm64 grading host on that kernel enforces goes unobserved. An arm64 grading host on a kernel with ABI 10 relies on the x86 KVM rows, which carry over because the only rows the KVM run may add name ports, not architecture-specific paths.
+
+### A.6.10 Python on the layer pruner (decision 5)
+
+Python moves to the layer pruner as well, which needs a Python run-phase image, since the prune image is built `FROM` a run-phase image. `docker/run_phase/python/Dockerfile` is built `FROM` Artemis's default Python image, `ls1tum/artemis-python-docker:v1.1.0`, pinned by its index digest, in the shape of the Java one: a stage that compiles the three enforcers from the same base, a final stage with `build-essential`, `gcc-14`, `binutils` and `haproxy`, the `readelf` hardening checks, Phobos under `/var/tmp/opt/core` with `BaseLanguage-python.cfg` and `TailPhobos.cfg`. It is held to the same acceptance suites and protection matrix as the Java image, in an ordinary container with no `--privileged`, `--cap-add` or `--security-opt`, on both architectures where the base image offers both (its pull request says which it offers). The shipped `BaseLanguage-python.cfg` was pruned with Bubblewrap on another image and is replaced later, by a separate reviewed pull request, as the Java base is. The Python prune then runs under the key `python` on a Python reference exercise defined in Task 11.1, following Artemis's Python template of the day (pytest writing JUnit XML), with every package pinned and present in the image; pytest's "no tests ran" (exit status 5) is one more `no_source` line. PR 13, which retires the Bubblewrap pruner, waits for this.
+
+### A.6.11 The guard names the refused endpoint (decision 9)
+
+The connect guard's verbose refusals name only the port: `refusing connect to a destination the allow-list does not name, port %u` in `phobos-seccomp-networksystem-supervisor.c` and its datagram counterpart in `phobos-seccomp-networksystem-datagram.c`. This plan makes them name the endpoint, address and port, through one function that is the shared building block for every message that names an endpoint:
+
+- `size_t format_endpoint(const struct destination *where, char *text, size_t size)` in `phobos-seccomp-networksystem-destination.c`, declared in its header beside `struct destination`, writes `203.0.113.7:443` for IPv4, `[2001:db8::1]:443` for IPv6 (an IPv4-mapped address as `[::ffff:203.0.113.7]:443`, so the brackets keep the port separator unambiguous) and `family <n>` for any other family, always NUL-terminated, truncating safely, and returns the length. `ENDPOINT_TEXT_SIZE`, named once beside it, is large enough for the longest IPv6 form with brackets and port.
+- The text comes only from `inet_ntop` and the numeric port, never from a byte of the command's memory copied verbatim, so it is drawn from a fixed alphabet (digits, `a` to `f`, `.`, `:`, `[`, `]`, and the word `family`): it needs no escaping, and a command cannot inject anything into the log line. The function takes a `struct destination`, never a host name.
+- The two refusal lines become `refusing connect to a destination the allow-list does not name: <endpoint>` and `refusing a datagram to a destination the allow-list does not name: <endpoint>`. Nothing else changes: the guard's decisions, the errno, the exit status and the verbose switch stay as they are, and the pruner does not depend on the line (its attribution comes from strace).
+- A separate plan, denial reporting (another draft pull request, not yet open), turns refusals into the message "Phobos Security Error: the program tried to illegally <op> the <File/Endpoint ...> but was blocked by Phobos." and touches the same output. It reuses `format_endpoint` for the endpoint part rather than formatting addresses again, so the two plans share one formatter; whichever lands second builds on the other's function.
 
 ## A.7 Which direction each heuristic errs in
 
@@ -345,13 +388,18 @@ AGENTS.md asks for this for every heuristic.
 | --- | --- | --- |
 | Granting every attributed denial of a failing run at once | permissive, corrected by minimisation | converges in few runs; minimisation removes what was not needed |
 | Leaving denials of a passing run ungranted | restrictive | grading denies them too, and the reference still passed |
+| File by file inside the fine-grained roots, never compacted (decision 7) | restrictive | a file the reference never opened there stays denied, so a correct solution that needs one fails visibly rather than the policy covering a whole system directory |
+| A per-run name granted on its smallest stable directory, with a comment in the policy (decision 7) | permissive (every entry of that directory the uid may open, for instance every readable process entry under `/proc`) | the name differs in every run, so no file-level grant can hold; the exception is limited to the kernel-assigned identifiers of A.6.5, and each such grant is commented and listed |
 | Directory instead of file outside fine-grained roots, `[read]`/`[execute]` only | permissive (siblings, read-class only) | a student's solution may read a sibling the reference did not; per-file grants would fail it; write-class rights are never widened |
 | Nearest pre-existing ancestor for objects the run creates | permissive (siblings) | temporary names differ per run, and only existing paths may be named |
-| Compaction at `k=3` children | permissive | robustness against code paths the reference did not take |
+| Compaction at `k=3` children, outside the fine-grained roots only | permissive | robustness against code paths the reference did not take |
 | Raising a strict-subset nested entry | neutral for enforcement | Landlock already grants those rights there |
-| Minimisation accepting a removal after one passing run | restrictive if a run passed by luck | caught by the final verification runs, which restore the pre-minimisation grants and report "minimisation unstable" |
+| Minimisation accepting a removal after two passing runs | restrictive if both passed by luck | caught by the final verification runs, which restore the grants the minimisation removed and report "minimisation unstable" |
+| Minimisation keeping a grant after one failing run | permissive if the run failed by chance | decisions are final, so a spurious failure cannot cause oscillation; the kept grant is listed |
 | Loopback port generalised to `*` when the run bound it | permissive within loopback only | the port differs per run; loopback is the shipped policy's existing shape |
-| Margins on every limit | permissive | a correct but slower solution must not be cut short; the cgroup caps stay the outer wall |
+| Margins of 5x wall clock and CPU, 2x address space (decision 3) | permissive, more so than the 3x and 1.5x first proposed | a correct but up to five times slower solution must not be cut short; the cgroup caps stay the outer wall |
+| `mem_mb` derived only with a pinned heap (decision 4) | restrictive where it is derived (a solution allocating more than the reference within the same heap still fits the 2x margin, one needing a larger heap does not), neutral where it is not (the default applies) | an address space measured with an unpinned heap would follow the prune host |
+| External rules only for declared hosts, each kept only when needed (decision 11) | restrictive within the declaration | nothing beyond what the instructor declared is ever granted, and a declared host the run did not need is dropped |
 | CPU attribution of a `137` by the last sample | restrictive if sampling missed the peak | the next attempt raises the limit, at most three times, then aborts |
 | A run that fails without an attributable denial | never granted | the AGENTS.md rule this design exists to honour |
 
@@ -361,7 +409,7 @@ AGENTS.md asks for this for every heuristic.
 2. **The baseline is repeated** three times unsandboxed; disagreement aborts the exercise as flaky.
 3. **The permissive layered run** separates "the layers' fixed rules break this exercise" from "the policy is too narrow".
 4. **A grant needs an attributed denial**: in the domain, refused by the layer under test, confirmed by the control replay. A failing run without one is rerun once unobserved; if it still fails, the exercise aborts.
-5. **The network cannot be a variable**: `--network none`, pinned dependencies and pre-populated caches; an external connect attempt aborts unless declared.
+5. **The network cannot be a variable**: `--network none`, pinned dependencies and pre-populated caches; an external connect attempt aborts unless declared, and a declared host is derived only in the networked service, kept only when the run needs it (decision 11).
 6. **The observer cannot be the reason**: an observed run that fails without a denial is rerun unobserved before anything is concluded, and every verification run is unobserved.
 
 ## A.9 Outputs
@@ -378,22 +426,28 @@ The orchestrator then writes into `var/tmp/opt/core/config`:
 - `TailPhobos.cfg` as today.
 - The debug comparisons as today, computed from the `.cfg` sections.
 
-The union base keeps today's deployment model (one base, optional `--config`), so adopting it needs no Artemis change; Q2 asks whether Markus wants an intersection base with mandatory per-exercise configurations instead. A final step re-verifies each exercise in the prune image under the merged base plus its `exercises/` remainder, because that pair, not the per-exercise policy it was pruned with, is what grading will apply.
+The union base keeps today's deployment model (one base, optional `--config`), so adopting it needs no Artemis change; decision 2 keeps it over an intersection base with mandatory per-exercise configurations. A final step re-verifies each exercise in the prune image under the merged base plus its `exercises/` remainder, because that pair, not the per-exercise policy it was pruned with, is what grading will apply.
 
 ## A.10 Tests, both directions
 
-- **Unit (pytest, `tests/python/`)**: the strace parser (quoted and escaped paths, `<unfinished ...>`/`<... resumed>` pairs, decorated descriptors, signals and exit lines), the in-domain process tree, the call-to-right table of A.6.2, the control replay classification (against a fixture tree with a mode-000 file), generalisation, compaction and hierarchy normalisation (directions pinned as in A.7), ddmin on a synthetic oracle, the cfg renderer (accepted by the real parser in a shell test), the network rule derivation, the margins and the limit signatures, the verdict comparison (JUnit, `NO-SOURCE`, infra patterns).
+- **Unit (pytest, `tests/python/`)**: the strace parser (quoted and escaped paths, `<unfinished ...>`/`<... resumed>` pairs, decorated descriptors, signals and exit lines), the in-domain process tree, the call-to-right table of A.6.2, the control replay classification (against a fixture tree with a mode-000 file), generalisation, compaction and hierarchy normalisation (directions pinned as in A.7), the minimisation of A.6.4 on a synthetic oracle (its result, its bound and its permanence), the cfg renderer (accepted by the real parser in a shell test), the network rule derivation, the margins and the limit signatures, the verdict comparison (JUnit, `NO-SOURCE`, infra patterns).
 - **Integration (shell, in the prune image, ordinary container, `--network none`)**: a fixture exercise under `tests/integration/layer-prune-fixture/` whose build script reads a needed file, tries an optional file and does without it, writes build output, creates temporary files with random names, starts a loopback server and connects to it, attempts an external connection and does without it, and writes JUnit XML whose tests pass only when the needed accesses worked. The suite asserts the **permitted** direction (the derived configuration passes under `phobos.sh` with every layer on) and the **forbidden** direction (`/srv/prune-fixture/unneeded/secret.txt`, the optional file, the prefix sibling `/srv/prune-fixture-secret`, and `10.0.0.1:80` are all refused under the derived configuration, checked with the protection matrix's `probe.c`; the derived limits are below the defaults, and a probe exceeding each is refused or ended). Wrong-reason variants: `FIXTURE_FLAKY=1` aborts as flaky and writes no `.cfg`; `FIXTURE_NO_SOURCE=1` is a failed verdict; `FIXTURE_SETSID=1` aborts as "incompatible with a fixed rule"; `FIXTURE_NEEDS_NET=1` aborts as "needs external network".
 - **Protection-matrix style**: every grant class gets a deny-and-allow pair in `tests/integration/layer_prune.sh` using `probe.c`'s `OP <name> ret=<n> errno=<NAME>` lines: a granted right works, the next right up on the same path is still refused.
-- **Runner capability**: `tests/runner-capability-probe.sh --assert-ptrace` (0 observed, 1 not, 3 cannot tell), reported by `runner-capabilities.yml` beside Landlock and Bubblewrap.
+- **Runner capability**: `tests/runner-capability-probe.sh --assert-ptrace` (0 observed, 1 not, 3 cannot tell), reported by `runner-capabilities.yml` beside Landlock and Bubblewrap; the KVM run reuses `--assert-kvm` from PR 161.
+- **Decisions 7, 10, 11 and 9**: per-run names (each table entry recognised only with observed change or the caller's own id; `/proc/self` and `/proc/thread-self` rewritten from the trace; a changing name outside the table never generalised; the comment written above the grant); no compaction inside a fine-grained root; the minimisation's bound of `4n - 2` runs and that no grant is ever tried twice, on a counting, deliberately flaky oracle; a declared host the run does not need dropped and an undeclared one aborting; `format_endpoint` for IPv4, IPv6, an IPv4-mapped address and another family, through the guard's verbose line in `tests/integration/seccomp_networksystem.sh`, with the refusal itself unchanged.
+- **KVM run (x86)**: the audit cross-check on the fixture exercise, both directions (an agreeing pair passes, a deliberately mismatched mapping fails the job), and an ABI 10 UDP bind denial producing exactly one `.abi10.cfg` row.
+- **Python run-phase image**: the acceptance suites and the protection matrix, as for Java.
 
 ## A.11 CI
 
 - `test.yml`, job `python`: picks up the new `tests/python/test_layer_prune_*.py` with no change.
 - `build.yml`, job `run-phase`: after the acceptance suites, build `docker/prune_phase/layers/Dockerfile` on top of the image just built (both architectures, native runners) and run `tests/integration/layer_prune_observer.sh` and, from PR 5 on, `tests/integration/layer_prune.sh` in an ordinary container with `--network none --memory 3g --pids-limit 1024`.
 - `lint.yml`: no new tool. `hadolint` reaches the new Dockerfile by its `Dockerfile*` glob, `bandit` and `ruff` reach `var/tmp/helpers/layer_prune/` through the existing `var/tmp/helpers` argument, `shellcheck` reaches the new shell suites.
-- `runner-capabilities.yml`: a ptrace row from PR 2; the Bubblewrap row is removed in PR 9.
-- `test.yml`: `prune_sandbox.sh`, `prune_producer.sh` and the Bubblewrap install step are removed in PR 9.
+- `runner-capabilities.yml`: a ptrace row from PR 2; the Bubblewrap row is removed in PR 13.
+- `test.yml`: `prune_sandbox.sh`, `prune_producer.sh` and the Bubblewrap install step are removed in PR 13.
+- `build.yml`: a `run-phase-python` job from PR 10, building `docker/run_phase/python/Dockerfile` on native runners and holding it to the acceptance suites, as `run-phase` does for Java.
+- `prune-kvm.yml` (PR 12): the KVM run of A.6.9, started with `workflow_dispatch`, on x86 runners only.
+- Every job that runs a whole prune carries `timeout-minutes` as its safety stop (A.6.4); reaching it fails the job and publishes no artefact.
 
 ## A.12 Documentation
 
@@ -403,6 +457,8 @@ The union base keeps today's deployment model (one base, optional `--config`), s
 - `var/tmp/pruning/orchestrate_core_idea.txt`: the new artefacts.
 - `docker/prune_phase/orchestrate/orchestrate.py` module docstring.
 - `SECURITY.md`: one paragraph saying that `strace` is in the prune image only and never in the grading image.
+- `core/phobos-tools-policysystem/config_doc.txt` and `README.md`: the guard's verbose refusal names the endpoint (A.6.11).
+- `README.md`, `CLAUDE.md`: the Python run-phase image, and that exercises run Gradle with `--no-daemon` and pin the heap of every JVM when `mem_mb` is to be derived; both are rules for the exercise, not for Phobos.
 - PR 122 (`feature/docusaurus-documentation`, `documentation/docs/contributor/pruning.md`) describes the Bubblewrap pruner; it has to be rebased onto the documentation changes of PR 8, or PR 8's README text moved into that page if PR 122 merges first.
 
 ## A.13 Risks
@@ -412,27 +468,34 @@ The union base keeps today's deployment model (one base, optional `--config`), s
 | A host with `ptrace_scope=3` or a seccomp profile that blocks `ptrace` | no observer | `--assert-ptrace` probe; the pruner refuses to start rather than fall back to stderr parsing |
 | Tracing slows the build | longer prune; timing-sensitive tests fail only under the observer | observed runs only in grow and diagnosis; verdicts and verification unobserved; a failure under the observer without a denial is rerun unobserved; `--seccomp-bpf` when the installed strace supports it unprivileged (measured in PR 3) |
 | strace output format differs between versions | parser misreads | golden fixtures captured from the image's own strace in PR 3; version recorded in every `.json` |
-| The reference exercise does not exercise what a student solution needs | grading denies a correct solution | directory granularity and compaction (A.7); review of the record; the README says the policy is only as good as the reference |
-| Gradle needs `setsid` for its daemon (observed locally with Gradle 9: "could not setsid()") | every run fails under the layers | B2 reports it as "incompatible with a fixed rule" before any grant; Q8 |
-| The JVM's address-space reservation depends on the host's memory | `mem_mb` derived on a large prune host differs from grading | record host memory; Q4 |
-| The prune kernel's Landlock ABI differs from the grading kernel's | a right the prune kernel does not handle (`RESOLVE_UNIX`, UDP) is never observed | record the ABI; verify on the grading ABI; Q6 |
+| The reference exercise does not exercise what a student solution needs | grading denies a correct solution | directory granularity and compaction outside the fine-grained roots (A.7); review of the record; the README says the policy is only as good as the reference |
+| A per-run name granted on `/proc` or `/dev/pts` | the command may read every entry of that directory its uid may open, other processes of the container included | limited to the kernel-assigned identifiers of A.6.5 with observed change, commented in the policy, listed in the record (decision 7) |
+| A minimisation without a run budget runs long | a prune takes hours | the bound of `4n - 2` runs; the CI job's `timeout-minutes` fails the prune rather than producing a partial policy (A.6.4) |
+| No KVM on `ubuntu-24.04-arm` | ABI 9 and 10 rights not observed on arm64 | arm64 is pruned on its grading kernel's ABI, where those rights are not enforced either; the x86 KVM rows name ports only and carry over (A.6.9) |
+| Gradle needs `setsid` for its daemon (observed locally with Gradle 9: "could not setsid()") | every run fails under the layers | exercises run Gradle with `--no-daemon` and the group lock is not changed (decision 8). Gradle documents that it still starts a single-use daemon under `--no-daemon` when the build needs JVM arguments the launching JVM does not have, so an exercise pins its heap where that does not happen (in the arguments of the JVM that runs Gradle, not only in `org.gradle.jvmargs`); B2 reports any remaining `setsid` refusal as "incompatible with a fixed rule" before any grant |
+| The JVM's address-space reservation depends on the host's memory | `mem_mb` derived on a large prune host differs from grading | `mem_mb` derived only for exercises that pin the heap and declare it, from the measured peak address space times 2 (decision 4); host memory recorded |
+| The prune kernel's Landlock ABI differs from the grading kernel's | a right the prune kernel does not handle (`RESOLVE_UNIX`, UDP) is never observed | record the ABI; the KVM run on x86 observes ABI 10 (decision 6, A.6.9) |
 | A second session or a stale artefact | wrong merge | unchanged: per-language stale removal, `.cfg`/`.json` hash cross-check in the orchestrator |
 | Two observers or tracers at once | `EPERM` on attach | one strace per run, the prune container runs nothing else |
 | Local apt failures in containers on this Mac | the prune image does not build locally | CI builds it; locally, build on a host where apt works |
 
-## A.14 Open questions for Markus
+## A.14 Decisions
 
-1. **Observer implementation.** `strace` from the archive (chosen: both architectures, every call decoded, no new C) or a dedicated C tracer in the repository (structured output, no text parsing, more C to lint and maintain)?
-2. **Base composition.** Keep a union base plus optional exercise remainders (chosen: no deployment change), or an intersection base with mandatory per-exercise configurations (tighter, needs Artemis to pass `--config`)?
-3. **Limit margins.** How much slower than the reference may a correct solution be? Defaults are 3x wall clock and CPU, 1.5x memory.
-4. **Memory.** Should exercises pin `-Xmx` so `mem_mb` is host-independent, or should `mem_mb` not be derived and stay at the default 8192?
-5. **Python.** There is no Python run-phase image; build one, keep Python on the Bubblewrap pruner until then (PR 9 waits), or retire `BaseLanguage-python.cfg`?
-6. **Kernel ABI.** Prune on the grading kernel's ABI only? Would a KVM guest with a 7.2 kernel (PR 161) be welcome, which would also make Landlock audit readable as a second, kernel-native observer?
-7. **Generalisation defaults.** The fine-grained roots (`/etc`, `/dev`, `/proc`, `/sys`, `/root`, `/home`, `/run`) and the compaction threshold `k=3`.
-8. **Gradle daemon.** If the reference needs `setsid`, should exercises run with `--no-daemon`, pin Gradle 8, or is a change to the group lock wanted (a sandbox change of its own)?
-9. **Guard log.** The guard's verbose refusal names only the port. Should it name the address too, for operators? The pruner does not need it.
-10. **Budgets.** Is a minimisation budget of 150 runs per exercise acceptable, and what total prune time is tolerable?
-11. **External egress.** Should declared hosts in `prune.json` ever be derived and verified by the pruner, or should every external rule stay hand-written?
+Markus answered all eleven questions on 2026-10-05. Each is recorded with the alternative he rejected and the reason, and propagated into Part A and Part B.
+
+| # | Question | Decision | Rejected alternative, and why |
+| --- | --- | --- | --- |
+| 1 | Observer | `strace` from the distribution archive (A.3.5). | A dedicated C tracer: structured output, but more C to lint and maintain, and `strace` already decodes every call of both architectures. |
+| 2 | Base composition | A union base plus optional per-exercise remainders (A.9). | An intersection base with mandatory per-exercise configurations: tighter, but it needs Artemis to pass `--config` for every exercise. |
+| 3 | Limit margins | 5x wall clock and CPU time, 2x address space (A.6.5); errs more permissive than the first proposal. | 3x and 1.5x: tighter, but a correct slower solution would be cut short sooner. |
+| 4 | Memory | Exercises pin `-Xmx` and declare it (`heap_pinned`); `mem_mb` is derived from the measured peak address space times 2, never from `-Xmx` alone; the pin lives only in the exercise, never in core or the pruner (A.6.5). | Not deriving `mem_mb` at all and keeping the default 8192: host independent, but no bound fitted to the exercise. |
+| 5 | Python | Build a Python run-phase image now and move Python to the layer pruner (A.6.10, PRs 10 and 11); retiring the Bubblewrap pruner waits for it (PR 13). | Keeping Python on Bubblewrap, or retiring `BaseLanguage-python.cfg`: the first keeps two pruners, the second drops a language. |
+| 6 | Kernel | A KVM guest with a 7.2 kernel on x86, added as a second, kernel-native observer and for ABI 10, beside the ordinary-container default path; arm64 on its grading kernel's ABI only (A.6.9, PR 12). | The grading kernel's ABI only: no audit cross-check, and ABI 10 rights never observed. A KVM-only prune: not available on arm64, and not the sandbox an ordinary grading container gives. |
+| 7 | Generalisation | Inside the fine-grained roots never compact, always file by file; the one exception is a per-run name (A.6.5), granted on its smallest stable directory with the reason as a comment in the policy; `/proc/self` and `/proc/thread-self` are rewritten from the trace and never written. | Compaction at `k=3` everywhere below the roots: fewer rows, but it widens system directories from a few observed files. |
+| 8 | Gradle daemon | Exercises run Gradle with `--no-daemon`; the group lock is not changed (A.13). | Pinning Gradle 8, which only postpones the problem, or relaxing the group lock, a sandbox change of its own. |
+| 9 | Guard log | This plan extends the guard's verbose refusal to name the endpoint, through one formatter, `format_endpoint`, which the denial-reporting plan reuses (A.6.11, PR 9). | Leaving the port alone: an operator cannot tell which host was refused, and two plans would each format endpoints. |
+| 10 | Budgets | No limit on minimisation runs; it runs until nothing more can be removed, at most `4n - 2` runs, decisions final, two passing runs per removal; the CI job's wall-clock limit is the only stop and fails the prune (A.6.4). | A budget of 150 runs: a minimisation cut short keeps grants nobody needed. |
+| 11 | External egress | The pruner derives external hosts, only those declared in `prune.json`, keeps each only when needed, drops the rest, and never grants an undeclared host: it widens nothing beyond what the instructor declared (A.6.5). | Hand-written external rules only: no check that a declared host is needed at all. |
 
 ## A.15 Review record
 
@@ -454,7 +517,13 @@ Each pull request is based on `main` after the previous one merged (or stacked o
 | 6 | `feature/prune-network-stage` | network derivation | no |
 | 7 | `feature/prune-limits-stage` | sampler, margins, limit signatures, joint verification, containment checks | no |
 | 8 | `feature/prune-producer-switch` | per-language entry, artefacts, orchestrator merge, compose, docs, the Maven reference prune (Task 8.4) | no (generated files only) |
-| 9 | `feature/retire-bubblewrap-pruner` | remove the Bubblewrap pruner and its tests and probe | no |
+| 9 | `feature/guard-names-the-endpoint` | `format_endpoint` and the guard's two verbose refusal lines (A.6.11, decision 9) | no: the text of two verbose log lines, no decision |
+| 10 | `feature/python-run-phase-image` | the Python run-phase image, its acceptance suites, the `run-phase-python` job (A.6.10, decision 5) | no for Java; a new image for Python |
+| 11 | `feature/prune-python-on-the-layers` | the Python reference exercise, pytest's no-tests line, the Python prune on the layer pruner | no (generated files only) |
+| 12 | `feature/prune-kvm-observer` | the KVM run of A.6.9 on x86: kernel prerequisites, audit observer, cross-check, ABI 10 rows and their fold in the orchestrator (decision 6) | no (generated files only) |
+| 13 | `feature/retire-bubblewrap-pruner` | remove the Bubblewrap pruner and its tests and probe | no |
+
+Order within this plan: PRs 2 to 8 in sequence; PR 9 depends on nothing in this plan and may land at any time, and it is the building block the denial-reporting plan reuses (A.6.11); PR 10 depends on nothing in this plan; PR 11 needs PRs 8 and 10; PR 12 needs PR 8; PR 13 needs PR 11, so that no language is left on the Bubblewrap pruner.
 
 Adopting a regenerated `BaseLanguage-java.cfg` into `core/config/` is not part of this plan; it is a later pull request of its own that lists every widening. The same holds for the Maven base of Task 8.4, which the Ares 2 import plan adopts.
 
@@ -593,6 +662,7 @@ Pin `strace` to the archive version the CI build resolves (`strace=<version>`) o
   - `strace_parse.parse_line(line: str) -> Syscall | None` (a complete line or a resumed one already joined).
   - `strace_parse.parse_trace(lines: Iterable[str]) -> Trace`, where `Trace` has `syscalls: list[Syscall]` (failed calls, `landlock_restrict_self`, `clone*`, `fork`, `vfork`, `socket`, `bind`, `listen`, `getsockname` successes) and `domain_pids: frozenset[int]`.
   - `strace_parse.STRACE_ARGUMENTS: tuple[str, ...]`, the option list every observed run uses.
+  - `Trace.thread_group: dict[int, int]`, every thread id seen mapped to its thread-group id, from `clone`/`clone3` with and without `CLONE_THREAD` (A.6.5, `/proc/self`).
 
 - [ ] **Step 1: Capture golden lines.** In the prune image run `strace -f -qq -y -s 4096 -o /tmp/g.txt -e trace=%file,%network,%process,landlock_restrict_self,setsid,setpgid,ioctl phobos.sh --config <Task 3.1 cfg> -- bash -c 'cat /etc/hostname; mkdir /etc/x; exec 3<>/dev/tcp/10.0.0.1/80'` and keep 30 representative lines (a refused `openat`, a refused `mkdir`, a refused `connect`, an `<unfinished ...>`/`<... resumed>` pair, a `clone` returning a pid, `landlock_restrict_self(...) = 0`, an `execve`, a `+++ exited with 0 +++` line, a `--- SIGCHLD ---` line, an escaped path with `\"` and `\n`) in `tests/python/fixtures/strace/basic.txt`. Record the strace version in `tests/python/fixtures/strace/VERSION`. Check whether `AT_FDCWD` is decorated with `<path>`; write the answer in `VERSION` too.
 - [ ] **Step 2: Write the failing tests.**
@@ -633,6 +703,17 @@ def test_an_unfinished_call_is_joined_with_its_resumption():
     refused = [call for call in trace.syscalls if call.name == "openat"]
     assert len(refused) == 1
     assert refused[0].errno == "EACCES"
+
+
+def test_a_thread_created_with_clone_thread_belongs_to_its_creators_thread_group():
+    lines = [
+        "100 clone(child_stack=NULL, flags=SIGCHLD) = 101",
+        "101 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM, exit_signal=0}, 88) = 105",
+        '105 openat(AT_FDCWD</w>, "/proc/self/status", O_RDONLY) = -1 EACCES (Permission denied)',
+    ]
+    trace = strace_parse.parse_trace(lines)
+    assert trace.thread_group[105] == 101
+    assert trace.thread_group[101] == 101
 
 
 def test_only_processes_after_landlock_restrict_self_are_in_the_domain():
@@ -881,11 +962,12 @@ The Maven log lines are the ones measured in A.8, copied verbatim.
   - `runner.RunShape(observe: bool, network: bool, limits: bool, sample: bool)`.
   - `runner.RunResult(verdict: Verdict, status: int, trace: Trace | None, samples: list | None, wall_seconds: float, log_path: pathlib.Path)`.
   - `runner.run_direct(exercise: Exercise) -> RunResult`.
+  - `runner.run_reference(exercise: Exercise) -> RunResult`, the baseline run of A.6.4: `run_direct` for an exercise that declares no host, and for one that does, `run_layers` under `permissive_policy(root, exercise.declared_hosts)`, limits off, in the egress service with `--resolver`, so that no reference run can reach an undeclared host (decision 11).
   - `runner.run_layers(exercise: Exercise, policy: Policy, shape: RunShape) -> RunResult`, which first passes the candidate through the acceptance gate (`phobos-policysystem.sh --spec-dir <temporary> --config <candidate>`) and raises `runner.PrunerDefect(status: int, log_path: pathlib.Path)` when the gate refuses or when the run ends with `2`, `11`, `15` or `125` together with Phobos's own stderr marker for that status (A.6.4).
   - `runner.Exercise(name: str, workdir: pathlib.Path, build_script: str, report_globs: tuple[str, ...], declared_hosts: tuple[str, ...])`, read from the exercise directory and its optional `prune.json` (the contract of A.6.8); `runner.read_exercise` raises `runner.ExerciseRefused(reason: str)` when the directory has no executable build script or its committed copy already matches one of its report globs.
   - `cfgfile.Policy(fs: dict[str, frozenset[str]], connect: tuple[str, ...], bind: tuple[str, ...], limits: dict[str, int])`.
   - `cfgfile.render(policy: Policy) -> str`.
-  - `cfgfile.permissive_policy(root: pathlib.Path) -> Policy`.
+  - `cfgfile.permissive_policy(root: pathlib.Path, declared_hosts: tuple[str, ...] = ()) -> Policy`, whose only external `[connect]` rules are `network.seed_rules(declared_hosts)`.
 
 - [ ] **Step 1: Write failing tests** with a fake `phobos.sh` (a script in `tmp_path` that records its argument vector and exits with a chosen status) so the runner's command line is checked without Docker:
 
@@ -931,6 +1013,15 @@ def test_an_exercise_that_already_holds_a_report_is_refused(tmp_path):
         runner.read_exercise(exercise_dir)
 
 
+def test_the_reference_of_an_exercise_with_declared_hosts_runs_under_the_layers_with_only_those_hosts(tmp_path):
+    fake = fake_phobos(tmp_path, status=0)
+    runner.run_reference(exercise(tmp_path, declared_hosts=("api.example.org:443",)), phobos=fake)
+    argv = recorded_argv(tmp_path)
+    assert argv[0].endswith("phobos.sh")
+    external = [rule for rule in recorded_connect_rules(tmp_path) if "localhost" not in rule and "127.0.0.1" not in rule and "::1" not in rule]
+    assert external == ["allow api.example.org:443"]
+
+
 def test_the_permissive_policy_keeps_the_specification_parent_out_of_every_write_path(tmp_path):
     policy = cfgfile.permissive_policy(pathlib.Path("/"))
     assert not any(path in ("/", "/var", "/var/tmp") for path, sections in policy.fs.items() if "write" in sections)
@@ -954,7 +1045,10 @@ def test_the_permissive_policy_keeps_the_specification_parent_out_of_every_write
   - `generalise.grants_for(denials: list[Denial], snapshot: Snapshot, fine_roots: tuple[str, ...]) -> dict[str, frozenset[str]]`.
   - `generalise.compact(grants: dict[str, frozenset[str]], threshold: int, fine_roots: tuple[str, ...]) -> dict[str, frozenset[str]]`.
   - `generalise.normalise_hierarchy(grants: dict[str, frozenset[str]]) -> dict[str, frozenset[str]]`.
-  - `generalise.DEFAULT_FINE_ROOTS = ("/etc", "/dev", "/proc", "/sys", "/root", "/home", "/run")`.
+  - `generalise.DEFAULT_FINE_ROOTS = ("/etc", "/dev", "/proc", "/sys", "/root", "/home", "/run")`; inside them `compact` never compacts (decision 7).
+  - `generalise.PER_RUN_PATTERNS`, the table of A.6.5, one compiled pattern per entry and per line.
+  - `generalise.rewrite_self(path: str, tgid: int, tid: int) -> str`, which rewrites `/proc/self` with the thread-group id and `/proc/thread-self` with both ids of the refusing thread; the caller takes `tid` from the trace line and `tgid` from `Trace.thread_group` (Task 3.2).
+  - `generalise.per_run_grants(denials: list[Denial]) -> tuple[dict[str, frozenset[str]], dict[str, str]]`, the grants on smallest stable directories and, for each, the comment `cfgfile.render` writes above it; `grants_for` leaves these denials to it. `record.Denial` gains `run: int` and `tid: int` for that purpose, and `cfgfile.Policy` gains `comments: dict[str, str]`.
 
 - [ ] **Step 1: Write the failing tests, each naming the direction it pins.**
 
@@ -977,6 +1071,40 @@ def test_a_file_the_run_created_is_granted_on_the_nearest_pre_existing_ancestor(
 def test_compaction_never_reaches_the_root_or_a_top_level_write():
     grants = {"/usr/a": frozenset({"write"}), "/usr/b": frozenset({"write"}), "/usr/c": frozenset({"write"})}
     assert generalise.compact(grants, 3, generalise.DEFAULT_FINE_ROOTS) == grants
+
+
+def test_compaction_never_happens_inside_a_fine_grained_root():
+    grants = {"/etc/a": frozenset({"read"}), "/etc/b": frozenset({"read"}), "/etc/c": frozenset({"read"}),
+              "/root/.m2/repository/x/1/x.jar": frozenset({"read"}), "/root/.m2/repository/x/1/x.pom": frozenset({"read"}),
+              "/root/.m2/repository/x/1/x.jar.sha1": frozenset({"read"})}
+    assert generalise.compact(grants, 3, generalise.DEFAULT_FINE_ROOTS) == grants
+
+
+def test_a_process_id_seen_changing_is_granted_on_proc_with_its_reason():
+    grants, comments = generalise.per_run_grants([read("/proc/412/status", run=1, pid=300), read("/proc/977/status", run=2, pid=301)])
+    assert grants == {"/proc": frozenset({"read"})}
+    assert comments["/proc"].startswith("per-run name: /proc/<pid>/status")
+
+
+def test_the_callers_own_process_id_is_a_per_run_name_from_one_run():
+    grants, _ = generalise.per_run_grants([read("/proc/412/stat", run=1, pid=412)])
+    assert grants == {"/proc": frozenset({"read"})}
+
+
+def test_another_processes_id_seen_once_is_granted_file_by_file_elsewhere():
+    grants, _ = generalise.per_run_grants([read("/proc/1/cmdline", run=1, pid=300)])
+    assert grants == {}
+
+
+def test_a_changing_name_outside_the_table_is_never_generalised():
+    grants, _ = generalise.per_run_grants([read("/run/lock/a8f3", run=1, pid=300), read("/run/lock/c91d", run=2, pid=301)])
+    assert grants == {}
+
+
+def test_proc_self_is_rewritten_with_the_thread_group_never_the_thread_or_the_pruner():
+    assert generalise.rewrite_self("/proc/self/status", tgid=412, tid=415) == "/proc/412/status"
+    assert generalise.rewrite_self("/proc/thread-self/stat", tgid=412, tid=415) == "/proc/412/task/415/stat"
+    assert generalise.rewrite_self("/proc/self/status", tgid=412, tid=415) != f"/proc/{os.getpid()}/status"
 
 
 def test_three_siblings_with_equal_read_rights_compact_into_their_parent():
@@ -1024,25 +1152,41 @@ def test_a_path_with_a_wildcard_character_is_generalised_to_its_parent():
 **Interfaces:**
 - Consumes: everything above.
 - Produces:
-  - `search.ddmin(items: list[T], passes: Callable[[list[T]], bool], budget: int) -> tuple[list[T], bool]` returning the kept items and whether the budget sufficed.
+  - `search.minimise(items: list[T], passes: Callable[[list[T]], bool]) -> MinimiseResult` implementing A.6.4's minimisation, where `MinimiseResult(kept: list[T], trials: int, runs: int)`; `passes` makes one run, and a removal is kept only when two calls in a row return true.
   - `search.grow(run: Callable[[Policy], RunResult], seed: Policy, reference: Verdict, rounds: int, derive: Callable[[RunResult], dict[str, frozenset[str]]]) -> Policy` raising `PruneAbort(reason: str, evidence: dict)`.
   - `stages.prune_filesystem(exercise: Exercise, reference: Verdict, budget: Budget) -> tuple[Policy, list[dict]]`.
-  - `stages.Budget(grow_rounds: int = 40, network_rounds: int = 10, minimise_runs: int = 150, verification_runs: int = 3, run_seconds: int = 1800)`.
+  - `stages.Budget(grow_rounds: int = 40, network_rounds: int = 10, verification_runs: int = 3, run_seconds: int = 1800)`, with no minimisation budget (decision 10).
 
-- [ ] **Step 1: Failing unit tests for `ddmin` and `grow`** with synthetic oracles:
+- [ ] **Step 1: Failing unit tests for `minimise` and `grow`** with synthetic oracles:
 
 ```python
-def test_ddmin_keeps_exactly_the_needed_items():
+def test_minimise_keeps_exactly_the_needed_items():
     needed = {"b", "e"}
-    kept, finished = search.ddmin(list("abcdefgh"), lambda subset: needed <= set(subset), budget=100)
-    assert set(kept) == needed
-    assert finished
+    result = search.minimise(list("abcdefgh"), lambda subset: needed <= set(subset))
+    assert set(result.kept) == needed
 
 
-def test_ddmin_out_of_budget_keeps_everything_it_could_not_try_permissively():
-    kept, finished = search.ddmin(list("abcdefgh"), lambda subset: {"b"} <= set(subset), budget=1)
-    assert "b" in kept
-    assert not finished
+def test_minimise_stays_within_four_n_minus_two_runs():
+    for size in range(1, 40):
+        items = list(range(size))
+        needed = set(items[::3])
+        result = search.minimise(items, lambda subset: needed <= set(subset))
+        assert result.trials <= 2 * size - 1
+        assert result.runs <= 4 * size - 2
+
+
+def test_a_flaky_oracle_cannot_make_minimise_retry_or_remove_on_one_pass():
+    outcomes = itertools.cycle([True, False])
+    tried = []
+
+    def flaky(subset):
+        tried.append(frozenset(subset))
+        return next(outcomes)
+
+    result = search.minimise(list("abcd"), flaky)
+    assert result.kept == list("abcd")
+    assert len(set(tried)) == result.trials
+    assert result.trials <= 7
 
 
 def test_grow_aborts_on_a_failure_without_a_denial():
@@ -1060,7 +1204,7 @@ def test_grow_stops_when_the_verdict_matches_and_leaves_harmless_denials_ungrant
     assert policy.fs == {}
 ```
 
-- [ ] **Step 2: Fail. Step 3: Implement** `search.py` (Zeller's ddmin over (path, section) pairs, counting runs against the budget) and `stages.prune_filesystem` exactly as A.6.4's stage 1. **Step 4: Pass, lint.**
+- [ ] **Step 2: Fail. Step 3: Implement** `search.py` (the binary-split minimisation of A.6.4 over (path, section) pairs, every decision final, two passing runs per removal, counting trials and runs) and `stages.prune_filesystem` exactly as A.6.4's stage 1. **Step 4: Pass, lint.**
 - [ ] **Step 5: Write the fixture.** `build_script.sh` (bash, `set -u`) reads `/srv/prune-fixture/needed/data.txt`, tries `/srv/prune-fixture/optional/maybe.txt` and ignores failure, writes `build/out.txt`, creates `build/tmp/$RANDOM.tmp`, and writes `build/test-results/test/TEST-fixture.xml` with testcase `Fixture.readsNeeded` passing only when the needed read worked and `Fixture.writesOutput` passing only when the write worked. Variants by environment: `FIXTURE_FLAKY=1` fails `readsNeeded` on every second run (a counter file under `/var/tmp/layer-prune-counter`, outside the exercise copy), `FIXTURE_NO_SOURCE=1` prints `> Task :compileJava NO-SOURCE` and writes no report, `FIXTURE_SETSID=1` runs `setsid true` and fails when it fails.
 - [ ] **Step 6: Write `tests/integration/layer_prune.sh`**: builds `/srv/prune-fixture/{needed,optional,unneeded}` and the sibling `/srv/prune-fixture-secret`, copies the fixture into `/srv/phobos-prune-exercises/java/fixture`, runs `python3 /var/tmp/helpers/layer_prune/main.py --stage filesystem java`, then asserts:
   - permitted: `phobos.sh --config <derived> -- bash build_script.sh` writes a report in which both tests pass;
@@ -1085,7 +1229,8 @@ def test_grow_stops_when_the_verdict_matches_and_leaves_harmless_denials_ungrant
 - Produces:
   - `network.bound_ports(trace: Trace) -> frozenset[tuple[str, int, str]]` (family, port, transport) from successful `bind`/`listen`/`getsockname` in the domain.
   - `network.NetworkDecision(connect: tuple[str, ...], bind: tuple[str, ...], refused_external: tuple[str, ...], reported: tuple[str, ...])`.
-  - `network.network_rules(denials: list[Denial], bound: frozenset[tuple[str, int, str]], declared_hosts: tuple[str, ...]) -> NetworkDecision`.
+  - `network.network_rules(denials: list[Denial], bound: frozenset[tuple[str, int, str]], declared_hosts: tuple[str, ...]) -> NetworkDecision`, whose `refused_external` holds only destinations no declared rule names.
+  - `network.seed_rules(declared_hosts: tuple[str, ...]) -> tuple[str, ...]`, one `allow <name>:<port>` rule (with ` udp` where declared) per entry of `prune.json` (decision 11).
   - `stages.prune_network(exercise, fs_policy, reference, budget) -> tuple[Policy, list[dict]]`.
 
 - [ ] **Step 1: Failing tests.**
@@ -1121,11 +1266,27 @@ def test_a_refused_listen_on_an_unbound_socket_becomes_allow_zero():
 def test_a_datagram_bind_on_port_zero_becomes_allow_zero_udp():
     decision = network.network_rules([bind(0, "udp")], frozenset(), ())
     assert decision.bind == ("allow 0 udp",)
+
+
+def test_declared_hosts_seed_exactly_their_rules():
+    assert network.seed_rules(("api.example.org:443", "ntp.example.org:123 udp")) == ("allow api.example.org:443", "allow ntp.example.org:123 udp")
+
+
+def test_an_undeclared_external_destination_is_refused_even_beside_declared_hosts():
+    decision = network.network_rules([connect("192.0.2.7", 443, "tcp")], frozenset(), ("api.example.org:443",))
+    assert decision.connect == ()
+    assert decision.refused_external == ("192.0.2.7:443 tcp",)
+
+
+def test_a_declared_host_the_run_does_not_need_is_dropped():
+    rules = ["allow api.example.org:443", "allow unused.example.org:443"]
+    result = search.minimise(rules, lambda kept: "allow api.example.org:443" in kept)
+    assert result.kept == ["allow api.example.org:443"]
 ```
 
-- [ ] **Step 2: Fail. Step 3: Implement** as A.6.5 "Network"; `prune_network` runs A.6.4's stage 2 and then ddmin over the rules. **Step 4: Pass, lint.**
+- [ ] **Step 2: Fail. Step 3: Implement** as A.6.5 "Network"; `prune_network` runs A.6.4's stage 2, seeded with `seed_rules(exercise.declared_hosts)`, and then the minimisation over all rules, declared ones included. **Step 4: Pass, lint.**
 - [ ] **Step 5: Extend the fixture**: start `python3 -m http.server --bind 127.0.0.1 0` in the background, read its port from its output, fetch from it with `bash`'s `/dev/tcp`, and make `Fixture.talksToItsServer` depend on it; attempt `10.0.0.1:80` and ignore the result; `FIXTURE_NEEDS_NET=1` makes a test depend on the external attempt.
-- [ ] **Step 6: Extend the suite**, both directions: permitted, the derived configuration carries `allow 127.0.0.1:*` and `allow 0` and the fixture's loopback test passes under it; forbidden, `probe connect 10.0.0.1 80` prints `errno=EACCES` under it and `probe bind 8080` is refused; wrong reason, `FIXTURE_NEEDS_NET=1` aborts with "needs external network".
+- [ ] **Step 6: Extend the suite**, both directions: permitted, the derived configuration carries `allow 127.0.0.1:*` and `allow 0` and the fixture's loopback test passes under it; forbidden, `probe connect 10.0.0.1 80` prints `errno=EACCES` under it and `probe bind 8080` is refused; wrong reason, `FIXTURE_NEEDS_NET=1` aborts with "needs external network". A second suite, `tests/integration/layer_prune_egress.sh`, runs the egress service with a peer container on a private Docker network standing in for the external host (no internet, no capability): two declared hosts of which the fixture needs one, so exactly that one is kept and the other dropped and reported; and an undeclared peer the fixture needs, which aborts with "needs external network: undeclared" and writes no `.cfg`.
 - [ ] **Step 7: Run in the prune image, lint, commit.**
 
 ## PR 7: The limits stage
@@ -1143,8 +1304,8 @@ def test_a_datagram_bind_on_port_zero_becomes_allow_zero_udp():
 **Interfaces:**
 - Produces:
   - `limits.Measurement(wall_seconds: float, cpu_seconds: float, vm_peak_mb: float, tasks: int, highest_descriptor: int, largest_file_mb: float)`.
-  - `limits.Margins(...)` with the defaults of A.6.5 as fields, one per line.
-  - `limits.margins(measurements: list[Measurement], margins: Margins) -> dict[str, int]` returning keys `timeout`, `cpu`, `mem_mb`, `nproc`, `nofile`, `fsize_mb`.
+  - `limits.Margins(...)` with the defaults of A.6.5 as fields, one per line: `wall_factor = 5`, `cpu_factor = 5`, `memory_factor = 2`, and the others unchanged (decision 3).
+  - `limits.margins(measurements: list[Measurement], margins: Margins, heap_pinned: bool) -> dict[str, int]` returning keys `timeout`, `cpu`, `nproc`, `nofile`, `fsize_mb`, and `mem_mb` only when `heap_pinned` (decision 4); `runner.Exercise` gains `heap_pinned: bool`, read from `prune.json`, false when absent.
   - `limits.limit_signature(status: int, last_samples: list[dict], limits: dict[str, int], diagnosis: list[Denial], control: list[Denial]) -> str | None`.
   - `sampler.Sampler(root_pid: int, uid: int, interval: float = 0.1)` with `start()`, `stop() -> list[dict]`.
 
@@ -1154,7 +1315,12 @@ def test_a_datagram_bind_on_port_zero_becomes_allow_zero_udp():
 def test_margins_take_the_maximum_over_runs_and_round_up():
     result = limits.margins([measurement(wall=41.0, cpu=30.2, vm=2100.0, tasks=70, fd=180, file=3.0),
                              measurement(wall=47.5, cpu=28.0, vm=2300.0, tasks=75, fd=150, file=2.0)], limits.Margins())
-    assert result == {"timeout": 150, "cpu": 100, "mem_mb": 3584, "nproc": 166, "nofile": 362, "fsize_mb": 16}
+    assert result == {"timeout": 240, "cpu": 160, "mem_mb": 4608, "nproc": 166, "nofile": 362, "fsize_mb": 16}
+
+
+def test_mem_mb_is_not_derived_without_a_pinned_heap():
+    result = limits.margins([measurement(wall=41.0, cpu=30.2, vm=2100.0, tasks=70, fd=180, file=3.0)], limits.Margins(), heap_pinned=False)
+    assert "mem_mb" not in result
 
 
 def test_status_fourteen_is_the_timeout():
@@ -1181,7 +1347,7 @@ def test_enomem_counts_only_when_the_unlimited_run_did_not_also_see_it():
     assert limits.limit_signature(1, [], {"mem_mb": 512}, seen_in_both, []) == "mem_mb"
 ```
 
-(The expected numbers follow A.6.5: wall 47.5 x 3 = 142.5, rounded up to 150; cpu 30.2 x 3 = 90.6, to 100; VmPeak 2300 x 1.5 = 3450, to 3584; tasks 2 x 75 + 16 = 166; descriptors 2 x 181 = 362; file 2 x 3 = 6, floor 16.)
+(The expected numbers follow A.6.5: wall 47.5 x 5 = 237.5, rounded up to 240; cpu 30.2 x 5 = 151, to 160; VmPeak 2300 x 2 = 4600, to 4608; tasks 2 x 75 + 16 = 166; descriptors 2 x 181 = 362; file 2 x 3 = 6, floor 16. The first test passes `heap_pinned=True`.)
 
 - [ ] **Step 2: Fail. Step 3: Implement**; the sampler reads `/proc/<pid>/status` (`VmPeak`, `Uid`), `/proc/<pid>/stat` (fields 14 and 15 divided by `os.sysconf("SC_CLK_TCK")`), `/proc/<pid>/fd` and `/proc/<pid>/task`, walking descendants by `/proc/<pid>/task/*/children`; the subreaper is `ctypes.CDLL(None).prctl(36, 1, 0, 0, 0)` (`PR_SET_CHILD_SUBREAPER`, named as a constant). **Step 4: Pass, lint.**
 - [ ] **Step 5: Extend the suite**, both directions: permitted, the fixture passes under the derived limits; forbidden, each derived limit is lower than its default in `phobos-constants.sh`, and under the derived configuration `probe` exceeding `nofile` prints `errno=EMFILE`, exceeding `fsize_mb` ends with status 153, and a `sleep` longer than the derived timeout ends with status 14.
@@ -1259,13 +1425,86 @@ Runs only once pull requests 5 and 6 of the Ares 2 import plan (the run-phase im
 - [ ] **Step 1: Check the input.** `git log --oneline origin/main -- var/tmp/testing-dir/java-maven/maven-reference docker/run_phase/java/maven-repository.sha256` names the other plan's pull request 6; otherwise stop, since the task has no input.
 - [ ] **Step 2: Add the compose service** and the orchestrator change; `yamllint --strict .`. Then check the image before any prune run: `docker compose -f docker-compose.yaml run --rm --no-deps --build --entrypoint bash prune_java_maven -c 'java -version && cd /root/.m2/repository && sha256sum --strict -c /srv/phobos-manifest/maven-repository.sha256'` must report version 25 and every line `OK`, which proves the prune image holds the bytes the run-phase image was built with; otherwise stop, since the prune would observe other artefacts than grading reads.
 - [ ] **Step 3: Run the prune**, from the repository root, in an ordinary container as compose starts it: `docker compose -f docker-compose.yaml run --rm --build prune_java_maven`, then `docker compose -f docker-compose.yaml run --rm --no-deps orchestrate --langs java-maven --path-dir /var/tmp/path_sets --skip-prune`; `--no-deps` keeps `run` from starting `orchestrate`'s dependencies, which would prune the exercise a second time instead of reading the artefacts just written. The stages are those of A.6.4, unchanged: the three unsandboxed baseline runs, the permissive layered run, filesystem, network and limits, the joint verification and the containment checks. Expected: status 0, the two artefacts and the base.
-- [ ] **Step 4: Read the result, not the status.** In `java-maven_maven-reference.json`: the baseline holds both test cases of the exercise (`de.phobos.reference.AdderTest.addsTwoNumbers` and `addsANegativeNumber`), passed, in all three runs, with `tests_ran` true and neither `no_source` nor `infra_failure`, and its log shows Ares at work (the weaving step and the agent on the test JVM's command line); the permissive layered run reports no fixed-rule refusal; every containment check is refused; the widening list says how `/root/.m2/repository` is covered, per file or compacted beneath it (A.6.5, the paragraph on local build-tool repositories), and names no grant on `/root/.m2` or `/root` as a whole; and no write-class right is granted under `/root/.m2`. A write-class grant there, or a grant of a whole group directory that holds artefacts the reference never opened, is not a failure of this task, but it is a finding the adopting pull request has to explain.
+- [ ] **Step 4: Read the result, not the status.** In `java-maven_maven-reference.json`: the baseline holds both test cases of the exercise (`de.phobos.reference.AdderTest.addsTwoNumbers` and `addsANegativeNumber`), passed, in all three runs, with `tests_ran` true and neither `no_source` nor `infra_failure`, and its log shows Ares at work (the weaving step and the agent on the test JVM's command line); the permissive layered run reports no fixed-rule refusal; every containment check is refused; every grant under `/root` is a single file the reference opened, never a directory (A.6.5, decision 7: no name under `/root/.m2/repository` matches the per-run table, so the exception never applies there); and no write-class right is granted under `/root/.m2`. A directory grant under `/root`, or any grant covering a file under `/root` the reference did not open, fails this task: it means the generalisation is wrong, and the prune is not handed over until it is fixed. A write-class grant there is a finding the adopting pull request has to explain.
 - [ ] **Step 5: Wrong reasons, both directions.** On two throwaway copies of the exercise under another key (`java-maven-check`), never committed: without `test/`, the baseline aborts with `no_source` and no `.cfg` is written; with `ares` pinned to a version the pre-loaded repository lacks, the baseline aborts as an infrastructure failure with the offline line of A.8 and no `.cfg` is written. Meanwhile the unmodified exercise in Step 3 produced its `.cfg`, which is the permitted direction.
 - [ ] **Step 6: Commit** `docker-compose.yaml` by name: `Prune the Maven reference exercise under its own key`. The artefacts are not committed by this task (`/var/tmp/path_sets/` is ignored, and the orchestrator's output under `var/tmp/opt/core/config` stays untracked); the record and the base are attached to this pull request and handed to the other plan's pull request 7.
 
-## PR 9: Retire the Bubblewrap pruner
+## PR 9: The guard names the refused endpoint
 
-Only after Q5 is answered (Python), since the Python prune image still uses Bubblewrap until then.
+### Task 9.1: `format_endpoint` and the two refusal lines
+
+**Files:**
+- Modify: `core/phobos-seccomp-networksystem/phobos-seccomp-networksystem-destination.h` and `.c` (`format_endpoint`, `ENDPOINT_TEXT_SIZE`)
+- Modify: `core/phobos-seccomp-networksystem/phobos-seccomp-networksystem-supervisor.c` and `phobos-seccomp-networksystem-datagram.c` (the two refusal lines)
+- Modify: `tests/integration/seccomp_networksystem.sh`
+- Modify: `core/phobos-tools-policysystem/config_doc.txt`, `README.md`
+
+**Interfaces:**
+- Produces: `size_t format_endpoint(const struct destination *where, char *text, size_t size)` as A.6.11 states it, the building block the denial-reporting plan reuses.
+
+- [ ] **Step 1: Write the failing checks** in `seccomp_networksystem.sh`: with the guard run `--verbose`, a refused `connect` to `10.0.0.1:80` prints `does not name: 10.0.0.1:80`, one to `[2001:db8::1]:443` prints `does not name: [2001:db8::1]:443`, one to `::ffff:10.0.0.1` port 80 prints `does not name: [::ffff:10.0.0.1]:80`, a refused datagram to `127.0.0.2:<port>` prints `does not name: 127.0.0.2:<port>`; and, unchanged, each call still fails with `EACCES` and an allowed destination still connects.
+- [ ] **Step 2: Run to see them fail**, in the run-phase image.
+- [ ] **Step 3: Implement** in C23, one declaration per line, every return value checked, a comment above the function saying what it writes and that it never copies the command's bytes.
+- [ ] **Step 4:** the gcc-14 `-fanalyzer` gate and `cppcheck --std=c23` over the changed files, then build the run-phase image on both architectures and run every acceptance suite and `seccomp_networksystem.sh`; expect the counts of `main` plus the new checks.
+- [ ] **Step 5: Commit** the files by name: `Name the refused endpoint in the connect guard's verbose refusals`.
+
+## PR 10: The Python run-phase image
+
+### Task 10.1: Build it and hold it to the acceptance suites
+
+**Files:**
+- Create: `docker/run_phase/python/Dockerfile`
+- Modify: `.github/scripts/assemble-run-phase-context.sh` (a language argument, `java` by default, so the Java build is unchanged)
+- Modify: `.github/workflows/build.yml` (the `run-phase-python` job)
+- Modify: `README.md`, `CLAUDE.md`, `AGENTS.md` (where they name the run-phase image or say there is one image)
+
+- [ ] **Step 1:** Pin `ls1tum/artemis-python-docker:v1.1.0` by its index digest, and record which architectures it offers.
+- [ ] **Step 2:** Write the Dockerfile in the shape of A.6.10, with the comments the Java one carries.
+- [ ] **Step 3:** Build it on native runners and run the acceptance suites and the protection matrix in it, exactly as the Java `run-phase` job does, in an ordinary container with no `--privileged`, `--cap-add` or `--security-opt`; expect the Java image's counts, minus nothing.
+- [ ] **Step 4:** `hadolint`, `shellcheck`, `actionlint`, `yamllint --strict .`, `ec`; commit the files by name: `Build a run-phase image for Python`.
+
+## PR 11: Python on the layer pruner
+
+### Task 11.1: The Python reference exercise and pytest's no-tests line
+
+**Files:**
+- Create: `var/tmp/testing-dir/python/python-reference/build_script.sh`, `prune.json`, and the sources of a minimal exercise in the shape of Artemis's Python template of the day (the PR names the template commit), whose tests pytest runs with `--junitxml=test-reports/results.xml`
+- Modify: `var/tmp/helpers/layer_prune/verdict.py` (`"no tests ran"` added to `NO_SOURCE_PATTERNS`), `tests/python/test_layer_prune_verdict.py`
+
+- [ ] **Step 1:** A failing verdict test: status 5 with `no tests ran in 0.01s` and no report is `no_source` and not `tests_ran`.
+- [ ] **Step 2:** Write the exercise, every package pinned and present in the Python run-phase image, `prune.json` with `"report_globs": ["test-reports/*.xml"]`.
+- [ ] **Step 3:** Run the build script in the Python run-phase image, `--network none`; expect status 0 and every test case passed in the report; without its tests, `no tests ran`.
+- [ ] **Step 4: Pass, lint, commit** the files by name.
+
+### Task 11.2: Prune it
+
+**Files:**
+- Modify: `docker-compose.yaml` (`prune_python` builds `docker/prune_phase/layers` with `RUN_PHASE_IMAGE` set to the Python run-phase image, `network_mode: none`, no capability, no privilege, the mounts of A.6.1, `command: ["--stage", "all", "python"]`)
+
+- [ ] **Step 1:** Run it as Task 8.4 Step 3 runs the Maven prune, and the orchestrator with `--langs python`.
+- [ ] **Step 2:** Read the record as Task 8.4 Step 4 does: the baseline's test cases, no fixed-rule refusal, every containment check refused, the per-run names and widenings listed.
+- [ ] **Step 3:** Commit `docker-compose.yaml` by name. Adopting a regenerated `BaseLanguage-python.cfg` is a later pull request of its own that lists every widening.
+
+## PR 12: The KVM run on x86
+
+### Task 12.1: Audit observer and cross-check
+
+**Files:**
+- Create: `var/tmp/helpers/layer_prune/audit.py`, `tests/python/test_layer_prune_audit.py`, `tests/python/fixtures/audit/` (records captured in the guest)
+- Create: `.github/scripts/run-prune-in-kvm-guest.sh`, `.github/workflows/prune-kvm.yml`
+- Modify: `var/tmp/helpers/layer_prune/main.py` (`--kernel-observer audit`), `docker/prune_phase/orchestrate/orchestrate.py` and `tests/python/test_orchestrate.py` (fold `<key>_<exercise>.abi10.cfg` into its exercise before the union, and cross-check its hash)
+
+**Interfaces:**
+- Produces: `audit.denials(records: Iterable[str]) -> list[Denial]` from `AUDIT_LANDLOCK_ACCESS` records, and `audit.cross_check(strace_denials: list[Denial], audit_denials: list[Denial]) -> list[dict]`, the mismatches; `main.py --kernel-observer audit`, which only verifies: it always writes the record `<key>_<exercise>.abi10.json` (schema version 1: kernel release, Landlock ABI, `verified_cfg_sha256` of the `.cfg` it verified, `abi10_cfg_sha256` of the sidecar or null when there is none, the cross-check's mismatches, each added row with the audit record that produced it, and the audit-only denials it reported) and writes `<key>_<exercise>.abi10.cfg` only when it adds a row. The orchestrator folds a sidecar only when `verified_cfg_sha256` equals the hash of the `.cfg` beside it and `abi10_cfg_sha256` equals the sidecar's own hash, and refuses the merge otherwise.
+
+- [ ] **Step 1: Failing tests**: a captured `fs.read_file` record maps to `[read]` on its path and agrees with the strace denial of the same `openat`; a record whose blocker maps to another section is a mismatch; an `net.bind_udp` record on port 5000 under the loopback-service condition yields exactly one `allow 5000 udp` row and nothing else.
+- [ ] **Step 2: Fail. Step 3: Implement.** The orchestrator test: an exercise with an `.abi10.cfg` row gets it in its configuration and in the union base, one without gets none, an `.abi10.json` naming another `.cfg` hash than the one beside it refuses the merge, and so does one whose `verified_cfg_sha256` matches but whose `abi10_cfg_sha256` does not match the `.abi10.cfg` beside it. The workflow job runs on `ubuntu-24.04` and `ubuntu-26.04` only, asserts `runner-capability-probe.sh --assert-kvm` first (and stops as indeterminate otherwise), boots the pinned 7.2 kernel, proves the kernel prerequisites of A.6.9 with the prune image's exported root file system, runs `main.py --kernel-observer audit` for the requested key on the artefacts of the workflow's first job, and uploads the `.abi10.json` record and any `.abi10.cfg`; the workflow's third job runs the orchestrator over both, as A.6.9 describes. It carries `timeout-minutes` (A.6.4).
+- [ ] **Step 4:** Run it on the fixture exercise: the cross-check is clean, and a deliberately wrong entry in a test copy of A.6.2's table makes it fail.
+- [ ] **Step 5:** `actionlint`, `yamllint --strict .`, `shellcheck`, `ruff`, `bandit`, `ec`; commit the files by name.
+
+## PR 13: Retire the Bubblewrap pruner
+
+Only after PR 11 has merged (decision 5), since the Python prune used Bubblewrap until then.
 
 **Files:**
 - Delete: `var/tmp/pruning/detect_minimal_fs.sh`, `var/tmp/pruning/run_minimal_fs_all.sh`, `var/tmp/helpers/emit_artifacts.py`, `var/tmp/helpers/make_lang_sets.py` (if PR 8 no longer calls it), `docker/prune_phase/java/Dockerfile`, `tests/integration/prune_sandbox.sh`, `tests/integration/prune_producer.sh`, `tests/python/test_make_lang_sets.py` (with its helper)
@@ -1295,3 +1534,5 @@ Round 2 approved, with one low note on the status contract. Acting on it showed 
 A later revision added the Maven reference exercise as an input (A.6.8, the Maven lines of A.8 and Task 4.1, the stale-report refusal of Task 4.2, Task 8.4 and the ordering against the Ares 2 import plan of pull request 163). It was reviewed together with the matching changes to that plan in three rounds: this plan stopped repeating the exercise's build command, which that plan's A.4.3 defines, A.8 now says that under the layers the offline line classifies nothing, and Task 8.4 runs the orchestrator with `--no-deps` so that it does not prune the exercise a second time. The reviewer confirmed the ordering between the two plans has no cycle and approved explicitly: "I approve, no remaining concerns."
 
 When the Ares 2 import plan decided that the Maven reference exercise runs Ares 2 from pre-loaded, pinned artefacts in the run-phase image, this plan's A.6.1, A.6.5, A.6.8, A.8, Task 3.1, Task 8.4 and ordering were changed to match and reviewed with that plan in three rounds: the prune service gained a read-only mount of the repository manifest, the image check moved after the step that adds the service it runs, A.8 names both Maven measurements, and the paragraph on `/root/.m2` now says that a directory grant made by compaction covers unobserved files beneath it, as a listed widening. The reviewer approved explicitly: "I approve, no remaining concerns."
+
+Markus then answered all eleven open questions (A.14). Recording them and carrying them through the design, the tasks and the pull request table was reviewed in five rounds. The review connected the KVM run's ABI 10 rows to the orchestrator through one workflow run with a hash-checked record, required the guest kernel's Landlock and audit configuration and a self-test before any prune in it, made the minimisation's 1-minimality conditional on monotone outcomes and said what happens without it, rewrote `/proc/self` with the thread-group id rather than the thread id strace reports, limited even the reference and permissive runs of a declared-host exercise to its declared hosts, removed an allowance in Task 8.4 for directory grants under `/root` that decision 7 no longer permits, and added a negative test for the sidecar's own hash. The reviewer approved explicitly: "I approve, no remaining concerns."
