@@ -18,10 +18,15 @@ thing.
 
 ## The algorithm
 
-`var/tmp/pruning/detect_minimal_fs.sh` takes a tree to prune and a script to run:
+`var/tmp/pruning/detect_minimal_fs.sh` takes a tree to prune and a script to run. The entry
+point is `run_minimal_fs_all.sh <lang>`, which copies each reference exercise to a scratch
+directory, sets `HOST_WORKDIR`, calls `detect_minimal_fs.sh` on it and turns `final_bindings.txt`
+into per-exercise path sets with `emit_artifacts.py`. Each language's `make_lang_sets.py` then
+writes the union and the intersection. Called on its own, `detect_minimal_fs.sh` needs
+`HOST_WORKDIR` when the script is a path inside the sandbox:
 
 ```bash
-detect_minimal_fs.sh --target / --script /var/tmp/build.sh --lang java
+HOST_WORKDIR=/srv/exercise detect_minimal_fs.sh --target / --script /var/tmp/build.sh --lang java
 ```
 
 It starts by making every child of the target writable and running the script once. A failure
@@ -55,7 +60,7 @@ run is enforced by Landlock and needs no namespace at all.
   Binding the host's `/tmp` there would let the sandbox read whatever any other process on the
   machine left in it.
 - The environment is cleared and rebuilt. Only `PATH`, `HOME`, `LANG`, `LC_ALL` and `TERM`
-  survive, and anything else a caller names with `--env`, so nothing arrives merely because it
+  survive, plus `BUILD_HOME` and `BUILD_OPTS` where given, and anything else a caller names with `--env`, so nothing arrives merely because it
   was set in the shell that started the prune.
 - `--new-session` detaches the sandbox from the controlling terminal. Without it, and with no
   seccomp filter, a process inside could push characters back into that terminal with `TIOCSTI`
@@ -78,9 +83,9 @@ three patterns:
 | `INFRA_FAILURE_PATTERNS` | a zero status whose log matches counts as failure. The toolchain itself broke. |
 | `UNIGNORABLE_SUCCESS_PATTERNS` | a zero status whose log matches counts as failure. Gradle reports `NO-SOURCE` with status zero for a build that compiled nothing. |
 
-All three are environment variables with defaults shaped for a Gradle build. Pruning anything
-else means setting them, and getting them wrong is the failure mode this phase is most exposed
-to: a run that fails for an unrelated reason is written into the allow-list as a dependency.
+All three are environment variables. The defaults of the first and third are shaped for a Gradle
+build and the default of the second for a Python one. Pruning anything else means setting them.
+Getting them wrong is the failure mode this phase is most exposed to: a run that fails for an unrelated reason is written into the allow-list as a dependency.
 
 ## Which way it errs
 

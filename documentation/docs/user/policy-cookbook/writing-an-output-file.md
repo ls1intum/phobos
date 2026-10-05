@@ -32,17 +32,21 @@ The three sections are separate because the rights are separate. A command that 
 one known file needs `[write]` alone. A command that generates files needs `[create]` too. A
 command that rebuilds in place, and therefore removes what was there, needs `[delete]` as well.
 
-Where the tool writes to a temporary name and renames it into place, replace all three with one
-section:
+Where the tool writes to a temporary name and renames it into place, keep `[write]` and
+replace `[create]` and `[delete]` with one section:
 
 ```ini title="exercise.cfg"
+[write]
+/var/tmp/workspace
+
 [restructure]
 /var/tmp/workspace
 ```
 
 [`[restructure]`](/user/policy-reference/restructure) carries create, delete and the REFER right
 together, and REFER is what a rename across directories needs. Without it the kernel answers
-`EXDEV`.
+`EXDEV`. It carries no write right, so a tool that opens a file for writing, which truncates
+it, still needs `[write]`.
 
 ## What this still forbids
 

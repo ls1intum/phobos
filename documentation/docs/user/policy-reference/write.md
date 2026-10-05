@@ -95,7 +95,7 @@ renaming anything: those are [`[create]`](create.md), [`[delete]`](delete.md) an
 
 `phobos-filesystem.sh` materialises the path before the rule is built, because a Landlock rule
 needs an existing path to open. A path that does not exist is created as an empty **regular
-file**. The rule is then emitted as `--rights=w <path>`.
+file**. The rule is then emitted as `--rights=w <path>`, once for each section the path appears in.
 
 :::warning[A missing directory is created as a file]
 The materialising step reads a trailing slash as "make a directory", and it never sees one: the
@@ -121,8 +121,8 @@ links.
 
 **Without `TRUNCATE`, a read-only path is not safe from `truncate(2)`.** On a kernel below
 Landlock version 3 the right does not exist, so it is not handled at all.
-`phobos-landlock-filesystem-and-networksystem` says so before the run, and `--minimum-landlock-version 3` refuses such a
-kernel instead.
+`phobos-landlock-filesystem-and-networksystem` says so before the run, and putting `--minimum-landlock-version 3` in the tail flags file makes
+the enforcer refuse such a kernel instead.
 
 ## Further reading
 

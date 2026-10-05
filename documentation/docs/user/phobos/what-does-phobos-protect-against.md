@@ -90,8 +90,11 @@ command's output with it.
 ## What holds all four together
 
 Every layer fails closed. A missing connect guard, a missing process-group lock, an
-unenforceable policy, a kernel too old for a right the policy named: each ends the run with a
-message and a non-zero status rather than running the command with that layer quietly absent.
+unenforceable policy, a TCP port rule on a kernel below Landlock version 4, a UDP rule below
+version 10: each ends the run with a message and a non-zero status rather than running the
+command with that layer quietly absent. A kernel too old for a filesystem right, or for closing
+bind, gets a warning on every run instead, and `--minimum-landlock-version` turns that into a
+refusal.
 With no base policy present at all, Phobos refuses to run rather than run the command
 unprotected.
 

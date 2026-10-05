@@ -15,7 +15,7 @@ workflow summary.
 There is no build system. The shell runs as it is and the C is compiled inside the image, so
 the suites under `tests/` are the checks.
 
-## One harness, four families
+## One harness, six families
 
 Every suite sources `tests/harness.sh`, which owns `ok`, `bad`, `skip`, `check`, the three
 counters and `finish`. A suite keeps everything else of its own: its shell options, its
@@ -24,14 +24,22 @@ non-zero on a failure.
 
 | Family | Where | What it needs | Run by |
 | --- | --- | --- | --- |
-| Host suites | `tests/*.sh` | a shell, a compiler, a Python and Bubblewrap | the `Shell suites` job of `test.yml`, in continuous integration (CI) |
+| Integration suites | `tests/integration/*.sh` | a shell, `gcc-14`, Bubblewrap, `haproxy`, `openssl` | the `Shell suites` job of `test.yml`, in continuous integration (CI) |
+| Shell unit suites | `tests/unit/<core component>/*.sh` | a shell | the `Shell suites` job of `test.yml` |
 | Python suites | `tests/python/` | pytest | the `Python helpers` job of `test.yml` |
-| Unit suites | `tests/unit/` | `gcc-14`, no kernel feature | `build.yml` |
-| Acceptance suites | `tests/integration/landlock-filesystem-and-networksystem-acceptance/` | the run-phase image, an ordinary container | `build.yml` |
+| C unit suites | `tests/unit/phobos-landlock-filesystem-and-networksystem/`, `tests/unit/phobos-seccomp-networksystem/` | `gcc-14`, no kernel feature | the `unit` job of `build.yml` |
+| Acceptance suites | `tests/integration/landlock-filesystem-and-networksystem-acceptance/` | the run-phase image, an ordinary container | the `run-phase` job of `build.yml`, on amd64 and arm64 |
+| Protection matrix | `tests/integration/protection-matrix/` | the run-phase image, an ordinary container | the `run-phase` job of `build.yml`, on amd64 and arm64 |
 
 Each shell suite is a CI step of its own, so one run names every suite that broke rather than
 the first alone. `tests/README.md` is the table of every suite, what it proves and what makes it
-skip.
+skip. `harness_self_test.sh` runs first as a step of its own. A step named "Every suite is started
+by a workflow" fails when a `*.sh` file under `tests/` is named in no workflow, apart from
+`harness.sh`, `lib.sh`, `run-all.sh` and `policy-redundancy-probe.sh`. It matches on the file
+name, so a suite that nobody wired in cannot sit green by never running. A second step checks
+that the entry points of `core/` and `var/tmp/pruning/` are executable. Some integration suites
+skip without `haproxy` or `openssl`, and `seccomp_networksystem.sh` skips without the kernel's
+seccomp user notification.
 
 ## A skipped check is not a passing one
 
@@ -54,8 +62,8 @@ Only one of them carries a coverage gate:
 
 | Suite | Gate |
 | --- | --- |
-| `unit/connect_guard_run.sh` | every line, with `--coverage` |
-| `unit/run.sh` | none. `unit/mutation.sh` reports a mutation score for it weekly instead, because the coverage runtime disturbs the calls the suite interposes |
+| `tests/unit/phobos-seccomp-networksystem/seccomp_networksystem_run.sh` | every line, with `--coverage` |
+| `tests/unit/phobos-landlock-filesystem-and-networksystem/run.sh` | none. `mutation.sh` in the same folder reports a mutation score for it instead, because the coverage runtime disturbs the calls the suite interposes |
 
 ## The acceptance suites measure the real sandbox
 
@@ -64,11 +72,42 @@ They run inside the run-phase image, in an **ordinary** container: no `--privile
 be measuring a different sandbox from the one a command gets, which is why that constraint is
 part of the convention rather than part of the setup.
 
-Seven suites cover, in order: the five guarantees of the shipped policy, inheritance by a
+Nine suites cover, in order: the five guarantees of the shipped policy, inheritance by a
 second process and a non-root run, rights tightened and widened across four phases, the policy
-the image ships running a real build, a raw `connect()` refused by a Landlock port
-rule, Landlock scoping against signals and abstract sockets, and the connect guard inside the
-image.
+the image ships running a real build, a raw `connect()` refused by a Landlock port rule, a raw
+bind refused by a Landlock bind-port rule, Landlock scoping against signals and abstract sockets,
+the connect guard inside the image, and the network layer leaving nothing behind. That last
+suite checks that no HAProxy remains and that `/etc/hosts` is byte for byte as it was, even
+after a `SIGKILL`ed timeout and two overlapping runs.
+The job runs on both architectures, and the image build checks with `readelf` that the three
+compiled programs are position independent with full RELRO.
+
+## The protection matrix
+
+The acceptance suites measure the shipped policy. The matrix under
+`tests/integration/protection-matrix/` holds `phobos.sh` itself to its promises, layer by layer
+and combined. It has eleven suites (`filesystem`, `network`, `timeout`, `resources`,
+`combinations`, `cli`, `lifecycle`, `policy-syntax`, `network-edge`, `filesystem-edge` and
+`resources-edge`), each a step of the `run-phase` job in an ordinary container with
+`--network none --memory 3g --pids-limit 1024`. The cgroup caps are not privileges. `lib.sh`,
+`probe.c`, `edge.c`, `stubdns.c` and `run-all.sh` are the shared parts.
+
+The conventions are these:
+
+- Every denial has three partners: an unprotected control, a refusal through `phobos.sh`, and a
+  pass with only its own layer switched off. A control that fails turns the check into a skip
+  that says there is no evidence.
+- Every denial has a permitted neighbour, so a sandbox that refuses everything cannot pass.
+- `probe.c` prints `START` and then `OP <name> ret=<n> errno=<NAME>` for each call, so a suite
+  reads what the kernel answered and not an exit code.
+- `gap_case` pins a documented limit as it is today and turns red on a change in either
+  direction. `known_defect` skips while a defect holds and fails the moment it is fixed. A skip
+  is never a pass.
+- A refusal that is new belongs in the matrix too: it pins old behaviour as an ordinary accept
+  or a `gap_case`, so a parser that starts to refuse fails there first.
+
+Run it with `run-all.sh [suite...]` in a disposable container only, with `--network none`: the
+suites replace the image's base policy for their duration and end helper processes with `pkill`.
 
 ## Both directions, always
 

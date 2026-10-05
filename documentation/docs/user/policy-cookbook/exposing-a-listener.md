@@ -27,7 +27,8 @@ expose 18080 to 8080 from 198.51.100.0/24
 ```
 
 Two ports, with different jobs. `8080` is the command's own listening port, and Landlock
-refuses it a listener on any other. `18080` is the port the container exposes, which the
+refuses it a listener on any other, unless the base policy names port 0, as the shipped Java
+policy does. `18080` is the port the container exposes, which the
 inbound filter binds and which the command may not bind itself.
 
 ## What this still forbids
@@ -48,8 +49,8 @@ allow 8080
 expose 8080 to 8080 from 198.51.100.0/24
 ```
 
-Fronting a port the command may itself bind lets it take that port before the filter starts and
-receive unfiltered connections. Phobos refuses this with `PHB-EPOLICY`.
+Fronting a port the command can itself bind lets it compete with the filter for that port and
+receive connections the filter was meant to screen. Phobos refuses this with `PHB-EPOLICY`.
 
 Three more are refused for related reasons: a public port below 1024, which cannot be bound
 without a capability the run does not have; a backend port `[bind]` does not name, which would

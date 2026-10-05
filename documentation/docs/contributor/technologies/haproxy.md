@@ -20,9 +20,9 @@ a connection before deciding, and resolving a name through a nominated resolver.
 Both instances are **trusted infrastructure**, started before the command and outside the
 sandbox. Both run in the foreground with `-db`, so they stay children of the layer that started
 them and inside the run's process group, and both write their own output to a scratch log
-rather than to the command's streams. The layer records each process identifier in the
-specification directory, because it replaces itself with the rest of the chain and cannot stop
-them itself; whichever layer ends the run stops them.
+rather than to the command's streams. Both are direct children of the network layer, which runs
+the rest of the chain as a child and waits. It keeps each process identifier in a shell variable
+and stops both in its `EXIT` trap: `TERM`, a bounded wait of about two seconds, then `KILL`.
 
 ## Role one: the egress broker
 

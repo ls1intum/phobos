@@ -52,9 +52,9 @@ does not assume they are set.
 
 ## Network isolation is not provided
 
-Phobos filters outbound stream `connect()` from outside the process, at the seccomp and
-Landlock boundaries, and interposes no library call inside the process. Three things sit
-outside that:
+Phobos filters outbound stream `connect()` and every datagram connect and send from outside the
+process, at the seccomp and Landlock boundaries, and interposes no library call inside the
+process. Three things sit outside that:
 
 - **Host-level datagram egress beyond the allow-list.** A `udp` rule in `[connect]` that names a
   host is held to the addresses the name had when the run began, because a datagram carries no
@@ -62,10 +62,10 @@ outside that:
   reachable through that rule, and the container's isolation is the boundary beyond it.
 - **Inbound connections no `[accept]` rule fronts.** The inbound filter covers the ports it is
   given, on the Transmission Control Protocol only.
-- **Everything on a kernel below Landlock version 10**, where the UDP rights do not exist. A
-  `udp` rule is refused on such a kernel rather than left unenforced, so the run stops instead
-  of running with an unenforced rule. The exception is a `udp` rule beside a `udp` loopback rule
-  with no port, which the guard alone holds on every kernel.
+- **UDP bind on a kernel below Landlock version 10.** The guard still holds UDP connect and send
+  by host and port, but the kernel cannot close UDP bind there, so the enforcer warns and the
+  bind stays open. A `udp` `[connect]` or `[bind]` port rule is refused on such a kernel, except a
+  `udp` port rule beside a `udp` loopback rule with no port, which the guard alone holds.
 
 A deployment that wants no network at all starts the container with `--network none`, under
 which only loopback exists. A deployment that needs `[accept]` gives that up and has to provide
@@ -143,8 +143,9 @@ itself. A grading host is protected where Ares, Phobos and the container are all
 
 Landlock grew one release at a time. A right the running kernel does not know is not merely
 ungranted, it is not handled at all, so it is free on every path including the ones the policy
-calls read-only. `phobos-landlock-filesystem-and-networksystem` reports every such gap before the run rather than leaving it
-to be discovered, and `--minimum-landlock-version` refuses a kernel too old for the guarantee
+calls read-only. `phobos-landlock-filesystem-and-networksystem` reports the gaps in `TRUNCATE`, ioctl, scoping and bind closing before the run, and notes a missing
+`REFER`. It does not report a kernel below version 9, where connecting to a pathname UNIX socket
+outside the sandbox is not restricted, and `--minimum-landlock-version` refuses a kernel too old for the guarantee
 you need. The table on the [Landlock](/contributor/technologies/landlock) page says which
 version brought which right.
 

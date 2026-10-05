@@ -90,8 +90,9 @@ The rule carries the letter `x`, and it applies to the path and everything benea
 
 ## What enforces it
 
-The same path is emitted as `--rights=x <path>`, or, where the path appears in `[read]` too,
-as one rule carrying both letters. Landlock refuses an `execve` of a file beneath a path that
+The filesystem layer emits the same path as `--rights=x <path>`. A path named in several sections gets one rule
+per section, each carrying the union of the letters, so `--rights=rx <path>` twice for a path in
+`[read]` and `[execute]`, which Landlock unions. Landlock refuses an `execve` of a file beneath a path that
 holds no execute right.
 
 ## Notes

@@ -113,7 +113,7 @@ the kernel lacks, a missing tool or too few processor cores.
 | `resources.sh` | every limit is set, read back, enforced, inherited, merged and validated |
 | `combinations.sh` | all sixteen subsets of switched-off layers, with one witness per layer in each |
 | `cli.sh` | the command line, streams, overrides, tail flags and odd policy files |
-| `lifecycle.sh` | nothing is left behind after any ending of a run, a signal sent to `phobos.sh` is pinned as it is (it never reaches the command, a known defect) |
+| `lifecycle.sh` | nothing is left behind after any ending of a run, a signal sent to `phobos.sh` reaches the command, with a documented gap for a command that ignores `SIGTERM` and for `SIGKILL` |
 | `policy-syntax.sh` | every shape of a policy line, accepted or refused with its status, and every limit read back from the kernel |
 | `network-edge.sh` | range ends, port boundaries, special addresses, IPv6 spellings, socket kinds, a TCP destination rewritten during connect |
 | `filesystem-edge.sh` | links, dot-dot, magic links, rights on files and the root, odd names, a link swapped while it is opened |

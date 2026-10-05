@@ -22,9 +22,15 @@ goes to standard error, so whatever reads the run can take one stream and a pers
 | `11` | `PHB-EPOLICY` | the policy is invalid, or cannot be enforced as written |
 | `14` | `PHB-ETIMEOUT` | the run passed its timeout and was stopped |
 | `15` | `PHB-ERUNTIME` | something Phobos needs is missing or cannot be started |
-| `125` | — | `phobos-landlock-filesystem-and-networksystem` or the connect guard refused to set the sandbox up |
+| `125` | — | `phobos-landlock-filesystem-and-networksystem`, the connect guard or the group lock refused to set the sandbox up |
 | `127` | — | the command itself could not be executed |
 | anything else | — | the command's own status. Phobos did not stop the run. |
+
+A signal sent to `phobos.sh` (`SIGTERM`, `SIGHUP`, `SIGINT` or `SIGQUIT`) is passed on to the
+command, and `phobos.sh` then ends with 128 plus the signal's number once the layers have cleaned
+up. A command that ignores the signal goes on until its time limit. `SIGKILL` cannot be passed
+on, so a caller that must stop a run at once kills the whole process group. A run whose clean-up
+fails ends with `15` even if the command succeeded.
 
 `PHB-EDENY` carries no status of its own. It is a count of lines in the command's own standard
 error that look like denials, printed as a hint, and it never changes the exit status.
@@ -79,13 +85,54 @@ The two transports are separate. On every kernel the guard alone holds a udp rul
 port beside a udp loopback wildcard, so it needs no Landlock version 10. The same rule on its
 own does need it.
 
+### A path is relative, has a wildcard or does not exist
+
+```
+Policy invalid: 'data' in [read] is not an absolute path. Write the whole path from /, because ~,
+variables, quotes and names relative to a directory are not expanded. Found in 'exercise.cfg',
+line 3. (PHB-EPOLICY)
+```
+
+```
+Policy invalid: '/usr/lib/jvm/*' in [read] holds a wildcard character, and a path is taken as
+written, so it would name the one entry with that literal name and not the files it looks like it
+matches. Name the directory or the file itself. Found in 'exercise.cfg', line 4. (PHB-EPOLICY)
+```
+
+```
+Policy invalid: '/srv/reference-dta' in [read] does not exist on this system, so the rule would
+grant nothing. Check the spelling, or remove the line if the path is not needed here. Found in
+'exercise.cfg', line 5. (PHB-EPOLICY)
+```
+
+Write the full path from `/`, name the directory instead of a pattern, and check the spelling.
+The missing-path check applies to `[read]` and `[execute]` in a task configuration. The sections
+that change things create a missing path, and the shipped base policies are exempt.
+
+### A configuration file is not the text it should be
+
+```
+Policy invalid: this line contains a carriage return, which a Windows line ending leaves at its
+end and which would become part of the value. Save the file with LF line endings. Found in
+'exercise.cfg', line 1. (PHB-EPOLICY)
+```
+
+The same refusal family covers a byte order mark and a NUL byte, which name the file alone. It
+covers a resource limit with more than 18 significant digits and a timeout with more than 15
+significant digits in its seconds part. It covers a `--config` that is a directory, a link to
+nothing, not a regular file or not readable. The message says which. See
+[what Phobos refuses in a file](policy-reference/index.md#what-phobos-refuses-in-a-file-and-how-it-says-so).
+
 ### A `[bind]` rule names an address
 
 ```
 Policy invalid: '127.0.0.1:8080' in [bind] is not a bare port; [bind] takes only a port number,
 because Landlock enforces a bind by port and cannot narrow to a local address. Name the port
-alone, and govern a listener's reachability with [accept]. (PHB-EPOLICY)
+alone, and govern a listener's reachability with [accept]. Found in 'exercise.cfg', line 12.
+(PHB-EPOLICY)
 ```
+
+Every refusal that concerns one line of a configuration ends with the file and the line.
 
 Write the port alone, and govern reachability with [`[accept]`](policy-reference/accept.md).
 
@@ -107,17 +154,18 @@ refusing to build a policy. (PHB-EPOLICY)
 
 You are running from a checkout rather than from the run-phase image. The shipped base
 configurations live in `core/config/`, and `phobos-policysystem.sh` looks for them beside itself.
-Build the image, or pass `--allow-unsandboxed` where an unprotected run is what you meant.
+Build the image. `--no-restriction` (`-nr`) runs the command with no sandbox at all. It is a debugging switch, it is refused together with `--config`, and it does not make a checkout run the sandbox.
 
 ### The specification directory lies under a write path
 
 ```
 Policy unenforceable: the specification directory '/var/tmp/phobos-spec.XXXXXX' lies beneath
 the write path '/var/tmp', so the graded command could rewrite the connect policy or the
-clean-up's process-id files. (PHB-EPOLICY)
+record the clean-up acts on. (PHB-EPOLICY)
 ```
 
-The message says `graded command`, which is the sandboxed command whatever it happens to be.
+The message says `graded command`, which is the sandboxed command whatever it happens to be. The
+record the clean-up acts on is the file that names the hosts file whose lines the run added.
 Move the specification with `--spec-parent`, or name a subdirectory rather than `/var/tmp`
 itself in the write sections.
 
@@ -143,7 +191,7 @@ that program, `--minimum-landlock-version` among them.
 
 ```
 The connect guard '/var/tmp/opt/core/phobos-seccomp-networksystem' is missing or not executable;
-refusing to run without connect supervision.
+refusing to run without connect supervision. (PHB-ERUNTIME)
 ```
 
 The three compiled programs are built inside the run-phase image and never committed. A bare
@@ -153,7 +201,7 @@ checkout therefore cannot run. Build the image.
 
 ```
 The group lock '/var/tmp/opt/core/phobos-seccomp-timeoutsystem' is missing or not executable; refusing
-to run a timed command that could escape the timeout with setsid.
+to run a timed command that could escape the timeout with setsid. (PHB-ERUNTIME)
 ```
 
 Same cause, same fix.
@@ -162,7 +210,8 @@ Same cause, same fix.
 
 ```
 The [connect] allow-list names an exact host, which the egress broker binds by resolving it,
-but no resolver was given; pass --resolver <ip[:port]>.
+but no resolver was given; pass --resolver <ip[:port]>. Refusing rather than run without
+host-name enforcement. (PHB-ERUNTIME)
 ```
 
 Give the run a resolver, or name the host's address or address range instead.
@@ -171,7 +220,7 @@ Give the run a resolver, or name the host's address or address range instead.
 
 ```
 Runtime unusable: realpath does not take --canonicalize-missing --no-symlinks, so a policy's
-paths cannot be canonicalised. GNU coreutils is what provides it.
+paths cannot be canonicalised. GNU coreutils is what provides it. (PHB-ERUNTIME)
 ```
 
 The BSD and BusyBox versions do not take those options. Without them every path would fall
@@ -215,8 +264,10 @@ port the kernel chooses. The shipped Java policy already grants port 0 and nothi
 A kernel too old to close bind gets a warning on standard error instead of a refusal:
 
 ```
-warning: Landlock version 3 cannot close TCP bind (that needs version 4); a command can still
-bind and listen on any TCP port, so the container's network isolation is the only boundary there.
+[phobos-landlock-filesystem-and-networksystem] warning: Landlock version 3 cannot close TCP bind
+(that needs version 4); a command can still bind and listen on any TCP port, so the container's
+network isolation is the only boundary there. Pass --minimum-landlock-version 4 to refuse such a
+kernel instead.
 ```
 
 The run goes on, because refusing would stop every run on that kernel. The UDP warning is the same
@@ -232,8 +283,10 @@ network layer is the cause.
 
 ## Which layer refused?
 
-Switch one layer off at a time. A disabled layer is left out of the chain rather than entered
-and skipped, and each is recorded on standard error, so the log says what was off.
+Switch one layer off at a time. The timeout, network and resource layers drop out of the chain
+when disabled. The filesystem layer stays: with `-nfr` it still runs the command and counts
+denials, and only Landlock is left out. Each is recorded on standard error, so the log says what
+was off.
 
 ```bash
 ${PHOBOS_HOME}/phobos.sh --no-filesystem-restriction -- <command>    # -nfr

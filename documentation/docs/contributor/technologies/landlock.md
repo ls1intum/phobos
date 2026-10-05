@@ -53,7 +53,7 @@ to every ruleset from version 6.
 
 ## The version ladder
 
-`core/phobos-landlock-filesystem-and-networksystem-ruleset.h` names the first version that carries each right. A right the
+`core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-ruleset.h` names the first version that carries each right. A right the
 running kernel does not know is **not handled at all**, so it is free on every path, including
 the ones the policy calls read-only.
 
@@ -97,8 +97,9 @@ building a new view of the filesystem.
 ## Composing two rulesets
 
 Landlock rulesets stack by intersection, and Phobos relies on that. The network layer applies a
-ruleset created with `--no-filesystem`, which handles no filesystem right and carries the port
-rules alone; the filesystem layer later applies its own, which handles the filesystem and
+ruleset created with `--no-filesystem`, which handles nothing of the filesystem except `REFER`,
+granted on `/` so that it leaves moves between directories to the filesystem ruleset (a layer
+that does not handle `REFER` refuses every cross-directory rename), and carries the port rules; the filesystem layer later applies its own, which handles the filesystem and
 carries no port rule. Neither can widen the other.
 
 ## Further reading

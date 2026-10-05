@@ -18,7 +18,7 @@ phobos.sh
   -> phobos-policysystem.sh                 (builds the specification, then returns)
   -> phobos-timeoutsystem.sh                (runs the rest under GNU timeout and waits)
        -> phobos-seccomp-timeoutsystem          (installs the seccomp filter, then execs)
-       -> phobos-networksystem.sh           (starts the broker and the filter, then execs)
+       -> phobos-networksystem.sh           (starts the broker and the filter, runs the rest as a child, waits, then cleans up)
             -> phobos-seccomp-networksystem   (forks a supervisor, the child execs on)
             -> phobos-landlock-filesystem-and-networksystem        (--no-filesystem: the port rules only)
             -> phobos-filesystem.sh   (runs the command as a child and waits)
@@ -27,8 +27,9 @@ phobos.sh
                  -> the command
 ```
 
-A layer that is switched off is left out of the chain rather than entered and skipped, so no
-enable flag travels with the run.
+The timeout, network and resource layers drop out of the chain when switched off, so no enable
+flag travels with them. The filesystem layer is always in the chain: with `-nfr` it receives
+`--no-landlock` and still runs the command as a child and counts denials.
 
 ## Stage 1: the command line
 
@@ -41,8 +42,9 @@ particular resets on every source of the shared library, because bash imports ea
 variable as a shell variable of the same name and debugging must never be switchable from
 outside.
 
-`--allow-unsandboxed` is handled here, before any specification directory exists and before the
-configurations are read, so a raw run leaves nothing behind.
+`phobos.sh` handles `--no-restriction` (`-nr`) here, before any specification directory exists
+and before it reads the configurations, so a raw run leaves nothing behind. It refuses a
+`--config` given beside it, which catches `-nr` typed where `-nrr` was meant.
 
 ## Stage 2: the specification
 
@@ -60,8 +62,11 @@ part.
 | `timeout.sec` | the canonical timeout, or empty |
 | `limits.conf` | one `key=value` per resource limit |
 | `tail.flags` | the tail flags, comments stripped |
+| `net.guard.rules` | `net.rules` with the udp name rows expanded to addresses, written by the network layer for the guard |
+| `hosts.record` | the hosts file whose lines the run added, so the clean-up can remove exactly those |
 
-Every part gets its file even where it is empty, so each layer can read it unconditionally.
+Every part `write_spec` writes gets its file even where it is empty, so each layer can read it
+unconditionally. The last two files appear only when the network layer needs them.
 
 Three checks happen here rather than in a layer, because a layer may be absent from the chain
 and a rule must be judged either way: every network rule is judged for enforceability, every
@@ -70,7 +75,7 @@ checked to lie outside every write path.
 
 ## Stage 3: the timeout
 
-`phobos-timeoutsystem.sh` reads `timeout.sec`. Where it is empty the layer hands the chain straight
+`phobos-timeoutsystem.sh` reads `timeout.sec`. Where it is empty, which happens only where a configuration wrote `0`, the layer hands the chain straight
 on with `exec`, and no process-group lock is applied, since there is no group kill to escape.
 
 Where a timeout is set the layer runs the rest under
@@ -149,16 +154,17 @@ Four properties hold the chain together, and each is easy to break:
 
 ## Who removes the specification directory
 
-Whichever layer waits. With a timeout set, the timeout layer waits and its trap removes the
-directory, including after it has just group-killed everything below. Without one, the
-filesystem layer is the waiter and removes it. `phobos.sh` itself ends with `exec`, so its own
-trap never fires.
+Every layer that waits has an `EXIT` trap that removes it. The first to end does the work, and
+the others find the directory gone. After a group `SIGKILL` only the timeout layer, which sits
+outside the group, still removes it. `phobos.sh` itself ends with `exec`, so its own trap fires
+only where the policy program refuses first.
 
 The removal is conservative: it deletes only the files `write_spec` wrote, the scratch
 subdirectory and the marker, then the directory itself. A directory that has gained anything
 else stays, and the failure turns an otherwise successful run into `PHB-ERUNTIME` rather than
-leaving a policy behind unnoticed. It stops the egress broker and the inbound filter first,
-through the process-id files they recorded.
+leaving a policy behind unnoticed. Stopping the HAProxy processes is the network layer's job, done
+before it removes the directory: it keeps their process identifiers in shell variables and stops
+them in its own `EXIT` trap.
 
 ## Further reading
 

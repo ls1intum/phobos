@@ -67,7 +67,7 @@ When no configuration names a value, the run is bounded by a default:
 | `fsize_mb` | 256 | `ulimit -f`, the size of any single file |
 
 A configuration that names a larger value wins over the default, and one that names `0` switches
-that limit off and wins over it too. The default is a floor, never a cap.
+that limit off and wins over it too. The default is a fallback used only where no configuration names the limit. A configuration can name a lower value, and that value then applies. It is never a cap.
 
 Both spellings of the command work. Everything after `--` is the command and its arguments; if
 you leave `--` out, the first word that is not an option becomes the command and everything
@@ -97,9 +97,10 @@ one directory on purpose; choosing between them is the packaging step.
 ## Switching a layer off
 
 Every restriction is applied by default. Each can be disabled on its own, which is how you find
-out which layer a failure belongs to. A disabled layer is left out of the chain rather than
-entered and skipped, and every one of them is recorded on standard error, so a run with a layer
-off cannot look like an ordinary one in a log.
+out which layer a failure belongs to. The timeout, network and resource layers drop out of
+the chain when disabled. The filesystem layer is the exception: it still runs the command and
+counts denials, and `-nfr` only leaves Landlock out. Every one of them is recorded on standard
+error, so a run with a layer off cannot look like an ordinary one in a log.
 
 | Option | Short | Disables |
 | --- | --- | --- |
@@ -135,7 +136,8 @@ can only be switched on by the flag.
 ## What the layers do, in order
 
 ```
-phobos.sh -> phobos-timeoutsystem.sh -> phobos-networksystem.sh -> phobos-landlock-filesystem-and-networksystem --no-filesystem
+phobos.sh -> phobos-timeoutsystem.sh -> timeout -> phobos-seccomp-timeoutsystem -> phobos-networksystem.sh
+          -> phobos-seccomp-networksystem -> phobos-landlock-filesystem-and-networksystem --no-filesystem
           -> phobos-filesystem.sh -> phobos-resourcesystem.sh -> phobos-landlock-filesystem-and-networksystem -> your command
 ```
 
@@ -161,12 +163,17 @@ goes to standard error, and the exit status is the contract to read.
 | Status | Meaning |
 | --- | --- |
 | the command's own | Phobos did not stop the run |
+| `128` plus a signal | a `SIGTERM`, `SIGHUP`, `SIGINT` or `SIGQUIT` sent to `phobos.sh` was passed on to the command, which died of it |
 | `2` | a script was called the wrong way |
 | `11` | `PHB-EPOLICY`: the policy is invalid or cannot be enforced as written |
 | `14` | `PHB-ETIMEOUT`: the run passed its timeout and was stopped |
 | `15` | `PHB-ERUNTIME`: something Phobos needs is missing or cannot be started |
-| `125` | `phobos-landlock-filesystem-and-networksystem` or the connect guard refused to set the sandbox up |
+| `125` | `phobos-landlock-filesystem-and-networksystem`, the connect guard or the group lock refused to set the sandbox up |
 | `127` | the command itself could not be executed |
+
+A run whose clean-up fails, because the specification directory or the run's `/etc/hosts` lines
+cannot be removed, ends with `15` even where the command succeeded. A command that ignores the
+signal goes on until its time limit, and `SIGKILL` cannot be passed on.
 
 One more report carries no status of its own. Where the command's own standard error contained
 lines that look like denials, the filesystem layer counts them and prints

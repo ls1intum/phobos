@@ -17,8 +17,10 @@ stays behind to watch what the work was refused.
 resource layer, runs `phobos-landlock-filesystem-and-networksystem`, and waits for the command so that it can report the
 denials.
 
-It is the one layer that runs the command as a **child** rather than replacing itself with
-it. Everything else in the chain hands over with `exec`.
+It is the layer that runs the command itself as a **child**, through the resource layer and
+`phobos-landlock-filesystem-and-networksystem`. The timeout layer and the network layer wait
+on the rest of the chain as well. Only the policy step, the resource layer and the enforcer
+programs hand over with `exec`.
 
 ## What is in it
 
@@ -64,10 +66,13 @@ The program is the sequence of stages and nothing else:
 ```
 parse_arguments
 detect_landlock_version      -> refuses a kernel below the minimum, or below what the rules need
-report_unenforceable_rights  -> warns about every right this kernel cannot handle
+report_unenforceable_rights  -> warns about the gaps in TRUNCATE, ioctl and scoping, and notes REFER
+report_bind_not_closed       -> warns when this kernel cannot close bind, where the policy asked
 create_ruleset               -> handled filesystem rights, handled network rights, scoping
 add_path_rules               -> one LANDLOCK_RULE_PATH_BENEATH per path
+allow_reparenting_everywhere -> with --no-filesystem, REFER granted on / and nothing else
 add_port_rules               -> one LANDLOCK_RULE_NETWORK_PORT per port and direction
+add_ephemeral_bind_rules     -> the port 0 grants for a kernel-chosen source or listening port
 enter_working_directory      -> before the restriction, because the directory may be outside it
 apply_restriction            -> PR_SET_NO_NEW_PRIVS, then landlock_restrict_self
 exec_command
@@ -108,8 +113,9 @@ escalation finds.
 
 ## Known gaps
 
-**A denial count is a text match.** `Permission denied`, `EACCES`, `EROFS` and the two resolver
-messages are the whole heuristic. A build that prints one of those phrases for its own reasons
+**A denial count is a text match.** The filesystem count matches `Permission denied`, `EACCES`
+and `EROFS`. The network count matches `EAI_AGAIN`, `EAI_FAIL`, `EAI_NONAME`,
+`Network is unreachable` and `Connection timed out`. A build that prints one of those phrases for its own reasons
 is counted, so the report is a hint rather than a verdict, which is why it never touches the
 exit status.
 

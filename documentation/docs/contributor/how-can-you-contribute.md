@@ -73,8 +73,9 @@ and `.editorconfig` asks editors for the same. Check with `git ls-files --eol | 
 
 ## The gate
 
-`lint.yml` runs eight jobs, and every one can be run by hand. The commands below are all eight,
-run against locally installed tools. That is the usual reason a local run and the run in
+`lint.yml` runs seven lint jobs, and `actionlint.yml` lints the workflows beside it, weekly and
+on a change under `.github`. Every one can be run by hand. The commands below are those seven
+jobs plus `actionlint`, run against locally installed tools. That is the usual reason a local run and the run in
 continuous integration (CI) disagree on a version. The C job is two steps rather than one: the
 compiler gate runs before cppcheck and fails on any warning.
 
@@ -88,18 +89,20 @@ yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 actionlint
 ec --no-color
-awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print FILENAME":"FNR; e=1}} {p=$0} END{exit e}' core/*.sh
+awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print FILENAME":"FNR; e=1}} {p=$0} END{exit e}' core/*.sh core/phobos-tools-*/*.sh
 ```
 
 `shellcheck -x` matters: without it the shared library is analysed in isolation and every
-caller reports findings that are not real. The last command is the `conventions` job, which
-checks that every function in `core/*.sh` carries a comment above it.
+caller reports findings that are not real, and `.shellcheckrc` (`source-path=SCRIPTDIR`) is what
+lets it find them. The last command is the `conventions` job, which checks that every function in
+`core/*.sh` and `core/phobos-tools-*/*.sh` carries a comment above it.
 
 This documentation has a gate of its own, run by `documentation-ci.yml`:
 
 ```bash
 cd documentation
 pnpm install --frozen-lockfile
+pnpm run test:install   # the Chromium that Playwright drives, once per machine
 pnpm run lint:code      # ESLint over the site sources
 pnpm run test:prose     # the prose scanner's own tests
 pnpm run test:structure # the twelve Policy Reference pages still share one example
@@ -112,7 +115,7 @@ pnpm run test           # Playwright, against the built site
 ## Documenting shell, C and Python
 
 - One field, variable or function declaration per line, in every language.
-- Every function in `core/*.sh` carries a comment saying what it does and what it assumes about
+- Every function in `core/*.sh` and `core/phobos-tools-*/*.sh` carries a comment saying what it does and what it assumes about
   the environment it runs in. A sandbox wrapper that assumes a mount, a capability or an
   environment variable and does not say so is a trap for the next reader.
 - No comments inside a function body. A function that needs one is a function that should be
@@ -123,7 +126,7 @@ pnpm run test           # Playwright, against the built site
 - Every `shellcheck` directive carries a comment above it saying why the finding is acceptable.
 - British English in all prose, comments, workflow names and messages.
 
-## Opening a pull request
+## Opening a pull request, and publishing a release
 
 Build the body from `.github/PULL_REQUEST_TEMPLATE.md`, and read that file rather than
 reconstructing it. GitHub inserts the template only as a prefill in the web interface, so
@@ -132,6 +135,11 @@ reconstructing it. GitHub inserts the template only as a prefill in the web inte
 ```bash
 PR_BODY="$(cat body.md)" java .github/scripts/CheckPullRequestTemplate.java
 ```
+
+A release follows the same rule with `.github/RELEASE_TEMPLATE.md`, and the check
+`RELEASE_BODY="$(cat notes.md)" java .github/scripts/CheckReleaseTemplate.java`.
+`release-template.yml` runs it after publishing, so it is an alarm and the command above is the
+gate. Publishing the run-phase image is a manual step that AGENTS.md spells out.
 
 The checker is a single-file Java program run through the source-code launcher of
 Java Development Kit (JDK) 11 or newer, so it needs no build step. Fill in every section, use each

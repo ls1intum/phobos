@@ -90,7 +90,11 @@ The rule carries the letter `l`.
 
 ## What enforces it
 
-The path is materialised like a `[write]` path, and the rule is emitted as `--rights=l <path>`.
+Phobos materialises the path like a `[write]` path. A path that does not exist is therefore created as
+an empty regular file. A regular file cannot hold a directory-only right, so a missing path named
+only in this section ends the run with exit status 125 (`add_rule failed`). Create the directory
+before the run. Where the path appears in no other section the rule is `--rights=l <path>`. A
+path named in several sections gets one rule per section, each carrying the union of the letters.
 
 ## Notes
 

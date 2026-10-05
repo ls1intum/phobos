@@ -49,7 +49,7 @@ Four more options carry reasoning worth keeping:
 
 - **`--tmpfs /` and a separate `--tmpfs /tmp`.** Binding the host's `/tmp` would let the
   sandbox read whatever any other process on the machine left there.
-- **`--clearenv`, with an explicit pass-through list.** Nothing reaches the sandbox merely
+- **`--clearenv`, with an explicit pass-through list, which gains `BUILD_HOME` and `BUILD_OPTS` where the caller gives them.** Nothing reaches the sandbox merely
   because it was set in the shell that started the prune, so a token or a path to a runner
   control file stays outside.
 - **`--new-session`.** Without it, and with no seccomp filter, a process inside could push

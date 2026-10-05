@@ -7,8 +7,9 @@ description: "The wall-clock timeout and the five resource limits a run is held 
 :::tip[Simple Story]
 The session has a length and a budget.
 
-Both belong to the work itself. Nothing Phobos runs beside it shares them, so a helper can
-never run out of budget and take the work's output with it.
+Phobos applies the budgets to the work itself, but each limit has its own reach. `mem_mb` and
+`cpu` apply to each process separately and `fsize_mb` to each single file. `nproc` counts every
+process of the grading user, so the helpers Phobos starts spend the same process budget.
 :::
 
 ## Position in the example policy file
@@ -84,8 +85,8 @@ mem_mb=2048
 | Key | Unit | Bounds | Applied as |
 | --- | --- | --- | --- |
 | `timeout` | seconds | the wall clock of the whole run | GNU `timeout` |
-| `mem_mb` | megabytes | virtual memory | `ulimit -v` |
-| `nproc` | count | processes | `ulimit -u` |
+| `mem_mb` | megabytes | the address space of each process | `ulimit -v` |
+| `nproc` | count | the processes of the whole grading user, helpers included | `ulimit -u` |
 | `nofile` | count | open file descriptors | `ulimit -n` |
 | `fsize_mb` | megabytes | the largest file that may be written | `ulimit -f` |
 | `cpu` | seconds | processor time | `ulimit -t` |
@@ -106,8 +107,9 @@ A run is never unbounded by omission. Where no configuration names a value, a de
 | `nofile` | 1024 |
 | `fsize_mb` | 256 |
 
-The default is a floor, never a cap. A configuration that names a larger value wins over it, and
-one that names `0` switches that limit off and wins over it as well. `mem_mb` is 8192 because it
+The default is a fallback, neither a minimum nor a maximum. A configuration that names a
+smaller or a larger value gets exactly that value, and one that names `0` switches that limit
+off. `mem_mb` is 8192 because it
 is applied as `ulimit -v`, the virtual address space, which a 64-bit Java virtual machine
 reserves far more of than it makes resident. A value near the real memory of the machine would
 stop it before `main()`.

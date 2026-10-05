@@ -152,8 +152,8 @@ that the listener's port is not locked either.
 
 ## The Landlock port rules
 
-`[connect]` and `[bind]` produce `--connect-tcp`, `--bind-tcp` and, on a Landlock version 10
-kernel, `--connect-udp` and `--bind-udp`. The layer applies them on a Landlock ruleset of its
+`[connect]` and `[bind]` produce `--connect-tcp`, `--bind-tcp` and `--connect-udp` and
+`--bind-udp`, which need a Landlock version 10 kernel and which the enforcer refuses below it. The layer applies them on a Landlock ruleset of its
 own, created with `--no-filesystem`, which composes with the filesystem layer's ruleset by
 intersection. It is applied inside the guard's child lineage, after the supervisor has forked,
 so the supervisor that connects on the command's behalf stays unrestricted.

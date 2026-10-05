@@ -91,13 +91,18 @@ The rule carries the letter `p`.
 
 ## What enforces it
 
-The path is materialised like a `[write]` path, and the rule is emitted as `--rights=p <path>`.
+Phobos materialises the path like a `[write]` path. A path that does not exist is therefore created as
+an empty regular file. A regular file cannot hold a directory-only right, so a missing path named
+only in this section ends the run with exit status 125 (`add_rule failed`). Create the directory
+before the run. Where the path appears in no other section the rule is `--rights=p <path>`. A
+path named in several sections gets one rule per section, each carrying the union of the letters.
 
 ## Notes
 
-**This is for local inter-process communication (IPC) objects alone.** A tool that needs a
-control socket in its run directory gets this section and nothing more, so it does not gain the
-right to create ordinary files there.
+**This is for local inter-process communication (IPC) objects alone.** A tool that needs to
+bind and listen on a control socket in its run directory gets this section and nothing more, so
+it does not gain the right to create ordinary files there. A `connect()` to a UNIX socket, even
+its own, is refused by the connect guard unless the network restriction is off.
 
 **A nested entry adds to its ancestor, it never narrows it.** In the example above,
 `/var/tmp/workspace/run` lies beneath `/var/tmp/workspace`, which already holds write, create,
@@ -108,7 +113,8 @@ hold.
 
 **Reaching a socket is a different question from creating one.** Connecting to a pathname UNIX
 socket whose server lives outside the Landlock domain is gated by `RESOLVE_UNIX`, which rides
-with [`[read]`](read.md), and an abstract UNIX socket outside the sandbox is refused by scoping
+with [`[read]`](read.md), but only where the connect guard is off: with the network layer on, the
+guard refuses every UNIX-domain connect first. An abstract UNIX socket outside the sandbox is refused by scoping
 from Landlock version 6.
 
 ## Further reading

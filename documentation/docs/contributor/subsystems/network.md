@@ -58,7 +58,8 @@ hand-written specification too.
 
 `classify_connect_host` is the one classifier the configuration generator and the layer share,
 so the two can never disagree about what an exact name is. It treats `localhost` as an address
-rather than a name: the guard already resolves it to the loopback the command connected to. It
+rather than a name, held to every `127.x.x.x` address and `::1`, which includes the broker's
+placeholder `127.0.0.2`. It
 answers `invalid` for a host with a star in it other than `*`. It tests that before the address
 shortcuts, so a star beside a slash or a colon never counts as an address.
 
@@ -146,7 +147,7 @@ load_rules            -> refuses to run rather than fall open where the file can
 configure_broker      -> where the layer gave it one
 socketpair + fork
   child:  run_child   -> install the filter, send the descriptor up, exec the rest of the chain
-  parent: ignore SIGTERM, receive the descriptor, supervise, wait, exit with the child's status
+  parent: install the signal forwarders, receive the descriptor, supervise, wait, exit with the child's status
 ```
 
 The network layer runs this guard as a child rather than replacing itself with it, so its `EXIT`
@@ -154,8 +155,9 @@ trap is still there when the command ends. That trap stops the broker and the in
 removes the run's own lines from `/etc/hosts`, after a normal exit, a refusal and a timeout alike.
 The command's status is passed through unchanged.
 
-`SIGTERM` is ignored only **after** the fork. The command keeps the default disposition, so an
-outer timeout's escalation reaches it rather than the supervisor.
+The supervisor installs its forwarders only **after** the fork, so the command keeps the default
+disposition. It passes `SIGTERM`, `SIGHUP`, `SIGINT` and `SIGQUIT` on to the command and stays
+until the command is gone. A `SIGKILL` cannot be passed on.
 
 Where the descriptor never arrives, the parent waits for the child, reports that the command
 could not be supervised, and ends with the child's status, or with the setup status where the
@@ -186,11 +188,17 @@ EDNS0 size of 1232, so an answer that does not fit refuses the run.
 answering the broker, because the broker holds the port exclusively, but the window itself is a
 retry loop rather than a reservation.
 
-**The placeholder entry in `/etc/hosts` is removed only by the layer that wrote it.** It is
-written before the filesystem layer makes `/etc` read-only, under a marker line tagged with the
-run, and the layer's `EXIT` trap removes exactly those lines. A run that is killed with
-`SIGKILL` skips the trap and leaves them behind, and re-running skips a name that is already
-mapped.
+**The hosts lines depend on a clean exit of at least one waiting layer.** The layer writes each
+placeholder line before the filesystem layer makes `/etc` read-only, ending in a tag with the
+run's name, and `hosts.record` in the specification directory names the file. Any layer that
+removes the specification directory removes the run's lines first, in place, under `flock` on
+`/run/lock/phobos-hosts.lock` and waiting up to ten seconds, a lock the command cannot reach. A
+run whose every waiting layer is killed with `SIGKILL` from outside leaves the lines behind. A
+later run refuses a name already mapped to different addresses, through `hosts_accepts`, rather
+than skipping it.
+
+**A host rule or an `[accept]` rule needs a networked container.** Both HAProxy instances need
+one, so the layer logs a notice and relies on the outer isolation instead of `--network none`.
 
 **`[accept]` is stream only.** There is no datagram inbound filter.
 

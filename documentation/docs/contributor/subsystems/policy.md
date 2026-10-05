@@ -67,11 +67,24 @@ It quotes the value with `${value@Q}`, so a control character or a byte that is 
 reaches the terminal as an escape. Some refusals name no line: a byte order mark, a NUL byte,
 an unusable file, and a port checked in `phobos-network-args.sh` outside the parse loop.
 Before the first line, `refuse_binary_cfg` looks for a byte order mark and a NUL byte. Each
-line then faces three refusals: a carriage return, a path that does not start with `/`, and a
-path with `*`, `?` or `[`. A task configuration faces a fourth, a `[read]` or `[execute]` path
-that does not exist. `phobos-policysystem.sh` asks `refuse_unusable_cfg_file` first, so a directory, a
+line then faces one refusal everywhere, a carriage return. A line in a filesystem section faces
+two more, a path that does not start with `/` and a path with `*`, `?` or `[`. A task
+configuration adds a `[read]` or `[execute]` path that does not exist.
+`phobos-policysystem.sh` asks `refuse_unusable_cfg_file` first, so a directory, a
 link to nothing or an unreadable file is said to be that. A refusal ends the run before the
 specification gets written, and the parser's scratch files exist by then.
+
+`[connect]` lines are judged in `append_connect_rule` and `refuse_malformed_address`. A host
+written like an address must be a valid one: IPv4 is four numbers from 0 to 255 without a leading
+zero, and IPv6 has at most one `::` and no zone. A prefix runs from 1 to the address width, an
+IPv4-mapped range needs at least 96 bits, and a colon needs a port after it. Anything else is
+refused, because otherwise the connect guard reads it as a host name and opens its port to
+every address. `is_ipv4_literal`, `is_ipv6_literal` and `count_ipv6_groups` are the predicates,
+and the guard drops a rule written like an address that it cannot read
+(`is_unreadable_address`). Further refusals sit in small functions. `append_connect_rule`
+refuses an unknown transport and trailing words, `append_bind_rule` a target that is not a port,
+and `append_accept_rule` a malformed `expose` line. `refuse_unknown_section` refuses an unknown
+section, `read_limits_line` an unknown key, and `set_parsed_limit` a value with a space inside.
 
 Every digit class is POSIX (`[[:digit:]]`, `[[:xdigit:]]`) or an explicit list. In a UTF-8
 locale `[0-9]` matched Arabic-Indic digits, and an address written in them passed as an address
@@ -92,7 +105,12 @@ every dimension:
 | the timeout and each resource limit | a zero disables and wins; otherwise the largest value |
 
 The limit rule is the same within a file and across files, so the order the configurations are
-read in does not matter.
+read in does not matter. A limit no configuration names takes a built-in default. The default is a
+fallback and never a cap: a configuration naming a larger or a smaller value gets exactly that
+value, and `0` switches the limit off. The defaults are 600 seconds, `mem_mb` 8192, `cpu` 600,
+`nofile` 1024, `nproc` 256 and `fsize_mb` 256, in `phobos-constants.sh`. A run given no
+`--config` drops every `[connect]`, `[bind]` and `[accept]` rule the base granted, loopback
+included, and keeps the base's filesystem grants.
 
 ## The three checks that live here
 
@@ -103,12 +121,13 @@ either way, or the specification carries something that is silently dropped.
 | Check | What it refuses |
 | --- | --- |
 | `refuse_unenforceable_network_rules` | a wildcard host name, a port outside 1 to 65535, an external host with no port. A loopback wildcard beside a concrete port is accepted: the guard alone enforces the port, and `emit_connect_port_args` logs which ports |
-| `refuse_unenforceable_accept_rules` | a public port below 1024, a public port the command may bind, a backend port `[bind]` does not name, two rules fronting one public port |
+| `refuse_unenforceable_accept_rules` | a public port below 1024, a public port the command may bind, a backend port `[bind]` does not name, two rules fronting one public port with different backends |
 | `refuse_spec_dir_under_write_path` | a specification directory beneath any write, create, delete, inter-process communication (IPC), symbolic-link or restructure path |
 
-The last one is the one with teeth: the directory holds `net.rules`, which the connect guard
-reads before Landlock is applied, and the process identifiers the clean-up kills. A command
-able to write there could rewrite the connect policy or aim the kill anywhere. Both sides are
+The last one is the one with teeth: the directory holds `net.rules` and `net.guard.rules`, which
+the connect guard reads before Landlock is applied, and `hosts.record`, which names the hosts
+file whose lines the clean-up rewrites. A command able to write there could rewrite the connect
+policy or aim that rewrite at another file. Both sides are
 resolved through their symbolic links before they are compared.
 
 ## Two canonical forms

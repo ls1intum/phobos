@@ -109,7 +109,9 @@ configuration, and three of its entries are worth knowing about before you copy 
   shipped base policies.** Each names three loopback rules with no port. The run starts, and the
   connect guard alone enforces the port, because Landlock cannot keep loopback open on every
   port and close the rest.
-- **The exact host name needs `--resolver`**, or the network layer refuses the run.
+- **The exact host name needs `--resolver`**, or the network layer refuses the run. It and the
+  `[accept]` rule both start HAProxy, so the run needs `haproxy` installed and a container with a
+  network, which replaces the `--network none` default.
 - **The two `udp` rules need a Landlock version 10 kernel**, and `phobos-landlock-filesystem-and-networksystem` refuses them
   on an older one.
 
@@ -138,10 +140,16 @@ specification directory reads the path files without that check.
 
 ## What Phobos refuses in a file, and how it says so
 
-A configuration that is wrong ends the run with `PHB-EPOLICY` before the command starts. The
-message says what is wrong. For a fault on one line it names the file and the line, and it quotes
-what it found, so a control character or a byte that is not text reaches the terminal as an
-escape. A fault in the whole file, such as a byte order mark, names the file alone.
+A configuration the parser cannot read ends the run with `PHB-EPOLICY` before the command
+starts. A rule that parses but cannot be enforced ends it later. `PHB-ERUNTIME` covers a network
+layer or an HAProxy that cannot start, for example with an `[accept]` source HAProxy rejects or an
+exact name with no resolver. Exit status 125 covers a rule the enforcer refuses, for example a
+`udp` rule below Landlock version 10.
+
+The message says what is wrong. For a fault on one line it names the file and the line. It
+quotes what it found, so a control character or a byte that is not text shows as an escape
+sequence and never reaches the terminal. A fault in the whole file, such as a byte order mark,
+names the file alone.
 
 | What it finds | Why it refuses |
 | --- | --- |

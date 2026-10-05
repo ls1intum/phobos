@@ -7,8 +7,8 @@ description: "Bounding a run in wall-clock time, memory, processes, open files, 
 :::tip[Simple Story]
 The session ends at a fixed time, and the bench is a fixed size.
 
-Both belong to the work. Nothing Phobos runs beside the work shares its budget, so a helper
-cannot run out and take the work's output with it.
+Both belong to the work, with one catch: the process count is per user, so the helpers Phobos
+starts spend it too.
 :::
 
 ## The situation
@@ -28,9 +28,11 @@ fsize_mb=512
 cpu=100
 ```
 
-Every key is optional, and each bounds one thing: wall-clock seconds for the whole run, virtual
-memory in megabytes, the number of processes, the number of open file descriptors, the largest
-file that may be written in megabytes, and processor seconds.
+Every key is optional, and each bounds one thing. `timeout` bounds the wall-clock seconds of the
+whole run and `mem_mb` the address space of each process in megabytes. `nproc` bounds the
+processes of the whole grading user and `nofile` the open file descriptors. `fsize_mb` bounds the
+largest single file the command can write, in megabytes, and `cpu` the processor seconds of each
+process.
 
 Two of them look alike and are not. `timeout` is wall clock and stops the run from outside,
 through GNU `timeout`. `cpu` is processor time and is enforced by the kernel against the

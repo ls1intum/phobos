@@ -86,7 +86,7 @@ expose 18080 to 8080 from 198.51.100.0/24
 | --- | --- | --- |
 | `<public-port>` | the port the container exposes | at or above 1024, and not a `[bind]` port |
 | `<backend-port>` | the command's own listening port | must be named in [`[bind]`](bind.md) |
-| `<source>` | an address or a range, separated by commas | either version of the Internet Protocol |
+| `<source>` | an address or a range, separated by commas | either version of the Internet Protocol; Phobos checks the shape and HAProxy checks the address, so an address HAProxy rejects ends the run with `PHB-ERUNTIME` |
 
 The literal words `expose`, `to` and `from` are all required, `from` included on a rule that
 names no source.
@@ -106,8 +106,8 @@ The three refusals in the table above are checked once the whole policy has been
 only then is the full `[bind]` set known:
 
 - a public port below 1024 cannot be bound without a capability the run does not have;
-- a public port the command may itself bind would let it take the port before the filter and
-  receive unfiltered connections;
+- a public port the command can itself bind lets it compete with the filter for the port and
+  receive connections the filter was meant to screen;
 - a backend port that `[bind]` does not name would leave the filter forwarding to a listener
   that never comes up.
 
@@ -120,7 +120,8 @@ An `[accept]` rule changes the run's posture, and Phobos says so loudly on stand
 - **Phobos locks the port, not its reachability.** Landlock refuses the command a listener on
   any other port, in the kernel and against raw system calls, and the connect guard refuses a
   `listen()` on a socket that was never bound, which the kernel would otherwise give a port of
-  its own choosing. The bind right is per port rather
+  its own choosing, unless the base policy names port 0. The shipped Java policy does, so a Java
+  run can still listen on a port the kernel chooses. The bind right is per port rather
   than per address, so the command may bind the backend port on every interface. That the
   backend is reachable only through the filter comes from the container's network isolation: a
   dedicated network with inter-container communication disabled, only the public port

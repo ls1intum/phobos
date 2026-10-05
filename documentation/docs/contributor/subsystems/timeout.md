@@ -7,13 +7,14 @@ description: "The layer that bounds a run in wall-clock time, and the contract f
 :::tip[Simple Story]
 The layer that waits.
 
-Everything else hands over and disappears. This one stays, which is why it is the layer that
-tidies up when the run ends.
+Three layers wait: this one, the network layer and the filesystem layer. This one stays outside
+the process group, which is why it still tidies up after a group kill.
 :::
 
 ## What it does
 
-`phobos-timeoutsystem.sh` reads `timeout.sec` from the specification. Where it is empty the layer
+`phobos-timeoutsystem.sh` reads `timeout.sec` from the specification. Where it is empty, which
+happens only where a configuration wrote `0`, the layer
 hands the chain straight on with `exec` and applies no process-group lock, since there is no
 group kill to escape. Where a timeout is set it runs the rest under GNU `timeout` and waits.
 
@@ -56,10 +57,11 @@ and `EPOCHREALTIME` always carries exactly six decimals, so what is left is the 
 
 ## Why this layer tidies up
 
-It is the layer that waits, so its `EXIT` trap is the one that runs after the run ends,
-including after the group kill has just reached everything below it. Where no timeout is set it
-hands over with `exec` and fires no trap, and the filesystem layer, which does wait, removes
-the specification directory instead.
+It is one of three layers that wait, and each has an `EXIT` trap that removes the specification
+directory. The first to end does the work and the others find it gone. This layer sits outside
+the group GNU `timeout` kills, so its trap still runs after the group kill has reached everything
+below it. Where no timeout is set it hands over with `exec` and fires no trap, and the other two
+remove the directory.
 
 ## Known gaps
 

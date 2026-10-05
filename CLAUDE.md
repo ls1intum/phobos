@@ -59,7 +59,8 @@ environment, offline, and grading itself only applies a fixed configuration.
 - C for `phobos-landlock-filesystem-and-networksystem`, the connect guard and the timeout's group lock, all compiled inside the run-phase image
 - Python for the prune orchestrator and the artefact helpers
 - Docker for both phases, one image per language environment
-- Java for exactly one file, `.github/scripts/CheckPullRequestTemplate.java`
+- Java for the two template checkers in `.github/scripts/` and for the two acceptance fixtures
+- Docusaurus, Node 24 and pnpm for the documentation site under `documentation/`, tested with Playwright
 
 The filesystem layer is enforced by Landlock, an unprivileged Linux kernel sandbox, applied
 by `phobos-landlock-filesystem-and-networksystem` (the C program under `core/`). The run phase needs no privileges, no
@@ -100,9 +101,10 @@ granted, because a command whose binary and libraries were denied could not star
 
 `lint.yml` runs seven lint jobs, and `actionlint.yml` lints the workflows beside it, weekly
 as well as on a change under `.github`. Neither is the whole of CI: `test.yml` runs the shell and
-Python suites, `build.yml` builds the images and holds the run-phase image to the Landlock
-acceptance suites inside it, `codeql.yml` scans, and `pullrequest-template.yml` checks the
-body. The lint jobs are the ones you can run in full by hand before opening a pull request.
+Python suites, `build.yml` builds the images for amd64 and arm64, runs the two C unit suites
+and holds the run-phase image to the Landlock acceptance suites and the protection matrix inside
+it, `codeql.yml` scans, `pullrequest-template.yml` checks the body, and `documentation-ci.yml`
+holds the documentation site to its own gate (see `documentation/README.md`). The lint jobs are the ones you can run in full by hand before opening a pull request.
 
 ```
 # Same file sets and same flags as CI. Together these are the seven lint.yml jobs plus
@@ -123,8 +125,8 @@ awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print 
 One of those is narrower than it looks: `bandit` runs over exactly two directories, not the
 whole tree, because everything else Python here is fixture. `hadolint` matches `Dockerfile*` at
 any depth, which reaches the four under `docker/`. CI runs
-shellcheck, cppcheck and hadolint inside pinned container images and downloads `actionlint` at a
-pinned version and checksum; the commands above assume the tools are installed locally and will
+shellcheck and hadolint inside pinned container images, installs cppcheck with apt, and
+downloads `actionlint` and `editorconfig-checker` at a pinned version and checksum; the commands above assume the tools are installed locally and will
 differ in version, which is the usual reason a local run and CI disagree.
 
 `.bandit`, `.yamllint` and `.hadolint.yaml` at the repository root carry the thresholds and
@@ -135,7 +137,12 @@ comment saying why.
 
 ```
 docker compose -f docker-compose.yaml up --build        # the prune environments
+.github/scripts/assemble-run-phase-context.sh build/run-phase-context   # the build context the compose file reads
 docker compose -f docker/run_phase/java/docker-compose.yaml up --build
+docker build -f docker/run_phase/java/Dockerfile -t phobos-run-phase:ci build/run-phase-context
+# an acceptance suite, in an ordinary container: no --privileged, no --cap-add, no --security-opt
+docker run --rm --network none -v "$PWD/tests:/tests:ro" phobos-run-phase:ci \
+  bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/run-tests.sh
 ```
 
 Each prune container works independently on its language and writes its result into the
@@ -179,7 +186,9 @@ core/                      the sandbox itself
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
 docker/prune_phase/        one image per language, plus the orchestrator
 docker/run_phase/          the image an exercise actually runs in
-tests/                     the acceptance and probe suites
+tests/                     unit/ (C and shell units), integration/ (shell suites, the acceptance suites and
+                           protection-matrix/), python/, and two probes
+documentation/             the Docusaurus site, with its own gate
 var/tmp/                   prune inputs, helpers and example outputs
 ```
 

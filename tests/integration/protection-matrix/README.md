@@ -129,7 +129,7 @@ The second group is behaviour nothing documents, found while writing the suites,
 6. **A netlink datagram socket can be made.** The guard refuses raw and packet sockets, not netlink. The suite
    checks only that the socket can be made; what a command can then do with it is not checked.
 7. **A `[connect]` rule for `localhost` covers the whole loopback range and `::1`**, not only `127.0.0.1`.
-   `SECURITY.md`, the README and `config_doc.txt` say so; they once said it was held to one address.
+   `SECURITY.md`, the README and the documentation site say so; they once said it was held to one address.
 8. **Three more things Landlock does not cover:** a hard link made before the run inside a granted tree to a
    file outside it can be read, a watch for changes (inotify) can be placed on a file outside every tree, and
    `getxattr`, `listxattr`, `lstat` and `statx` work on one.

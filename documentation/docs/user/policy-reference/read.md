@@ -92,8 +92,10 @@ The rule carries the letter `r`, and it applies to the path and everything benea
 grants a whole subtree and cannot carve an exception inside it.
 
 `RESOLVE_UNIX` rides with the read right on purpose: reaching such a socket by its pathname is
-a read-like resolution, so a path you may read, you may reach the sockets beneath, and a path
-you may not read, you may not.
+a read-like resolution, so with the network layer switched off a path you can read gives you the
+sockets beneath it, and a path you cannot read does not. In a default run the connect guard
+refuses every UNIX-domain `connect()` with `EACCES` before Landlock looks at it, so no pathname
+socket can be reached at all.
 
 ## What enforces it
 

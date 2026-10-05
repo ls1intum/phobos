@@ -197,8 +197,8 @@ PR_BODY="$(cat body.md)" java .github/scripts/CheckPullRequestTemplate.java
 ```
 
 The checker is a single-file Java program, run through the source-code launcher of JDK 11 or
-newer, so it needs no build step and adds no language to the repository. It is the only Java
-here, which is why the CodeQL workflow analyses `java-kotlin`: the checker reads a pull
+newer, so it needs no build step and adds no language to the repository. The only other Java
+here is the release checker and the acceptance fixtures, which is why the CodeQL workflow analyses `java-kotlin`: the checker reads a pull
 request body that an outsider writes verbatim.
 
 **Only the template's own headings.** The check reports every line it reads as a heading that

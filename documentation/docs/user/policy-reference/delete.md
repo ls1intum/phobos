@@ -91,13 +91,17 @@ The rule carries the letter `d`.
 
 ## What enforces it
 
-The path is materialised like a `[write]` path, and the rule is emitted as `--rights=d <path>`.
+Phobos materialises the path like a `[write]` path. A path that does not exist is therefore created as
+an empty regular file. A regular file cannot hold a directory-only right, so a missing path named
+only in this section ends the run with exit status 125 (`add_rule failed`). Create the directory
+before the run. Where the path appears in no other section the rule is `--rights=d <path>`. A
+path named in several sections gets one rule per section, each carrying the union of the letters.
 
 ## Notes
 
 **A build tree usually needs all three.** A tool that rebuilds in place writes, creates and
-deletes, so its scratch directory is named in `[write]`, `[create]` and `[delete]`, or in
-[`[restructure]`](restructure.md) where it moves files too.
+deletes, so its scratch directory is named in `[write]`, `[create]` and `[delete]`, or in `[write]`
+and [`[restructure]`](restructure.md) where it moves files too.
 
 **Deleting is not moving.** See [`[restructure]`](restructure.md).
 

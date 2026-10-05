@@ -31,8 +31,8 @@ ${PHOBOS_HOME}/phobos-resourcesystem.sh --config exercise.cfg -- ./hungry-thing
 
 | Key | Set as | Bounds |
 | --- | --- | --- |
-| `mem_mb` | `ulimit -v`, in kilobytes | the virtual memory of the command and everything it starts |
-| `nproc` | `ulimit -u` | the number of processes |
+| `mem_mb` | `ulimit -v`, in kilobytes | the address space of each process the command starts, counted per process |
+| `nproc` | `ulimit -u` | the processes of the whole grading user |
 | `nofile` | `ulimit -n` | the number of open file descriptors |
 | `fsize_mb` | `ulimit -f`, in 1024-byte blocks | the largest file that may be written |
 | `cpu` | `ulimit -t`, in seconds | the processor time |

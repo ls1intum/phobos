@@ -94,7 +94,11 @@ or `[delete]`.
 ## What enforces it
 
 The parser writes the path into the create, the delete and the refer path set at once, so the
-filesystem layer emits one rule carrying all three letters.
+filesystem layer emits one rule per set, each carrying the union of the letters, for example
+`--rights=mfd <path>` three times. Landlock unions them. Phobos materialises the path like a
+`[write]` path, so a missing one becomes an empty regular file and the run ends with exit
+status 125, as for [`[create]`](create.md). It carries no write right: a file opened for writing
+still needs [`[write]`](write.md).
 
 ## Notes
 

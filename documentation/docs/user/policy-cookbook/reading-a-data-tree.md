@@ -45,7 +45,7 @@ Adding `[write]` because the tool "opens the files" is the common mistake. Readi
 the read right alone. A tool that rewrites its input is doing something worth knowing about,
 and it needs [`[write]`](/user/policy-reference/write) on purpose.
 
-The second tempting version is narrower, and it is refused outright:
+The second tempting version is narrower, and it is refused whenever an ancestor already holds more rights:
 
 ```ini title="also-wrong.cfg"
 [read]
@@ -62,4 +62,5 @@ right away further down a path.
   the message names the file and the line. The shipped base policies are exempt, because they
   name system paths an image can lack. Check the path exists when the run is built.
 - Reaching a pathname UNIX socket beneath the tree rides with this right, through
-  `RESOLVE_UNIX` on Landlock version 9 and later.
+  `RESOLVE_UNIX` on Landlock version 9 and later, but only with the network layer off. In a default
+  run the connect guard refuses every UNIX-domain connect.
