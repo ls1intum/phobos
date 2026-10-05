@@ -10,7 +10,9 @@
 # allowed host reaches the resolved address; the same name aimed at the decoy still reaches the
 # resolved address and never the decoy (the spoof is denied); a forbidden name, and a plain
 # connection with no ClientHello, reach neither; a plain loopback connection is forwarded under a
-# localhost rule, which is loopback rather than a name to resolve; a broker that cannot start, and
+# localhost rule, which is loopback rather than a name to resolve; a server that speaks first on a
+# port no name rule names gets its banner to the client at once rather than after the broker's
+# inspect-delay, while a port no rule names stays refused; a broker that cannot start, and
 # an exact-name rule with no resolver, each refuse the run; and, end to end through the network
 # layer, the name is mapped to a placeholder the command resolves with no DNS before it reaches the
 # resolved address, and once the run has ended the mapping and the broker are both gone. It needs
@@ -31,6 +33,9 @@ WORK="$(mktemp -d)"
 cleanup() {
   stop_haproxy_child "${broker_pid:-}"
   stop_haproxy_child "${lh_broker_pid:-}"
+  stop_haproxy_child "${sf_broker_pid:-}"
+  [[ -n "${speaker_pid:-}" ]] && kill "$speaker_pid" 2>/dev/null
+  [[ -n "${ungranted_pid:-}" ]] && kill "$ungranted_pid" 2>/dev/null
   [[ -n "${real_pid:-}" ]] && kill "$real_pid" 2>/dev/null
   [[ -n "${decoy_pid:-}" ]] && kill "$decoy_pid" 2>/dev/null
   [[ -n "${loopback_pid:-}" ]] && kill "$loopback_pid" 2>/dev/null
@@ -77,8 +82,9 @@ enum { UPSTREAM_BIND_FAILED = 3 };
 /* How many connections may wait to be accepted. */
 enum { LISTEN_BACKLOG = 4 };
 /* A tiny server on a given loopback address and port that writes a marker file the moment it
- * accepts a connection, so the suite can tell which address the broker forwarded to. It reads and
- * discards what follows. Arguments: bind address, port, marker path. */
+ * accepts a connection, so the suite can tell which address the broker forwarded to. Given a
+ * banner, it sends that line first, before it reads anything, as a server that speaks first does.
+ * It reads and discards what follows. Arguments: bind address, port, marker path, optional banner. */
 int main(int argc, char **argv) {
     if (argc < 4) {
         return 2;
@@ -109,6 +115,10 @@ int main(int argc, char **argv) {
         if (marker != NULL) {
             fprintf(marker, "GOT\n");
             fclose(marker);
+        }
+        if (argc > 4) {
+            ssize_t spoke = write(client, argv[4], strlen(argv[4]));
+            (void)spoke;
         }
         char discard[64];
         ssize_t got = read(client, discard, sizeof(discard));
@@ -244,6 +254,59 @@ int main(int argc, char **argv) {
 C
 if ! "$compiler" -O2 -o "$WORK/client" "$WORK/client.c" 2>"$WORK/client-cc.log"; then
   bad "the plain client builds" "$(cat "$WORK/client-cc.log")"
+  finish
+fi
+
+cat > "$WORK/reader.c" <<'C'
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+/* The status the reader ends with when no byte came in time, and when it cannot connect. */
+enum { NOTHING_IN_TIME = 1 };
+enum { CONNECT_FAILED = 7 };
+/* A client for a server that speaks first: it connects to an address and port, sends nothing, and
+ * waits at most the given number of milliseconds for the server's first bytes, which it prints after
+ * "BANNER ". Arguments: address, port, milliseconds. */
+int main(int argc, char **argv) {
+    if (argc < 4) {
+        return 2;
+    }
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in address;
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_port = htons((unsigned short)atoi(argv[2]));
+    if (inet_pton(AF_INET, argv[1], &address.sin_addr) != 1) {
+        return 2;
+    }
+    if (connect(sock, (struct sockaddr *)&address, sizeof(address)) != 0) {
+        perror("connect");
+        return CONNECT_FAILED;
+    }
+    struct pollfd readable = { .fd = sock, .events = POLLIN };
+    if (poll(&readable, 1, atoi(argv[3])) != 1) {
+        printf("NOTHING within %s ms\n", argv[3]);
+        return NOTHING_IN_TIME;
+    }
+    char banner[64];
+    ssize_t got = read(sock, banner, sizeof(banner) - 1);
+    if (got <= 0) {
+        printf("CLOSED before any byte\n");
+        return NOTHING_IN_TIME;
+    }
+    banner[got] = '\0';
+    printf("BANNER %s\n", banner);
+    close(sock);
+    return 0;
+}
+C
+if ! "$compiler" -O2 -o "$WORK/reader" "$WORK/reader.c" 2>"$WORK/reader-cc.log"; then
+  bad "the reading client builds" "$(cat "$WORK/reader-cc.log")"
   finish
 fi
 
@@ -426,6 +489,75 @@ else
 fi
 stop_haproxy_child "$mx_broker_pid"
 kill "$bypass_pid" "$aimed_pid" 2> /dev/null || true
+
+# A server that speaks first, as SMTP, MySQL or SSH do, hears nothing from its client before it has
+# sent its banner, and the broker connects onward only once it has decided the connection. A
+# decision that waited for a ClientHello would therefore hold the banner back until the broker's
+# five-second inspect-delay ran out. On a port no name rule names, no ClientHello can change the
+# decision, so it is made at once and the banner arrives well within that delay. Beside it the other
+# directions are pinned under the same rules: a loopback port no rule names is still refused, the
+# allowed name still reaches the address it resolves to, and a forbidden name reaches nothing.
+SPEAKER_IP=127.0.0.6
+SPEAKER_PORT=39513
+UNGRANTED_PORT=39514
+BANNER_WAIT_MILLISECONDS=3000
+spec_sf="$WORK/spec-sf"
+mkdir -p "$spec_sf"
+printf '%s %s\nallowed.example %s\n' "$SPEAKER_IP" "$SPEAKER_PORT" "$UPORT" > "$spec_sf/net.rules"
+"$WORK/upstream" "$SPEAKER_IP" "$SPEAKER_PORT" "$WORK/speaker.marker" "220 speaker ready" > "$WORK/speaker.out" 2>&1 &
+speaker_pid=$!
+"$WORK/upstream" "$SPEAKER_IP" "$UNGRANTED_PORT" "$WORK/ungranted.marker" "220 ungranted ready" > "$WORK/ungranted.out" 2>&1 &
+ungranted_pid=$!
+for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do grep -q UPSTREAM-LISTENING "$WORK/speaker.out" 2>/dev/null && break; sleep "$LISTENER_WAIT_SECONDS"; done
+for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do grep -q UPSTREAM-LISTENING "$WORK/ungranted.out" 2>/dev/null && break; sleep "$LISTENER_WAIT_SECONDS"; done
+sf_endpoint=""
+sf_broker_pid=""
+start_egress_broker "$spec_sf" "$spec_sf/net.rules" "$haproxy_bin" "127.0.0.1:${DNSPORT}" sf_endpoint sf_broker_pid
+sf_status=0
+"$WORK/guard" --rules "$spec_sf/net.rules" --broker "$sf_endpoint" -- \
+  "$WORK/reader" "$SPEAKER_IP" "$SPEAKER_PORT" "$BANNER_WAIT_MILLISECONDS" > "$WORK/sf.client.out" 2>&1 \
+  || sf_status=$?
+if (( sf_status == 0 )) && grep -q '^BANNER 220 speaker ready' "$WORK/sf.client.out"; then
+  ok "a server that speaks first on a port no name rule names gets its banner to the client at once, not after the broker's inspect-delay"
+else
+  bad "a server that speaks first gets its banner to the client at once" "exit ${sf_status}; client=$(cat "$WORK/sf.client.out"); broker=$(cat "$spec_sf/${PHB_SPEC_SCRATCH}/broker.log" 2>/dev/null)"
+fi
+rm -f "$WORK/ungranted.marker"
+sf_status=0
+"$WORK/guard" --rules "$spec_sf/net.rules" --broker "$sf_endpoint" -- \
+  "$WORK/reader" "$SPEAKER_IP" "$UNGRANTED_PORT" "$BANNER_WAIT_MILLISECONDS" > "$WORK/sf.client.out" 2>&1 \
+  || sf_status=$?
+sleep 0.6
+if (( sf_status == 7 )) && [[ ! -f "$WORK/ungranted.marker" ]]; then
+  ok "beside it, a loopback port no rule names is still refused, and its server is never reached"
+else
+  bad "a loopback port no rule names is still refused" "exit ${sf_status}, expected 7; reached=$([[ -f "$WORK/ungranted.marker" ]] && echo yes || echo no); client=$(cat "$WORK/sf.client.out")"
+fi
+rm -f "$WORK/real.marker" "$WORK/decoy.marker"
+"$WORK/guard" --rules "$spec_sf/net.rules" --broker "$sf_endpoint" -- \
+  timeout 3 openssl s_client -connect "${DECOY_IP}:${UPORT}" -servername allowed.example -quiet < /dev/null \
+  > "$WORK/sf.client.out" 2>&1 || true
+sleep 0.6
+if [[ -f "$WORK/real.marker" && ! -f "$WORK/decoy.marker" ]]; then
+  ok "and the allowed name still reaches only the address it resolves to"
+else
+  bad "the allowed name still reaches only the address it resolves to" "real=$([[ -f "$WORK/real.marker" ]] && echo yes || echo no) decoy=$([[ -f "$WORK/decoy.marker" ]] && echo yes || echo no)"
+fi
+rm -f "$WORK/real.marker" "$WORK/decoy.marker"
+"$WORK/guard" --rules "$spec_sf/net.rules" --broker "$sf_endpoint" -- \
+  timeout 3 openssl s_client -connect "${REAL_IP}:${UPORT}" -servername forbidden.example -quiet < /dev/null \
+  > "$WORK/sf.client.out" 2>&1 || true
+sleep 0.6
+if [[ ! -f "$WORK/real.marker" && ! -f "$WORK/decoy.marker" ]]; then
+  ok "and a forbidden name still reaches neither address"
+else
+  bad "a forbidden name still reaches neither address" "the upstream was reached; client=$(cat "$WORK/sf.client.out")"
+fi
+stop_haproxy_child "$sf_broker_pid"
+kill "$speaker_pid" "$ungranted_pid" 2> /dev/null || true
+sf_broker_pid=""
+speaker_pid=""
+ungranted_pid=""
 
 # The whole network layer, end to end: it writes the placeholder to /etc/hosts, starts the broker
 # with the resolver, and the command then resolves the name with no DNS, connects, and reaches the
