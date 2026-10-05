@@ -17,8 +17,12 @@ trap 'rm -rf "$WORK"' EXIT
 
 CORE_X="${WORK}/core-x"
 cp -R "$CORE" "$CORE_X"
+CORE_B="${WORK}/core-b"
+cp -R "$CORE" "$CORE_B"
 chmod +x "$CORE_X"/*.sh
 printf '[read]\n/usr\n[execute]\n/usr\n' > "${CORE_X}/BaseTest.cfg"
+chmod +x "$CORE_B"/*.sh
+printf '[read]\n/usr\n/nonexistent/in-the-base\n[execute]\n/usr\n[connect]\nallow 127.0.0.1:*\n' > "${CORE_B}/BaseTest.cfg"
 
 # A UTF-8 locale where there is one, because the digit classes only matter there: in en_US.UTF-8 a
 # range such as [0-9] matched Arabic-Indic digits, which the arithmetic after it then could not read.
@@ -160,8 +164,41 @@ for path in "./x" "../x" '~/x' '$HOME' '"/usr/bin"' "'/usr/bin'" "-rf" "r /usr/b
 done
 accepted "an absolute path with .. in it" "$(cfg_text '[read]\n/usr/../etc\n')"
 accepted "an absolute path with a doubled and a trailing slash" "$(cfg_text '[read]\n/usr//bin/\n')"
-accepted "an absolute path with a space in it" "$(cfg_text '[read]\n/path with space\n')"
-accepted "an absolute path that does not exist" "$(cfg_text '[write]\n/nonexistent/where\n')"
+mkdir -p "${WORK}/dir with space" "${WORK}/odd[name"
+accepted "an absolute path with a space in it that exists" "$(cfg_text '[read]\n%s\n' "${WORK}/dir with space")"
+
+echo
+echo "== a wildcard in a path =="
+refused "a relative path with a wildcard is first of all not absolute" "$(cfg_text '[read]\nrelative/*\n')" "not an absolute path"
+CORE_W="${WORK}/core-w"
+cp -R "$CORE_X" "$CORE_W"
+printf '[read]\n/usr\n/usr/b*n\n' > "${CORE_W}/BaseTest.cfg"
+RUN_CORE="$CORE_W"
+refused "a wildcard in a base policy, which is exempt from the existence check only" "${WORK}/ok.cfg" "holds a wildcard character" "BaseTest.cfg', line 3"
+RUN_CORE="$CORE_X"
+for path in '/usr/b*n' '/usr/bin?' '/usr/[ab]' '/*' '/usr/lib/jvm/*/bin' "${WORK}/odd[name"; do
+  refused "[read] ${path}" "$(cfg_text '[read]\n%s\n' "$path")" "holds a wildcard character" "Name the directory or the file itself" "line 2"
+done
+refused "[write] with a wildcard" "$(cfg_text '[write]\n/tmp/*\n')" "holds a wildcard character" "[write]"
+
+echo
+echo "== a path that does not exist =="
+for section in read execute; do
+  refused "[${section}] a path that does not exist" "$(cfg_text "[${section}]\n/nonexistent/where\n")" "does not exist on this system" "[${section}]" "line 2"
+done
+for section in write create delete create-ipc create-symlink restructure; do
+  accepted "[${section}] a path that does not exist, which the filesystem layer creates" "$(cfg_text "[${section}]\n/nonexistent/where\n")"
+done
+refused "a path that exists after one that does not, at the line of the missing one" "$(cfg_text '[read]\n/usr\n/nonexistent/where\n/etc\n')" "line 3"
+refused "a path under a file, which cannot exist" "$(cfg_text '[read]\n/etc/hostname/below\n')" "does not exist on this system"
+ln -s "${WORK}/nowhere" "${WORK}/dangling-target"
+refused "a link to nothing" "$(cfg_text '[read]\n%s\n' "${WORK}/dangling-target")" "does not exist on this system"
+ln -s /usr "${WORK}/usr-link"
+accepted "a link to something that exists" "$(cfg_text '[read]\n%s\n' "${WORK}/usr-link")"
+RUN_CORE="$CORE_B"
+accepted "a base policy that names a path this image lacks, which only exercise configurations may not" "${WORK}/ok.cfg"
+accepted "and a loopback wildcard in the base beside an exercise rule that names a port" "$(cfg_text '[connect]\nallow 1.2.3.4:80\n')"
+RUN_CORE="$CORE_X"
 
 echo
 echo "== digits that are not digits =="
@@ -199,6 +236,6 @@ refused "[accept] without the shape" "$(cfg_text '[accept]\nexpose 8080\n')" "no
 refused "[limits] with a key that is no limit" "$(cfg_text '[limits]\ncolour=5\n')" "not a known limit" "line 2"
 refused "[limits] with a value that is not a number" "$(cfg_text '[limits]\nnproc=abc\n')" "must be a non-negative whole number" "line 2"
 refused "[limits] with a timeout in the wrong spelling" "$(cfg_text '[limits]\ntimeout=5.5\n')" "exactly three decimals" "line 2"
-refused "a loopback rule without a port beside a rule with one, which says it may come from the base" "$(cfg_text '[connect]\nallow 127.0.0.1:*\nallow 1.2.3.4:80\n')" "may come from a base policy"
+accepted "a loopback rule without a port beside a rule with one, which the guard alone then enforces" "$(cfg_text '[connect]\nallow 127.0.0.1:*\nallow 1.2.3.4:80\n')"
 
 finish

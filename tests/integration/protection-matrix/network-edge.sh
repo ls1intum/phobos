@@ -125,6 +125,20 @@ expect_verdict "and a third port is refused" refused connect "allow 127.0.0.1:${
 expect_verdict "a port rule for another address does not open this one" refused connect "allow 127.0.0.2:${PORT}" -- "$P" tcp 127.0.0.1 "$PORT"
 
 echo
+echo "== a loopback wildcard beside a rule that names a port =="
+# Landlock cannot keep loopback open on every port and close the rest, so the layer stays off for the transport and the
+# guard alone enforces the rule that names a port, by host and port. Both directions are asserted: the wildcard and the
+# rule pass, and everything beside them is still refused.
+MIXED=("allow 127.0.0.1" "allow 10.0.0.0/8:80")
+expect_verdict "the loopback wildcard still admits a port no other rule names" passed connect "${MIXED[@]}" -- "$P" tcp 127.0.0.1 65535
+expect_verdict "the rule that names a port admits its range on that port" passed connect "${MIXED[@]}" -- "$P" tcp 10.1.2.3 80
+expect_verdict "the rule that names a port refuses its range on another port" refused connect "${MIXED[@]}" -- "$P" tcp 10.1.2.3 81
+expect_verdict "the rule that names a port refuses another range on its port" refused connect "${MIXED[@]}" -- "$P" tcp 11.0.0.1 80
+expect_verdict "the loopback wildcard does not reach another loopback address" refused connect "${MIXED[@]}" -- "$P" tcp 127.0.0.2 "$PORT"
+expect_verdict "the loopback wildcard does not open a port to an outside address" refused connect "${MIXED[@]}" -- "$P" tcp 192.0.2.1 65535
+if grep -q 'connect guard alone enforces them' "$PM_ERR"; then ok "the run says that the connect guard alone enforces the port"; else bad "the run says that the connect guard alone enforces the port" "$(pm_describe)"; fi
+
+echo
 echo "== addresses that are not a host =="
 expect_verdict "the unspecified address is refused beside a rule for loopback" refused connect "allow 127.0.0.1:${PORT}" -- "$P" tcp 0.0.0.0 "$PORT"
 expect_verdict "the broadcast address is refused" refused connect "allow 127.0.0.1:${PORT}" -- "$P" tcp 255.255.255.255 "$PORT"

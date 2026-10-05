@@ -187,6 +187,19 @@ else
   if (( PM_STATUS == 125 )) && ! grep -q '^START' "$PM_OUT" && grep -q 'UDP network rules require Landlock version 10' "$PM_ERR"; then ok "below Landlock version 10 a udp rule that names a port is refused before the command, not left unenforced"; else bad "a udp rule that names a port is refused below Landlock version 10" "$(pm_describe)"; fi
 fi
 
+c_udp_mixed="$(cfg udpmixed <<EOF2
+[connect]
+allow 127.0.0.1 udp
+allow 127.0.0.2:$UDP_PORT udp
+EOF2
+)"
+# Landlock cannot keep loopback open on every UDP port and close the rest, so the guard alone holds the rule that names a
+# port, on every kernel, the ones below Landlock version 10 included.
+allow_case "a udp loopback wildcard beside a udp rule that names a port: a datagram to the wildcard address goes" "$c_udp_mixed" sendto -- "$P" udp_send sendto 127.0.0.1 "$UDP_PORT" "PAY-mixed-wild"
+allow_case "and a datagram to the named address and port goes" "$c_udp_mixed" sendto -- "$P" udp_send sendto 127.0.0.2 "$UDP_PORT" "PAY-mixed-port"
+deny_case "and a datagram to the named address on another port is refused" net "$c_udp_mixed" sendto "$DENIED_ERRNOS" -- "$P" udp_send sendto 127.0.0.2 "$((UDP_PORT + 1))" "BAD-mixed-port"
+deny_case "and a datagram to another address on the named port is refused" net "$c_udp_mixed" sendto "$DENIED_ERRNOS" -- "$P" udp_send sendto 127.0.0.3 "$UDP_PORT" "BAD-mixed-address"
+
 echo
 echo "== UDP: the destination cannot be swapped between the check and the send =="
 run_direct_args() {

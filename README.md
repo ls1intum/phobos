@@ -74,7 +74,7 @@ Landlock enforces **TCP ports**, so a policy that names a concrete port has that
 
 - the **connect guard** (`phobos-seccomp-networksystem`) supervises every `connect()` with a seccomp user-notification and makes an allowed connection itself, so it enforces the `[connect]` allow-list by host and port from outside the process, which a raw system call cannot step around. It holds an IP-literal rule to that exact address and the name `localhost` to the loopback range (every `127.x.x.x` address and `::1`); a rule naming a DNS hostname it cannot tie to an address is held to its port alone, with the host left to the egress broker. A `connect` of another family, such as a UNIX-domain socket, is refused rather than made outside the sandbox. It makes every datagram `connect()`, `sendto()`, `sendmsg()` and `sendmmsg()` itself too, from copies of the address and the data it read out of the command once, so a second thread cannot change a destination after the guard judged it; see SECURITY.md for what that costs.
 - the **egress broker** (an HAProxy the network layer starts automatically whenever a `[connect]` rule names a host) enforces that rule by reading the TLS host name from the ClientHello the guard cannot see and, for an exact name, resolving it itself and connecting only to that address. An exact-name rule is refused when no resolver is given, rather than run with a name the broker cannot pin to an address.
-- The boundary for external egress, and for UDP and DNS, is the container started with `--network none`. Under it, only loopback exists, and a loopback-only policy needs no port rules; an external host, if one is ever allowed, should name a concrete port so that Landlock can enforce it alongside the guard.
+- The boundary for external egress, and for UDP and DNS, is the container started with `--network none`. Under it, only loopback exists, and a loopback-only policy needs no port rules; an external host, if one is ever allowed, should name a concrete port so that Landlock can enforce it alongside the guard. Beside a loopback rule that names no port, which the shipped policies carry, a concrete port gets no Landlock rule, because Landlock cannot keep loopback open on every port and close the rest: the connect guard alone enforces it then, by host and port, while the network layer is on, and the run's log says so. For udp that also means the rule does not need Landlock version 10, which a udp rule on its own does.
 
 ## How a run is put together
 
@@ -153,7 +153,12 @@ than ignored, so a typo cannot silently drop a restriction.
 The same goes for a path that does not start with `/` (`~`, variables and quotes are not expanded, and a
 relative name would depend on the directory the run is started in), Windows line endings, a byte order mark,
 a NUL byte, and a number with more than 18 digits (15 digits of seconds for a timeout), which the shell's
-arithmetic would read as another number. Each refusal says what is wrong and names the file, and the line wherever one line is at fault.
+arithmetic would read as another number. A path that holds a wildcard (`*`, `?` or `[`) is refused too, since a path is taken as written, and so is a `[read]` or
+`[execute]` path in an exercise configuration that does not exist on the system the run is built on, since Landlock can
+only anchor a rule on a path that exists and the rule would otherwise grant nothing without a word. A path the command is
+meant to create has to be made first, or reached through an existing parent; the sections that change things (`[write]`,
+`[create]` and the like) are not asked, because the filesystem layer creates a missing path they name. The shipped base
+policies are exempt from the existence check, because they are written to fit more than one image. Each refusal says what is wrong and names the file, and the line wherever one line is at fault.
 
 - `[read]`: one path per line, granted read.
 - `[execute]`: one path per line, granted execute. A program tree needs both `[read]` and `[execute]`; a pure data tree needs only `[read]`.

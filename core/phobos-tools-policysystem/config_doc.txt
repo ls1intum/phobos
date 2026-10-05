@@ -39,7 +39,7 @@ covers both connecting a datagram socket and sending a datagram to a remote port
 and the connect guard enforces it for the UDP transport apart from TCP, so a udp
 rule never admits a TCP connection to the same host and port, nor the reverse. UDP
 needs Landlock version 10; on an older kernel a udp rule is refused (PHB-EPOLICY)
-rather than run with UDP left unenforced. There is no egress broker for UDP, whose
+rather than run with UDP left unenforced, except beside a udp loopback wildcard (see below). There is no egress broker for UDP, whose
 host enforcement rests on the TLS host name, so a udp [connect] rule that names a
 DNS host is held to the addresses the name had when the run began: the network layer
 asks the resolver given with --resolver once, before the command starts, hands the
@@ -49,6 +49,17 @@ addresses in /etc/hosts for the command. A name that does not resolve refuses th
 than the 256 rules the guard keeps. An address the name gains later is not followed, and
 an answer is only read for the name asked and the aliases that lead from it. A name with a
 star in it is refused as for tcp.
+
+A loopback rule that names no port (`allow 127.0.0.1:*`, `allow localhost`), which the shipped
+policies carry for Gradle's own sockets, switches the Landlock network layer off for its transport,
+because Landlock holds a port for every host and cannot keep loopback open on every port while closing
+the rest. A rule that names a port beside it, such as `allow dns.example.org:53 udp` or
+`allow 10.0.0.0/8:80`, is accepted and gets no Landlock rule either: the connect guard alone enforces it,
+by host and port, and the network layer logs which ports that applies to. That holds for udp on every
+kernel, so a udp rule that names a port beside a loopback wildcard for udp does not need Landlock
+version 10, while the same rule on its own does. The guard enforces them only while the network layer
+is on, as it does everything else: with --no-networksystem-restriction nothing is enforced. A host
+other than loopback may not omit its port.
 
 There is no `openConnections` / `sendData` / `receiveData` toggle: a rule names a
 host, a port and a transport, or it does not.

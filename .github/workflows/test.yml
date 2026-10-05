@@ -124,7 +124,8 @@ jobs:
 
       # How the network allow-list becomes Landlock TCP-port rules: a concrete port is
       # enforced, a loopback host with no port is tolerated, a non-loopback host with no
-      # port is refused, and the mixed case is refused. No sandbox needed.
+      # port is refused, and a loopback wildcard beside a concrete port leaves the guard
+      # to enforce it. No sandbox needed.
       - name: The network policy
         if: ${{ !cancelled() }}
         run: bash tests/unit/phobos-tools-networksystem/network_policy.sh

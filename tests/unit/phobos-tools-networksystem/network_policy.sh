@@ -69,13 +69,30 @@ else
 fi
 
 echo
-echo "== a loopback wildcard mixed with a concrete port is refused =="
+echo "== a loopback wildcard beside a concrete port is accepted, and the guard alone enforces the port =="
 r="$(run_rules "127.0.0.1 *
 example.com 443")"
-if [[ "$(field "$r" 1)" != 0 && "$(field "$r" 3)" == *"half-enforced"* ]]; then
-  ok "the mixed case is refused"
+if [[ "$(field "$r" 1)" == 0 && -z "$(field "$r" 2)" ]]; then
+  ok "the mixed case is accepted and emits no Landlock port rule, so loopback stays open on every port"
 else
-  bad "the mixed case is refused" "a non-zero exit naming the half-enforced policy" "exit $(field "$r" 1): $(field "$r" 3)"
+  bad "the mixed case is accepted and emits no Landlock port rule" "exit 0, no args" "exit $(field "$r" 1), args [$(field "$r" 2)]: $(field "$r" 3)"
+fi
+if [[ "$(field "$r" 3)" == *"network layer stays off"* && "$(field "$r" 3)" == *"tcp ports 443"* && "$(field "$r" 3)" == *"connect guard alone enforces them"* ]]; then
+  ok "and the log says the layer stays off and that the guard alone enforces port 443"
+else
+  bad "and the log says the guard alone enforces the port" "a log line naming port 443 and the guard" "$(field "$r" 3)"
+fi
+r="$(run_rules "127.0.0.1 *
+example.com 443
+example.org 80
+example.com 443")"
+[[ "$(field "$r" 3)" == *"tcp ports 80 443 named beside it"* ]] && ok "the ports named in the log are sorted and listed once" || bad "the ports named in the log are sorted and listed once" "tcp ports 80 443" "$(field "$r" 3)"
+r="$(run_rules "127.0.0.1 *
+example.com 443 udp")"
+if [[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" == "--connect-udp 443" && "$(field "$r" 3)" != *"ports 443"* ]]; then
+  ok "a wildcard on one transport does not touch a concrete port on the other"
+else
+  bad "a wildcard on one transport does not touch a concrete port on the other" "exit 0, --connect-udp 443, no mention of 443 in the tcp line" "exit $(field "$r" 1), args [$(field "$r" 2)]: $(field "$r" 3)"
 fi
 
 echo
