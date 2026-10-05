@@ -65,6 +65,13 @@ Only one of them carries a coverage gate:
 | `tests/unit/phobos-seccomp-networksystem/seccomp_networksystem_run.sh` | every line, with `--coverage` |
 | `tests/unit/phobos-landlock-filesystem-and-networksystem/run.sh` | none. `mutation.sh` in the same folder reports a mutation score for it instead, because the coverage runtime disturbs the calls the suite interposes |
 
+The mutation score answers a different question from coverage: coverage says a line ran, and
+mutation shows whether a test notices when a line is wrong. The `mutation` job of
+`build.yml` breaks the Landlock program's sources one small change at a time, runs the suite for
+each and reports the share it catches. It needs clang 20 and mull in an Ubuntu 26.04 container,
+reports a score without gating on it, and fails where it reaches no score. It runs on every
+change and weekly.
+
 ## The acceptance suites measure the real sandbox
 
 They run inside the run-phase image, in an **ordinary** container: no `--privileged`, no
