@@ -135,7 +135,7 @@ export PHOBOS_SCRATCH
 
 # Every --config must name a file that exists.
 for c in "${cfgs[@]}"; do
-  [[ -f "$c" ]] || { echo "Config not found: $c" >&2; exit "${PHB_EPOLICY}"; }
+  refuse_unusable_cfg_file "$c"
 done
 
 # Every Base*.cfg beside this script, in the order the shell sorts a glob, which is the order
@@ -152,8 +152,8 @@ shopt -s nullglob
 base_cfgs=( "${HERE}"/Base*.cfg )
 shopt -u nullglob
 for candidate in "${base_cfgs[@]}"; do
-  [[ -f "$candidate" ]] && continue
-  report "Policy invalid: '${candidate}' matches Base*.cfg but is not a readable file, so the base policy cannot be built. (PHB-EPOLICY)"
+  [[ -f "$candidate" && -r "$candidate" ]] && continue
+  report "Policy invalid: ${candidate@Q} matches Base*.cfg but is not a readable file, so the base policy cannot be built. (PHB-EPOLICY)"
   exit "${PHB_EPOLICY}"
 done
 if [[ ${#base_cfgs[@]} -eq 0 ]]; then

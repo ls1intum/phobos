@@ -178,6 +178,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/integration/policy_program.sh
 
+      # A configuration that is wrong has to end the run with a message that says what and where, and no
+      # bash error or raw byte may reach the terminal in its place.
+      - name: A malformed configuration is refused with a message that says what and where
+        if: ${{ !cancelled() }}
+        run: bash tests/integration/malformed_cfg.sh
+
       # The rights hierarchy decides which policies are refused before a command runs, and
       # nothing measured it until this suite: a nested entry narrower than its ancestor is
       # unenforceable and refused, while a redundant one and a merely different one are both

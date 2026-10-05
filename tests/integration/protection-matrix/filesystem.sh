@@ -417,9 +417,7 @@ c_rel="$(cfg rel <<EOF2
 EOF2
 )"
 run_pm --config "$c_rel" -- "$P" read "$PM/ro/data.txt"
-if grep -q '^START' "$PM_OUT" && op_ok read; then ok "a relative policy path with dot-dot segments is resolved against the working directory, to the directory it names"; else bad "a relative policy path is resolved" "$(pm_describe)"; fi
-run_pm --config "$c_rel" -- "$P" read "$PM/none/secret.txt"
-if grep -q '^START' "$PM_OUT" && op_failed_with open $DENIED_ERRNOS; then ok "and it grants nothing beyond that directory"; else bad "a relative policy path grants nothing beyond what it names" "$(pm_describe)"; fi
+if ! grep -q '^START' "$PM_OUT" && (( PM_STATUS == PHB_EPOLICY )) && grep -q 'not an absolute path' "$PM_ERR"; then ok "a relative policy path with dot-dot segments is refused rather than resolved against the working directory"; else bad "a relative policy path with dot-dot segments is refused rather than resolved against the working directory" "$(pm_describe)"; fi
 run_pm --config "$c_rw" -- "$P" read "$PM/none/secret.txt"
 if op_failed_with open $DENIED_ERRNOS; then ok "a write grant does not grant reading elsewhere"; else bad "a write grant does not grant reading elsewhere" "$(pm_describe)"; fi
 

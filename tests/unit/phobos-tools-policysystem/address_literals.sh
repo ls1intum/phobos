@@ -21,7 +21,7 @@ echo "== IPv4 literals =="
 for address in 0.0.0.0 1.2.3.4 127.0.0.1 255.255.255.255 10.20.30.40 192.168.1.1 100.64.0.1 9.9.9.9; do
   if is_ipv4_literal "$address"; then ok "${address} is an address"; else bad "${address} is an address" "accepted" "refused"; fi
 done
-for address in 256.1.1.1 1.2.3 1.2.3.4.5 127.1 2130706433 01.2.3.4 1.2.3.04 1.2.3. .1.2.3 1..2.3 -1.2.3.4 1.2.3.4a 999.0.0.1 1.2.3.256 a.b.c.d "" "1.2.3.4 " 1.2.3.-4 1,2,3,4; do
+for address in 256.1.1.1 1.2.3 1.2.3.4.5 127.1 2130706433 01.2.3.4 1.2.3.04 1.2.3. .1.2.3 1..2.3 -1.2.3.4 1.2.3.4a 999.0.0.1 1.2.3.256 a.b.c.d "" "1.2.3.4 " 1.2.3.-4 1,2,3,4 ٨.٨.٨.٨ 1.2.3.٤ ١٢٧.٠.٠.١ ١0.0.0.1 25٤.0.0.1 1.2.3.٥٠ ٢55.255.255.255; do
   if is_ipv4_literal "$address"; then bad "'${address}' is not an address" "refused" "accepted"; else ok "'${address}' is not an address"; fi
 done
 
@@ -30,7 +30,7 @@ echo "== IPv6 literals =="
 for address in ::1 :: 2001:db8::1 2001:db8:0:0:0:0:0:1 fe80::1 ::ffff:127.0.0.1 1:2:3:4:5:6:7:8 1:2:3:4:5:6:7:: ::2:3:4:5:6:7:8 1::8 ABCD::ef01 ::ffff:1.2.3.4 1:2:3:4:5:6:1.2.3.4 64:ff9b::1.2.3.4; do
   if is_ipv6_literal "$address"; then ok "${address} is an IPv6 address"; else bad "${address} is an IPv6 address" "accepted" "refused"; fi
 done
-for address in ::1::2 1:2:3:4:5:6:7:8:9 1:2:3:4:5:6:7 :1 1: ::1: :::1 1:::2 12345::1 g::1 fe80::1%eth0 1.2.3.4 ::1.2.3 ::256.1.1.1 1:2:3:4:5:6:7:8: 1::2::3 : 1:2:3:4:5:6:7:1.2.3.4 1.2.3.4::1 ::ffff:127.0.0.1.5 "" "::1 "; do
+for address in ::1::2 1:2:3:4:5:6:7:8:9 1:2:3:4:5:6:7 :1 1: ::1: :::1 1:::2 12345::1 g::1 fe80::1%eth0 1.2.3.4 ::1.2.3 ::256.1.1.1 1:2:3:4:5:6:7:8: 1::2::3 : 1:2:3:4:5:6:7:1.2.3.4 1.2.3.4::1 ::ffff:127.0.0.1.5 "" "::1 " ::٨ ٨::1 ::١2 fe٨0::1; do
   if is_ipv6_literal "$address"; then bad "'${address}' is not an IPv6 address" "refused" "accepted"; else ok "'${address}' is not an IPv6 address"; fi
 done
 
