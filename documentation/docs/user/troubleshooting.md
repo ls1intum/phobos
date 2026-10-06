@@ -328,12 +328,12 @@ gets no such entry.
 
 ## A server's first bytes arrive five seconds late
 
-Where a `[connect]` rule names a host, the connect guard hands every allowed stream connection
-to the egress broker, loopback ones included. On a port a name rule names, the broker reads the
-Transport Layer Security (TLS) host name before it decides. A server that speaks first, as SMTP, MySQL or SSH do, gets
-nothing from its client there, so the broker waits out its five-second inspection delay before
-an address rule lets the connection through. A connection to any other port goes through at
-once. Serve the program on a port no name rule names.
+Where a stream `[connect]` rule names a host, the connect guard hands every allowed stream
+connection to the egress broker, loopback ones included. On a port a name rule names, the broker
+reads the Transport Layer Security (TLS) host name before it decides. A server that speaks
+first, as SMTP, MySQL or SSH do, gets nothing from its client there, so the broker waits out its
+five-second inspection delay before an address rule lets the connection through. A connection
+to any other port goes through at once. Serve the program on a port no name rule names.
 
 ## A `udp` rule that names a host refuses the run
 

@@ -118,7 +118,7 @@ dispositions back straight afterwards with `restore_signal_traps`. The helpers e
 last writer of the command's standard error closes it. Whatever the command writes while it
 handles the signal, a Python traceback among it, still passes through and still counts. The
 layer discards a hangup, quit or interrupt that arrives in the brief interval while it makes the
-helpers, and the run then starts as if nobody had sent it. The helpers do not set the
+helpers. The helpers do not set the
 dispositions for themselves, because that leaves them a gap once the command has started.
 
 ## Known gaps

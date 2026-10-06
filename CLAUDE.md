@@ -168,7 +168,7 @@ core/                      the sandbox itself
   phobos-landlock-filesystem-and-networksystem/  its *.c/.h: the C program that applies the Landlock policy, then exec's
   phobos-seccomp-networksystem/  its *.c/.h: the connect guard, supervises connect() and enforces [connect] by host and port
   phobos-seccomp-timeoutsystem/  its *.c: the group lock, a seccomp filter refusing setsid and setpgid, then exec's
-  phobos-tools-common/     sourced by every layer through phobos-common.sh, which sources the rest here and the three per-subsystem helpers
+  phobos-tools-common/     sourced by every layer through phobos-common.sh, which sources the rest here and the four per-subsystem helpers
     phobos-common.sh       the shared entry the layers source; it sources the others
     phobos-constants.sh    the numbers the scripts share, named once, the exit statuses among them
     phobos-log.sh          reporting, and counting what a run was denied

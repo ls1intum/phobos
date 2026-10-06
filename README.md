@@ -52,10 +52,10 @@ wall Phobos relies on and cannot set for itself.
 
 📖 **<https://ls1intum.github.io/phobos/>**
 
-- [User Documentation](https://ls1intum.github.io/phobos/user/phobos/what-is-phobos) — put a
-  program in the sandbox, write a policy for it, and understand what Phobos does and does not
+- [User Documentation](https://ls1intum.github.io/phobos/user/phobos/what-is-phobos): how to put
+  a program in the sandbox, write a policy for it, and understand what Phobos does and does not
   protect against
-- [Contributor Documentation](https://ls1intum.github.io/phobos/contributor/how-can-you-contribute) —
+- [Contributor Documentation](https://ls1intum.github.io/phobos/contributor/how-can-you-contribute):
   the technologies Phobos is built on, the discovery phase and the subsystems
 
 The documentation source lives in [`documentation/`](documentation/).

@@ -135,15 +135,15 @@ second.
 
 ## The probes are not suites
 
-Two scripts under `tests/` report for themselves and never fail a run:
+Two scripts under `tests/` report for themselves and gate no pull request:
 
 - `runner-capability-probe.sh` answers what a machine can do, and is run by
   `runner-capabilities.yml` on request. Each assert mode answers 0 for yes, 1 for no and 3 for
   cannot tell. `--assert-landlock` and `--assert-bwrap` ask whether Landlock enforces and
-  whether Bubblewrap builds a sandbox. `--assert-kvm` asks each hosted runner image whether a
-  guest kernel boots under KVM. `--assert-ptrace` asks whether a tracer without privileges sees
+  whether Bubblewrap builds a sandbox. `--assert-kvm` asks whether a guest kernel boots under
+  KVM, and `runner-capabilities.yml` asks it on each hosted runner image. `--assert-ptrace` asks whether a tracer without privileges sees
   a traced Landlock refusal inside an ordinary container, which the layer pruner's observer
-  relies on.
+  relies on. `runner-capabilities.yml` fails only where a probe cannot tell.
 - `policy-redundancy-probe.sh` names the entries of a policy that grant Landlock nothing an
   ancestor already grants. Those entries are not dead code, so it reports rather than failing.
   Run it where the policy is applied, since it resolves symbolic links.
@@ -157,6 +157,7 @@ Two scripts under `tests/` report for themselves and never fail a run:
 | `COVERAGE_TOOL` | the unit runners | the gcov matching that compiler, `gcov-14` by default |
 | `PHOBOS_HOME` | the acceptance suites | where Phobos is installed in the image, `/var/tmp/opt/core` by default |
 | `PROBE_CONTAINER_IMAGE` | `runner-capability-probe.sh` | the image the container half of the probe runs in |
+| `LAYER_PRUNE_HELPERS` | `layer_prune_observer.sh` | the directory that holds the layer pruner's Python package, `/var/tmp/helpers` by default |
 | `PRUNE_LOG_DIR`, `PRUNE_TARGET`, `TESTING_DIR`, `PHOBOS_KEEP_LOG` | the prune suites and the pruner | where a prune writes its logs, which tree it prunes, where the reference workloads live, and whether the raw log is kept |
 
 ## Further reading

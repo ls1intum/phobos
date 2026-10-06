@@ -170,15 +170,16 @@ already grants, which is worth reading while judging a fresh one.
 Two further pruners are taking shape beside the Bubblewrap walk. Neither has an entry point
 yet, and nothing under `core/` reaches either of them.
 
-- **The layer pruner**, in `var/tmp/helpers/layer_prune/`, runs the reference workload through
-  the shipped `phobos.sh` chain under `strace`, an observer that needs no privilege, and grants
-  only what a recorded refusal proves. `strace_parse.py` turns the `strace -f` log into the
-  system calls made inside the command's Landlock domain. `attribute.py` assigns each refusal to
+- **The layer pruner**, in `var/tmp/helpers/layer_prune/`, reads a `strace -f` log of the
+  reference workload run through the shipped `phobos.sh` chain, and its design grants only what a
+  recorded refusal proves. `strace`, an observer that needs no privilege, writes that log.
+  `strace_parse.py` turns the log into the system calls made inside the command's Landlock
+  domain, and `record.py` holds the call and denial records the other modules share. `attribute.py` assigns each refusal to
   a layer and to the configuration sections that grant it. `control.py` replays each candidate
   outside every Landlock domain, so a refusal Landlock did not cause never becomes a grant.
-- **The recording pruner**, in `var/tmp/helpers/layer_record/`, records what a reference
-  program touches during scripted interactive sessions. It grants everything while it records,
-  so it is for a reference program only and never for an untrusted one. So far it holds its own
+- **The recording pruner**, in `var/tmp/helpers/layer_record/`, holds the parts of a recorder
+  for scripted interactive sessions of a reference program. Its design grants everything while
+  it records, so it is for a reference program only and never for an untrusted one. So far it holds its own
   refusals (`guard.py`), the listing of a container's starting state (`snapshot.py`) and
   scripted terminal sessions (`pty_script.py`). Beside them sit the host names a session sent or
   received (`names.py`) and the check that refuses a replay in a container that is not fresh

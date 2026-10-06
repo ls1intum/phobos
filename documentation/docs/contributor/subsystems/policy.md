@@ -42,7 +42,7 @@ usually makes writable.
 | `phobos-constants.sh` | the exit statuses and the other shared numbers |
 | `phobos-log.sh` | reporting, and the denial counter |
 | `phobos-signals.sh` | passing a caller's signals on to the command a layer waits for |
-| `phobos-common.sh` | the aggregate every caller sources, which sources the ten above |
+| `phobos-common.sh` | the aggregate every caller sources, which sources every file above but `phobos-policysystem.sh` |
 
 `phobos-common.sh` has no include guard on purpose: sourcing it has to keep resetting
 `PHB_DEBUG_ENABLED`, so that the environment can never switch debugging on.

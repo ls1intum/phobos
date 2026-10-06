@@ -115,8 +115,8 @@ as Gradle and its test workers do, needs it, and the shipped Java policy carries
 
 The connect guard closes the one route Landlock cannot judge. A socket that was never bound gets
 a port of the kernel's choosing when it calls `listen()`, with no `bind()` at all. The guard
-traps `listen()` and runs it itself, on a socket it created, and refuses a socket that is
-unbound unless a `[bind]` row names port 0, because that row already grants the same port.
+traps `listen()` and runs it itself, on a socket it created, and refuses an unbound socket
+unless a tcp `[bind]` row names port 0, because that row already grants the same port.
 
 ## The ephemeral source port
 

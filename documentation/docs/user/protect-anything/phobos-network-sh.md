@@ -58,7 +58,8 @@ allow-list never named before the guard did this, and none does now. The cost is
 
 The guard judges the source port itself, because it runs outside Landlock. A connect or send on
 a datagram socket that was never bound is refused unless the policy grants an ephemeral UDP
-bind, which the layer tells it when a `udp` rule or a `[bind]` row of port 0 for `udp` exists.
+bind, which the layer tells it when a `udp` `[connect]` rule or a `[bind]` row of port 0 for
+`udp` exists.
 
 The guard refuses a raw, packet or ICMP socket before the socket exists, and refuses
 `io_uring`, which would otherwise reach `connect` unseen.
