@@ -75,7 +75,6 @@ WRAPS=(
   -Wl,--wrap=statx
   -Wl,--wrap=read_small_file
   -Wl,--wrap=geteuid
-  -Wl,--wrap=realpath
   -Wl,--wrap=_exit
   -Wl,--wrap=calloc
   -Wl,--wrap=fork

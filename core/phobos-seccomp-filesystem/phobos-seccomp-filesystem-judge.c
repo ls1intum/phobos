@@ -6,6 +6,7 @@
 #include "../phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-ruleset.h"
 
 #include <arpa/inet.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <linux/openat2.h>
@@ -42,6 +43,9 @@ static constexpr int JUDGED_OPEN_FLAGS = O_ACCMODE | O_CREAT | O_EXCL | O_TRUNC 
 /* The open_how layout an openat2 is judged with: the first version, whose size is fixed. */
 static constexpr uint64_t OPEN_HOW_FIRST_SIZE = sizeof(struct open_how);
 
+/* The mode bits an openat2 accepts; any other bit is refused with EINVAL before the walk. */
+static constexpr uint64_t OPEN_HOW_MODE_BITS = 07777;
+
 /* The rename flags a judged rename may carry, each on its own. */
 static constexpr unsigned int JUDGED_RENAME_FLAGS = RENAME_NOREPLACE | RENAME_EXCHANGE;
 
@@ -50,8 +54,7 @@ static constexpr unsigned int JUDGED_RENAME_FLAGS = RENAME_NOREPLACE | RENAME_EX
 static constexpr unsigned int CAPABILITY_FOWNER = 3;
 static const char *const CREDENTIAL_KEYS[] = {"Uid:", "Gid:", "Groups:", "CapEff:"};
 
-/* Room for the supervisor's own /proc/self/status, a socket link and /proc/<pid>/net/unix. */
-static constexpr size_t STATUS_LENGTH = 4096;
+/* Room for a socket link and /proc/<pid>/net/unix. */
 static constexpr size_t SOCKET_LINK_LENGTH = 64;
 static constexpr size_t UNIX_TABLE_LENGTH = 1 << 20;
 static constexpr size_t PROC_PATH_LENGTH = 64;
@@ -59,13 +62,16 @@ static constexpr size_t PROC_PATH_LENGTH = 64;
 /* An object of two quoted paths: "'from' to 'to'". */
 static constexpr size_t TWO_PATH_OBJECT_LENGTH = 2 * REPORT_QUOTED_MAXIMUM + 8;
 
-static char own_status[STATUS_LENGTH];
+static char own_status[PROC_STATUS_LENGTH];
+static bool own_status_read = false;
 static bool own_status_known = false;
 static char unix_table[UNIX_TABLE_LENGTH];
 
-/* The supervisor's own /proc/self/status, read once: its credentials do not change. */
+/* The supervisor's own /proc/self/status, read once, and only tried once: its credentials do not
+ * change, and a status that could not be read then will not be read later. */
 static const char *supervisor_status(void) {
-    if (!own_status_known) {
+    if (!own_status_read) {
+        own_status_read = true;
         own_status_known = read_small_file("/proc/self/status", own_status, sizeof(own_status), NULL);
     }
     return own_status_known ? own_status : "";
@@ -131,7 +137,7 @@ static bool supervisor_capable(unsigned int capability) {
     return (status_hexadecimal(supervisor_status(), "CapEff:") >> capability) & 1ULL;
 }
 
-/* Whether the mount a path lies on lets it be changed, or executed from. */
+/* Whether the mount a path lies on lets it be changed, executed from, or opened as a device. */
 static bool mount_allows(const char *path, unsigned long refused_flag) {
     struct statvfs status;
     return statvfs(path, &status) == 0 && (status.f_flag & refused_flag) == 0;
@@ -143,14 +149,43 @@ static bool mode_allows(const char *path, int access) {
     return faccessat(AT_FDCWD, path, access, AT_EACCESS) == 0;
 }
 
-/* The mount a path lies on, by its identifier, or 0 when it cannot be told. */
-static uint64_t mount_of(const char *path) {
+/* The mount a path lies on, by its identifier, or 0 when it cannot be told. With
+ * AT_SYMLINK_NOFOLLOW a final symbolic link is not followed, though a mount on the last name is
+ * still crossed, as a lookup crosses it. */
+static uint64_t mount_of(const char *path, int flags) {
     struct statx status;
-    if (statx(AT_FDCWD, path, 0, STATX_MNT_ID, &status) != 0
+    if (statx(AT_FDCWD, path, flags, STATX_MNT_ID, &status) != 0
         || (status.stx_mask & STATX_MNT_ID) == 0) {
         return 0;
     }
     return status.stx_mnt_id;
+}
+
+/* Whether a file is append-only, or cannot be told not to be. An append-only file is refused a
+ * write that does not append, and any truncation, before Landlock is asked. */
+static bool append_only_or_unknown(const char *path) {
+    struct statx status;
+    return statx(AT_FDCWD, path, 0, STATX_TYPE, &status) != 0
+           || (status.stx_attributes & STATX_ATTR_APPEND) != 0;
+}
+
+/* Whether the kernel's protection of files in sticky directories may refuse an O_CREAT open of
+ * this existing file before Landlock is asked: a regular file or named pipe in a sticky directory
+ * that others may write, owned by neither that directory's owner nor the task. The
+ * protected_regular and protected_fifos settings are not read, so this errs towards silence.
+ * target is a resolved absolute path. */
+static bool sticky_protected(const char *target, const struct stat *status) {
+    char parent[PATH_MAX];
+    struct stat directory;
+    if (!S_ISREG(status->st_mode) && !S_ISFIFO(status->st_mode)) {
+        return false;
+    }
+    snprintf(parent, sizeof(parent), "%s", target);
+    char *slash = strrchr(parent, '/');
+    slash[slash == parent ? 1 : 0] = '\0';
+    return stat(parent, &directory) != 0
+           || ((directory.st_mode & S_ISVTX) != 0 && (directory.st_mode & (S_IWOTH | S_IWGRP)) != 0
+               && status->st_uid != directory.st_uid && status->st_uid != geteuid());
 }
 
 /* Removes the slashes a path ends with, keeping a lone "/". Answers whether there were any. */
@@ -226,61 +261,82 @@ static void report_two_paths(const char *verb, const char *noun, const char *fro
     report_blocked(REPORT_LAYER_FILESYSTEM, verb, noun, object, false, NULL);
 }
 
+/* Whether a name the call creates is absent as the kernel looks it up for the task: entry, the
+ * name with its directories resolved, does not exist. Any other failure to look, a last name
+ * longer than a name may be among them, is refused before Landlock and answers false. */
+static bool name_absent(const char *entry) {
+    struct stat status;
+    return lstat(entry, &status) != 0 && errno == ENOENT;
+}
+
 /* Resolves the parent a call creates or removes a name in, and answers whether the kernel would
- * reach Landlock at all: the parent is a directory on a writable mount that the file mode lets
- * the task write and search. */
-static bool parent_accepts_change(const char *absolute, char *anchor, char *shown) {
-    if (!resolve_for_landlock(absolute, true, anchor, PATH_MAX, shown, PATH_MAX)) {
+ * reach Landlock at all: the parent is a directory on a writable mount that the file mode lets the
+ * task search. Write permission on the parent is checked only after Landlock's hook, so it is not
+ * asked here. */
+static bool parent_accepts_change(const struct task_view *task, const char *absolute, char *anchor,
+                                  char *shown) {
+    if (!resolve_for_landlock(task, absolute, true, anchor, PATH_MAX, shown, PATH_MAX)) {
         return false;
     }
     struct stat status;
     return stat(anchor, &status) == 0 && S_ISDIR(status.st_mode)
-           && mount_allows(anchor, ST_RDONLY) && mode_allows(anchor, W_OK | X_OK);
+           && mount_allows(anchor, ST_RDONLY) && mode_allows(anchor, X_OK);
 }
 
-/* An open of a name that exists. The file mode, the mount and the type must let the open reach
- * Landlock, and then Landlock checks write (and truncate) before read. */
-static void judge_open_existing(const char *absolute, const struct stat *status, int flags,
-                                const struct policy_model *model) {
+/* Whether an open of an existing object reaches Landlock: its type takes the access mode and the
+ * flags, the file mode lets the task read or write it as asked, a write or truncation is not on a
+ * read-only mount, a device is not on a nodev mount, and an append-only file is opened to append
+ * and not truncated. */
+static bool open_reaches_landlock(const char *target, const struct stat *status, int flags) {
     int access = flags & O_ACCMODE;
     bool directory = S_ISDIR(status->st_mode);
+    bool device = S_ISCHR(status->st_mode) || S_ISBLK(status->st_mode);
+    bool writes = access == O_WRONLY || access == O_RDWR;
+    bool reads = access == O_RDONLY || access == O_RDWR;
+    bool truncating = (flags & O_TRUNC) != 0;
+    bool changes_contents = writes || (truncating && S_ISREG(status->st_mode));
+    int mode_access = (reads ? R_OK : 0) | (writes || truncating ? W_OK : 0);
+    if (access == O_ACCMODE || S_ISSOCK(status->st_mode)
+        || (directory && (writes || truncating || (flags & O_CREAT) != 0))
+        || ((flags & O_DIRECTORY) != 0 && !directory)) {
+        return false;
+    }
+    return !(changes_contents && !mount_allows(target, ST_RDONLY))
+           && !(device && !mount_allows(target, ST_NODEV)) && mode_allows(target, mode_access)
+           && !(((writes && (flags & O_APPEND) == 0) || truncating)
+                && append_only_or_unknown(target));
+}
+
+/* An open of a name that exists; target is the object the open lands on. Landlock checks the write
+ * and the read the open asks for, and only after that a truncation. */
+static void judge_open_existing(const char *target, const struct stat *status, int flags,
+                                const char *absolute, const struct policy_model *model) {
+    int access = flags & O_ACCMODE;
     bool writes = access == O_WRONLY || access == O_RDWR;
     bool reads = access == O_RDONLY || access == O_RDWR;
     bool truncates = (flags & O_TRUNC) != 0 && S_ISREG(status->st_mode);
-    if (access == O_ACCMODE || S_ISSOCK(status->st_mode)
-        || (directory && (writes || (flags & O_CREAT) != 0))
-        || ((flags & O_DIRECTORY) != 0 && !directory)) {
+    if (!open_reaches_landlock(target, status, flags)) {
         return;
     }
-    int mode_access = (reads ? R_OK : 0) | (writes || truncates ? W_OK : 0);
-    if (((writes || truncates) && !mount_allows(absolute, ST_RDONLY))
-        || !mode_allows(absolute, mode_access)) {
-        return;
-    }
-    char anchor[PATH_MAX];
-    char shown[PATH_MAX];
-    if (!resolve_for_landlock(absolute, false, anchor, sizeof(anchor), shown, sizeof(shown))) {
-        return;
-    }
-    uint64_t granted = model_rights_along(model, anchor);
-    uint64_t write_rights = (writes ? LANDLOCK_ACCESS_FILESYSTEM_WRITE_FILE : 0)
-                            | (truncates ? LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE : 0);
-    uint64_t read_right = directory ? LANDLOCK_ACCESS_FILESYSTEM_READ_DIRECTORY
-                                    : LANDLOCK_ACCESS_FILESYSTEM_READ_FILE;
-    if (refused(model, granted, write_rights)) {
-        report_path("write", "File", shown, absolute);
+    uint64_t granted = model_rights_along(model, target);
+    uint64_t read_right = S_ISDIR(status->st_mode) ? LANDLOCK_ACCESS_FILESYSTEM_READ_DIRECTORY
+                                                   : LANDLOCK_ACCESS_FILESYSTEM_READ_FILE;
+    if (writes && refused(model, granted, LANDLOCK_ACCESS_FILESYSTEM_WRITE_FILE)) {
+        report_path("write", "File", target, absolute);
     } else if (reads && refused(model, granted, read_right)) {
-        report_path("read", whole_object_noun_for(status->st_mode), shown, absolute);
+        report_path("read", whole_object_noun_for(status->st_mode), target, absolute);
+    } else if (truncates && refused(model, granted, LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE)) {
+        report_path("write", "File", target, absolute);
     }
 }
 
 /* An open that creates its name. Landlock checks the creation in the parent first, and then, on
  * the new file, the write and read the open asks for. */
-static void judge_open_create(char *absolute, int flags, const struct policy_model *model) {
+static void judge_open_create(const struct task_view *task, const char *absolute, int flags,
+                              const struct policy_model *model) {
     char anchor[PATH_MAX];
     char shown[PATH_MAX];
-    if ((flags & O_DIRECTORY) != 0 || strip_trailing_slashes(absolute)
-        || !parent_accepts_change(absolute, anchor, shown)) {
+    if ((flags & O_DIRECTORY) != 0 || !parent_accepts_change(task, absolute, anchor, shown)) {
         return;
     }
     int access = flags & O_ACCMODE;
@@ -296,37 +352,46 @@ static void judge_open_create(char *absolute, int flags, const struct policy_mod
     }
 }
 
-/* An open, with flags from the call or from an openat2's open_how. */
+/* An open, with flags from the call or from an openat2's open_how. A name with a slash after it is
+ * followed by the walk, so a missing one ends the walk and is never created. */
 static void judge_open(const struct task_view *task, const struct named_object *object, int flags,
                        const struct policy_model *model) {
     char absolute[PATH_MAX];
+    char entry[PATH_MAX];
+    char target[PATH_MAX];
+    struct stat status;
     if ((flags & ~JUDGED_OPEN_FLAGS) != 0
-        || !read_absolute_name(task, object, absolute, sizeof(absolute))) {
+        || !read_absolute_name(task, object, absolute, sizeof(absolute))
+        || !resolve_as_task(task, absolute, false, entry, sizeof(entry))) {
         return;
     }
-    bool exclusive = (flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL);
-    struct stat status;
-    if (lstat(absolute, &status) != 0) {
-        if ((flags & O_CREAT) != 0) {
-            judge_open_create(absolute, flags, model);
+    if (lstat(entry, &status) != 0) {
+        if (errno == ENOENT && (flags & O_CREAT) != 0) {
+            judge_open_create(task, absolute, flags, model);
         }
         return;
     }
+    bool exclusive = (flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL);
     if (exclusive || (S_ISLNK(status.st_mode) && (flags & O_NOFOLLOW) != 0)
-        || stat(absolute, &status) != 0) {
+        || !resolve_as_task(task, absolute, true, target, sizeof(target))
+        || stat(target, &status) != 0
+        || ((flags & O_CREAT) != 0 && sticky_protected(target, &status))) {
         return;
     }
-    judge_open_existing(absolute, &status, flags, model);
+    judge_open_existing(target, &status, flags, absolute, model);
 }
 
 /* An openat2: judged as an open only for the first open_how layout with no resolve flag, since
- * the resolve flags change the walk in ways the mirror does not reproduce. */
+ * the resolve flags change the walk in ways the mirror does not reproduce, and only with a mode
+ * openat2 accepts: bits within 07777, and none at all unless the open creates. */
 static void judge_open_how(const struct task_view *task, const struct access_request *request,
                            const struct policy_model *model) {
     struct open_how how;
     if (request->open_how_size != OPEN_HOW_FIRST_SIZE
         || !read_command_bytes(task, request->open_how_address, &how, sizeof(how))
-        || how.resolve != 0 || how.flags > (uint64_t)INT_MAX) {
+        || how.resolve != 0 || how.flags > (uint64_t)INT_MAX
+        || (how.mode & ~OPEN_HOW_MODE_BITS) != 0
+        || ((how.flags & O_CREAT) == 0 && how.mode != 0)) {
         return;
     }
     judge_open(task, &request->objects[0], (int)how.flags, model);
@@ -337,21 +402,22 @@ static void judge_open_how(const struct task_view *task, const struct access_req
 static void judge_execute(const struct task_view *task, const struct access_request *request,
                           const struct policy_model *model) {
     char absolute[PATH_MAX];
-    char anchor[PATH_MAX];
-    char shown[PATH_MAX];
+    char entry[PATH_MAX];
+    char target[PATH_MAX];
     struct stat status;
     bool no_follow = (request->execute_flags & AT_SYMLINK_NOFOLLOW) != 0;
     if ((request->execute_flags & ~AT_SYMLINK_NOFOLLOW) != 0
         || !read_absolute_name(task, &request->objects[0], absolute, sizeof(absolute))
-        || lstat(absolute, &status) != 0 || (S_ISLNK(status.st_mode) && no_follow)
-        || stat(absolute, &status) != 0 || !S_ISREG(status.st_mode)
-        || !mount_allows(absolute, ST_NOEXEC) || !mode_allows(absolute, X_OK)
-        || !resolve_for_landlock(absolute, false, anchor, sizeof(anchor), shown, sizeof(shown))) {
+        || !resolve_as_task(task, absolute, false, entry, sizeof(entry))
+        || lstat(entry, &status) != 0 || (S_ISLNK(status.st_mode) && no_follow)
+        || !resolve_as_task(task, absolute, true, target, sizeof(target))
+        || stat(target, &status) != 0 || !S_ISREG(status.st_mode)
+        || !mount_allows(target, ST_NOEXEC) || !mode_allows(target, X_OK)) {
         return;
     }
-    if (refused(model, model_rights_along(model, anchor),
+    if (refused(model, model_rights_along(model, target),
                 LANDLOCK_ACCESS_FILESYSTEM_EXECUTE | LANDLOCK_ACCESS_FILESYSTEM_READ_FILE)) {
-        report_path("execute", "File", shown, absolute);
+        report_path("execute", "File", target, absolute);
     }
 }
 
@@ -360,12 +426,13 @@ static void judge_execute(const struct task_view *task, const struct access_requ
 static void judge_create_name(const struct task_view *task, const struct named_object *object,
                               mode_t type, const struct policy_model *model) {
     char absolute[PATH_MAX];
+    char entry[PATH_MAX];
     char anchor[PATH_MAX];
     char shown[PATH_MAX];
-    struct stat status;
     if (!read_absolute_name(task, object, absolute, sizeof(absolute))
-        || (strip_trailing_slashes(absolute) && !S_ISDIR(type)) || lstat(absolute, &status) == 0
-        || !parent_accepts_change(absolute, anchor, shown)) {
+        || (strip_trailing_slashes(absolute) && !S_ISDIR(type))
+        || !resolve_as_task(task, absolute, false, entry, sizeof(entry)) || !name_absent(entry)
+        || !parent_accepts_change(task, absolute, anchor, shown)) {
         return;
     }
     if (refused(model, model_rights_along(model, anchor), make_right_for(type))) {
@@ -394,19 +461,32 @@ static void judge_make_node(const struct task_view *task, const struct access_re
     judge_create_name(task, &request->objects[0], type, model);
 }
 
+/* A symlink, judged only when its target is a name the kernel accepts, since the target is read
+ * before the new name is looked at. */
+static void judge_make_symbolic_link(const struct task_view *task,
+                                     const struct access_request *request,
+                                     const struct policy_model *model) {
+    if (command_string_present(task, request->link_target_address)) {
+        judge_create_name(task, &request->objects[0], S_IFLNK, model);
+    }
+}
+
 /* An unlink or rmdir: the name must exist with the type the call expects, and Landlock checks the
  * removal in the parent. */
 static void judge_remove(const struct task_view *task, const struct access_request *request,
                          const struct policy_model *model) {
     char absolute[PATH_MAX];
+    char entry[PATH_MAX];
     char anchor[PATH_MAX];
     char shown[PATH_MAX];
     struct stat status;
     bool directory = (request->unlink_flags & AT_REMOVEDIR) != 0;
     if ((request->unlink_flags & ~AT_REMOVEDIR) != 0
         || !read_absolute_name(task, &request->objects[0], absolute, sizeof(absolute))
-        || (strip_trailing_slashes(absolute) && !directory) || lstat(absolute, &status) != 0
-        || S_ISDIR(status.st_mode) != directory || !parent_accepts_change(absolute, anchor, shown)) {
+        || (strip_trailing_slashes(absolute) && !directory)
+        || !resolve_as_task(task, absolute, false, entry, sizeof(entry))
+        || lstat(entry, &status) != 0 || S_ISDIR(status.st_mode) != directory
+        || !parent_accepts_change(task, absolute, anchor, shown)) {
         return;
     }
     if (refused(model, model_rights_along(model, anchor), remove_right_for(status.st_mode))) {
@@ -414,10 +494,13 @@ static void judge_remove(const struct task_view *task, const struct access_reque
     }
 }
 
-/* Both names of a rename or a link, made absolute and resolved to their parents. */
+/* Both names of a rename or a link, made absolute, their directories resolved, and resolved to
+ * their parents. */
 struct two_names {
     char from[PATH_MAX];
     char to[PATH_MAX];
+    char from_entry[PATH_MAX];
+    char to_entry[PATH_MAX];
     char from_anchor[PATH_MAX];
     char to_anchor[PATH_MAX];
     char from_shown[PATH_MAX];
@@ -427,32 +510,43 @@ struct two_names {
     bool to_exists;
 };
 
-/* Reads both names, and answers whether the kernel would reach Landlock: the source exists, a
- * trailing slash names a directory, the destination's parent accepts a change, the source's parent
- * accepts one too when the call removes the source (a rename, not a link) and otherwise resolves,
- * and both parents lie on one mount, since a call across mounts ends with EXDEV first. */
+/* Reads both names and strips their trailing slashes before either is looked up, and answers
+ * whether the kernel would reach Landlock: the source exists, the destination exists or is absent
+ * (not unreadable), a trailing slash names a directory, the destination's parent accepts a change,
+ * the source's parent accepts one too when the call removes the source (a rename, not a link) and
+ * otherwise resolves, and the call stays on one mount, since a call across mounts ends with EXDEV
+ * first. A rename compares the two parents' mounts, a link the source object's own mount with the
+ * destination parent's, as the kernel does. */
 static bool read_two_names(const struct task_view *task, const struct access_request *request,
                            bool source_removed, struct two_names *names) {
     if (!read_absolute_name(task, &request->objects[0], names->from, sizeof(names->from))
-        || !read_absolute_name(task, &request->objects[1], names->to, sizeof(names->to))
-        || lstat(names->from, &names->from_status) != 0) {
+        || !read_absolute_name(task, &request->objects[1], names->to, sizeof(names->to))) {
         return false;
     }
     bool from_slashes = strip_trailing_slashes(names->from);
     bool to_slashes = strip_trailing_slashes(names->to);
-    names->to_exists = lstat(names->to, &names->to_status) == 0;
-    if ((from_slashes || to_slashes) && !S_ISDIR(names->from_status.st_mode)) {
+    if (!resolve_as_task(task, names->from, false, names->from_entry, PATH_MAX)
+        || !resolve_as_task(task, names->to, false, names->to_entry, PATH_MAX)
+        || lstat(names->from_entry, &names->from_status) != 0) {
         return false;
     }
-    bool source_ready =
-        source_removed ? parent_accepts_change(names->from, names->from_anchor, names->from_shown)
-                       : resolve_for_landlock(names->from, true, names->from_anchor, PATH_MAX,
-                                              names->from_shown, PATH_MAX);
-    if (!source_ready || !parent_accepts_change(names->to, names->to_anchor, names->to_shown)) {
+    names->to_exists = lstat(names->to_entry, &names->to_status) == 0;
+    if ((!names->to_exists && errno != ENOENT)
+        || ((from_slashes || to_slashes) && !S_ISDIR(names->from_status.st_mode))) {
         return false;
     }
-    uint64_t from_mount = mount_of(names->from_anchor);
-    return from_mount != 0 && from_mount == mount_of(names->to_anchor);
+    bool source_ready = source_removed
+                            ? parent_accepts_change(task, names->from, names->from_anchor,
+                                                    names->from_shown)
+                            : resolve_for_landlock(task, names->from, true, names->from_anchor,
+                                                   PATH_MAX, names->from_shown, PATH_MAX);
+    if (!source_ready
+        || !parent_accepts_change(task, names->to, names->to_anchor, names->to_shown)) {
+        return false;
+    }
+    uint64_t source_mount = source_removed ? mount_of(names->from_anchor, 0)
+                                           : mount_of(names->from_entry, AT_SYMLINK_NOFOLLOW);
+    return source_mount != 0 && source_mount == mount_of(names->to_anchor, 0);
 }
 
 /* Whether path lies strictly beneath ancestor. */
@@ -524,7 +618,7 @@ static void judge_link(const struct task_view *task, const struct access_request
     static struct two_names names;
     if (request->link_flags != 0 || !read_two_names(task, request, false, &names) || names.to_exists
         || S_ISDIR(names.from_status.st_mode)
-        || !hard_link_allowed(names.from, &names.from_status)) {
+        || !hard_link_allowed(names.from_entry, &names.from_status)) {
         return;
     }
     mode_t from_mode = names.from_status.st_mode;
@@ -539,23 +633,23 @@ static void judge_link(const struct task_view *task, const struct access_request
     }
 }
 
-/* A truncate: a regular file the mode lets the task write, on a writable mount, of a length that
- * is not negative. Landlock checks TRUNCATE on the file. */
+/* A truncate: a regular file the mode lets the task write, on a writable mount, that is not
+ * append-only, of a length that is not negative. Landlock checks TRUNCATE on the file. */
 static void judge_truncate(const struct task_view *task, const struct access_request *request,
                            const struct policy_model *model) {
     char absolute[PATH_MAX];
-    char anchor[PATH_MAX];
-    char shown[PATH_MAX];
+    char target[PATH_MAX];
     struct stat status;
     if (request->truncate_length < 0
         || !read_absolute_name(task, &request->objects[0], absolute, sizeof(absolute))
-        || stat(absolute, &status) != 0 || !S_ISREG(status.st_mode)
-        || !mount_allows(absolute, ST_RDONLY) || !mode_allows(absolute, W_OK)
-        || !resolve_for_landlock(absolute, false, anchor, sizeof(anchor), shown, sizeof(shown))) {
+        || !resolve_as_task(task, absolute, true, target, sizeof(target))
+        || stat(target, &status) != 0 || !S_ISREG(status.st_mode)
+        || !mount_allows(target, ST_RDONLY) || !mode_allows(target, W_OK)
+        || append_only_or_unknown(target)) {
         return;
     }
-    if (refused(model, model_rights_along(model, anchor), LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE)) {
-        report_path("write", "File", shown, absolute);
+    if (refused(model, model_rights_along(model, target), LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE)) {
+        report_path("write", "File", target, absolute);
     }
 }
 
@@ -606,9 +700,9 @@ static void judge_bind_unix(const struct task_view *task, const struct access_re
     size_t path_room = length - offsetof(struct sockaddr_un, sun_path);
     char name[sizeof(address->sun_path) + 1];
     char absolute[PATH_MAX];
+    char entry[PATH_MAX];
     char anchor[PATH_MAX];
     char shown[PATH_MAX];
-    struct stat status;
     if (length <= offsetof(struct sockaddr_un, sun_path) || address->sun_path[0] == '\0') {
         return;
     }
@@ -616,7 +710,8 @@ static void judge_bind_unix(const struct task_view *task, const struct access_re
     if (!socket_is_unix(task, request->socket_descriptor)
         || !make_absolute(task, AT_FDCWD, name, absolute, sizeof(absolute))
         || !notification_still_valid(task) || strip_trailing_slashes(absolute)
-        || lstat(absolute, &status) == 0 || !parent_accepts_change(absolute, anchor, shown)) {
+        || !resolve_as_task(task, absolute, false, entry, sizeof(entry)) || !name_absent(entry)
+        || !parent_accepts_change(task, absolute, anchor, shown)) {
         return;
     }
     if (refused(model, model_rights_along(model, anchor), LANDLOCK_ACCESS_FILESYSTEM_MAKE_SOCKET)) {
@@ -694,7 +789,7 @@ void judge_and_report(const struct task_view *task, const struct access_request 
         judge_make_node(task, request, filesystem);
         return;
     case ACCESS_MAKE_SYMBOLIC_LINK:
-        judge_create_name(task, &request->objects[0], S_IFLNK, filesystem);
+        judge_make_symbolic_link(task, request, filesystem);
         return;
     case ACCESS_REMOVE:
         judge_remove(task, request, filesystem);
@@ -718,6 +813,7 @@ void judge_and_report(const struct task_view *task, const struct access_request 
 
 #ifdef PHOBOS_REPORTER_UNIT_TEST
 void reset_judge_for_tests(void) {
+    own_status_read = false;
     own_status_known = false;
 }
 #endif

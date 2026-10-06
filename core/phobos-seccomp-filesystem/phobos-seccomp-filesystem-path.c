@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <sys/statfs.h>
 #include <sys/uio.h>
 #include <unistd.h>
 
@@ -22,6 +24,19 @@ static constexpr size_t PROC_LINK_LENGTH = 64;
 
 /* What the kernel appends to the link of a directory that was removed. */
 static const char DELETED_SUFFIX[] = " (deleted)";
+
+/* The magic number of procfs, and the inode of its root. self and thread-self, the two links there
+ * that read differently for every process, live in that root. */
+static constexpr unsigned long PROC_FILESYSTEM_MAGIC = 0x9fa0;
+static constexpr ino_t PROC_ROOT_INODE = 1;
+
+/* As many symbolic links as the kernel follows on one walk before it answers ELOOP. */
+static constexpr int SYMBOLIC_LINKS_MAXIMUM = 40;
+
+/* The status lines that number the task's thread group and the task itself, as procfs counts them. */
+static const char THREAD_GROUP_KEY[] = "\nTgid:";
+static const char THREAD_KEY[] = "\nPid:";
+static constexpr int DECIMAL = 10;
 
 bool notification_still_valid(const struct task_view *task) {
     uint64_t id = task->id;
@@ -111,15 +126,180 @@ static bool creatable_name(const char *last) {
     return last[0] != '\0' && strcmp(last, ".") != 0 && strcmp(last, "..") != 0;
 }
 
-bool resolve_for_landlock(const char *absolute, bool parent, char *anchor, size_t anchor_size,
-                          char *shown, size_t shown_size) {
+/* Whether a directory is the root of a procfs, where self and thread-self live. An empty name is
+ * the root of the filesystem. */
+static bool is_proc_root(const char *directory) {
+    const char *path = directory[0] == '\0' ? "/" : directory;
+    struct statfs filesystem;
+    struct stat status;
+    return statfs(path, &filesystem) == 0
+           && (unsigned long)filesystem.f_type == PROC_FILESYSTEM_MAGIC
+           && stat(path, &status) == 0 && status.st_ino == PROC_ROOT_INODE;
+}
+
+/* The number a status line gives after key, or -1 when the status has no such line. */
+static long status_number(const char *status, const char *key) {
+    const char *line = strstr(status, key);
+    if (line == NULL) {
+        return -1;
+    }
+    const char *number = line + strlen(key);
+    char *end = NULL;
+    long value = strtol(number, &end, DECIMAL);
+    return end == number || value <= 0 ? -1 : value;
+}
+
+/* What self (thread == false) or thread-self (thread == true) reads as for the task whose status
+ * this is: its thread group, or its thread within that group, relative to the procfs root. */
+static bool task_link_target(const char *status, bool thread, char *out, size_t size) {
+    long group = status_number(status, THREAD_GROUP_KEY);
+    long task = status_number(status, THREAD_KEY);
+    if (group < 0 || task < 0) {
+        return false;
+    }
+    int written = thread ? snprintf(out, size, "%ld/task/%ld", group, task)
+                         : snprintf(out, size, "%ld", group);
+    return (size_t)written < size;
+}
+
+/* Reads the target of the symbolic link at path, whose last name is name in directory. self and
+ * thread-self of a procfs root read as they read for the task whose status is given; with no
+ * status, meeting one of them ends the walk. Either way the meeting is recorded in
+ * met_reader_link. */
+static bool link_target(const char *directory, const char *name, const char *path,
+                        const char *task_status, bool *met_reader_link, char *out, size_t size) {
+    bool self = strcmp(name, "self") == 0;
+    bool thread_self = strcmp(name, "thread-self") == 0;
+    if ((self || thread_self) && is_proc_root(directory)) {
+        *met_reader_link = true;
+        return task_status != NULL && task_link_target(task_status, thread_self, out, size);
+    }
+    ssize_t length = readlink(path, out, size - 1);
+    if (length <= 0 || (size_t)length >= size - 1) {
+        return false;
+    }
+    out[length] = '\0';
+    return true;
+}
+
+/* Whether nothing but slashes is left of a name. */
+static bool only_slashes(const char *rest) {
+    return rest[strspn(rest, "/")] == '\0';
+}
+
+/* Removes the last name of a resolved path, in which an empty string stands for the root. */
+static void drop_last_name(char *done) {
+    char *slash = strrchr(done, '/');
+    if (slash != NULL) {
+        *slash = '\0';
+    }
+}
+
+/* Whether one name of a walk is "." (dots == 1) or ".." (dots == 2). */
+static bool is_dot_name(const char *name, size_t length, size_t dots) {
+    return length == dots && strncmp(name, "..", dots) == 0;
+}
+
+/* Joins a resolved directory, in which an empty string stands for the root, and the first length
+ * bytes of a name into out, which holds PATH_MAX bytes. Answers false when the result does not
+ * fit. */
+static bool join_name(const char *done, const char *name, size_t length, char *out) {
+    return (size_t)snprintf(out, PATH_MAX, "%s/%.*s", done, (int)length, name) < PATH_MAX;
+}
+
+/* Walks an absolute name name by name, the way the kernel walks it: "." stays, ".." leaves the
+ * directory resolved so far, a symbolic link is read and walked in place of its name, and a name
+ * with a slash after it must be a directory and is followed. The last name is followed only with
+ * follow_last or a slash after it; otherwise it is joined unresolved and not examined. Answers false
+ * for a name that does not exist on the way, a file used as a directory, too many links, or a
+ * result that does not fit. Needs every directory on the way to be searchable by the supervisor. */
+static bool walk_name(const char *absolute, bool follow_last, const char *task_status,
+                      bool *met_reader_link, char *out, size_t size) {
+    char done[PATH_MAX];
+    char pending[PATH_MAX];
+    char candidate[PATH_MAX];
+    char name[PATH_MAX];
+    char target[PATH_MAX];
+    char joined[PATH_MAX];
+    int links = 0;
+    if (absolute[0] != '/'
+        || (size_t)snprintf(pending, sizeof(pending), "%s", absolute) >= sizeof(pending)) {
+        return false;
+    }
+    done[0] = '\0';
+    char *cursor = pending;
+    while (*(cursor += strspn(cursor, "/")) != '\0') {
+        size_t length = strcspn(cursor, "/");
+        char *rest = cursor + length;
+        bool slash_after = *rest == '/';
+        bool last = only_slashes(rest);
+        struct stat status;
+        if (is_dot_name(cursor, length, 1) || is_dot_name(cursor, length, 2)) {
+            if (length == 2) {
+                drop_last_name(done);
+            }
+            cursor = rest;
+            continue;
+        }
+        if (last && !follow_last && !slash_after) {
+            return join_name(done, cursor, length, candidate)
+                   && (size_t)snprintf(out, size, "%s", candidate) < size;
+        }
+        if (!join_name(done, cursor, length, candidate) || lstat(candidate, &status) != 0) {
+            return false;
+        }
+        if (!S_ISLNK(status.st_mode)) {
+            if ((!last || slash_after) && !S_ISDIR(status.st_mode)) {
+                return false;
+            }
+            memcpy(done, candidate, sizeof(done));
+            cursor = rest;
+            continue;
+        }
+        snprintf(name, sizeof(name), "%.*s", (int)length, cursor);
+        if (++links > SYMBOLIC_LINKS_MAXIMUM
+            || !link_target(done, name, candidate, task_status, met_reader_link, target,
+                            sizeof(target))
+            || (size_t)snprintf(joined, sizeof(joined), "%s%s", target, rest) >= sizeof(joined)) {
+            return false;
+        }
+        if (target[0] == '/') {
+            done[0] = '\0';
+        }
+        memcpy(pending, joined, sizeof(pending));
+        cursor = pending;
+    }
+    return (size_t)snprintf(out, size, "%s", done[0] == '\0' ? "/" : done) < size;
+}
+
+bool resolve_as_task(const struct task_view *task, const char *absolute, bool follow_last,
+                     char *out, size_t size) {
+    bool met_reader_link = false;
+    return walk_name(absolute, follow_last, task->status, &met_reader_link, out, size);
+}
+
+bool reads_alike_for_every_process(const char *absolute) {
+    char resolved[PATH_MAX];
+    bool met_reader_link = false;
+    (void)walk_name(absolute, true, NULL, &met_reader_link, resolved, sizeof(resolved));
+    return absolute[0] == '/' && !met_reader_link;
+}
+
+bool command_string_present(const struct task_view *task, uint64_t address) {
+    char text[PATH_MAX];
+    return read_command_string(task, address, text, sizeof(text)) && text[0] != '\0'
+           && notification_still_valid(task);
+}
+
+bool resolve_for_landlock(const struct task_view *task, const char *absolute, bool parent,
+                          char *anchor, size_t anchor_size, char *shown, size_t shown_size) {
     char resolved[PATH_MAX];
     char copy[PATH_MAX];
     if ((size_t)snprintf(copy, sizeof(copy), "%s", absolute) >= sizeof(copy) || copy[0] != '/') {
         return false;
     }
     if (!parent) {
-        return realpath(copy, resolved) != NULL
+        return resolve_as_task(task, copy, true, resolved, sizeof(resolved))
                && (size_t)snprintf(anchor, anchor_size, "%s", resolved) < anchor_size
                && (size_t)snprintf(shown, shown_size, "%s", resolved) < shown_size;
     }
@@ -132,7 +312,7 @@ bool resolve_for_landlock(const char *absolute, bool parent, char *anchor, size_
         snprintf(resolved, sizeof(resolved), "/");
     } else {
         *slash = '\0';
-        if (realpath(copy, resolved) == NULL) {
+        if (!resolve_as_task(task, copy, true, resolved, sizeof(resolved))) {
             return false;
         }
     }

@@ -56,8 +56,10 @@
 #undef main
 
 #include <poll.h>
+#include <signal.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
+#include <time.h>
 
 #include "../../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-model.h"
 #include "../../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-ruleset.h"
@@ -655,10 +657,11 @@ ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned l
     return (ssize_t)copied;
 }
 
-/* The command's /proc links. A link under /proc/42 that is not here does not exist. */
+/* The command's /proc links, and any other link a case fakes. A link under /proc/42 that is not
+ * here does not exist; a faked link with an empty target cannot be read. */
 static constexpr size_t FAKE_LINK_COUNT = 16;
 struct fake_link {
-    char path[64];
+    char path[PATH_MAX];
     char target[PATH_MAX];
 };
 static struct fake_link fake_links[FAKE_LINK_COUNT];
@@ -735,6 +738,7 @@ struct process_script {
     bool send_result;
     bool set_flags_fails;
     bool send_fails;
+    unsigned int sends_interrupted;
     bool calloc_fails;
     struct poll_step polls[SCRIPT_LENGTH];
     size_t poll_count;
@@ -1045,6 +1049,11 @@ int __wrap_ioctl(int descriptor, unsigned long request, ...) {
             script->every_response_continued
             && script->last_response.flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE
             && script->last_response.error == 0 && script->last_response.val == 0;
+        if (script->sends_interrupted > 0) {
+            script->sends_interrupted--;
+            errno = EINTR;
+            return -1;
+        }
         if (scripted() && script->send_fails) {
             errno = EINVAL;
             return -1;
@@ -1072,12 +1081,16 @@ int __wrap_ioctl(int descriptor, unsigned long request, ...) {
     return __real_ioctl(descriptor, request, argument);
 }
 
-/* A path the file mode refuses, a mount that is read-only or noexec, a mount that differs, a
- * statx that fails. Empty means none. */
+/* A path the file mode refuses the access bits in fake_refused_mode on, a mount that is
+ * read-only, noexec or nodev, a mount that differs, a file that is append-only, a statx that fails.
+ * Empty means none. */
 static char fake_refused_access[PATH_MAX];
+static int fake_refused_mode = R_OK | W_OK | X_OK;
 static char fake_read_only_mount[PATH_MAX];
 static char fake_noexec_mount[PATH_MAX];
+static char fake_nodev_mount[PATH_MAX];
 static char fake_other_mount[PATH_MAX];
+static char fake_append_only[PATH_MAX];
 static bool fake_statx_fails = false;
 
 static bool beneath_or_at(const char *path, const char *prefix) {
@@ -1088,7 +1101,8 @@ static bool beneath_or_at(const char *path, const char *prefix) {
 
 int __real_faccessat(int directory, const char *path, int mode, int flags);
 int __wrap_faccessat(int directory, const char *path, int mode, int flags) {
-    if (fake_refused_access[0] != '\0' && strcmp(path, fake_refused_access) == 0) {
+    if (fake_refused_access[0] != '\0' && strcmp(path, fake_refused_access) == 0
+        && (mode & fake_refused_mode) != 0) {
         errno = EACCES;
         return -1;
     }
@@ -1104,6 +1118,9 @@ int __wrap_statvfs(const char *path, struct statvfs *status) {
     if (result == 0 && beneath_or_at(path, fake_noexec_mount)) {
         status->f_flag |= ST_NOEXEC;
     }
+    if (result == 0 && beneath_or_at(path, fake_nodev_mount)) {
+        status->f_flag |= ST_NODEV;
+    }
     return result;
 }
 
@@ -1117,6 +1134,9 @@ int __wrap_statx(int directory, const char *path, int flags, unsigned int mask,
     int result = __real_statx(directory, path, flags, mask, status);
     if (result == 0 && beneath_or_at(path, fake_other_mount)) {
         status->stx_mnt_id += 1000;
+    }
+    if (result == 0 && fake_append_only[0] != '\0' && strcmp(path, fake_append_only) == 0) {
+        status->stx_attributes |= STATX_ATTR_APPEND;
     }
     return result;
 }
@@ -1191,18 +1211,6 @@ bool __wrap_read_small_file(const char *path, char *out, size_t size, size_t *le
     return true;
 }
 
-/* Whether realpath fails, as it does for a path that grew past PATH_MAX since it was examined. */
-static bool fake_realpath_fails = false;
-
-char *__real_realpath(const char *path, char *resolved);
-char *__wrap_realpath(const char *path, char *resolved) {
-    if (fake_realpath_fails) {
-        errno = ENAMETOOLONG;
-        return NULL;
-    }
-    return __real_realpath(path, resolved);
-}
-
 /* The supervisor's effective user, when a case fakes it. */
 static bool fake_euid_set = false;
 static uid_t fake_euid = 0;
@@ -1220,14 +1228,16 @@ static void reset_fakes(void) {
     fake_readlink("/proc/42/root", "/");
     fake_notification_valid = true;
     fake_refused_access[0] = '\0';
+    fake_refused_mode = R_OK | W_OK | X_OK;
     fake_read_only_mount[0] = '\0';
     fake_noexec_mount[0] = '\0';
+    fake_nodev_mount[0] = '\0';
     fake_other_mount[0] = '\0';
+    fake_append_only[0] = '\0';
     fake_statx_fails = false;
     fake_own_status = NULL;
     fake_unix_table = NULL;
     fake_euid_set = false;
-    fake_realpath_fails = false;
     fake_file_count = 0;
     memset(script, 0, sizeof(*script));
     script->every_response_continued = true;
@@ -1328,43 +1338,239 @@ static void test_reading_names(void) {
 
 static void test_resolving_names(void) {
     printf("\nResolving a name the way Landlock sees it\n");
+    static char own_status_text[PROC_STATUS_LENGTH];
+    __real_read_small_file("/proc/self/status", own_status_text, sizeof(own_status_text), NULL);
+    struct task_view task = fake_task(own_status_text);
     char anchor[PATH_MAX];
     char shown[PATH_MAX];
     check("an object resolves to itself",
-          resolve_for_landlock("/proc/self/..", false, anchor, sizeof(anchor), shown, sizeof(shown))
+          resolve_for_landlock(&task, "/proc/self/..", false, anchor, sizeof(anchor), shown,
+                               sizeof(shown))
               && strcmp(anchor, "/proc") == 0 && strcmp(shown, "/proc") == 0);
     check("a name to create resolves its parent and keeps the last name",
-          resolve_for_landlock("/proc/../tmp/new", true, anchor, sizeof(anchor), shown,
+          resolve_for_landlock(&task, "/proc/../tmp/new", true, anchor, sizeof(anchor), shown,
                                sizeof(shown))
               && strcmp(anchor, "/tmp") == 0 && strcmp(shown, "/tmp/new") == 0);
     check("a name directly in the root has the root as its parent",
-          resolve_for_landlock("/new", true, anchor, sizeof(anchor), shown, sizeof(shown))
+          resolve_for_landlock(&task, "/new", true, anchor, sizeof(anchor), shown, sizeof(shown))
               && strcmp(anchor, "/") == 0 && strcmp(shown, "/new") == 0);
     check("a missing object does not resolve",
-          !resolve_for_landlock("/no/such/thing", false, anchor, sizeof(anchor), shown,
+          !resolve_for_landlock(&task, "/no/such/thing", false, anchor, sizeof(anchor), shown,
                                 sizeof(shown)));
     check("a missing parent does not resolve",
-          !resolve_for_landlock("/no/such/thing", true, anchor, sizeof(anchor), shown,
+          !resolve_for_landlock(&task, "/no/such/thing", true, anchor, sizeof(anchor), shown,
                                 sizeof(shown)));
     check("a dot entry is no name to create",
-          !resolve_for_landlock("/tmp/..", true, anchor, sizeof(anchor), shown, sizeof(shown)));
+          !resolve_for_landlock(&task, "/tmp/..", true, anchor, sizeof(anchor), shown,
+                                sizeof(shown)));
     check("nor is a single dot",
-          !resolve_for_landlock("/tmp/.", true, anchor, sizeof(anchor), shown, sizeof(shown)));
+          !resolve_for_landlock(&task, "/tmp/.", true, anchor, sizeof(anchor), shown,
+                                sizeof(shown)));
     check("nor an empty last name",
-          !resolve_for_landlock("/tmp/", true, anchor, sizeof(anchor), shown, sizeof(shown)));
+          !resolve_for_landlock(&task, "/tmp/", true, anchor, sizeof(anchor), shown,
+                                sizeof(shown)));
     check("a relative name does not resolve",
-          !resolve_for_landlock("tmp/x", true, anchor, sizeof(anchor), shown, sizeof(shown)));
+          !resolve_for_landlock(&task, "tmp/x", true, anchor, sizeof(anchor), shown,
+                                sizeof(shown)));
     static char overlong[PATH_MAX + 8];
     memset(overlong, 'c', sizeof(overlong) - 1);
     overlong[0] = '/';
     overlong[sizeof(overlong) - 1] = '\0';
     check("a name longer than PATH_MAX does not resolve",
-          !resolve_for_landlock(overlong, false, anchor, sizeof(anchor), shown, sizeof(shown)));
+          !resolve_for_landlock(&task, overlong, false, anchor, sizeof(anchor), shown,
+                                sizeof(shown)));
     char small[4];
     check("a resolved path that does not fit is refused",
-          !resolve_for_landlock("/proc", false, small, sizeof(small), shown, sizeof(shown)));
+          !resolve_for_landlock(&task, "/proc", false, small, sizeof(small), shown,
+                                sizeof(shown)));
     check("a parent that does not fit is refused",
-          !resolve_for_landlock("/proc/new", true, small, sizeof(small), shown, sizeof(shown)));
+          !resolve_for_landlock(&task, "/proc/new", true, small, sizeof(small), shown,
+                                sizeof(shown)));
+}
+
+/* The judge's tree, built below, which the walking cases borrow. */
+static const char *in_tree(const char *relative);
+static void tree_link(const char *relative, const char *target);
+
+/* A child of the suite that sleeps until it is killed, its standard output on output, so that a
+ * case has a task whose /proc/self differs from the suite's. Its number is never the fake task's,
+ * whose /proc entries the fakes answer for: in a fresh namespace a child may well be given 42. */
+static pid_t start_sleeper(int output) {
+    pid_t child = 0;
+    do {
+        if (child == FAKE_PID) {
+            waitpid(child, NULL, 0);
+        }
+        child = fork();
+        if (child == 0) {
+            dup2(output, STDOUT_FILENO);
+            execl("/bin/sleep", "sleep", getpid() == FAKE_PID ? "0" : "60", (char *)NULL);
+            _exit(127);
+        }
+    } while (child == FAKE_PID);
+    struct timespec pause = {.tv_sec = 0, .tv_nsec = 50 * 1000 * 1000};
+    char path[64];
+    char name[64];
+    snprintf(path, sizeof(path), "/proc/%d/comm", (int)child);
+    for (int round = 0; round < 100; round++) {
+        if (__real_read_small_file(path, name, sizeof(name), NULL) && strcmp(name, "sleep\n") == 0) {
+            break;
+        }
+        nanosleep(&pause, NULL);
+    }
+    return child;
+}
+
+/* The resolved path of the program a task runs, as /proc/<pid>/exe names it, and whether that path
+ * can be reached here. Under an emulator the link may name the emulator, which a container need not
+ * be able to reach. */
+static bool program_of(pid_t pid, char *out) {
+    char link[64];
+    char program[PATH_MAX];
+    snprintf(link, sizeof(link), "/proc/%d/exe", (int)pid);
+    ssize_t length = __real_readlink(link, program, sizeof(program) - 1);
+    program[length < 0 ? 0 : length] = '\0';
+    return length > 0 && realpath(program, out) != NULL;
+}
+
+static void stop_sleeper(pid_t child) {
+    kill(child, SIGKILL);
+    waitpid(child, NULL, 0);
+}
+
+/* The suite's own status with its Tgid and Pid lines naming a different task. */
+static const char *status_naming(pid_t group, pid_t thread) {
+    static char text[PROC_STATUS_LENGTH];
+    static char copy[PROC_STATUS_LENGTH];
+    size_t used = 0;
+    char *state = NULL;
+    __real_read_small_file("/proc/self/status", copy, sizeof(copy), NULL);
+    for (char *line = strtok_r(copy, "\n", &state); line != NULL; line = strtok_r(NULL, "\n", &state)) {
+        if (strncmp(line, "Tgid:", strlen("Tgid:")) == 0) {
+            used += (size_t)snprintf(text + used, sizeof(text) - used, "Tgid:\t%d\n", (int)group);
+        } else if (strncmp(line, "Pid:", strlen("Pid:")) == 0) {
+            used += (size_t)snprintf(text + used, sizeof(text) - used, "Pid:\t%d\n", (int)thread);
+        } else {
+            used += (size_t)snprintf(text + used, sizeof(text) - used, "%s\n", line);
+        }
+    }
+    return text;
+}
+
+static void test_walking_names_as_the_task(void) {
+    printf("\nWalking a name as the task walks it\n");
+    reset_fakes();
+    int pipe_ends[2];
+    if (pipe(pipe_ends) != 0) {
+        perror("pipe");
+        exit(2);
+    }
+    pid_t child = start_sleeper(pipe_ends[1]);
+    char expected[PATH_MAX];
+    char out[PATH_MAX];
+    struct task_view task = fake_task(status_naming(child, child));
+    snprintf(expected, sizeof(expected), "/proc/%d", (int)child);
+    check("/proc/self is the task's thread group, not the supervisor's",
+          resolve_as_task(&task, "/proc/self", true, out, sizeof(out)) && strcmp(out, expected) == 0);
+    snprintf(expected, sizeof(expected), "/proc/%d/task/%d/status", (int)child, (int)child);
+    check("/proc/thread-self is the task's thread within it",
+          resolve_as_task(&task, "/proc/thread-self/status", true, out, sizeof(out))
+              && strcmp(out, expected) == 0);
+    char program[PATH_MAX];
+    bool reachable = program_of(child, program);
+    bool walked = resolve_as_task(&task, "/proc/self/exe", true, out, sizeof(out));
+    check("/proc/self/exe leads to the task's program",
+          reachable ? walked && strcmp(out, program) == 0 : !walked);
+    check("/dev/stdout of a task writing to a pipe leads nowhere a path names",
+          !resolve_as_task(&task, "/dev/stdout", true, out, sizeof(out)));
+    snprintf(expected, sizeof(expected), "/proc/%d/fd/1", (int)child);
+    check("without following the last name, /dev/stdout is the task's descriptor link",
+          resolve_as_task(&task, "/dev/fd/1", false, out, sizeof(out)) && strcmp(out, expected) == 0);
+    struct task_view nameless = fake_task("Name:\tx\nUid:\t0\n");
+    check("a status without a Tgid line refuses a walk through /proc/self",
+          !resolve_as_task(&nameless, "/proc/self/status", true, out, sizeof(out)));
+    struct task_view garbled = fake_task("Name:\tx\nTgid:\tmany\nPid:\t1\n");
+    check("so does one whose Tgid is no number",
+          !resolve_as_task(&garbled, "/proc/self/status", true, out, sizeof(out)));
+    tree_link("rw/self", "data");
+    check("a link named self outside procfs is read as it is",
+          resolve_as_task(&task, in_tree("rw/self"), true, out, sizeof(out))
+              && strcmp(out, in_tree("rw/data")) == 0);
+    unlink(in_tree("rw/self"));
+    tree_link("rw/loop", "loop");
+    check("a link that leads to itself ends the walk",
+          !resolve_as_task(&task, in_tree("rw/loop"), true, out, sizeof(out)));
+    check("a link not followed at the end is joined unread",
+          resolve_as_task(&task, in_tree("rw/loop"), false, out, sizeof(out))
+              && strcmp(out, in_tree("rw/loop")) == 0);
+    unlink(in_tree("rw/loop"));
+    check("a file used as a directory ends the walk",
+          !resolve_as_task(&task, in_tree("rw/data/x"), false, out, sizeof(out)));
+    check("a slash after a file ends the walk", !resolve_as_task(&task, in_tree("rw/data/"), false,
+                                                                 out, sizeof(out)));
+    check("a slash after a directory follows it",
+          resolve_as_task(&task, in_tree("rolink/"), false, out, sizeof(out))
+              && strcmp(out, in_tree("ro")) == 0);
+    check("a link before the last name is always followed",
+          resolve_as_task(&task, in_tree("rolink/file"), false, out, sizeof(out))
+              && strcmp(out, in_tree("ro/file")) == 0);
+    check("a relative link is walked from its own directory",
+          (tree_link("rw/up", "../ro"), resolve_as_task(&task, in_tree("rw/up/dir"), true, out,
+                                                        sizeof(out)))
+              && strcmp(out, in_tree("ro/dir")) == 0);
+    check("dot names stay or step up, and a step up from the root stays there",
+          resolve_as_task(&task, "/../.././tmp/./", true, out, sizeof(out))
+              && strcmp(out, "/tmp") == 0);
+    check("the root resolves to itself", resolve_as_task(&task, "///", true, out, sizeof(out))
+                                             && strcmp(out, "/") == 0);
+    fake_readlink(in_tree("rw/up"), "");
+    check("a link that cannot be read ends the walk",
+          !resolve_as_task(&task, in_tree("rw/up/dir"), true, out, sizeof(out)));
+    static char long_target[PATH_MAX];
+    memset(long_target, 'l', sizeof(long_target) - 1);
+    long_target[sizeof(long_target) - 1] = '\0';
+    fake_readlink(in_tree("rw/up"), long_target);
+    check("a link whose target fills the buffer ends the walk",
+          !resolve_as_task(&task, in_tree("rw/up/dir"), true, out, sizeof(out)));
+    long_target[PATH_MAX - 64] = '\0';
+    fake_readlink(in_tree("rw/up"), long_target);
+    static char long_rest[PATH_MAX];
+    snprintf(long_rest, sizeof(long_rest), "%s/%0128d", in_tree("rw/up"), 0);
+    check("a link whose target and rest do not fit ends the walk",
+          !resolve_as_task(&task, long_rest, true, out, sizeof(out)));
+    fake_link_count = 0;
+    fake_readlink("/proc/42/root", "/");
+    unlink(in_tree("rw/up"));
+    char small[4];
+    check("a resolved path that does not fit is refused",
+          !resolve_as_task(&task, "/proc", true, small, sizeof(small)));
+    check("a last name that does not fit is refused",
+          !resolve_as_task(&task, "/proc/new", false, small, sizeof(small)));
+    check("a rule through /proc/self does not read alike for every process",
+          !reads_alike_for_every_process("/proc/self/fd"));
+    check("nor one through /dev/stdout", !reads_alike_for_every_process("/dev/stdout"));
+    check("nor a relative one", !reads_alike_for_every_process("proc/self"));
+    check("a plain path does", reads_alike_for_every_process(in_tree("ro")));
+    check("and a missing one does too, the model refusing it on its own",
+          reads_alike_for_every_process(in_tree("ro/gone")));
+    stop_sleeper(child);
+    close(pipe_ends[0]);
+    close(pipe_ends[1]);
+}
+
+static void test_reading_strings(void) {
+    printf("\nWhether the command holds a name\n");
+    reset_fakes();
+    struct task_view task = fake_task("");
+    fake_string(NAME_ADDRESS, "/target");
+    check("a name is present", command_string_present(&task, NAME_ADDRESS));
+    fake_string(NAME_ADDRESS, "");
+    check("an empty one is not", !command_string_present(&task, NAME_ADDRESS));
+    check("nor one in unmapped memory", !command_string_present(&task, 0x900000));
+    fake_string(NAME_ADDRESS, "/target");
+    fake_notification_valid = false;
+    check("nor one read for a notification that vanished",
+          !command_string_present(&task, NAME_ADDRESS));
 }
 
 static void test_reading_small_files(void) {
@@ -1656,7 +1862,7 @@ static void test_opens_that_stay_silent(void) {
     snprintf(fake_refused_access, sizeof(fake_refused_access), "%s", secret);
     check("a file the mode refuses", silent(judged_open(secret, O_RDONLY)));
     snprintf(fake_refused_access, sizeof(fake_refused_access), "%s", in_tree("ro"));
-    check("a create in a directory the mode refuses",
+    check("a create in a directory the mode keeps the task from searching",
           silent(judged_open(in_tree("ro/new"), O_WRONLY | O_CREAT)));
     fake_refused_access[0] = '\0';
     snprintf(fake_read_only_mount, sizeof(fake_read_only_mount), "%s", in_tree("ro"));
@@ -1674,9 +1880,11 @@ static void test_opens_that_stay_silent(void) {
     check("a socket file", bound && silent(judged_open(in_tree("none/sock"), O_RDONLY)));
     close(socket_descriptor);
     unlink(in_tree("none/sock"));
-    fake_realpath_fails = true;
-    check("a file whose path no longer resolves", silent(judged_open(secret, O_RDONLY)));
-    fake_realpath_fails = false;
+    fake_readlink(in_tree("rw/link_to_none"), "");
+    check("a file whose link can no longer be read",
+          silent(judged_open(in_tree("rw/link_to_none"), O_RDONLY)));
+    fake_link_count = 0;
+    fake_readlink("/proc/42/root", "/");
     struct access_request arming;
     struct seccomp_data restrict_self = native_call(SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF, 0, 0, 0,
                                                     0, 0);
@@ -2086,6 +2294,188 @@ static void test_judging_truncation(void) {
                  line_for("write", "File", in_tree("ro/file"))) == 0);
 }
 
+static void test_judging_as_the_task(void) {
+    printf("\nA name the task resolves differently from the supervisor\n");
+    reset_fakes();
+    int output = open(in_tree("none/child-output"), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
+                      TREE_FILE_MODE);
+    int pipe_ends[2];
+    if (output < 0 || pipe(pipe_ends) != 0) {
+        perror("child output");
+        exit(2);
+    }
+    pid_t child = start_sleeper(output);
+    pid_t piped = start_sleeper(pipe_ends[1]);
+    char resolved_program[PATH_MAX];
+    bool reachable = program_of(child, resolved_program);
+    snprintf(task_status, sizeof(task_status), "%s", status_naming(child, child));
+    char expected[PATH_MAX * 3];
+    fake_string(NAME_ADDRESS, "/proc/self/exe");
+    snprintf(expected, sizeof(expected),
+             "Phobos Security Error: the program tried to illegally execute the File '%s' (named "
+             "as '/proc/self/exe') but was blocked by Phobos.\n",
+             resolved_program);
+    const char *executed = judged(native_call(__NR_execve, NAME_ADDRESS, 0, 0, 0, 0));
+    check("an execve of /proc/self/exe names the task's program",
+          reachable ? strcmp(executed, expected) == 0 : silent(executed));
+    snprintf(expected, sizeof(expected),
+             "Phobos Security Error: the program tried to illegally write the File '%s' (named "
+             "as '/dev/stdout') but was blocked by Phobos.\n",
+             in_tree("none/child-output"));
+    check("a write of /dev/stdout names the file the task's output goes to",
+          strcmp(judged_open("/dev/stdout", O_WRONLY), expected) == 0);
+    snprintf(expected, sizeof(expected),
+             "Phobos Security Error: the program tried to illegally read the Directory "
+             "'/proc/%d/fd' (named as '/proc/self/fd') but was blocked by Phobos.\n",
+             (int)child);
+    check("a read of /proc/self/fd names the task's descriptors, not the supervisor's",
+          strcmp(judged_open("/proc/self/fd", O_RDONLY | O_DIRECTORY), expected) == 0);
+    snprintf(task_status, sizeof(task_status), "%s", status_naming(piped, piped));
+    check("a write of /dev/stdout by a task writing to a pipe is silent",
+          silent(judged_open("/dev/stdout", O_WRONLY)));
+    stop_sleeper(child);
+    stop_sleeper(piped);
+    close(output);
+    close(pipe_ends[0]);
+    close(pipe_ends[1]);
+    unlink(in_tree("none/child-output"));
+    __real_read_small_file("/proc/self/status", task_status, sizeof(task_status), NULL);
+}
+
+/* Refuses, in turn, the file mode of the tree's read-only directory with only the given bits. */
+static void refuse_mode_on(const char *relative, int bits) {
+    snprintf(fake_refused_access, sizeof(fake_refused_access), "%s", in_tree(relative));
+    fake_refused_mode = bits;
+}
+
+static void test_judging_what_the_kernel_checks_first(void) {
+    printf("\nWhat the kernel checks before Landlock, and what only after it\n");
+    reset_fakes();
+    refuse_mode_on("ro", W_OK);
+    check("a create where the mode refuses writing the directory is still Landlock's refusal",
+          strcmp(judged_open(in_tree("ro/new"), O_WRONLY | O_CREAT),
+                 line_for("create", "File", in_tree("ro/new"))) == 0);
+    check("and so is a mkdir there",
+          strcmp(judged_name_call(__NR_mkdirat, in_tree("ro/newdir"), FILE_MODE),
+                 line_for("create", "Directory", in_tree("ro/newdir"))) == 0);
+    check("and an unlink there",
+          strcmp(judged_name_call(__NR_unlinkat, in_tree("ro/file"), 0),
+                 line_for("delete", "File", in_tree("ro/file"))) == 0);
+    refuse_mode_on("ro", X_OK);
+    check("while a directory the mode keeps the task from searching is silent",
+          silent(judged_open(in_tree("ro/new"), O_WRONLY | O_CREAT)));
+    reset_fakes();
+    snprintf(fake_other_mount, sizeof(fake_other_mount), "%s", in_tree("rw/data"));
+    check("a link whose source is a mount of its own is silent, the kernel answering EXDEV",
+          silent(judged_two_names(&judge_model, __NR_linkat, in_tree("rw/data"), in_tree("ro/hard"),
+                                  0)));
+    check("while a rename of it is judged by its parent's mount",
+          strcmp(judged_two_names(&judge_model, __NR_renameat2, in_tree("rw/data"),
+                                  in_tree("ro/moved"), 0),
+                 line_for("create", "File", in_tree("ro/moved"))) == 0);
+    fake_other_mount[0] = '\0';
+    fake_string(NAME_ADDRESS, in_tree("rw/data"));
+    check("a rename whose second name cannot be read is silent",
+          silent(judged(native_call(__NR_renameat2, AT_FDCWD_ARGUMENT, NAME_ADDRESS,
+                                    AT_FDCWD_ARGUMENT, 0x900000, 0))));
+    fake_string(OTHER_NAME_ADDRESS, "");
+    fake_string(NAME_ADDRESS, in_tree("ro/link"));
+    check("a symbolic link with an empty target is silent",
+          silent(judged(native_call(__NR_symlinkat, OTHER_NAME_ADDRESS, AT_FDCWD_ARGUMENT,
+                                    NAME_ADDRESS, 0, 0))));
+    check("and one whose target cannot be read",
+          silent(judged(native_call(__NR_symlinkat, 0x900000, AT_FDCWD_ARGUMENT, NAME_ADDRESS, 0,
+                                    0))));
+    static char long_name[PATH_MAX];
+    snprintf(long_name, sizeof(long_name), "%s/%0300d", in_tree("ro"), 0);
+    check("a last name longer than a name may be is silent for a mkdir",
+          silent(judged_name_call(__NR_mkdirat, long_name, FILE_MODE)));
+    check("and for a creating open", silent(judged_open(long_name, O_WRONLY | O_CREAT)));
+    check("and as a rename's destination",
+          silent(judged_two_names(&judge_model, __NR_renameat2, in_tree("rw/data"), long_name, 0)));
+    check("O_TRUNC on a directory is silent",
+          silent(judged_open(in_tree("none/dir"), O_RDONLY | O_TRUNC)));
+    refuse_mode_on("none/fifo", W_OK);
+    check("O_TRUNC on a named pipe the mode will not let be written is silent",
+          silent(judged_open(in_tree("none/fifo"), O_RDONLY | O_NONBLOCK | O_TRUNC)));
+    reset_fakes();
+    check("a truncating read that Landlock refuses to read is a read, the truncation coming after",
+          strcmp(judged_open(in_tree("none/secret"), O_RDONLY | O_TRUNC),
+                 line_for("read", "File", in_tree("none/secret"))) == 0);
+    struct open_how how = {.flags = O_RDONLY, .mode = 0644, .resolve = 0};
+    struct seccomp_data openat2_call = native_call(__NR_openat2, AT_FDCWD_ARGUMENT, NAME_ADDRESS,
+                                                   OTHER_NAME_ADDRESS, sizeof(how), 0);
+    fake_string(NAME_ADDRESS, in_tree("none/secret"));
+    fake_memory(OTHER_NAME_ADDRESS, &how, sizeof(how));
+    check("an openat2 with a mode but no O_CREAT is silent", silent(judged(openat2_call)));
+    how.flags = O_WRONLY | O_CREAT;
+    how.mode = 010644;
+    fake_string(NAME_ADDRESS, in_tree("ro/new"));
+    fake_memory(OTHER_NAME_ADDRESS, &how, sizeof(how));
+    check("and one with a mode bit outside 07777", silent(judged(openat2_call)));
+    how.mode = 0644;
+    fake_memory(OTHER_NAME_ADDRESS, &how, sizeof(how));
+    check("while a creating one with a plain mode is judged",
+          strcmp(judged(openat2_call), line_for("create", "File", in_tree("ro/new"))) == 0);
+    check("a rename of a link to a directory, named with a trailing slash, is silent",
+          silent(judged_two_names(&judge_model, __NR_renameat2, in_tree("rolink/"),
+                                  in_tree("rw/x"), 0)));
+    check("a device Landlock refuses to read is a line",
+          strcmp(judged_open("/dev/null", O_RDONLY), line_for("read", "File", "/dev/null")) == 0);
+    snprintf(fake_nodev_mount, sizeof(fake_nodev_mount), "/dev");
+    check("but not on a nodev mount", silent(judged_open("/dev/null", O_RDONLY)));
+    fake_nodev_mount[0] = '\0';
+    snprintf(fake_append_only, sizeof(fake_append_only), "%s", in_tree("ro/file"));
+    check("a write of an append-only file without O_APPEND is silent",
+          silent(judged_open(in_tree("ro/file"), O_WRONLY)));
+    check("and a truncation of it", silent(judged_open(in_tree("ro/file"), O_RDONLY | O_TRUNC)));
+    fake_string(NAME_ADDRESS, in_tree("ro/file"));
+    check("and a truncate of it",
+          silent(judged(native_call(__NR_truncate, NAME_ADDRESS, 0, 0, 0, 0))));
+    check("while an appending write of it is judged",
+          strcmp(judged_open(in_tree("ro/file"), O_WRONLY | O_APPEND),
+                 line_for("write", "File", in_tree("ro/file"))) == 0);
+    fake_append_only[0] = '\0';
+    fake_statx_fails = true;
+    check("a write whose attributes cannot be told is silent",
+          silent(judged_open(in_tree("ro/file"), O_WRONLY)));
+    check("while a read needs no attributes and is judged",
+          !silent(judged_open(in_tree("none/secret"), O_RDONLY)));
+    fake_statx_fails = false;
+}
+
+static void test_judging_sticky_directories(void) {
+    printf("\nAn O_CREAT open of a file another user owns in a sticky directory\n");
+    reset_fakes();
+    char sticky_file[] = "/tmp/phobos-sticky-XXXXXX";
+    int descriptor = mkstemp(sticky_file);
+    struct stat directory;
+    if (descriptor < 0 || stat("/tmp", &directory) != 0 || (directory.st_mode & S_ISVTX) == 0
+        || (directory.st_mode & S_IWOTH) == 0) {
+        perror("a file in a sticky /tmp");
+        exit(2);
+    }
+    close(descriptor);
+    if (__real_geteuid() == 0) {
+        if (chown(sticky_file, FAKE_CHILD_PID, FAKE_CHILD_PID) != 0) {
+            perror("chown");
+            exit(2);
+        }
+    } else {
+        fake_euid_set = true;
+        fake_euid = FAKE_CHILD_PID;
+    }
+    check("the kernel's protection ends it before Landlock, so it is silent",
+          silent(judged_open(sticky_file, O_WRONLY | O_CREAT)));
+    check("while the same open without O_CREAT is judged",
+          strcmp(judged_open(sticky_file, O_WRONLY), line_for("write", "File", sticky_file)) == 0);
+    check("as is an O_CREAT open of a file in a directory that is not sticky",
+          strcmp(judged_open(in_tree("ro/file"), O_WRONLY | O_CREAT),
+                 line_for("write", "File", in_tree("ro/file"))) == 0);
+    unlink(sticky_file);
+    reset_fakes();
+}
+
 /* A bind of a UNIX socket on descriptor 3 to a path name. */
 static const char *judged_unix_bind(const char *path, size_t length) {
     struct sockaddr_un address;
@@ -2361,6 +2751,11 @@ static void test_arming_and_membership(void) {
     check("a call the reporter does not decode is continued all the same",
           silent(serviced(native_call(__NR_getpid, 0, 0, 0, 0, 0)))
               && script->last_response.flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+    unsigned int sent_before = script->responses_sent;
+    script->sends_interrupted = 2;
+    check("a CONTINUE whose send a signal interrupts is sent again until it is delivered",
+          silent(serviced(native_call(__NR_getpid, 0, 0, 0, 0, 0)))
+              && script->responses_sent == sent_before + 3 && script->sends_interrupted == 0);
     check("every answer of the run was CONTINUE with error and value 0",
           script->responses_sent > 0 && script->every_response_continued);
 }
@@ -2370,8 +2765,8 @@ static void test_arming_in_order(void) {
     start_reporter();
     const char *network_enforcer[] = {"enforcer", "--no-filesystem", "--close-bind",
                                       "--bind-tcp", "8080", "--", "bash", NULL};
-    const char *filesystem_enforcer[] = {"enforcer", "--rights=rx", in_tree("ro"), "--",
-                                         "/bin/cat", NULL};
+    const char *filesystem_enforcer[] = {"enforcer", "--mark-reported-domain", "--rights=rx",
+                                         in_tree("ro"), "--", "/bin/cat", NULL};
     check("the network enforcer arms", silent(arm_with(network_enforcer, ARMED_FILTERS - 1)));
     check("only the bind model", reporter_current_state() == REPORTER_NETWORK_ARMED);
     fake_filters(MARKED_FILTERS);
@@ -2408,8 +2803,8 @@ static void test_arming_in_order(void) {
 static void test_arming_refusals(void) {
     printf("\nWhat does not arm, or turns reporting off\n");
     start_reporter();
-    const char *filesystem_enforcer[] = {"enforcer", "--rights=rx", in_tree("ro"), "--",
-                                         "/bin/cat", NULL};
+    const char *filesystem_enforcer[] = {"enforcer", "--mark-reported-domain", "--rights=rx",
+                                         in_tree("ro"), "--", "/bin/cat", NULL};
     fake_readlink("/proc/42/exe", "/usr/bin/python3");
     fake_cmdline(filesystem_enforcer);
     fake_filters(ARMED_FILTERS);
@@ -2442,10 +2837,27 @@ static void test_arming_refusals(void) {
           silent(serviced(native_call(__NR_openat, AT_FDCWD_ARGUMENT, NAME_ADDRESS, O_RDONLY, 0,
                                       0))));
     start_reporter();
-    const char *missing_rule[] = {"enforcer", "--rights=r", in_tree("ro/gone"), "--", "/bin/cat",
-                                  NULL};
+    const char *missing_rule[] = {"enforcer", "--mark-reported-domain", "--rights=r",
+                                  in_tree("ro/gone"), "--", "/bin/cat", NULL};
     check("rules that cannot be modelled turn reporting off",
-          strstr(arm_with(missing_rule, ARMED_FILTERS), notice) != NULL);
+          strstr(arm_with(missing_rule, ARMED_FILTERS), "could not be read the way the enforcer "
+                                                        "reads them")
+              != NULL);
+    start_reporter();
+    const char *unmarked[] = {"enforcer", "--rights=rx", in_tree("ro"), "--", "/bin/cat", NULL};
+    check("an enforcer not asked to mark its domain turns reporting off",
+          strstr(arm_with(unmarked, ARMED_FILTERS), "was not asked to mark its domain") != NULL
+              && reporter_current_state() == REPORTER_FILESYSTEM_ARMED);
+    fake_filters(MARKED_FILTERS);
+    fake_string(NAME_ADDRESS, in_tree("none/secret"));
+    check("after which nothing is judged either",
+          silent(serviced(native_call(__NR_openat, AT_FDCWD_ARGUMENT, NAME_ADDRESS, O_RDONLY, 0,
+                                      0))));
+    start_reporter();
+    const char *through_self[] = {"enforcer", "--mark-reported-domain", "--rights=r",
+                                  "/proc/self/fd", "--", "/bin/cat", NULL};
+    check("a rule through /proc/self, which the enforcer opened as itself, turns reporting off",
+          strstr(arm_with(through_self, ARMED_FILTERS), "/proc/self or /proc/thread-self") != NULL);
     start_reporter();
     check("a status that does not count the filters turns reporting off",
           strstr(arm_with(filesystem_enforcer, -1), notice) != NULL);
@@ -2597,6 +3009,12 @@ static void test_answering_refusals(void) {
     check("every call of the class, on both ABIs, gets error -EACCES, value 0 and flags 0",
           every_one_refused && script->responses_sent > 0);
     check("and not one of them was continued", script->last_response.flags == 0);
+    unsigned int sent_before = script->responses_sent;
+    script->sends_interrupted = 2;
+    refusal_answered(native_call(__NR_setsid, 0, 0, 0, 0, 0), REPORT_LAYER_TIMEOUT);
+    check("a refusal whose send a signal interrupts is sent again until it is delivered",
+          script->responses_sent == sent_before + 3 && script->sends_interrupted == 0
+              && refused_exactly(&script->last_response, FAKE_NOTIFICATION_ID));
     reset_report_for_tests();
     check("setsid leaves the Session",
           strcmp(refusal_answered(native_call(__NR_setsid, 0, 0, 0, 0, 0), REPORT_LAYER_TIMEOUT),
@@ -3196,6 +3614,8 @@ int main(int argument_count, char *arguments[]) {
     __real_read_small_file("/proc/self/status", task_status, sizeof(task_status), NULL);
     test_reading_names();
     test_resolving_names();
+    test_walking_names_as_the_task();
+    test_reading_strings();
     test_reading_small_files();
     test_judging_opens();
     test_opens_that_stay_silent();
@@ -3207,6 +3627,9 @@ int main(int argument_count, char *arguments[]) {
     test_judging_renames();
     test_judging_links();
     test_judging_truncation();
+    test_judging_as_the_task();
+    test_judging_what_the_kernel_checks_first();
+    test_judging_sticky_directories();
     test_judging_unix_binds();
     test_judging_port_binds();
     test_arming_and_membership();

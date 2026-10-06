@@ -6,10 +6,13 @@
  * changes what the kernel does: the call is continued whatever the judgement says, and Landlock
  * alone decides it. So every doubt is resolved towards silence. A call is judged only when every
  * flag it carries is in the plan's whitelist, and only when nothing the kernel checks before
- * Landlock would end it first (a missing name, an existing one, the file mode, a read-only or
- * noexec mount, a type mismatch, a final symbolic link under a no-follow flag, two mounts). A task
- * whose credentials or root differ from the supervisor's is not judged at all, because the
- * supervisor could not tell the file mode's refusal from Landlock's.
+ * Landlock would end it first (a missing name, an existing one, the file mode, a read-only,
+ * noexec or nodev mount, an append-only file, the protection of sticky directories, a type
+ * mismatch, a final symbolic link under a no-follow flag, two mounts). Every name is resolved as
+ * the kernel resolves it for the task, /proc/self and /proc/thread-self included, so the object
+ * judged is the task's and not the supervisor's. A task whose credentials or root differ from the
+ * supervisor's is not judged at all, because the supervisor could not tell the file mode's refusal
+ * from Landlock's.
  */
 #ifndef PHOBOS_SECCOMP_FILESYSTEM_JUDGE_H
 #define PHOBOS_SECCOMP_FILESYSTEM_JUDGE_H

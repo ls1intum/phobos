@@ -4,6 +4,7 @@
 #include "phobos-seccomp-filesystem-access.h"
 #include "phobos-seccomp-filesystem-path.h"
 
+#include <errno.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,8 +18,7 @@
 static constexpr size_t ARGUMENT_AREA = 2U << 20;
 static constexpr size_t ARGUMENT_COUNT_MAXIMUM = 16384;
 
-/* Room for /proc/<pid>/status and for a path under /proc/<pid>. */
-static constexpr size_t STATUS_LENGTH = 8192;
+/* Room for a path under /proc/<pid>. */
 static constexpr size_t PROC_PATH_LENGTH = 64;
 
 /* Room for a refusal the policy module words. */
@@ -41,7 +41,7 @@ static struct argument_slot slots[2];
 static struct options scratch_options;
 static struct policy_model filesystem_model;
 static struct policy_model network_model;
-static char status_text[STATUS_LENGTH];
+static char status_text[PROC_STATUS_LENGTH];
 static enum reporter_state state = REPORTER_UNARMED;
 static char enforcer_path[PATH_MAX];
 static bool enforcer_known = false;
@@ -77,14 +77,18 @@ bool reporter_handles(const struct seccomp_notif *request) {
 }
 
 /* Lets the kernel run the trapped call unchanged. This is the only answer an observation trap ever
- * gets. A send that finds the task gone fails with ENOENT, which is nobody's concern. */
+ * gets. A send that finds the task gone fails with ENOENT, which is nobody's concern. A send
+ * interrupted by a signal while it waits for the filter's lock fails with EINTR and is sent again:
+ * the notification has been received, so the kernel never offers it a second time, and the call
+ * would otherwise wait until its task is signalled. */
 static void answer_continue(int notify_descriptor, struct seccomp_notif_resp *response, __u64 id) {
     memset(response, 0, sizeof(*response));
     response->id = id;
     response->val = 0;
     response->error = 0;
     response->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
-    (void)ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_SEND, response);
+    while (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_SEND, response) != 0 && errno == EINTR) {
+    }
 }
 
 /* How many seccomp filters a status says its task carries, or -1 when it does not say. */
@@ -157,14 +161,36 @@ static void turn_filesystem_reporting_off(const char *reason) {
             reason);
 }
 
+/* Whether every rule of the model names a path that reaches the same object for the supervisor as
+ * for the enforcer, which opened it as itself. */
+static bool rules_read_alike(const struct policy_model *model) {
+    for (size_t number = 0; number < model->options.path_rule_count; number++) {
+        if (!reads_alike_for_every_process(model->options.rules[number].path)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* Builds the filesystem model from the filesystem enforcer's command line and records the filter
- * count every task of its domain will carry one more of. */
+ * count every task of its domain will carry one more of. Only an enforcer that marks its domain
+ * arms anything, since without the marker no task could be told to be inside it. */
 static void arm_filesystem(const struct task_view *task, struct argument_slot *slot) {
     char error[REFUSAL_LENGTH];
+    if (!scratch_options.mark_reported_domain) {
+        turn_filesystem_reporting_off("the filesystem enforcer was not asked to mark its domain");
+        return;
+    }
     if (!build_policy_model(slot->count, slot->vector, model_version, &filesystem_model, error,
                             sizeof(error))) {
         turn_filesystem_reporting_off("the enforcer's rules could not be read the way the "
                                       "enforcer reads them");
+        return;
+    }
+    if (!rules_read_alike(&filesystem_model)) {
+        turn_filesystem_reporting_off("a rule names a path through /proc/self or "
+                                      "/proc/thread-self, which reads differently for the "
+                                      "reporter");
         return;
     }
     armed_filter_count = filter_count_in(task->status);

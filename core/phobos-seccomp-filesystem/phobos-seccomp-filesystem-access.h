@@ -59,6 +59,7 @@ struct access_request {
     int unlink_flags;                 /* unlinkat, and AT_REMOVEDIR for rmdir */
     int execute_flags;                /* execveat */
     int link_flags;                   /* linkat */
+    uint64_t link_target_address;     /* symlinkat, symlink: where the link's target lies */
     int64_t truncate_length;          /* truncate */
     int socket_descriptor;            /* bind: the socket */
     uint32_t socket_address_length;   /* bind: object 0 points at the address, of this length */

@@ -1812,7 +1812,7 @@ static void test_report_marker(void) {
     check("of one instruction that allows everything",
           record->seccomp_length == 1 && record->seccomp_first_code == (BPF_RET | BPF_K)
               && record->seccomp_first_value == SECCOMP_RET_ALLOW);
-    check("after the restriction, so the enforcer itself is not marked",
+    check("after the restriction, so the reporter counts the enforcer's filters before the marker",
           record->restricted_at != 0 && record->seccomp_at > record->restricted_at);
     expect_exit("an unmarked run goes through", 0, unmarked);
     check("and installs no filter", record->seccomp_calls == 0);

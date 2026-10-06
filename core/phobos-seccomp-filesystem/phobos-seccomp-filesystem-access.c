@@ -100,6 +100,7 @@ static bool decode_legacy_call(const struct seccomp_data *data, struct access_re
     case __NR_symlink:
         request->kind = ACCESS_MAKE_SYMBOLIC_LINK;
         name_object(request, 0, working_directory, data->args[1]);
+        request->link_target_address = data->args[0];
         return true;
     default:
         return false;
@@ -182,6 +183,7 @@ bool decode_trapped_call(const struct seccomp_data *data, struct access_request 
     case __NR_symlinkat:
         request->kind = ACCESS_MAKE_SYMBOLIC_LINK;
         name_object(request, 0, data->args[1], data->args[2]);
+        request->link_target_address = data->args[0];
         return true;
     case __NR_truncate:
         request->kind = ACCESS_TRUNCATE;
