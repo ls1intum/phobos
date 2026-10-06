@@ -1,0 +1,30 @@
+strace -- version 6.8
+
+Captured in the prune image (docker/prune_phase/layers/Dockerfile on the run-phase image), arm64,
+Linux 7.0 (Docker Desktop), Landlock ABI 8, as root in an ordinary container with --network none:
+
+  strace -f -qq -y -s 4096 -o basic-full.txt \
+    -e trace=%file,%network,%process,%desc,landlock_restrict_self,setsid,setpgid,ioctl \
+    phobos.sh --config <[read] and [execute] on /usr, /lib, /bin> -- \
+    bash -c 'cat /etc/hostname; mkdir /etc/x; touch "/tmp/a\"b<newline>c"; exec 3<>/dev/tcp/10.0.0.1/80'
+
+basic.txt keeps 127 of its lines, unchanged and in their order: the network layer's port-only
+enforcer (its execve with --no-filesystem, its landlock_restrict_self and the connect guard's
+refusals of its own nscd lookups), the clone that started the filesystem layer's process, and for
+that process and the processes it started every execve, clone, socket, connect, mkdirat and
+landlock_restrict_self line and every refused call, with each <unfinished ...> half kept exactly
+when its <... resumed> half is.
+
+AT_FDCWD is decorated: -y prints it as AT_FDCWD</var/tmp/testing-dir>, so a relative path is
+resolved against the decoration and the per-process working directory is only a fallback.
+
+Sockets are decorated as <socket:[inode]> under -y, without the protocol, so a socket's family and
+type come from the socket() call that returned the descriptor.
+
+-qq suppresses the "+++ exited with" lines; none appear in the capture.
+
+--seccomp-bpf is not used: strace's filter answers SECCOMP_RET_TRACE, the connect guard's filter
+answers SECCOMP_RET_USER_NOTIF for the calls it supervises, which takes precedence, and the guard's
+refusal of the connect to 10.0.0.1 was missing from a trace taken with it. Measured beside it: a
+traced run of the same chain around /bin/cat took 5.8 s without it, 2.3 s with it, and 0.6 s
+untraced.
