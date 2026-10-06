@@ -48,6 +48,18 @@ SKIPPED = "skipped"
 UNREADABLE = "unreadable"
 
 
+# The statuses phobos.sh ends with when it stopped a run itself (phobos-constants.sh): usage,
+# PHB-EPOLICY, PHB-ERUNTIME, PHB-ESTATUS and the enforcer's refusal. A command may end with them too,
+# so they mean a stop only beside Phobos's own marker printed before the command started (A.6.4).
+PHOBOS_STOP_STATUSES = frozenset({2, 11, 15, 16, 125})
+# The lines that mark such a stop on stderr: the usage text and the error codes.
+PHOBOS_STOP_MARKERS = ("Usage:", "USAGE", "(PHB-EPOLICY)", "(PHB-ERUNTIME)", "(PHB-ESTATUS)")
+# The prefixes of the enforcers' own lines. A refusal under one of them is a stop; their warnings,
+# printed on every run (such as a Landlock version that cannot close UDP bind), are not.
+ENFORCER_PREFIXES = ("[phobos-landlock-filesystem-and-networksystem]", "[phobos-seccomp-networksystem]",
+                     "[phobos-seccomp-timeoutsystem]", "[phobos-seccomp-filesystem]")
+
+
 @dataclasses.dataclass(frozen=True)
 class Verdict:
     """What a run produced.
@@ -116,6 +128,26 @@ def read_verdict(status: int, log_text: str, report_paths: list[pathlib.Path]) -
         no_source=matches_any(NO_SOURCE_PATTERNS, log_text),
         infra_failure=infra,
     )
+
+
+def phobos_stopped(status: int, stderr_before_command: str) -> str | None:
+    """The line showing Phobos itself stopped a run before its command started, or None (A.6.4).
+
+    `stderr_before_command` is what the run printed on stderr before the command started; a caller
+    that cannot tell where that was passes the whole of it. A run counts as stopped by Phobos only
+    when its status is one of PHOBOS_STOP_STATUSES and that text holds one of Phobos's markers: the
+    usage text, an error code, or an enforcer's line that is not a warning. Such a run is never a
+    verdict but a defect of the caller, because reading it as "the policy is too narrow" would turn a
+    malformed candidate into more grants.
+    """
+    if status not in PHOBOS_STOP_STATUSES:
+        return None
+    for line in stderr_before_command.splitlines():
+        if any(marker in line for marker in PHOBOS_STOP_MARKERS):
+            return line
+        if line.startswith(ENFORCER_PREFIXES) and " warning: " not in line:
+            return line
+    return None
 
 
 def same_outcome(first: Verdict, second: Verdict) -> bool:

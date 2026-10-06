@@ -5,6 +5,8 @@ from __future__ import annotations
 import pathlib
 import sys
 
+import pytest
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "var" / "tmp" / "helpers"))
 
@@ -96,6 +98,28 @@ def test_a_report_cut_short_never_agrees_with_a_run_without_tests(tmp_path):
     assert cut.tests_ran
     assert cut.exit_class == "tests-failed"
     assert not verdict.same_outcome(cut, verdict.read_verdict(0, "", []))
+
+
+@pytest.mark.parametrize(("status", "stderr"), [
+    (11, "Policy invalid: '/x' is not an absolute path. (PHB-EPOLICY)\n"),
+    (15, "Could not start the connect guard. (PHB-ERUNTIME)\n"),
+    (2, "phobos.sh - run a command under the Phobos sandbox.\nUSAGE\n"),
+    (125, "[phobos-landlock-filesystem-and-networksystem] cannot open /x: No such file or directory\n"),
+])
+def test_a_run_phobos_itself_stopped_is_named_by_its_marker(status, stderr):
+    assert verdict.phobos_stopped(status, stderr) is not None
+
+
+@pytest.mark.parametrize("status", [2, 11, 15, 125])
+def test_the_commands_own_status_without_a_phobos_marker_is_not_a_stop(status):
+    assert verdict.phobos_stopped(status, "make: *** [all] Error 2\n") is None
+
+
+def test_a_marker_beside_another_status_or_an_enforcer_warning_is_not_a_stop():
+    assert verdict.phobos_stopped(1, "Policy invalid. (PHB-EPOLICY)\n") is None
+    warning = ("[phobos-landlock-filesystem-and-networksystem] warning: Landlock version 8 cannot close UDP bind "
+               "(that needs version 10)\n")
+    assert verdict.phobos_stopped(2, warning) is None
 
 
 def test_the_infrastructure_flag_does_not_decide_whether_two_runs_agree(tmp_path):
