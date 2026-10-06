@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# One programming language configuration in, the base policies it names and the values of its
-# placeholders out.
+# One programming language configuration in, the base policies it names and, on first use, the
+# value of each of its placeholders out.
 #
 # A component of phobos-common.sh, which sources this file after phobos-policy-yaml.sh and is
 # what every caller sources. It sets no shell option and sources nothing, so that sourcing the
@@ -14,7 +14,8 @@
 # sections, [base] and [placeholders], and four generic ways of determining a value, and every
 # value it determines comes from the environment, the PATH and the password database entry of the
 # process that loads it, from the image and from the configuration file, all of which are fixed
-# before the command exists.
+# before the command exists. A placeholder is determined only when it is first used, so a source
+# that a run never needs cannot refuse it.
 # PARSE_LOCATION is set here and read by refuse_cfg in phobos-policy-parse.sh, never in this file,
 # so SC2034 would fire on it by design.
 # shellcheck disable=SC2034
@@ -133,8 +134,8 @@ add_language_base() {
 # printenv, once, never a shell variable of this script. printenv answers 1 for an unset variable; any
 # other failure, printenv missing among them, ends the run with PHB-ERUNTIME rather than being taken
 # for an unset variable, which would put a fallback in the place of a value that exists. Takes the
-# variable's name. Assumes it runs inside load_language_configuration and that it is called plainly,
-# so that a refusal ends the run.
+# variable's name. Assumes it runs inside determine_language_placeholder and that it is called
+# plainly, so that a refusal ends the run.
 read_environment_variable() {
   local variable="$1"
   local status=0
@@ -155,19 +156,14 @@ read_environment_variable() {
 # variable is unset or empty. Only the process environment is read, through printenv, never a
 # shell variable of this script, so a value is what the caller of phobos.sh exported. Takes the
 # placeholder's name, the primitive as written, and the primitive's arguments, the variable and an
-# optional fallback. Assumes it runs inside load_language_configuration, with PARSE_LOCATION
-# naming the line, and that it is called plainly, so that a refusal ends the run.
+# optional fallback, which refuse_malformed_placeholder_primitive has checked. Assumes it runs
+# inside determine_language_placeholder, with PARSE_LOCATION naming the placeholder's line, and
+# that it is called plainly, so that a refusal ends the run.
 determine_by_environment() {
   local placeholder="$1"
   local written="$2"
-  local variable="${3:-}"
+  local variable="$3"
   local fallback="${4:-}"
-  if (( $# < 3 || $# > 4 )); then
-    refuse_cfg "'environment' takes a variable and an optional fallback, as in 'environment HOME /root', not ${written@Q}"
-  fi
-  if [[ ! "$variable" =~ $LANGUAGE_VARIABLE_NAME_PATTERN ]]; then
-    refuse_cfg "${variable@Q} in ${written@Q} is not a variable name"
-  fi
   read_environment_variable "$variable"
   if [[ -z "$language_value" ]]; then
     language_value="$fallback"
@@ -181,7 +177,7 @@ determine_by_environment() {
 # nothing. Only the PATH's absolute entries are searched: an empty entry, ".", and any other
 # relative one name the current directory or one below it, which may be the assignment tree, so
 # they are skipped. Takes the command's name, which holds no slash. Assumes it runs inside
-# load_language_configuration, whose language_found it sets.
+# determine_by_command_ancestor, whose language_found it sets.
 find_command_on_absolute_path() {
   local command="$1"
   local directory
@@ -200,27 +196,19 @@ find_command_on_absolute_path() {
 # Sets language_value to the directory a command on the PATH lives in, that many levels up from
 # the command resolved through every symbolic link: java at /opt/java/openjdk/bin/java with 2
 # gives /opt/java/openjdk. The command is looked up in the absolute entries of the PATH alone,
-# never in the current directory, and a command name with a slash is refused. Takes the placeholder's name, the
-# primitive as written, and the primitive's arguments, the command and the levels. Assumes GNU
-# realpath, that it runs inside load_language_configuration, with PARSE_LOCATION naming the line,
-# and that it is called plainly, so that a refusal ends the run.
+# never in the current directory. Takes the placeholder's name, the primitive as written, and the
+# primitive's arguments, the command and the levels, which refuse_malformed_placeholder_primitive
+# has checked. Assumes GNU realpath, that it runs inside determine_language_placeholder, with
+# PARSE_LOCATION naming the placeholder's line, and that it is called plainly, so that a refusal
+# ends the run.
 determine_by_command_ancestor() {
   local placeholder="$1"
   local written="$2"
-  local command="${3:-}"
-  local levels="${4:-}"
+  local command="$3"
+  local levels="$4"
   local language_found=""
   local found
   local step
-  if (( $# != 4 )); then
-    refuse_cfg "'command-ancestor' takes a command and a number of levels, as in 'command-ancestor java 2', not ${written@Q}"
-  fi
-  if [[ ! "$command" =~ $LANGUAGE_COMMAND_NAME_PATTERN ]]; then
-    refuse_cfg "${command@Q} in ${written@Q} is not a command name; it is looked up on the PATH, so it holds no slash"
-  fi
-  if [[ ! "$levels" =~ $LANGUAGE_LEVELS_PATTERN ]]; then
-    refuse_cfg "${levels@Q} in ${written@Q} is not a number of levels from 1 to 99"
-  fi
   find_command_on_absolute_path "$command"
   found="$language_found"
   if [[ "$found" != /* ]]; then
@@ -244,20 +232,16 @@ determine_by_command_ancestor() {
 # for the uid, an entry that holds a control character or is not seven fields, and a home field
 # shorter than two characters are refused, naming only the uid, since an entry may hold a password
 # field and a real name; getent failing in any other way, getent missing among them, ends the run
-# with PHB-ERUNTIME. Takes the placeholder's name, the primitive as written, and
-# the primitive's one argument, the field, which is "home". Assumes it runs inside
-# load_language_configuration, with PARSE_LOCATION naming the line, and that it is called plainly,
-# so that a refusal ends the run.
+# with PHB-ERUNTIME. Takes the placeholder's name and the primitive as written; its one argument,
+# the field "home", refuse_malformed_placeholder_primitive has checked. Assumes it runs inside
+# determine_language_placeholder, with PARSE_LOCATION naming the placeholder's line, and that it is
+# called plainly, so that a refusal ends the run.
 determine_by_password_database() {
   local placeholder="$1"
   local written="$2"
-  local field="${3:-}"
   local entry=""
   local status=0
   local -a fields=()
-  if (( $# != 3 )) || [[ "$field" != "$LANGUAGE_PASSWORD_DATABASE_FIELD" ]]; then
-    refuse_cfg "'password-database' takes the one field it reads, as in 'password-database ${LANGUAGE_PASSWORD_DATABASE_FIELD}', not ${written@Q}"
-  fi
   entry="$(getent passwd "$UID" 2>/dev/null && printf 'x')" || status=$?
   if (( status == LANGUAGE_GETENT_NOT_FOUND )); then
     refuse_cfg "\${${placeholder}} cannot be determined: ${written@Q} found no entry for the uid ${UID} in the password database, or the name service could not answer"
@@ -282,14 +266,51 @@ determine_by_password_database() {
 }
 
 # Sets language_value to a constant path. Takes the placeholder's name, the primitive as written,
-# and the primitive's one argument. Assumes it runs inside load_language_configuration, with
-# PARSE_LOCATION naming the line, and that it is called plainly, so that a refusal ends the run.
+# and the primitive's one argument, which refuse_malformed_placeholder_primitive has checked.
+# Assumes it runs inside determine_language_placeholder.
 determine_fixed() {
-  local written="$2"
-  if (( $# != 3 )); then
-    refuse_cfg "'fixed' takes one absolute path, as in 'fixed /tmp', not ${written@Q}"
-  fi
   language_value="$3"
+}
+
+# Refuses a placeholder's primitive that is not one of the four, or that is given the wrong
+# arguments: their number, a variable name, a command name with a slash, a number of levels outside
+# 1 to 99, a field other than home. Asked when the configuration is read, so that a malformed line is
+# refused whether or not the placeholder is ever used; what the primitive would find is only asked
+# when the placeholder is used. Takes the line, the primitive as written and its words. Assumes
+# PARSE_LOCATION names the line and that it is called plainly, so that a refusal ends the run.
+refuse_malformed_placeholder_primitive() {
+  local line="$1"
+  local written="$2"
+  local primitive="${3:-}"
+  shift 3 || shift $#
+  case "$primitive" in
+    environment)
+      if (( $# < 1 || $# > 2 )); then
+        refuse_cfg "'environment' takes a variable and an optional fallback, as in 'environment HOME /root', not ${written@Q}"
+      fi
+      if [[ ! "$1" =~ $LANGUAGE_VARIABLE_NAME_PATTERN ]]; then
+        refuse_cfg "${1@Q} in ${written@Q} is not a variable name"
+      fi ;;
+    command-ancestor)
+      if (( $# != 2 )); then
+        refuse_cfg "'command-ancestor' takes a command and a number of levels, as in 'command-ancestor java 2', not ${written@Q}"
+      fi
+      if [[ ! "$1" =~ $LANGUAGE_COMMAND_NAME_PATTERN ]]; then
+        refuse_cfg "${1@Q} in ${written@Q} is not a command name; it is looked up on the PATH, so it holds no slash"
+      fi
+      if [[ ! "$2" =~ $LANGUAGE_LEVELS_PATTERN ]]; then
+        refuse_cfg "${2@Q} in ${written@Q} is not a number of levels from 1 to 99"
+      fi ;;
+    fixed)
+      if (( $# != 1 )); then
+        refuse_cfg "'fixed' takes one absolute path, as in 'fixed /tmp', not ${written@Q}"
+      fi ;;
+    password-database)
+      if (( $# != 1 )) || [[ "$1" != "$LANGUAGE_PASSWORD_DATABASE_FIELD" ]]; then
+        refuse_cfg "'password-database' takes the one field it reads, as in 'password-database ${LANGUAGE_PASSWORD_DATABASE_FIELD}', not ${written@Q}"
+      fi ;;
+    *) refuse_cfg "unknown primitive ${primitive@Q} in ${line@Q}; the primitives are 'environment <variable> [<fallback>]', 'command-ancestor <command> <levels>', 'fixed <absolute path>' and 'password-database home'" ;;
+  esac
 }
 
 # Whether the text holds a control character, a newline among them. Takes the text. Compares in the
@@ -318,45 +339,78 @@ refuse_unusable_placeholder_value() {
   fi
 }
 
-# Reads one [placeholders] line, "<name> = <primitive> <arguments>", determines the value with the
-# one primitive it names, and records it in LANGUAGE_CONFIGURATION_PLACEHOLDERS. A placeholder named
-# twice, the one Phobos determines itself, and an unknown primitive are refused. Takes the line.
-# Assumes it runs inside load_language_configuration, with PARSE_LOCATION naming the line, and that
-# it is called plainly, so that a refusal ends the run.
+# Reads one [placeholders] line, "<name> = <primitive> <arguments>", and records how the
+# placeholder is determined, and on which line, in LANGUAGE_PLACEHOLDER_DEFINITIONS and
+# LANGUAGE_PLACEHOLDER_LINES. Nothing is determined yet: determine_language_placeholder does that
+# when the placeholder is used, so a source a run never needs cannot refuse it. A placeholder named
+# twice, the one Phobos determines itself and a malformed primitive are refused here. Takes the line
+# and its number. Assumes it runs inside load_language_configuration, with PARSE_LOCATION naming the
+# line, and that it is called plainly, so that a refusal ends the run.
 read_language_placeholder_line() {
   local line="$1"
+  local number="$2"
   local placeholder
   local written
-  local primitive
   local -a words=()
-  local language_value=""
   if [[ ! "$line" =~ $LANGUAGE_PLACEHOLDER_LINE_PATTERN ]]; then
     refuse_cfg "${line@Q} is not a '<name> = <primitive> <arguments>' placeholder line"
   fi
   placeholder="${BASH_REMATCH[1]}"
   written="${BASH_REMATCH[2]}"
   read -ra words <<< "$written"
-  primitive="${words[0]:-}"
   if [[ "$placeholder" == "$LANGUAGE_RESERVED_PLACEHOLDER" ]]; then
     refuse_cfg "\${${LANGUAGE_RESERVED_PLACEHOLDER}} is determined by Phobos, from --project-root or the tail flags, and not by a programming language configuration"
   fi
-  if [[ -v "LANGUAGE_CONFIGURATION_PLACEHOLDERS[$placeholder]" ]]; then
+  if [[ -v "LANGUAGE_PLACEHOLDER_DEFINITIONS[$placeholder]" ]]; then
     refuse_cfg "the placeholder ${placeholder@Q} is named twice"
   fi
-  case "$primitive" in
+  refuse_malformed_placeholder_primitive "$line" "$written" "${words[@]}"
+  LANGUAGE_PLACEHOLDER_DEFINITIONS["$placeholder"]="$written"
+  LANGUAGE_PLACEHOLDER_LINES["$placeholder"]="$number"
+}
+
+# Sets LANGUAGE_PLACEHOLDER_VALUE to the value of a placeholder of the loaded configuration,
+# determining it with its primitive the first time it is used and keeping it in
+# LANGUAGE_CONFIGURATION_PLACEHOLDERS, so that a placeholder used twice asks its source once and a
+# placeholder never used never asks it. A value that cannot be determined, or is not an absolute
+# path to an existing directory, is refused naming the configuration file and the placeholder's
+# line; a placeholder the configuration does not name is refused where the caller's PARSE_LOCATION
+# points. Takes the placeholder's name. Assumes load_language_configuration has run, that it is
+# called plainly, never in a subshell, so that the value is kept and a refusal ends the run, and
+# leaves PARSE_LOCATION as the caller had it.
+determine_language_placeholder() {
+  local placeholder="$1"
+  local caller_location="$PARSE_LOCATION"
+  local written
+  local language_value=""
+  local -a words=()
+  if [[ -v "LANGUAGE_CONFIGURATION_PLACEHOLDERS[$placeholder]" ]]; then
+    LANGUAGE_PLACEHOLDER_VALUE="${LANGUAGE_CONFIGURATION_PLACEHOLDERS[$placeholder]}"
+    return 0
+  fi
+  if [[ ! -v "LANGUAGE_PLACEHOLDER_DEFINITIONS[$placeholder]" ]]; then
+    refuse_cfg "\${${placeholder}} is not a placeholder the programming language configuration ${LANGUAGE_CONFIGURATION_NAME@Q} names"
+  fi
+  written="${LANGUAGE_PLACEHOLDER_DEFINITIONS[$placeholder]}"
+  read -ra words <<< "$written"
+  PARSE_LOCATION="${LANGUAGE_CONFIGURATION_FILE@Q}, line ${LANGUAGE_PLACEHOLDER_LINES[$placeholder]}"
+  case "${words[0]}" in
     environment) determine_by_environment "$placeholder" "$written" "${words[@]:1}" ;;
     command-ancestor) determine_by_command_ancestor "$placeholder" "$written" "${words[@]:1}" ;;
     fixed) determine_fixed "$placeholder" "$written" "${words[@]:1}" ;;
     password-database) determine_by_password_database "$placeholder" "$written" "${words[@]:1}" ;;
-    *) refuse_cfg "unknown primitive ${primitive@Q} in ${line@Q}; the primitives are 'environment <variable> [<fallback>]', 'command-ancestor <command> <levels>', 'fixed <absolute path>' and 'password-database home'" ;;
   esac
   refuse_unusable_placeholder_value "$placeholder" "$written" "$language_value"
   LANGUAGE_CONFIGURATION_PLACEHOLDERS["$placeholder"]="$language_value"
+  LANGUAGE_PLACEHOLDER_VALUE="$language_value"
+  PARSE_LOCATION="$caller_location"
 }
 
 # Reads the programming language configuration of that name and sets LANGUAGE_CONFIGURATION_BASES,
-# the absolute paths of the base policies it names in order, and LANGUAGE_CONFIGURATION_PLACEHOLDERS,
-# each placeholder it names mapped to the value determined for it now. The file is read with the
+# the absolute paths of the base policies it names in order, LANGUAGE_PLACEHOLDER_DEFINITIONS and
+# LANGUAGE_PLACEHOLDER_LINES, how and where each placeholder it names is determined, and empties
+# LANGUAGE_CONFIGURATION_PLACEHOLDERS, which determine_language_placeholder fills as placeholders are
+# used. No placeholder is determined here. The file is read with the
 # discipline of a policy cfg: no byte order mark, no NUL, no carriage return, everything from a "#"
 # a comment, nothing before the first section, no unknown section, and every refusal names the file
 # and the line. A configuration that names no base is refused. Takes the name and the folder of
@@ -372,8 +426,13 @@ load_language_configuration() {
   local section=""
   refuse_unknown_language_configuration "$name" "$home"
   file="$(language_configuration_file "$name" "$home")"
+  LANGUAGE_CONFIGURATION_NAME="$name"
+  LANGUAGE_CONFIGURATION_FILE="$file"
   LANGUAGE_CONFIGURATION_BASES=()
+  LANGUAGE_PLACEHOLDER_VALUE=""
   declare -gA LANGUAGE_CONFIGURATION_PLACEHOLDERS=()
+  declare -gA LANGUAGE_PLACEHOLDER_DEFINITIONS=()
+  declare -gA LANGUAGE_PLACEHOLDER_LINES=()
   refuse_unusable_cfg_file "$file"
   refuse_binary_cfg "$file"
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -393,7 +452,7 @@ load_language_configuration() {
     fi
     case "$section" in
       base) add_language_base "$line" "$home" ;;
-      placeholders) read_language_placeholder_line "$line" ;;
+      placeholders) read_language_placeholder_line "$line" "$number" ;;
       *) refuse_cfg "${line@Q} appears before any [section] header" ;;
     esac
   done < "$file"

@@ -33,16 +33,29 @@ cp "${WORK}/opt/tool/bin/tool" "${WORK}/cwd/onlyhere"
 # shellcheck disable=SC2034
 PHOBOS_TEST_SHELL_ONLY="${WORK}/srv"
 
-# Writes its standard input as the configuration of that name, then loads it in a subshell whose
-# PATH starts with the fake tool's directory and whose current directory is ${WORK}/cwd, and prints
-# the bases and the placeholders it determined, or "<status>|<message>" when the loader refuses.
+# Loads the configuration of that name and then uses every placeholder it names, in name order, as
+# a policy that writes each of them would, printing the bases and each value. Assumes it runs in a
+# subshell, since a refusal ends it.
+load_and_use_every_placeholder() {
+  local name="$1"
+  local key
+  load_language_configuration "$name" "$HOME_DIR"
+  printf 'base %s\n' "${LANGUAGE_CONFIGURATION_BASES[@]}"
+  for key in $(printf '%s\n' "${!LANGUAGE_PLACEHOLDER_DEFINITIONS[@]}" | sort); do
+    determine_language_placeholder "$key"
+    printf 'placeholder %s=%s\n' "$key" "$LANGUAGE_PLACEHOLDER_VALUE"
+  done
+}
+
+# Writes its standard input as the configuration of that name, then loads it and uses every
+# placeholder it names in a subshell whose PATH starts with the fake tool's directory and whose
+# current directory is ${WORK}/cwd, and prints the bases and the placeholders' values, or
+# "<status>|<message>" when the loader refuses.
 load_result() {
   local name="$1"
   local message
   cat > "${CONFIGURATIONS}/${name}.cfg"
-  message="$( (cd "${WORK}/cwd" && PATH="${WORK}/bin:${PATH}" && load_language_configuration "$name" "$HOME_DIR" \
-    && printf 'base %s\n' "${LANGUAGE_CONFIGURATION_BASES[@]}" \
-    && for key in "${!LANGUAGE_CONFIGURATION_PLACEHOLDERS[@]}"; do printf 'placeholder %s=%s\n' "$key" "${LANGUAGE_CONFIGURATION_PLACEHOLDERS[$key]}"; done | sort) 2>&1)"
+  message="$( (cd "${WORK}/cwd" && PATH="${WORK}/bin:${PATH}" && load_and_use_every_placeholder "$name") 2>&1)"
   local status=$?
   if (( status == 0 )); then printf '%s' "$message"; else printf '%s|%s' "$status" "$message"; fi
 }
@@ -131,11 +144,11 @@ for entry in "." "" "cwd-relative"; do
 done
 
 mkdir -p "${WORK}/tools"
-for tool in head od tr wc realpath dirname; do
+for tool in head od tr wc realpath dirname sort; do
   ln -s "$(type -P "$tool")" "${WORK}/tools/${tool}"
 done
 printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\na = environment HOME /tmp\n' > "${CONFIGURATIONS}/NO_PRINTENV_CONFIGURATION.cfg"
-if result="$( (PATH="${WORK}/tools" load_language_configuration NO_PRINTENV_CONFIGURATION "$HOME_DIR") 2>&1)"; then status=0; else status=$?; fi
+if result="$( (PATH="${WORK}/tools" load_and_use_every_placeholder NO_PRINTENV_CONFIGURATION) 2>&1)"; then status=0; else status=$?; fi
 if (( status == PHB_ERUNTIME )) && [[ "$result" == *"printenv could not be run"* ]]; then
   ok "an environment that cannot be read ends the run instead of falling back"
 else
@@ -220,12 +233,51 @@ for written in 'password-database' 'password-database shell' 'password-database 
   fi
 done
 printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\nuser.home = password-database home\n' > "${CONFIGURATIONS}/BROKEN_GETENT_CONFIGURATION.cfg"
-if result="$( (PATH="${WORK}/fakegetent:${PATH}" PHOBOS_TEST_GETENT=broken load_language_configuration BROKEN_GETENT_CONFIGURATION "$HOME_DIR") 2>&1)"; then status=0; else status=$?; fi
+if result="$( (PATH="${WORK}/fakegetent:${PATH}" PHOBOS_TEST_GETENT=broken load_and_use_every_placeholder BROKEN_GETENT_CONFIGURATION) 2>&1)"; then status=0; else status=$?; fi
 if (( status == PHB_ERUNTIME )) && [[ "$result" == *"getent could not be run"* ]]; then
   ok "a password database that cannot be read ends the run instead of being taken for no entry"
 else
   bad "a password database that cannot be read ends the run instead of being taken for no entry" "status ${PHB_ERUNTIME}" "${status}|${result}"
 fi
+
+echo "== a placeholder is determined when it is used =="
+# A configuration whose first placeholder has a source that cannot be determined here: the
+# variable is unset and there is no fallback. Loading it, and using only the other placeholder, must
+# work; using the first must be refused with the configuration's file and that placeholder's line.
+printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\nunused.dir = environment PHOBOS_TEST_UNSET\nused.dir = fixed %s\n' "${WORK}/srv" > "${CONFIGURATIONS}/LAZY_CONFIGURATION.cfg"
+if result="$( (PHOBOS_TEST_UNSET="" load_language_configuration LAZY_CONFIGURATION "$HOME_DIR" && determine_language_placeholder used.dir && printf '%s' "$LANGUAGE_PLACEHOLDER_VALUE") 2>&1)"; then status=0; else status=$?; fi
+check "a placeholder whose source cannot be determined does not refuse a run that never uses it" "0|${WORK}/srv" "${status}|${result}"
+if result="$( (PHOBOS_TEST_UNSET="" load_language_configuration LAZY_CONFIGURATION "$HOME_DIR" && determine_language_placeholder unused.dir && echo "not reached") 2>&1)"; then status=0; else status=$?; fi
+if (( status == PHB_EPOLICY )) && [[ "$result" == *"\${unused.dir} cannot be determined"* && "$result" == *"LAZY_CONFIGURATION.cfg', line 4."* && "$result" != *"not reached"* ]]; then
+  ok "the same placeholder is refused, with the configuration's file and its line, once it is used"
+else
+  bad "the same placeholder is refused, with the configuration's file and its line, once it is used" "status ${PHB_EPOLICY}" "${status}|${result}"
+fi
+# PARSE_LOCATION stands for the policy line that used the placeholder; refuse_cfg reads it.
+# shellcheck disable=SC2034
+if result="$( (PARSE_LOCATION="'policy.yaml', line 9" && load_language_configuration LAZY_CONFIGURATION "$HOME_DIR" && determine_language_placeholder other.dir) 2>&1)"; then status=0; else status=$?; fi
+if (( status == PHB_EPOLICY )) && [[ "$result" == *"\${other.dir} is not a placeholder the programming language configuration 'LAZY_CONFIGURATION' names"* && "$result" == *"'policy.yaml', line 9."* ]]; then
+  ok "a placeholder the configuration does not name is refused where it was used"
+else
+  bad "a placeholder the configuration does not name is refused where it was used" "status ${PHB_EPOLICY}" "${status}|${result}"
+fi
+printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\nuser.home = password-database home\n' > "${CONFIGURATIONS}/COUNTED_CONFIGURATION.cfg"
+mkdir -p "${WORK}/countinggetent"
+cat > "${WORK}/countinggetent/getent" <<GETENT
+#!/bin/sh
+echo asked >> "${WORK}/getent-calls"
+printf 'tester:x:%s:0:Test User:%s:/bin/sh\n' "\$2" "${WORK}/srv"
+GETENT
+chmod +x "${WORK}/countinggetent/getent"
+: > "${WORK}/getent-calls"
+result="$( (PATH="${WORK}/countinggetent:${PATH}" && load_language_configuration COUNTED_CONFIGURATION "$HOME_DIR" \
+  && determine_language_placeholder user.home && first="$LANGUAGE_PLACEHOLDER_VALUE" \
+  && determine_language_placeholder user.home && printf '%s %s' "$first" "$LANGUAGE_PLACEHOLDER_VALUE") 2>&1)"
+check "a placeholder used twice gives the same value both times" "${WORK}/srv ${WORK}/srv" "$result"
+check "a placeholder used twice asks its source once" "1" "$(wc -l < "${WORK}/getent-calls" | tr -d ' ')"
+: > "${WORK}/getent-calls"
+result="$( (PATH="${WORK}/countinggetent:${PATH}" && load_language_configuration COUNTED_CONFIGURATION "$HOME_DIR") 2>&1)"
+check "a placeholder that is never used never asks its source" "0|" "$(wc -l < "${WORK}/getent-calls" | tr -d ' ')|${result}"
 
 echo "== the shipped configurations =="
 for file in "${CORE}"/config/language-configurations/*.cfg; do
@@ -236,8 +288,11 @@ for file in "${CORE}"/config/language-configurations/*.cfg; do
     cp "$file" "${WORK}/shipped/${name}/language-configurations/"
     printf '#!/bin/sh\nexit 0\n' > "${WORK}/shipped/${name}/jdk/bin/java"
     chmod +x "${WORK}/shipped/${name}/jdk/bin/java"
-    PATH="${WORK}/shipped/${name}/jdk/bin:${PATH}" HOME="${WORK}/home" TMPDIR="" load_language_configuration "$name" "${WORK}/shipped/${name}" \
-      && printf '%s ' "${LANGUAGE_CONFIGURATION_BASES[@]##*/}" "${#LANGUAGE_CONFIGURATION_PLACEHOLDERS[@]}" "${LANGUAGE_CONFIGURATION_PLACEHOLDERS[user.home]}") 2>&1)"
+    PATH="${WORK}/shipped/${name}/jdk/bin:${PATH}"
+    HOME="${WORK}/home" TMPDIR="" load_language_configuration "$name" "${WORK}/shipped/${name}" \
+      && determine_language_placeholder java.home && determine_language_placeholder java.io.tmpdir \
+      && determine_language_placeholder user.home \
+      && printf '%s ' "${LANGUAGE_CONFIGURATION_BASES[@]##*/}" "${#LANGUAGE_PLACEHOLDER_DEFINITIONS[@]}" "$LANGUAGE_PLACEHOLDER_VALUE") 2>&1)" || true
   check "${name} loads, names its base and determines its placeholders, user.home from the password database" "BaseLanguage-java.cfg 3 ${REAL_HOME} " "$result"
 done
 
