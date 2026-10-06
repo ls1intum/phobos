@@ -3287,6 +3287,16 @@ static void test_the_continue_probe(void) {
     script->active = false;
 }
 
+/* Frees a pair of notification buffers and forgets them, so a later allocation that fails leaves
+ * nothing behind that could be freed a second time. */
+static void release_notification_buffers(struct seccomp_notif **request,
+                                         struct seccomp_notif_resp **response) {
+    free(*request);
+    free(*response);
+    *request = NULL;
+    *response = NULL;
+}
+
 static void test_notification_buffers(void) {
     printf("\nNotification buffers of the kernel's sizes\n");
     reset_fakes();
@@ -3297,21 +3307,18 @@ static void test_notification_buffers(void) {
     check("a kernel's larger sizes are used",
           allocate_notification_buffers(&request, &size, &response)
               && size == sizeof(struct seccomp_notif) + 16);
-    free(request);
-    free(response);
+    release_notification_buffers(&request, &response);
     script->notif_sizes_small = true;
     check("never less than this build's structures",
           allocate_notification_buffers(&request, &size, &response)
               && size == sizeof(struct seccomp_notif));
-    free(request);
-    free(response);
+    release_notification_buffers(&request, &response);
     script->notif_sizes_small = false;
     script->notif_sizes_fail = true;
     check("and this build's sizes when the kernel does not say",
           allocate_notification_buffers(&request, &size, &response)
               && size == sizeof(struct seccomp_notif));
-    free(request);
-    free(response);
+    release_notification_buffers(&request, &response);
     script->calloc_fails = true;
     check("no memory leaves neither allocated",
           !allocate_notification_buffers(&request, &size, &response) && request == NULL
