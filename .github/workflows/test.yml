@@ -121,6 +121,11 @@ jobs:
       - name: The command-line contract
         if: ${{ !cancelled() }}
         run: bash tests/integration/cli_flags.sh
+      # No entry point finds a program through a relative or empty PATH entry, which names the
+      # current directory, and the submission's tree when a grader starts Phobos there.
+      - name: No entry point looks a program up in the current directory
+        if: ${{ !cancelled() }}
+        run: bash tests/integration/startup_environment.sh
 
       # How the network allow-list becomes Landlock TCP-port rules: a concrete port is
       # enforced, a loopback host with no port is tolerated, a non-loopback host with no

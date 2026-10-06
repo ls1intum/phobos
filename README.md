@@ -37,6 +37,7 @@ core/                      the sandbox itself
   phobos-seccomp-networksystem/  its *.c/.h: the connect guard, supervises the egress a command makes and enforces [connect] by host and port
   phobos-seccomp-timeoutsystem/  its *.c: the group lock, a seccomp filter refusing setsid and setpgid, then exec's
   phobos-tools-common/     sourced by every layer through phobos-common.sh, which sources the rest here and the three per-subsystem helpers
+    phobos-environment.sh  sourced first by every entry point: PATH and the other lookup variables made safe before anything is looked up
     phobos-common.sh       the shared entry the layers source; it sources the others
     phobos-constants.sh    the numbers the scripts share, named once, the exit statuses among them
     phobos-log.sh          reporting, and counting what a run was denied
@@ -90,6 +91,8 @@ phobos.sh -> phobos-timeoutsystem.sh -> phobos-networksystem.sh (connect guard) 
 
 The base policy is every `Base*.cfg` sitting beside `phobos-policysystem.sh`, applied in sorted order, and the exercise configurations named with `--config` are applied on top. **Ship exactly one `Base*.cfg` per runtime environment.** They are found by a glob and unioned, so a `BasePhobos.cfg` left beside a `BaseLanguage-java.cfg` gives a Java run the paths of every other language as well, which is a wider sandbox that looks like a working one. The prune phase does not prevent that: it writes every applied policy into one directory, the cross-language `BasePhobos.cfg` beside the per-language files, because they are **alternatives** rather than parts of one policy, and choosing between them is the packaging step. `docker/run_phase/java/Dockerfile` does the choosing by naming `BaseLanguage-java.cfg` explicitly, and an image that copied the directory wholesale would ship the union of every alternative. A `BasePhobos.cfg` a run left behind earlier is the same hazard from the other direction, so check what is in that directory rather than what this run wrote. The files meant only for reading go to `debug/` and are never applied at all. With no `Base*.cfg` at all, a run is refused (`PHB-EPOLICY`) rather than run unconfined.
 
+Before any of this, every entry point, `phobos.sh` and each layer started on its own, removes from `PATH` every entry that is not absolute (`.`, any other relative directory, an empty entry, one beginning with `~`), unsets `CDPATH`, and drops whatever is not absolute from `TMPDIR` and from the C library's `GCONV_PATH`, `LOCPATH`, `NLSPATH`, `HOSTALIASES` and `TZDIR`, so that nothing Phobos runs before the sandbox exists is looked up in the current directory, which may be the submission's tree. The command is given the cleaned environment as well (and still no `PATH` when the caller gave none), and a `PATH` with no absolute entry is refused with `PHB-ERUNTIME`. SECURITY.md says why, and what the grader must still keep out of the environment, because it takes effect before a script's first line.
+
 A layer switched off is left out of the chain rather than entered and skipped. Three properties of the chain are relied on and easy to break:
 
 - The resource limits bind the command and nothing beside it. `phobos-resourcesystem.sh` is started by the filesystem layer as the last step before `phobos-landlock-filesystem-and-networksystem`, so the helpers around the command (the filesystem layer's shell, the stderr pass-through and denial counter, the connect guard's supervisor) never run under the command's rlimits. A helper that met the command's file-size, memory or CPU limit would otherwise take the command's output with it.
@@ -132,6 +135,8 @@ ${PHOBOS_HOME}/phobos.sh --config exercise.cfg -- ./gradlew test
 A bare checkout cannot run this. `phobos-policysystem.sh` finds the base policy by globbing `Base*.cfg` beside itself, and a checkout keeps those files in `core/config/` rather than in `core/`, so a run from one is refused with `PHB-EPOLICY` instead of running unconfined. The image is the delivery vehicle, as it is for the three C products.
 
 Run the grading container with **`--network none`** and with cgroup limits (`--memory`, `--pids-limit`, `--cpus`, and a size-bounded `--tmpfs` for scratch). Those are the outer wall Phobos relies on and cannot set for itself.
+
+Start `phobos.sh` with a `PATH` of absolute directories (or through an absolute interpreter, `/bin/bash ${PHOBOS_HOME}/phobos.sh`) and without `BASH_ENV`, `LD_LIBRARY_PATH`, `LD_PRELOAD` or `LD_AUDIT`. Those are read before Phobos runs a line, so a relative entry in them, with the submission's tree as the current directory, would hand the submission code that runs before the sandbox exists. SECURITY.md has the details. A command that relied on `.` in `PATH` must be named by its path, as `./gradlew` is above, since the command is given `PATH` without its relative entries.
 
 stdout carries the command's own output and nothing else. Every message of Phobos itself, the `PHB-EPOLICY`, `PHB-ETIMEOUT`, `PHB-ERUNTIME` and `PHB-EDENY` reports among them, is written to stderr, and the exit status (11, 14 or 15 for a run Phobos stopped) is the contract a grader should read.
 
