@@ -165,6 +165,19 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/unit/phobos-tools-policysystem/no_language_in_code.sh
 
+      # How an Ares 2 policy becomes the parsed state a .cfg gives: every field the import maps is
+      # mapped as the documentation says, and every element whose translation would widen or narrow
+      # the sandbox without saying so is refused with its line.
+      - name: The Ares 2 policy import
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/phobos-tools-policysystem/ares_policy.sh
+
+      # The policy program given an Ares 2 policy: base selection by the programming language
+      # configuration, the additive fold beside a .cfg, the project root and the covered-entry skip.
+      - name: The policy program with an Ares 2 policy
+        if: ${{ !cancelled() }}
+        run: bash tests/integration/ares_policy_program.sh
+
       - name: The connect guard enforces the allow-list by host and port
         if: ${{ !cancelled() }}
         run: bash tests/integration/seccomp_networksystem.sh

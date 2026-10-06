@@ -2,7 +2,7 @@
 # shellcheck shell=bash
 # The shared library every layer and every suite sources, by this name. It defines nothing
 # itself: it sets the shell options the helpers assume, reads the constants, and then reads
-# the ten files below, one concern each. Splitting it changed no caller for that reason,
+# the eleven files below, one concern each. Splitting it changed no caller for that reason,
 # and it has no include guard on purpose, because sourcing it has to keep resetting
 # PHB_DEBUG_ENABLED so that the environment can never switch debugging on. It finds the files
 # beside it in bash alone, from the path it was sourced by, which every caller gives with a
@@ -31,6 +31,8 @@ source "${BASH_SOURCE[0]%/*}/../phobos-tools-policysystem/phobos-policy-parse.sh
 source "${BASH_SOURCE[0]%/*}/../phobos-tools-policysystem/phobos-policy-yaml.sh"
 # shellcheck source=../phobos-tools-policysystem/phobos-language-configuration.sh
 source "${BASH_SOURCE[0]%/*}/../phobos-tools-policysystem/phobos-language-configuration.sh"
+# shellcheck source=../phobos-tools-policysystem/phobos-policy-ares.sh
+source "${BASH_SOURCE[0]%/*}/../phobos-tools-policysystem/phobos-policy-ares.sh"
 # shellcheck source=../phobos-tools-filesystem/phobos-rights.sh
 source "${BASH_SOURCE[0]%/*}/../phobos-tools-filesystem/phobos-rights.sh"
 # shellcheck source=../phobos-tools-networksystem/phobos-network-args.sh

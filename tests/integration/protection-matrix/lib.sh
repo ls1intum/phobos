@@ -120,6 +120,51 @@ cfg() {
   printf '%s\n' "$path"
 }
 
+# The programming language configuration the Ares 2 policies of the suites name: one the image ships, whose base,
+# BaseLanguage-java.cfg, pm_install_base has replaced with the minimal one.
+PM_ARES_CONFIGURATION="JAVA_USING_GRADLE_ARCHUNIT_AND_ASPECTJ"
+
+# Writes an Ares 2 policy to a named file under cfg/ and prints its path. Takes the name, then one argument per entry:
+# "fs PATH RIGHTS", RIGHTS a word of the letters r (read), w (overwrite), c (create), x (execute) and d (delete), or "-"
+# for none; "net HOST PORT", which grants all three network flags; "timeout MILLISECONDS". A list with no entry is empty.
+ares_cfg() {
+  local path="$PM/cfg/$1.yaml"
+  local entry
+  local -a fields=()
+  local fs=""
+  local net=""
+  local timeouts=""
+  local letter
+  local key
+  shift
+  for entry in "$@"; do
+    read -ra fields <<< "$entry"
+    case "${fields[0]}" in
+      fs)
+        fs+="      - onThisPathAndAllPathsBelow: \"${fields[1]}\"\n"
+        for key in r:readAllFiles w:overwriteAllFiles c:createAllFiles x:executeAllFiles d:deleteAllFiles; do
+          letter="${key%%:*}"
+          if [[ "${fields[2]}" == *"$letter"* ]]; then fs+="        ${key#*:}: true\n"; else fs+="        ${key#*:}: false\n"; fi
+        done ;;
+      net)
+        net+="      - onTheHost: \"${fields[1]}\"\n        onThePort: ${fields[2]}\n"
+        net+="        openConnections: true\n        sendData: true\n        receiveData: true\n" ;;
+      timeout)
+        timeouts+="      - timeout: ${fields[1]}\n" ;;
+    esac
+  done
+  {
+    printf 'thisPolicyFileCompliesToThePolicyVersion: 1\nregardingTheSupervisedCode:\n'
+    printf '  theFollowingProgrammingLanguageConfigurationIsUsed: %s\n' "$PM_ARES_CONFIGURATION"
+    printf '  theFollowingClassesAreTestClasses: []\n  theFollowingResourceAccessesArePermitted:\n'
+    if [[ -n "$fs" ]]; then printf '    regardingFileSystemInteractions:\n%b' "$fs"; else printf '    regardingFileSystemInteractions: []\n'; fi
+    if [[ -n "$net" ]]; then printf '    regardingNetworkConnections:\n%b' "$net"; else printf '    regardingNetworkConnections: []\n'; fi
+    printf '    regardingCommandExecutions: []\n    regardingThreadCreations: []\n    regardingPackageImports: []\n'
+    if [[ -n "$timeouts" ]]; then printf '    regardingTimeouts:\n%b' "$timeouts"; else printf '    regardingTimeouts: []\n'; fi
+  } > "$path"
+  printf '%s\n' "$path"
+}
+
 # Runs phobos.sh with the arguments given, under the watchdog, and keeps its streams and status.
 # Everything is read back from PM_OUT, PM_ERR and PM_STATUS. The test tail flags are always given.
 run_pm() {

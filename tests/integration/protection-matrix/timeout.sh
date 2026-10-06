@@ -48,6 +48,18 @@ run_pm_timed --config "$c_t3" -- /bin/sh -c "$P sleep 58 & $P sleep 57 & wait"
 if (( PM_STATUS == PHB_ETIMEOUT )) && ! alive "pprobe sleep 58" && ! alive "pprobe sleep 57"; then ok "the children of the command die with it"; else bad "the children of the command die with it" "status ${PM_STATUS}; alive=$(alive 'pprobe sleep 5[78]' && echo yes || echo no)"; fi
 
 echo
+echo "== an imported Ares 2 timeout =="
+a_t1500="$(ares_cfg ares_t1500 "fs $PM/ro r" "timeout 1500")"
+run_pm_timed --debug --config "$a_t1500" -- "$P" sleep 60
+if (( PM_STATUS == PHB_ETIMEOUT && PM_ELAPSED_MS >= 1500 && PM_ELAPSED_MS < 15000 )) && grep -q 'timeout.sec: 1.500' "$PM_ERR"; then
+  ok "an Ares timeout of 1500 ms bounds the run at 1.5 s, not rounded to 1 s or 2 s (${PM_ELAPSED_MS} ms)"
+else
+  bad "an Ares timeout of 1500 ms bounds the run at 1.5 s" "status ${PM_STATUS} after ${PM_ELAPSED_MS} ms: $(pm_describe)"
+fi
+run_pm_timed --config "$a_t1500" -- "$P" sleep 1
+if (( PM_STATUS == 0 )) && grep -q SLEPT "$PM_OUT"; then ok "and a command that ends within it is left alone"; else bad "a command within an Ares timeout is left alone" "status ${PM_STATUS} after ${PM_ELAPSED_MS} ms: $(pm_describe)"; fi
+
+echo
 echo "== leaving the process group is refused by two things at once =="
 for call in setsid setpgid; do
   run_pm --config "$c_t5" -- "$P" "$call"
