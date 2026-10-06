@@ -210,7 +210,9 @@ static bool read_syscall_stop(pid_t child, struct observation *seen) {
 
 /*
  * Follows the stopped child to its end, system call by system call. Returns the
- * child's exit status, or -1 where the child could not be followed.
+ * child's exit status, or -1 where the child could not be followed. A ptrace
+ * refusal shows as the child's own PTRACE_TRACEME failing, before this runs, so
+ * a failure here is an anomaly the probe cannot read as an answer.
  */
 static int follow_child(pid_t child, struct observation *seen) {
     if (ptrace(PTRACE_SETOPTIONS, child, NULL, (void *) (PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL)) != 0) {
@@ -318,8 +320,8 @@ int main(void) {
     if (child_status < 0) {
         kill(child, SIGKILL);
         waitpid(child, NULL, 0);
-        puts("NOT-OBSERVED");
-        return EXIT_UNAVAILABLE;
+        puts("INDETERMINATE the child could not be followed to its end");
+        return EXIT_INDETERMINATE;
     }
     return verdict(child_status, &seen);
 }

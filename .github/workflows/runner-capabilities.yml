@@ -11,9 +11,12 @@
 # each hosted runner image. Landlock lives in the kernel, so a container always meets the
 # runner's kernel, and trying a newer kernel than the runner has needs a virtual machine.
 #
-# Manual on purpose. It is a diagnostic, not a gate: the two assert steps are allowed to
-# fail and the verdict is written to the run summary, so one dispatch answers both
-# questions without turning a red check into the answer.
+# Both jobs also ask whether ptrace, without privileges, sees a traced process's Landlock
+# refusal inside an ordinary container, which the layer pruner's observer relies on.
+#
+# Manual on purpose. It is a diagnostic, not a gate: the assert steps are allowed to fail
+# and the verdict is written to the run summary, so one dispatch answers every question
+# without turning a red check into the answer.
 name: Runner Capabilities
 
 on:

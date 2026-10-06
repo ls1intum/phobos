@@ -29,6 +29,8 @@ EXIT_INDETERMINATE=3
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROBE_SOURCE="${HERE}/landlock-filesystem-and-networksystem-capability-probe.c"
 PTRACE_PROBE_SOURCE="${HERE}/ptrace-observer-capability-probe.c"
+# The uid and gid the ptrace probe runs as inside its container: nobody, which holds no capability.
+UNPRIVILEGED_UID=65534
 CONTAINER_IMAGE="${PROBE_CONTAINER_IMAGE:-ubuntu:26.04}"
 # How long a guest kernel may take to boot to its end, in seconds, with the host's virtualisation and without.
 KVM_BOOT_SECONDS=90
@@ -456,10 +458,11 @@ build_ptrace_probe() {
 }
 
 # The ptrace probe in a plain docker run, as the prune container is started: --network none and
-# nothing else, no --privileged, no --cap-add, no --security-opt. Its one line goes to standard
-# output and its reasons to ${WORK}/ptrace-container.log.
+# nothing else, no --privileged, no --cap-add, no --security-opt. It runs as an ordinary uid
+# rather than the container's root, so the answer holds for a tracer with no privilege at all.
+# Its one line goes to standard output and its reasons to ${WORK}/ptrace-container.log.
 run_ptrace_probe_in_container() {
-  docker run --rm --network none \
+  docker run --rm --network none --user "${UNPRIVILEGED_UID}:${UNPRIVILEGED_UID}" \
     -v "${WORK}/ptrace-probe:/probe:ro" \
     "${CONTAINER_IMAGE}" \
     /probe 2>"${WORK}/ptrace-container.log"
