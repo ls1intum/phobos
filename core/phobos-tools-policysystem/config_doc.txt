@@ -38,7 +38,8 @@ rule is handed to Landlock as `--connect-udp` (the CONNECT_SEND_UDP right, which
 covers both connecting a datagram socket and sending a datagram to a remote port),
 and the connect guard enforces it for the UDP transport apart from TCP, so a udp
 rule never admits a TCP connection to the same host and port, nor the reverse. UDP
-needs Landlock version 10; on an older kernel a udp rule is refused (PHB-EPOLICY)
+needs Landlock version 10; on an older kernel a udp rule that names a port is refused
+(exit status 125 from phobos-landlock-filesystem-and-networksystem, not PHB-EPOLICY)
 rather than run with UDP left unenforced, except beside a udp loopback wildcard (see below). There is no egress broker for UDP, whose
 host enforcement rests on the TLS host name, so a udp [connect] rule that names a
 DNS host is held to the addresses the name had when the run began: the network layer
@@ -103,8 +104,9 @@ rule, unlike the port 0 grant, still refuses a kernel that cannot handle it.
 Phobos filters outbound stream connect() from outside the process, at the seccomp
 and Landlock boundaries, and does not interpose any libc call inside the process.
 On a Landlock version 10 kernel it also enforces UDP ports (connect/send and bind)
-at those boundaries when the policy names them; on an older kernel a udp rule is
-refused rather than left unenforced. Host-level UDP egress beyond the allow-list
+at those boundaries when the policy names them; on an older kernel a udp rule that
+names a concrete port is refused rather than left unenforced, except a [connect]
+rule beside a udp loopback wildcard (section 1). Host-level UDP egress beyond the allow-list
 and inbound connections a [accept] rule does not front are governed by the
 container the run is placed in
 (`--network none`, or the operator's firewall in a networked posture), as

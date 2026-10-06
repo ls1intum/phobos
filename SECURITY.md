@@ -39,8 +39,9 @@ rest exists to take privileges away. None of the following is a vulnerability.
   rather than made outside the Landlock view the command is held to. A `[connect]`/`[bind]` rule may
   carry a `udp` transport marker: the guard enforces it for the UDP transport apart from TCP, and
   Landlock's `--connect-udp`/`--bind-udp` (the version-10 UDP rights) are its second, kernel-enforced
-  expression. UDP needs Landlock version 10, so a udp rule is refused on an older kernel rather than
-  left unenforced, except beside a udp loopback wildcard, which Landlock cannot express with any
+  expression. UDP needs Landlock version 10, so a udp rule that names a concrete port is refused on
+  an older kernel rather than left unenforced, except a `[connect]` rule beside a udp loopback
+  wildcard, which Landlock cannot express with any
   version and which leaves such a rule to the guard alone. A udp rule may name an exact host: a datagram carries no TLS host name for the
   egress broker to read, so the network layer resolves the name once, before the command starts,
   through the resolver the operator gave, hands the guard a rule for each address (at most sixteen) and

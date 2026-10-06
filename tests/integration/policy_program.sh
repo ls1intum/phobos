@@ -162,7 +162,7 @@ refuse_case "a [bind] rule naming an address is refused"  '[bind]\nallow 127.0.0
 refuse_case "a [bind] rule naming a bracketed IPv6 address is refused" '[bind]\nallow [::1]:8080\n'
 
 # A wildcard host name is refused for either transport, and the reason has to be the wildcard: a
-# bare PHB-EPOLICY could come from another rule, such as a udp rule naming a host.
+# bare PHB-EPOLICY could come from another rule, such as an external host that names no port.
 refuse_wildcard_case() {
   local name="$1"
   local body="$2"
