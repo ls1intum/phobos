@@ -403,7 +403,7 @@ def test_a_file_a_deeper_directory_still_lets_execute_is_not_moved_and_the_resul
     generalise.cfgfile.check_hierarchy(grants)
 
 
-def test_an_executable_the_run_wrote_is_reported_even_where_no_write_was_refused():
+def test_an_executable_the_run_created_is_reported_even_where_no_write_was_refused():
     grants, notes = generalise.grants_and_notes([execute("/srv/app/gen/tool")], BESIDE, FINE)
     assert grants == {}
     assert [(item["path"], item["section"]) for item in notes.reported] == [("/srv/app/gen/tool", "execute")]
@@ -440,3 +440,25 @@ def test_an_executable_a_held_write_lets_the_run_overwrite_is_noted_wherever_it_
     assert grants == {"/root/.gradle/dist/bin/gradle": frozenset({"execute"})}
     assert notes.comments["/root/.gradle/dist/bin/gradle"] == generalise.EXECUTE_WRITABLE_COMMENT
     assert generalise.grants_for([execute("/root/.gradle/dist/bin/gradle")], tree, FINE) == grants
+
+
+def test_a_kept_file_under_a_held_write_says_so():
+    grants, notes = generalise.grants_and_notes([execute("/srv/app/run.sh")], BESIDE, FINE,
+                                                held={"/srv/app": frozenset({"write"})})
+    assert grants == {"/srv/app/run.sh": frozenset({"execute"})}
+    assert notes.comments["/srv/app/run.sh"].endswith("can be overwritten in place")
+
+
+def test_narrow_execute_on_a_whole_policy_reports_an_executed_object_that_did_not_exist():
+    notes = generalise.Notes()
+    narrowed = generalise.narrow_execute({"/srv/app": frozenset({"execute", "create"})}, ["/srv/app/gen/tool"],
+                                         BESIDE, notes)
+    assert narrowed == {"/srv/app": frozenset({"create"})}
+    assert [(item["path"], item["section"]) for item in notes.reported] == [("/srv/app/gen/tool", "execute")]
+
+
+def test_an_execute_already_on_the_file_is_left_alone_without_a_comment():
+    snapshot = snapshot_with("/home/u/bin/tool", directories=("/home/u", "/home/u/bin"))
+    grants, notes = generalise.grants_and_notes([execute("/home/u/bin/tool"), create("/home/u/bin/new")], snapshot, FINE)
+    assert grants == {"/home/u/bin/tool": frozenset({"execute"}), "/home/u/bin": frozenset({"create"})}
+    assert notes.comments == {}
