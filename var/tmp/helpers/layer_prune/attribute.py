@@ -86,6 +86,8 @@ TWO_PATH_ARGUMENTS = {
 }
 DESCRIPTOR_CALLS = frozenset({"ftruncate", "getdents", "getdents64"})
 SEND_CALLS = frozenset({"sendto", "sendmsg", "sendmmsg"})
+# The socket families the connect guard carries and a [connect] or [bind] rule can name.
+INET_FAMILIES = frozenset({"AF_INET", "AF_INET6"})
 # The program header type of an ELF interpreter, and how far into a file the pruner reads to find it.
 PT_INTERP = 3
 ELF_READ_LIMIT = 65536
@@ -200,9 +202,13 @@ def open_flags(call: Syscall) -> str:
 
 
 def attribute_open(call: Syscall, path: str) -> Denial:
-    """A refused open: read, write or both on the file, or a creation on its parent (A.6.2)."""
+    """A refused open: read, write or both on the file, or a creation on its parent (A.6.2).
+
+    An O_PATH open is not checked by Landlock, and for an unnamed O_TMPFILE file the table does
+    not state which right Landlock checks, so both are reported as `other` and never granted.
+    """
     flags = set(open_flags(call).split("|"))
-    if "O_PATH" in flags:
+    if "O_PATH" in flags or "O_TMPFILE" in flags:
         return make_denial(call, LAYER_OTHER, (path,))
     if "O_CREAT" in flags and not os.path.lexists(path):
         return filesystem(call, (parent_of(path),), SECTION_CREATE)
@@ -350,10 +356,17 @@ def destination_text(call: Syscall) -> str:
 
 
 def attribute_send(call: Syscall, state: RunState) -> Denial:
-    """A refused connect or datagram: the guard or Landlock's port rule, or a fixed rule for AF_UNIX."""
+    """A refused connect or datagram: the guard or Landlock's port rule for an IPv4 or IPv6 destination.
+
+    The guard refuses every other family (AF_UNIX, and AF_UNSPEC, which disconnects a datagram
+    socket), so that is a fixed rule. A call without a destination the trace names, such as a send
+    on a connected socket, is reported as `other`: a [connect] rule needs an address and a port.
+    """
     family, address, port = parse_address(destination_text(call))
-    if family == "AF_UNIX":
+    if family is not None and family not in INET_FAMILIES:
         return make_denial(call, LAYER_FIXED)
+    if family is None or address is None or port is None:
+        return make_denial(call, LAYER_OTHER)
     transport = state.transport(call)
     if call.name in SEND_CALLS and transport is None:
         transport = "udp"
@@ -361,7 +374,10 @@ def attribute_send(call: Syscall, state: RunState) -> Denial:
 
 
 def attribute_bind(call: Syscall, state: RunState) -> Denial:
-    """A refused bind: a pathname socket asks for create-ipc on its parent, a port for [bind]."""
+    """A refused bind: a pathname socket asks for create-ipc on its parent, an IPv4 or IPv6 port for [bind].
+
+    An abstract socket, another family or an address without a port is reported as `other`.
+    """
     text = strace_parse.argument(call, 1) or ""
     family, address, port = parse_address(text)
     if family == "AF_UNIX":
@@ -371,6 +387,8 @@ def attribute_bind(call: Syscall, state: RunState) -> Denial:
         if not path.startswith("/"):
             path = os.path.join(state.directory(call.pid), path)
         return filesystem(call, (parent_of(path),), SECTION_CREATE_IPC)
+    if family not in INET_FAMILIES or port is None:
+        return make_denial(call, LAYER_OTHER)
     return make_denial(call, LAYER_NETWORK, (), frozenset({SECTION_BIND}), address, port, state.transport(call))
 
 

@@ -1,24 +1,28 @@
-"""The control replay: whether a refused filesystem access also fails outside every Landlock domain.
+"""The control replay: whether a refused access also fails outside every Landlock domain.
 
 The command runs as the same uid as the pruner and under the same AppArmor profile, so a refusal
-Landlock did not cause (a mode, an owner, a mount) also happens to the pruner itself. Each candidate
-denial is therefore replayed here, outside the sandbox (A.6.3). A replay that fails means granting
-would not help, and the denial must never become a grant.
+Landlock did not cause (a mode, an owner, a mount, a privileged port) also happens to the pruner
+itself. Each candidate denial is therefore replayed here, outside the sandbox (A.6.3). A replay that
+fails means granting would not help, and the denial must never become a grant.
 
-Every replay is free of lasting effects: a read or write opens without truncating and closes again,
+A replay changes nothing it leaves behind: a read or write opens without truncating and closes again,
 a device node, FIFO or socket is never opened (its permission is asked with access(2) instead, so no
-driver sees an open), and a creation makes one temporary file and removes it at once. Nothing follows
-a symbolic link: a link is resolved to its target first, which is what Landlock checks, and the
-target is then opened with O_NOFOLLOW.
+driver sees an open), a creation makes one temporary file and removes it again, and a bind takes a
+loopback port and closes it. Only a pruner killed between creating and removing that temporary file
+leaves it behind. Nothing follows a symbolic link: a link is resolved to its target first, which is
+what Landlock checks, and the target is then opened with O_NOFOLLOW.
 """
 
 from __future__ import annotations
 
+import errno
 import os
+import socket
 import stat
 import tempfile
 
 from layer_prune.attribute import (
+    SECTION_BIND,
     SECTION_CREATE,
     SECTION_EXECUTE,
     SECTION_READ,
@@ -114,8 +118,31 @@ def replay_create(path: str) -> bool:
         descriptor, name = tempfile.mkstemp(dir=directory, prefix=".phobos-prune-control.")
     except OSError:
         return False
-    os.close(descriptor)
-    os.unlink(name)
+    try:
+        os.close(descriptor)
+    finally:
+        os.unlink(name)
+    return True
+
+
+def replay_bind(denial: Denial) -> bool:
+    """Whether the pruner can bind the refused port itself, on loopback of the address's family.
+
+    Only a refusal with EACCES counts against the grant: a port below the kernel's unprivileged
+    start, for a uid without the capability to bind it, is refused there too, and a [bind] rule could
+    not help. A port already in use answers EADDRINUSE, which says nothing about permission. Port 0
+    (an ephemeral port, or a listen on an unbound socket) is never privileged.
+    """
+    if not denial.port:
+        return True
+    family = socket.AF_INET6 if denial.address and ":" in denial.address else socket.AF_INET
+    kind = socket.SOCK_DGRAM if denial.transport == "udp" else socket.SOCK_STREAM
+    loopback = "::1" if family == socket.AF_INET6 else "127.0.0.1"
+    try:
+        with socket.socket(family, kind) as probe:
+            probe.bind((loopback, denial.port))
+    except OSError as refusal:
+        return refusal.errno != errno.EACCES
     return True
 
 
@@ -152,14 +179,14 @@ def replay(path: str, section: str) -> bool:
 def landlock_caused(denial: Denial) -> bool:
     """Whether granting the denial could help, because the access it was refused succeeds unsandboxed.
 
-    A network refusal needs no replay: in the prune container only the connect guard and Landlock's
-    port rules answer EACCES on connect, sendto and bind. A fixed rule, a limit or another mechanism's
-    refusal is never Landlock's in the sense that a grant could undo. A rename or link refused with
-    EXDEV is Landlock's only when both parents share a filesystem; otherwise it is the filesystem's
-    own answer.
+    A refused connect or datagram needs no replay: in the prune container only the connect guard and
+    Landlock's port rules answer EACCES there. A refused bind is replayed, because the kernel also
+    refuses a privileged port with EACCES. A fixed rule, a limit or another mechanism's refusal is
+    never one a grant could undo. A rename or link refused with EXDEV is Landlock's only when both
+    parents share a filesystem; otherwise it is the filesystem's own answer.
     """
     if denial.layer == LAYER_NETWORK:
-        return True
+        return SECTION_BIND not in denial.sections or replay_bind(denial)
     if denial.layer != LAYER_FILESYSTEM or not denial.objects:
         return False
     if denial.errno == "EXDEV" and SECTION_RESTRUCTURE in denial.sections and not same_filesystem(denial.objects):

@@ -223,6 +223,33 @@ def test_a_refused_unix_connect_is_a_fixed_rule_of_the_guard():
     assert denial.sections == frozenset()
 
 
+def test_a_refused_connect_of_another_family_is_a_fixed_rule_of_the_guard():
+    denial = only_denial("300 connect(5<socket:[2]>, {sa_family=AF_UNSPEC, sa_data=\"\"}, 16) = -1 EACCES (Permission denied)")
+    assert denial.layer == record.LAYER_FIXED
+    assert denial.sections == frozenset()
+
+
+def test_a_refused_send_without_a_destination_is_never_a_network_grant():
+    denial = only_denial("300 socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP) = 5<socket:[2]>",
+                         '300 sendto(5<socket:[2]>, "x", 1, 0, NULL, 0) = -1 EACCES (Permission denied)')
+    assert denial.layer == record.LAYER_OTHER
+    assert denial.sections == frozenset()
+
+
+def test_a_refused_bind_of_an_abstract_socket_or_another_family_is_never_a_grant():
+    abstract = only_denial('300 bind(4<socket:[1]>, {sa_family=AF_UNIX, sun_path=@"x"}, 4) = -1 EACCES (Permission denied)')
+    netlink = only_denial("300 bind(4<socket:[1]>, {sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, 12) "
+                          "= -1 EACCES (Permission denied)")
+    assert abstract.layer == record.LAYER_OTHER
+    assert netlink.layer == record.LAYER_OTHER
+
+
+def test_a_refused_unnamed_temporary_file_is_never_a_grant():
+    denial = only_denial('300 openat(AT_FDCWD</w>, "/srv", O_RDWR|O_EXCL|O_TMPFILE, 0600) = -1 EACCES (Permission denied)')
+    assert denial.layer == record.LAYER_OTHER
+    assert denial.sections == frozenset()
+
+
 def test_a_refused_raw_or_packet_socket_is_fixed():
     raw = only_denial("300 socket(AF_INET, SOCK_RAW, IPPROTO_ICMP) = -1 EACCES (Permission denied)")
     packet = only_denial("300 socket(AF_PACKET, SOCK_DGRAM, 768) = -1 EACCES (Permission denied)")

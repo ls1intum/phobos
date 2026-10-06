@@ -282,19 +282,30 @@ def started_port_only_enforcer(call: Syscall) -> bool:
     return program.endswith("/" + ENFORCER_NAME) and f'"{PORT_ONLY_ENFORCER_FLAG}"' in call.arguments
 
 
+class ReusedProcessId(ValueError):
+    """The kernel handed one process id to two processes within one trace.
+
+    Calls are told apart only by the id strace prints, so the calls of the two processes could not be
+    separated, and a refusal of one could be attributed to the other. A trace like this is refused
+    rather than guessed at; the pruner aborts the run. With pid_max at 4194304, as in the prune
+    containers measured, it needs millions of processes in one run.
+    """
+
+
 @dataclasses.dataclass
 class DomainWalk:
     """The running state of parse_trace's walk over the log, kept apart from the finished Trace."""
 
     kept: list[Syscall] = dataclasses.field(default_factory=list)
-    thread_group: dict[int, int] = dataclasses.field(default_factory=dict)
+    seen: set[int] = dataclasses.field(default_factory=set)
     port_only: set[int] = dataclasses.field(default_factory=set)
     entries: list[tuple[int, int, bool]] = dataclasses.field(default_factory=list)
-    births: list[tuple[int, int, int]] = dataclasses.field(default_factory=list)
+    births: list[tuple[int, int, int, bool]] = dataclasses.field(default_factory=list)
+    born: set[int] = dataclasses.field(default_factory=set)
 
     def take(self, call: Syscall) -> None:
         """Records one completed call: the process tree, the domain entries, and what to keep."""
-        self.thread_group.setdefault(call.pid, call.pid)
+        self.seen.add(call.pid)
         if call.name == "execve" and call.errno is None:
             if started_port_only_enforcer(call):
                 self.port_only.add(call.pid)
@@ -302,13 +313,34 @@ class DomainWalk:
                 self.port_only.discard(call.pid)
         child = forked_child(call)
         if child is not None:
-            self.thread_group[child] = self.thread_group[call.pid] if is_thread(call) else child
-            self.births.append((len(self.kept), call.pid, child))
+            if child in self.born:
+                raise ReusedProcessId(f"process id {child} was created twice in one trace")
+            self.born.add(child)
+            self.seen.add(child)
+            self.births.append((len(self.kept), call.pid, child, is_thread(call)))
         if call.errno is None and call.name not in KEPT_SUCCESSES:
             return
         if call.name == "landlock_restrict_self" and call.result == 0:
             self.entries.append((len(self.kept), call.pid, call.pid in self.port_only))
         self.kept.append(call)
+
+    def thread_groups(self) -> dict[int, int]:
+        """Every thread id seen mapped to its thread-group id, once every clone is known.
+
+        A thread joins its creator's group and any other child starts its own. The walk repeats
+        until nothing changes, because strace may print a thread's own clone before the clone that
+        created it returned and named it.
+        """
+        group = {pid: pid for pid in self.seen}
+        changed = True
+        while changed:
+            changed = False
+            for _, parent, child, thread in self.births:
+                wanted = group[parent] if thread else child
+                if group[child] != wanted:
+                    group[child] = wanted
+                    changed = True
+        return group
 
     def domain_from(self, count_port_only: bool) -> dict[int, int]:
         """Where each thread's calls enter the domain, counting port-only entries or not.
@@ -324,7 +356,7 @@ class DomainWalk:
         changed = True
         while changed:
             changed = False
-            for position, parent, child in self.births:
+            for position, parent, child, _ in self.births:
                 if parent in start and start[parent] <= position and start.get(child) != 0:
                     start[child] = 0
                     changed = True
@@ -338,7 +370,8 @@ def parse_trace(lines: Iterable[str]) -> Trace:
     thread or process it creates afterwards is in the domain from its first call. The network
     layer's enforcer applies a domain that handles no path (started with --no-filesystem) before the
     filesystem layer's helper shells run, so its entry is not counted, unless the trace holds no
-    other entry at all, as when the filesystem layer is switched off.
+    other entry at all, as when the filesystem layer is switched off. Raises ReusedProcessId when
+    one id was given to two processes.
     """
     walk = DomainWalk()
     for line in joined_lines(lines):
@@ -351,6 +384,6 @@ def parse_trace(lines: Iterable[str]) -> Trace:
     return Trace(
         syscalls=walk.kept,
         domain_pids=frozenset(start),
-        thread_group=walk.thread_group,
+        thread_group=walk.thread_groups(),
         domain_from=start,
     )

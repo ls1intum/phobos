@@ -5,6 +5,8 @@ from __future__ import annotations
 import pathlib
 import sys
 
+import pytest
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "var" / "tmp" / "helpers"))
 
@@ -60,6 +62,25 @@ def test_a_thread_created_with_clone_thread_belongs_to_its_creators_thread_group
     trace = strace_parse.parse_trace(lines)
     assert trace.thread_group[105] == 101
     assert trace.thread_group[101] == 101
+
+
+def test_a_thread_whose_creating_clone_is_printed_late_still_passes_its_group_on():
+    lines = [
+        "100 clone3({flags=CLONE_VM|CLONE_THREAD|CLONE_SIGHAND, exit_signal=0}, 88 <unfinished ...>",
+        "101 clone3({flags=CLONE_VM|CLONE_THREAD|CLONE_SIGHAND, exit_signal=0}, 88) = 102",
+        "100 <... clone3 resumed>) = 101",
+    ]
+    trace = strace_parse.parse_trace(lines)
+    assert trace.thread_group == {100: 100, 101: 100, 102: 100}
+
+
+def test_a_process_id_handed_out_twice_is_refused_rather_than_guessed_at():
+    lines = [
+        "100 clone(child_stack=NULL, flags=SIGCHLD) = 101",
+        "100 clone(child_stack=NULL, flags=SIGCHLD) = 101",
+    ]
+    with pytest.raises(strace_parse.ReusedProcessId):
+        strace_parse.parse_trace(lines)
 
 
 def test_only_processes_after_landlock_restrict_self_are_in_the_domain():

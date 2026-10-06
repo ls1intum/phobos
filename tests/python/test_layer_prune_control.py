@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import socket
 import sys
 
 import pytest
@@ -140,6 +141,38 @@ def test_a_rename_between_two_filesystems_is_the_filesystems_own_exdev(tmp_path)
         pytest.skip("the temporary directory and /dev share a device here")
     refer = denial((str(tmp_path), "/dev"), frozenset({attribute.SECTION_RESTRUCTURE}), errno="EXDEV")
     assert control.landlock_caused(refer) is False
+
+
+def bind_denial(port: int) -> record.Denial:
+    """A refused bind of one TCP port on any IPv4 address."""
+    return record.Denial(pid=1, layer=record.LAYER_NETWORK, operation="bind", objects=(),
+                         sections=frozenset({attribute.SECTION_BIND}), address="0.0.0.0", port=port,
+                         transport="tcp", errno="EACCES")
+
+
+def free_port() -> int:
+    """A loopback TCP port nothing holds right now."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def test_a_refused_bind_of_a_port_the_uid_may_bind_is_landlock_caused():
+    assert control.landlock_caused(bind_denial(free_port())) is True
+    assert control.landlock_caused(bind_denial(0)) is True
+
+
+def test_a_refused_bind_of_a_port_the_kernel_refuses_this_uid_is_not_landlock_caused():
+    privileged = 80
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", privileged))
+    except PermissionError:
+        assert control.landlock_caused(bind_denial(privileged)) is False
+        return
+    except OSError:
+        pytest.skip("port 80 is held here, so the kernel's own refusal cannot be shown")
+    pytest.skip("this uid may bind port 80 here, so the kernel's own refusal cannot be shown")
 
 
 def test_a_network_refusal_needs_no_replay_and_the_other_layers_are_never_landlock_caused():
