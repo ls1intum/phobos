@@ -611,6 +611,32 @@ def verify(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
     raise search.PruneAbort("the joint verification did not settle")
 
 
+def verify_merged(exercise: runner.Exercise, configs: tuple[pathlib.Path, ...], environment: runner.Environment,
+                  pristine: generalise.Snapshot) -> list[dict]:
+    """Runs the exercise under the merged configuration files exactly as grading will apply them (A.9); the record.
+
+    The orchestrator writes a language's base as the union of its exercises and each exercise's file
+    as what that base lacks, so the pair, not the policy the exercise was pruned with, is what grading
+    applies. A baseline as the prune's, then verification_runs runs with every layer on, each from
+    the state the index records; any run that does not match the reference raises PruneAbort.
+    """
+    pruning = Pruning(exercise=exercise, budget=Budget(), environment=environment, pristine=pristine)
+    try:
+        pruning.reference = baseline(pruning)
+        runner.gate_configs(configs, environment, runner.log_paths(environment, "verify-gate")[0])
+        for _ in range(pruning.budget.verification_runs):
+            restore_pristine(pruning)
+            result = runner.run_configured(exercise, configs, JOINT, environment, runner.log_paths(environment, "verify"))
+            pruning.note("merged verification", run=result.log_path.name, status=result.status,
+                         verdict=dataclasses.asdict(result.verdict), configs=[str(config) for config in configs])
+            if not pruning.matches(result):
+                raise search.PruneAbort("a run under the merged base and its exercise file did not match the reference")
+    except search.PruneAbort as abort:
+        abort.evidence["record"] = pruning.log
+        raise
+    return pruning.log
+
+
 def prune_exercise(exercise: runner.Exercise, budget: Budget, environment: runner.Environment,
                    stage: str = "all", pristine: generalise.Snapshot | None = None) -> tuple[cfgfile.Policy, list[dict]]:
     """The pipeline for one exercise up to `stage` (filesystem, network, limits or all); the policy and the record.

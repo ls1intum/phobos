@@ -36,6 +36,7 @@ def pruned(monkeypatch):
             raise search.PruneAbort("flaky reference", {"record": [{"stage": "baseline"}]})
         return cfgfile.Policy(fs={"/usr": frozenset({"read"})}, connect=(), bind=(), limits={"cpu": 30}), [{"stage": stage}]
     monkeypatch.setattr(stages, "prune_exercise", fake)
+    monkeypatch.setenv(stages.PRUNE_CONTAINER_VARIABLE, "1")
     monkeypatch.setattr(stages, "pristine_index", lambda environment: generalise.Snapshot(
         existing=frozenset(), directories=frozenset(), scanned=()))
     monkeypatch.setattr(main, "provenance", lambda environment: ORIGIN)
@@ -140,3 +141,49 @@ def test_an_output_directory_that_overlaps_the_working_directory_is_refused(tmp_
     working = runner.Environment().testing_dir
     assert main.main(["--testing-root", str(root), "--output-dir", working + "/out", "java"]) == main.EXIT_ABORTED
     assert "output directory" in capsys.readouterr().err
+
+
+def test_outside_the_prune_container_main_refuses_before_it_touches_an_artefact(tmp_path, pruned, monkeypatch, capsys):
+    monkeypatch.delenv(stages.PRUNE_CONTAINER_VARIABLE)
+    root = exercise_tree(tmp_path / "exercises", "alpha")
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / "java_alpha.cfg").write_text("[read]\n/usr\n")
+    assert main.main(["--testing-root", str(root), "--output-dir", str(output), "java"]) == main.EXIT_ABORTED
+    assert (output / "java_alpha.cfg").exists()
+    assert "only in the prune container" in capsys.readouterr().err
+
+
+def test_verify_runs_each_exercise_under_the_merged_pair_and_leaves_the_prune_artefacts(tmp_path, pruned, monkeypatch):
+    seen = []
+
+    def fake(exercise, configs, environment, pristine):
+        seen.append((exercise.name, [config.name for config in configs]))
+        if exercise.name == "beta":
+            raise search.PruneAbort("a run under the merged base and its exercise file did not match the reference")
+        return [{"stage": "merged verification"}]
+    monkeypatch.setattr(stages, "verify_merged", fake)
+    root = exercise_tree(tmp_path / "exercises", "alpha", "beta")
+    merged = tmp_path / "merged"
+    (merged / "exercises").mkdir(parents=True)
+    (merged / "BaseLanguage-java.cfg").write_text("[read]\n/usr\n")
+    (merged / "exercises" / "java_alpha.cfg").write_text("[limits]\ntimeout=60\n")
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / "java_alpha.cfg").write_text("kept")
+    status = main.main(["--verify", str(merged), "--testing-root", str(root), "--output-dir", str(output), "java"])
+    assert status == main.EXIT_ABORTED
+    assert seen == [("alpha", ["BaseLanguage-java.cfg", "java_alpha.cfg"]), ("beta", ["BaseLanguage-java.cfg"])]
+    assert (output / "java_alpha.cfg").read_text() == "kept"
+    assert json.loads((output / "verify" / "java_alpha.json").read_text())["verified"] is True
+    assert json.loads((output / "verify" / "java_beta.json").read_text())["verified"] is False
+
+
+def test_verify_without_a_merged_base_fails_every_exercise(tmp_path, pruned, monkeypatch):
+    monkeypatch.setattr(stages, "verify_merged", lambda *arguments: pytest.fail("nothing to verify against"))
+    root = exercise_tree(tmp_path / "exercises", "alpha")
+    output = tmp_path / "out"
+    status = main.main(["--verify", str(tmp_path / "empty"), "--testing-root", str(root), "--output-dir", str(output),
+                        "java"])
+    assert status == main.EXIT_ABORTED
+    assert "there is no" in json.loads((output / "verify" / "java_alpha.json").read_text())["aborted"]

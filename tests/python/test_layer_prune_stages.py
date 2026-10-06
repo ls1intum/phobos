@@ -318,3 +318,19 @@ def test_what_earlier_runs_left_is_removed_before_a_layered_run_and_what_was_the
     assert (real / "logs" / "run-0001-layers.log").exists()
     restored = next(entry for entry in found.log if entry["stage"] == "restored")
     assert restored["count"] == 3
+
+
+def test_the_merged_verification_runs_every_layer_under_the_files_as_given_and_aborts_on_a_mismatch(tmp_path,
+                                                                                                    monkeypatch):
+    configs = (tmp_path / "BaseLanguage-java.cfg", tmp_path / "java_fixture.cfg")
+    shapes = []
+    outcomes = iter([PASSED, FAILED])
+    monkeypatch.setattr(stages, "baseline", lambda pruning: PASSED)
+    monkeypatch.setattr(runner, "gate_configs", lambda given, environment, log: shapes.append(("gate", given)))
+    monkeypatch.setattr(runner, "run_configured", lambda exercise, given, shape, environment, files: (
+        shapes.append((shape, given)) or sampled(next(outcomes), None)))
+    index = stages.generalise.Snapshot(existing=frozenset(), directories=frozenset(), scanned=())
+    exercise = pruning(tmp_path).exercise
+    with pytest.raises(search.PruneAbort, match="did not match the reference"):
+        stages.verify_merged(exercise, configs, runner.Environment(log_dir=str(tmp_path / "logs")), index)
+    assert shapes == [("gate", configs), (stages.JOINT, configs), (stages.JOINT, configs)]
