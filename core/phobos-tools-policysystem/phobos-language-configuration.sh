@@ -39,7 +39,11 @@ LANGUAGE_LEVELS_PATTERN='^[123456789][0123456789]?$'
 LANGUAGE_PASSWORD_DATABASE_FIELD="home"
 LANGUAGE_PASSWORD_DATABASE_HOME_INDEX=5
 LANGUAGE_PASSWORD_DATABASE_FIELDS=7
-# The status getent answers with when the database holds no entry for the key.
+# The shortest home field password-database accepts. A runtime that reads its user's home from the
+# password database may fall back to HOME for a shorter one, as the JVM does from version 19.
+LANGUAGE_PASSWORD_DATABASE_SHORTEST_HOME=2
+# The status getent answers with when the database holds no entry for the key, or the name service
+# behind it could not answer.
 LANGUAGE_GETENT_NOT_FOUND=2
 # The placeholder Phobos determines itself, from --project-root or the tail flags, and which a
 # programming language configuration therefore may not name.
@@ -232,11 +236,15 @@ determine_by_command_ancestor() {
 }
 
 # Sets language_value to the home directory of this process's real user as the password database
-# names it, the entry getent passwd prints for the uid, sixth field. That is where a runtime such as
-# the JVM takes a user's home directory from, whatever HOME says. getent consults the system's name
-# service, which in the image is its /etc/passwd. No entry for the uid, an entry that is not seven
-# fields, and an empty home field are refused; getent failing in any other way, getent missing among
-# them, ends the run with PHB-ERUNTIME. Takes the placeholder's name, the primitive as written, and
+# names it, the entry getent passwd prints for the uid, sixth field. A runtime such as the JVM takes a
+# user's home directory from there and not from HOME, but may fall back to HOME when there is no
+# entry or the home field is shorter than two characters, as the JVM does from version 19; exactly
+# those cases are refused here rather than guessed, so a value this gives is the one such a runtime
+# uses. getent consults the system's name service, which in the image is its /etc/passwd. No entry
+# for the uid, an entry that holds a control character or is not seven fields, and a home field
+# shorter than two characters are refused, naming only the uid, since an entry may hold a password
+# field and a real name; getent failing in any other way, getent missing among them, ends the run
+# with PHB-ERUNTIME. Takes the placeholder's name, the primitive as written, and
 # the primitive's one argument, the field, which is "home". Assumes it runs inside
 # load_language_configuration, with PARSE_LOCATION naming the line, and that it is called plainly,
 # so that a refusal ends the run.
@@ -252,7 +260,7 @@ determine_by_password_database() {
   fi
   entry="$(getent passwd "$UID" 2>/dev/null && printf 'x')" || status=$?
   if (( status == LANGUAGE_GETENT_NOT_FOUND )); then
-    refuse_cfg "\${${placeholder}} cannot be determined: ${written@Q} found no entry for the uid ${UID} in the password database"
+    refuse_cfg "\${${placeholder}} cannot be determined: ${written@Q} found no entry for the uid ${UID} in the password database, or the name service could not answer"
   fi
   if (( status != 0 )); then
     report "Runtime unusable: getent could not be run to read the password database entry of the uid ${UID} (status ${status}). The C library's getent is what provides it. (PHB-ERUNTIME)"
@@ -261,15 +269,15 @@ determine_by_password_database() {
   entry="${entry%x}"
   entry="${entry%$'\n'}"
   if language_value_has_control_character "$entry"; then
-    refuse_cfg "\${${placeholder}} cannot be used: ${written@Q} found the password database entry ${entry@Q}, which holds a control character"
+    refuse_cfg "\${${placeholder}} cannot be used: ${written@Q} found a password database entry for the uid ${UID} that holds a control character"
   fi
   IFS=: read -ra fields <<< "${entry}:"
   if (( ${#fields[@]} != LANGUAGE_PASSWORD_DATABASE_FIELDS )); then
-    refuse_cfg "\${${placeholder}} cannot be determined: ${written@Q} found the password database entry ${entry@Q}, which is not seven colon-separated fields"
+    refuse_cfg "\${${placeholder}} cannot be determined: ${written@Q} found a password database entry for the uid ${UID} that is not ${LANGUAGE_PASSWORD_DATABASE_FIELDS} colon-separated fields"
   fi
   language_value="${fields[LANGUAGE_PASSWORD_DATABASE_HOME_INDEX]}"
-  if [[ -z "$language_value" ]]; then
-    refuse_cfg "\${${placeholder}} cannot be determined: ${written@Q} found an empty home field for the uid ${UID} in the password database"
+  if (( ${#language_value} < LANGUAGE_PASSWORD_DATABASE_SHORTEST_HOME )); then
+    refuse_cfg "\${${placeholder}} cannot be determined: ${written@Q} found the home field ${language_value@Q} for the uid ${UID} in the password database, and a home shorter than ${LANGUAGE_PASSWORD_DATABASE_SHORTEST_HOME} characters is one a runtime may replace with HOME"
   fi
 }
 

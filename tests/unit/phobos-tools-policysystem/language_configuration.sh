@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # How a programming language configuration is read: the base policies it names and how each of its
 # placeholders is determined. This file is the one place a programming language enters Phobos, so
-# the loader must accept exactly the three generic primitives and the two sections, determine each
-# value only from the environment and the PATH of the process that loads it, and refuse everything
+# the loader must accept exactly the four generic primitives and the two sections, determine each
+# value only from the environment, the PATH and the password database entry of the process that
+# loads it, and refuse everything
 # else with the file and the line. This suite pins both directions.
 set -uo pipefail
 
@@ -189,6 +190,8 @@ case "${PHOBOS_TEST_GETENT}" in
   control) printf 'tester:x:%s:0:Test User:/tmp\001x:/bin/sh\n' "$2" ;;
   newline) printf 'tester:x:%s:0:Test User:/tmp\n:/bin/sh\n' "$2" ;;
   short) printf 'tester:x:%s\n' "$2" ;;
+  long) printf 'tester:x:%s:0:Test:User:%s:/bin/sh\n' "$2" "${PHOBOS_TEST_GETENT_HOME}" ;;
+  root) printf 'tester:x:%s:0:Test User:/:/bin/sh\n' "$2" ;;
   broken) exit 1 ;;
 esac
 GETENT
@@ -196,12 +199,12 @@ chmod +x "${WORK}/fakegetent/getent"
 result="$(printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\nuser.home = password-database home\n' | PATH="${WORK}/fakegetent:${PATH}" PHOBOS_TEST_GETENT=entry PHOBOS_TEST_GETENT_HOME="${WORK}/srv" HOME=/tmp load_result PASSWORD_CONFIGURATION)"
 check "the home field of the entry for this uid is the value" "base ${HOME_DIR}/BaseLanguage-x.cfg
 placeholder user.home=${WORK}/srv" "$result"
-for case in 'missing|found no entry for the uid' 'empty|empty home field' 'relative|not an absolute path' \
+for case in 'missing|found no entry for the uid' 'empty|shorter than 2 characters' 'relative|not an absolute path' \
   'nonexistent|not an existing directory' 'control|control character' 'newline|control character' \
-  'short|not seven colon-separated fields'; do
+  'short|not 7 colon-separated fields' 'long|not 7 colon-separated fields' 'root|shorter than 2 characters'; do
   mode="${case%%|*}"
   needle="${case#*|}"
-  result="$(printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\nuser.home = password-database home\n' | PATH="${WORK}/fakegetent:${PATH}" PHOBOS_TEST_GETENT="$mode" load_result PASSWORD_CONFIGURATION)"
+  result="$(printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\nuser.home = password-database home\n' | PATH="${WORK}/fakegetent:${PATH}" PHOBOS_TEST_GETENT="$mode" PHOBOS_TEST_GETENT_HOME="${WORK}/srv" load_result PASSWORD_CONFIGURATION)"
   if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"${needle}"* && "${result#*|}" == *"PASSWORD_CONFIGURATION.cfg', line 4"* ]]; then
     ok "a password database entry that is ${mode} is refused, saying '${needle}', with file and line"
   else
