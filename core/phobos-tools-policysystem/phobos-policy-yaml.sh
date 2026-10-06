@@ -75,9 +75,11 @@ yaml_refuse_unsafe_characters() {
 }
 
 # Refuses a file whose text a line-based reader cannot take as it is: a line that is not
-# well-formed UTF-8, a carriage return or a tab anywhere, comments included. Asked before any
-# line is read as YAML, so that the first such line is the one named. Takes the path of a readable
-# file. Assumes it is called plainly, so that a refusal ends the run.
+# well-formed UTF-8, and a carriage return, a tab or a byte order mark anywhere, comments
+# included. refuse_binary_cfg has refused a byte order mark at the start of the file and a NUL
+# byte already; one later in the file is invisible in an editor and would become part of a
+# value. Asked before any line is read as YAML, so that the first such line is the one named.
+# Takes the path of a readable file. Assumes it is called plainly, so that a refusal ends the run.
 yaml_refuse_unreadable_lines() {
   local file="$1"
   local line
@@ -94,8 +96,21 @@ yaml_refuse_unreadable_lines() {
     if [[ "$line" == *$'\t'* ]]; then
       refuse_cfg "this line contains a tab character, which YAML does not accept as indentation and which this reader refuses everywhere. Indent and separate with spaces"
     fi
+    if [[ "$line" == *$'\xef\xbb\xbf'* ]]; then
+      refuse_cfg "this line contains a byte order mark, U+FEFF, which is invisible in an editor and would become part of the value. Remove it"
+    fi
   done < "$file"
   PARSE_LOCATION=""
+}
+
+# Sets yaml_lower to the text with its ASCII capitals made small and every other character left
+# as it is. Takes the text. Maps in the C locale, which it sets for itself alone, because the
+# caller's locale may map a capital to another letter, as a Turkish one maps I to a dotless i,
+# and a word compared after that would no longer be refused. Assumes its caller declared
+# yaml_lower.
+yaml_ascii_lower() {
+  local LC_ALL=C
+  yaml_lower="${1,,}"
 }
 
 # Sets yaml_value_type to the type of one plain scalar, "bool", "null", "int" or "str", and
@@ -105,18 +120,20 @@ yaml_refuse_unreadable_lines() {
 # that a refusal ends the run.
 yaml_plain_type() {
   local text="$1"
+  local yaml_lower=""
   case "$text" in
     true|false) yaml_value_type="bool"; return 0 ;;
     ""|"~"|null|Null|NULL) yaml_value_type="null"; return 0 ;;
   esac
-  if [[ "${text,,}" =~ $YAML_BOOLEAN_LIKE_PATTERN ]]; then
+  yaml_ascii_lower "$text"
+  if [[ "$yaml_lower" =~ $YAML_BOOLEAN_LIKE_PATTERN ]]; then
     refuse_cfg "${text@Q} is read as a boolean by some YAML readers and as a string by others; write true or false, or quote it"
   fi
   if [[ "$text" =~ $YAML_PLAIN_INT_PATTERN ]]; then
     yaml_value_type="int"
     return 0
   fi
-  if [[ "$text" =~ $YAML_NUMBER_LIKE_PATTERN || "${text,,}" =~ $YAML_SPECIAL_FLOAT_PATTERN ]]; then
+  if [[ "$text" =~ $YAML_NUMBER_LIKE_PATTERN || "$yaml_lower" =~ $YAML_SPECIAL_FLOAT_PATTERN ]]; then
     refuse_cfg "${text@Q} is ambiguous: YAML readers disagree on whether it is a number. Write a plain whole number without sign or leading zero, or quote it"
   fi
   yaml_value_type="str"

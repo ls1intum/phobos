@@ -83,7 +83,8 @@ for case in \
   'a: "x"y|after the closing quote' 'a: b: c|quote the value' '%YAML 1.2\na: 1|directive' 'a:\n  x|continuation' \
   'a:\n  b: 1\n c: 2|indentation' 'a: 1\n- x|list item' 'l:\n- x\n  - y|continuation' 'a b: 1|key' \
   'a: @x|indicator' 'a: `x|indicator' 'a: .inf|ambiguous' 'a: ? x|indicator' '\n# only a comment\n|no YAML content' \
-  'a:b|neither' '--- a: 1|own line' 'a: [1]|flow'; do
+  'a:b|neither' '--- a: 1|own line' 'a: [1]|flow' 'a: .INF|ambiguous' 'a: YES|true or false' 'a: oFf|true or false' \
+  'a: "x\xef\xbb\xbfy"|byte order mark' '# a comment \xef\xbb\xbf\na: 1|byte order mark'; do
   text="${case%|*}"
   needle="${case##*|}"
   result="$(printf '%b\n' "$text" | records_of)"
