@@ -41,8 +41,10 @@ hdr() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
 mkdir -p "$TD"
 # A base of this suite's own, as run-tests.sh uses one: the commands below need only the system
-# directories, and a base without the shipped loopback wildcard lets an exercise name a port.
-cat > "$CORE/BaseLanguage-java.cfg" <<'CFG'
+# directories, and a base without the shipped loopback wildcard lets an exercise name a port. It
+# replaces whichever base the image ships, so no second Base*.cfg stays beside it.
+BASE_FILE="$(compgen -G "$CORE/Base*.cfg" | head -n 1)"
+cat > "${BASE_FILE:-$CORE/BaseLanguage-java.cfg}" <<'CFG'
 [read]
 /bin
 /etc

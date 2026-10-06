@@ -34,6 +34,11 @@ PM_OUT=""
 PM_ERR=""
 PM_STATUS=0
 
+# The base policy the image ships beside phobos-policysystem.sh, whichever language it is for, which the
+# suites replace with the minimal one below: a second Base*.cfg left beside it would widen every case.
+PM_BASE="$(compgen -G "${PHOBOS_HOME}/Base*.cfg" | head -n 1)"
+PM_BASE="${PM_BASE:-${PHOBOS_HOME}/BaseLanguage-java.cfg}"
+
 export PATH="${PHOBOS_HOME}:${PATH}"
 
 # Compiles the probe twice, dynamic and static, and lays out the fixtures and the minimal base policy.
@@ -53,8 +58,8 @@ pm_setup() {
   printf 'TOP-SECRET\n' > "$PM/none/secret.txt"
   chmod 0644 "$PM"/ro/data.txt "$PM"/rw/data.txt "$PM"/none/secret.txt
   chmod 0755 "$PM"/ro/pprobe-static "$PM"/none/pprobe-static
-  if [[ -f "${PHOBOS_HOME}/BaseLanguage-java.cfg" ]] && ! pm_base_is_ours; then
-    cp "${PHOBOS_HOME}/BaseLanguage-java.cfg" "$PM/base.original"
+  if [[ -f "${PM_BASE}" ]] && ! pm_base_is_ours; then
+    cp "${PM_BASE}" "$PM/base.original"
   fi
   pm_install_base
   printf -- '--chdir %s/work\n' "$PM" > "$PM/tail.flags"
@@ -90,18 +95,18 @@ BASE
 
 # Writes the minimal base policy over the image's.
 pm_install_base() {
-  pm_minimal_base > "${PHOBOS_HOME}/BaseLanguage-java.cfg"
+  pm_minimal_base > "${PM_BASE}"
 }
 
 # Whether the base policy in place is the minimal one this library wrote, so that a backup is taken of the image's
 # own and never of a leftover from an earlier suite that did not get to restore it.
 pm_base_is_ours() {
-  [[ "$(cat "${PHOBOS_HOME}/BaseLanguage-java.cfg")" == "$(pm_minimal_base)" ]]
+  [[ "$(cat "${PM_BASE}")" == "$(pm_minimal_base)" ]]
 }
 
 pm_restore() {
   if [[ -f "$PM/base.original" ]]; then
-    cp "$PM/base.original" "${PHOBOS_HOME}/BaseLanguage-java.cfg"
+    cp "$PM/base.original" "${PM_BASE}"
   fi
 }
 
