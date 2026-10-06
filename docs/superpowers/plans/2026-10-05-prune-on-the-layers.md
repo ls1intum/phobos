@@ -160,7 +160,7 @@ docker/prune_phase/orchestrate/        stays; merges .cfg artefacts instead of .
 
 Without a mount namespace the exercise has to run at the path grading uses, `/var/tmp/testing-dir`, so its sources cannot live there too, as they do for the Bubblewrap pruner (which bound a copy over that path). The prune container therefore mounts the exercise sources read-only at `/srv/phobos-prune-exercises/<lang>/<exercise>` (from `./var/tmp/testing-dir`), the helpers read-only at `/var/tmp/helpers`, and only `./var/tmp/path_sets` read-write at `/var/tmp/path_sets` (the Maven service of Task 14.1 adds a fourth, read-only mount of the repository manifest for its precondition check); `/var/tmp/testing-dir` is local to the container and is replaced by a fresh copy of the exercise before every run.
 
-The observer is the outermost process: `strace -f ... phobos.sh --config <candidate> -- <build script>`. It therefore also traces the layers' own shells and helpers. Only processes inside the Landlock domain count: a process is in the domain once its own `landlock_restrict_self(...) = 0` has been recorded, and every process cloned from an in-domain process afterwards is too. Network refusals are attributed under the same rule, which drops the guard's refusals of the filesystem layer's own helper shells (measured in A.3.5).
+The observer is the outermost process: `strace -f ... phobos.sh --config <candidate> -- <build script>`. It therefore also traces the layers' own shells and helpers. Only processes inside the Landlock domain count: a process is in the domain once its own `landlock_restrict_self(...) = 0` has been recorded, and every process cloned from an in-domain process afterwards is too, and a process's calls before its own restrict do not count. The network layer applies a Landlock domain of its own that handles no path (the enforcer started with `--no-filesystem --close-bind`) before the filesystem layer's helper shells run, so its entry is not counted unless the trace holds no other one (measured in PR 3: otherwise the guard's refusals of those helpers' nscd lookups would be attributed). Network refusals are attributed under the same rule, which drops the guard's refusals of the filesystem layer's own helper shells (measured in A.3.5).
 
 ### A.6.2 Mapping a refused call to a right
 
@@ -198,12 +198,12 @@ An `execve` refused with `EACCES` is ambiguous between the binary, its ELF inter
 The command runs as the same uid as the pruner and under the same AppArmor profile, so a refusal Landlock did not cause also happens outside the sandbox. For each candidate denial the pruner replays the access itself, outside every Landlock domain:
 
 - read: `os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)` then close; a directory with `O_DIRECTORY`;
-- write on an existing regular file: `os.open(path, os.O_WRONLY | os.O_NONBLOCK)` without `O_TRUNC`, then close (FIFOs and device nodes are never replayed and are classified as fixed);
+- write on an existing regular file: `os.open(path, os.O_WRONLY | os.O_NONBLOCK)` without `O_TRUNC`, then close; FIFOs, sockets and device nodes are never opened but asked with `os.access`, and stay grantable, since every run needs `[write]` on `/dev/null` (corrected in PR 3; a symbolic link is resolved to its target before any replay, because Landlock checks the target);
 - create in a parent: `tempfile.mkstemp(dir=parent)` then `os.unlink` (the prune container is disposable, so a changed directory mtime is acceptable);
 - execute: `os.access(path, os.X_OK)` and the file's mode;
 - refer: compare `os.stat(...).st_dev` of the two parents.
 
-A replay that also fails means the refusal was not Landlock's, and granting would not help: the denial is recorded as `layer="other"` and never granted. Network refusals need no replay: the guard and Landlock's port rules are the only producers of `EACCES` on `connect`, `sendto` and `bind` in the prune container.
+A replay that also fails means the refusal was not Landlock's, and granting would not help: the denial is recorded as `layer="other"` and never granted. Network refusals are replayed too (corrected in PR 3): the guard passes the kernel's own answer to its connect through, so a refused `connect` or datagram is replayed with a datagram `connect` (route and address check only, nothing sent), and a refused `bind` with a loopback `bind`, which also catches a privileged port; only `EACCES` there counts against the grant. A destination of another family than IPv4 or IPv6 is the guard's fixed rule, and a refusal without a destination, an `O_TMPFILE` open or an `O_PATH` open is reported as `other`.
 
 Two further rules keep a foreign refusal from becoming a grant:
 
@@ -468,7 +468,7 @@ The union base keeps today's deployment model (one base, optional `--config`), s
 | Risk | Consequence | Mitigation |
 | --- | --- | --- |
 | A host with `ptrace_scope=3` or a seccomp profile that blocks `ptrace` | no observer | `--assert-ptrace` probe; the pruner refuses to start rather than fall back to stderr parsing |
-| Tracing slows the build | longer prune; timing-sensitive tests fail only under the observer | observed runs only in grow and diagnosis; verdicts and verification unobserved; a failure under the observer without a denial is rerun unobserved; `--seccomp-bpf` when the installed strace supports it unprivileged (measured in PR 3) |
+| Tracing slows the build | longer prune; timing-sensitive tests fail only under the observer | observed runs only in grow and diagnosis; verdicts and verification unobserved; a failure under the observer without a denial is rerun unobserved; `--seccomp-bpf` is not used: measured in PR 3 it needs no privilege and makes a traced run 2.5 times faster, but the connect guard's `SECCOMP_RET_USER_NOTIF` outranks its `SECCOMP_RET_TRACE`, so every call the guard decides disappears from the trace |
 | strace output format differs between versions | parser misreads | golden fixtures captured from the image's own strace in PR 3; version recorded in every `.json` |
 | The reference exercise does not exercise what a student solution needs | grading denies a correct solution | directory granularity and compaction outside the fine-grained roots (A.7); review of the record; the README says the policy is only as good as the reference |
 | A per-run name granted on `/proc` or `/dev/pts` | the command may read every entry of that directory its uid may open, other processes of the container included | limited to the kernel-assigned identifiers of A.6.5 with observed change, commented in the policy, listed in the record (decision 7) |
@@ -562,7 +562,7 @@ static int verdict(bool observed, bool landlock_available) {
 }
 ```
 
-- [ ] **Step 2: Add the mode to the probe script.** Mirror `--assert-landlock`: compile the probe inside `PROBE_CONTAINER_IMAGE` (default `ubuntu:26.04`) started with `docker run --rm --network none` and nothing else, map `OBSERVED` to 0, `TRACEME-REFUSED`/`NOT-OBSERVED` to 1, everything else to 3. `--report` adds `/proc/sys/kernel/yama/ptrace_scope` (or "absent") and the probe's line.
+- [ ] **Step 2: Add the mode to the probe script.** Mirror `--assert-landlock`: compile the probe statically on the runner (`ubuntu:26.04` carries no compiler, and `--network none` rules out installing one) and run it inside `PROBE_CONTAINER_IMAGE` (default `ubuntu:26.04`) started with `docker run --rm --network none --user 65534:65534` and nothing else, map `OBSERVED` to 0, `TRACEME-REFUSED`/`NOT-OBSERVED` to 1, everything else to 3. `--report` adds `/proc/sys/kernel/yama/ptrace_scope` (or "absent") and the probe's line.
 - [ ] **Step 3: Run it locally** in Docker Desktop: `bash tests/runner-capability-probe.sh --assert-ptrace; echo "status $?"`. Expected: `status 0`.
 - [ ] **Step 4: Add the workflow step and the table row** "ptrace observes a Landlock denial, plain container" in `runner-capabilities.yml`, using `.github/scripts/record-capability.sh ptrace --assert-ptrace` the way the Landlock row does.
 - [ ] **Step 5: Lint**: `shellcheck -x -S warning tests/runner-capability-probe.sh`, the gcc-14 `-fanalyzer` gate and `cppcheck --std=c23` on the new C file, `actionlint`, `yamllint --strict .`, `ec --no-color`.
@@ -644,7 +644,7 @@ COPY BasePrune.cfg ${PHOBOS_HOME}/BasePrune.cfg
 
 The image gets its `ENTRYPOINT` in Task 8.1, once `main.py` exists; until then every suite starts it with `--entrypoint bash`.
 
-Pin `strace` to the archive version the CI build resolves (`strace=<version>`) once the first CI build has printed it, as hadolint's `DL3008` asks; until then the `.hadolint.yaml` exception that the run-phase Dockerfile uses applies, with a comment.
+`strace` and `python3` are not pinned to an archive version: `.hadolint.yaml` ignores `DL3008` repository-wide because Ubuntu keeps only the current version of a package, so a pin breaks the build at the next security update; the base image is pinned instead (corrected in PR 3). The strace version is recorded in `tests/python/fixtures/strace/VERSION` and, from PR 8, in every `.json`.
 
 - [ ] **Step 5: Build and run the suite**: `docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci -t phobos-prune-layers:local docker/prune_phase/layers && docker run --rm --network none --entrypoint bash -v "$PWD/tests:/tests:ro" phobos-prune-layers:local /tests/integration/layer_prune_observer.sh`. Expected: `N passed, 0 failed`.
 - [ ] **Step 6: Wire it into `build.yml`** after the acceptance steps of the `run-phase` job (same runner matrix), with the same `docker run` line.
@@ -661,9 +661,9 @@ Pin `strace` to the archive version the CI build resolves (`strace=<version>`) o
 
 **Interfaces:**
 - Produces:
-  - `record.Syscall(pid: int, name: str, arguments: str, result: int, errno: str | None)`, frozen dataclass.
+  - `record.Syscall(pid: int, name: str, arguments: str, result: int | None, errno: str | None)`, frozen dataclass; `result` is None where strace printed `?`.
   - `strace_parse.parse_line(line: str) -> Syscall | None` (a complete line or a resumed one already joined).
-  - `strace_parse.parse_trace(lines: Iterable[str]) -> Trace`, where `Trace` has `syscalls: list[Syscall]` (failed calls, `landlock_restrict_self`, `clone*`, `fork`, `vfork`, `socket`, `bind`, `listen`, `getsockname` successes) and `domain_pids: frozenset[int]`.
+  - `strace_parse.parse_trace(lines: Iterable[str]) -> Trace`, where `Trace` has `syscalls: list[Syscall]` (failed calls, and the successes named in `strace_parse.KEPT_SUCCESSES`: `landlock_restrict_self`, `clone*`, `fork`, `vfork`, `socket`, `bind`, `listen`, `getsockname`, and `chdir` and `fchdir` for the undecorated-`AT_FDCWD` fallback) and `domain_pids: frozenset[int]`; `Trace.in_domain(index)` says whether one call of `syscalls` was made inside the domain, and `strace_parse.ReusedProcessId` is raised for a trace in which one process id was handed out twice. `strace_parse.split_arguments`, `argument` and `descriptor_path` are public, and `attribute` adds `SECTION_CONNECT` and `SECTION_BIND` for network denials (PR 3).
   - `strace_parse.STRACE_ARGUMENTS: tuple[str, ...]`, the option list every observed run uses.
   - `Trace.thread_group: dict[int, int]`, every thread id seen mapped to its thread-group id, from `clone`/`clone3` with and without `CLONE_THREAD` (A.6.5, `/proc/self`).
 
