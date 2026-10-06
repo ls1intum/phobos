@@ -446,15 +446,19 @@ Every pull request is based on `main` after its predecessor merged, or stacked o
 | PR | Branch | Content | Needs | Grading behaviour changed |
 | --- | --- | --- | --- | --- |
 | R1 | `feature/recording-pruner-plan` | this plan and its spike | | no |
+| R3a | `feature/record-guard-and-snapshot` | the parts of R3 and R4.3 that need nothing from PR 162: the safety refusals (`guard`), the snapshot and its fingerprint (`snapshot.take`, `snapshot.fingerprint`, `snapshot.read_listing`), scripted sessions (`pty_script`), and `check.mode` with its warning | | no |
+| R5a | `feature/record-names` | Task R5.1: host names from TLS client hellos, DNS answers and the hosts file | | no |
 | R2 | `feature/record-shared-groundwork` | the shared modules extended: all calls from the parser, `Need`, per-run session ids, renderer header and comments, policy reader, loopback helper | PR 162's PRs 3, 5 and 6 | no |
-| R3 | `feature/record-observer` | `phobos-record record`, snapshot, safety refusals, scripted sessions, compose services | R2 | no |
-| R4 | `feature/record-filesystem` | the filesystem mapping, `generate`, `check`, the offline and interactive suites | R3 | no |
-| R5 | `feature/record-network` | endpoints, names, rules, the networked suite | R4 | no |
+| R3 | `feature/record-observer` | `phobos-record record` (the entry script, `main.py`, `observe.py`), `snapshot.load`, compose services and the safety suite | R2, R3a | no |
+| R4 | `feature/record-filesystem` | the filesystem mapping, `generate`, the rest of `check`, the offline and interactive suites | R3 | no |
+| R5 | `feature/record-network` | endpoints, rules, the networked suite | R4, R5a | no |
 | R6 | `feature/record-merge-and-diff` | several sessions, `diff` | R5 | no |
 | R7 | `feature/record-limits` | optional limits | R6 and PR 162's PR 7 | no |
 | R8 | `docs/record-documentation` | README, CLAUDE.md, SECURITY.md | R7 | no |
 
 **Who introduces the shared modules, and in which order.** PR 162 introduces `var/tmp/helpers/layer_prune/` (`strace_parse` and `record` in its PR 3, `generalise` and `cfgfile` in its PR 5, `network` in its PR 6, `sampler` and `limits` in its PR 7) and this plan only extends them, in R2, without changing any behaviour PR 162's tests pin. R2 therefore waits for PR 162's PR 6. If PR 162's PR 5 is still open when R2 starts, R2 stacks on it rather than copying a module. Nothing in PR 162 waits for this plan; its parser gains two test cases from this spike (A.4, defect 3), which R2 adds and which PR 162 may take earlier.
+
+**Work that does not wait for PR 162.** R3a and R5a hold the modules of R3, R4.3 and R5.1 that import nothing from `layer_prune`, so they are based on `main` and can merge while PR 162 is still under way. They change nothing a run uses: no entry point reaches them until R3 adds `phobos-record`. R3a delivers Task R3.1's `guard.py` and `snapshot.py` without `snapshot.load` (which returns PR 162's `generalise.Snapshot` and so stays in R3), Task R3.2 whole, and Task R4.3's `check.mode` and `check.NOT_FRESH_WARNING` in a `check.py` that R4.3 then completes. Because `check.mode` must read a written snapshot without PR 162's type, R3a adds `snapshot.read_listing(path: pathlib.Path) -> dict[str, str]`, the listing as `take` wrote it (path to fingerprint), and fixes the two keys of `session.json` that `check.mode` reads and `observe.record_session` (R3) writes: `container_id`, the container's id, and `snapshot`, the snapshot's path relative to the recording directory. R5a is Task R5.1 unchanged. The tests of each task move with the code they test.
 
 ## PR R2: Shared groundwork
 
