@@ -5,9 +5,9 @@ This site is built with [Docusaurus](https://docusaurus.io/) and published to
 
 It is split into two guides:
 
-- **User Documentation** (`docs/user/`) — for whoever puts a program in the sandbox: what
+- **User Documentation** (`docs/user/`), for whoever puts a program in the sandbox: what
   Phobos protects against, how to run a command under it, and every section of a policy file.
-- **Contributor Documentation** (`docs/contributor/`) — for people working on Phobos itself: the
+- **Contributor Documentation** (`docs/contributor/`), for people working on Phobos itself: the
   technologies it is built on, the discovery phase and the subsystems.
 
 ## Installation

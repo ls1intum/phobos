@@ -126,6 +126,6 @@ the enforcer refuse such a kernel instead.
 
 ## Further reading
 
-- [Writing an output file](/user/policy-cookbook/writing-an-output-file) — the recipe
-- [`[create]`](create.md), [`[delete]`](delete.md), [`[restructure]`](restructure.md) — the
+- [Writing an output file](/user/policy-cookbook/writing-an-output-file): the recipe
+- [`[create]`](create.md), [`[delete]`](delete.md), [`[restructure]`](restructure.md): the
   other three ways to change a tree

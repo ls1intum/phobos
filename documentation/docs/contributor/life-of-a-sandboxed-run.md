@@ -175,7 +175,7 @@ them in its own `EXIT` trap.
 
 ## Further reading
 
-- [Policy subsystem](subsystems/policy.md) — stage 2 in detail
-- [Network subsystem](subsystems/network.md) — stage 4 in detail
-- [Filesystem subsystem](subsystems/filesystem.md) — stage 5 in detail
-- [phobos.sh](/user/protect-anything/phobos-sh) — the same chain, from the outside
+- [Policy subsystem](subsystems/policy.md): stage 2 in detail
+- [Network subsystem](subsystems/network.md): stage 4 in detail
+- [Filesystem subsystem](subsystems/filesystem.md): stage 5 in detail
+- [phobos.sh](/user/protect-anything/phobos-sh): the same chain, from the outside

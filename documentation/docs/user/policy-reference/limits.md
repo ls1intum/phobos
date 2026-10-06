@@ -152,7 +152,7 @@ container is started with. Phobos cannot set those for itself.
 
 ## Further reading
 
-- [Setting time and memory budgets](/user/policy-cookbook/setting-time-and-memory-budgets) —
+- [Setting time and memory budgets](/user/policy-cookbook/setting-time-and-memory-budgets):
   the recipe
-- [rlimits](/contributor/technologies/rlimits) — the mechanism and its units
+- [rlimits](/contributor/technologies/rlimits): the mechanism and its units
 - [timeout and the process-group lock](/contributor/technologies/timeout-and-the-process-group-lock)

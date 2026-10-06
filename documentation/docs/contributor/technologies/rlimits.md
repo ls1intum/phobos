@@ -62,8 +62,8 @@ in-process line beside them.
 
 ## Further reading
 
-- [`getrlimit(2)`](https://man7.org/linux/man-pages/man2/getrlimit.2.html) — every resource and
+- [`getrlimit(2)`](https://man7.org/linux/man-pages/man2/getrlimit.2.html): every resource and
   its semantics
-- [`ulimit`](https://man7.org/linux/man-pages/man1/ulimit.1p.html) — the shell interface
-- [`cgroups(7)`](https://man7.org/linux/man-pages/man7/cgroups.7.html) — the caps the container
+- [`ulimit`](https://man7.org/linux/man-pages/man1/ulimit.1p.html): the shell interface
+- [`cgroups(7)`](https://man7.org/linux/man-pages/man7/cgroups.7.html): the caps the container
   supplies

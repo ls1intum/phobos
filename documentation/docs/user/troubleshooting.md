@@ -18,13 +18,13 @@ goes to standard error, so whatever reads the run can take one stream and a pers
 
 | Status | Prefix | Meaning |
 | --- | --- | --- |
-| `2` | — | a script was called the wrong way |
+| `2` | none | a script was called the wrong way |
 | `11` | `PHB-EPOLICY` | the policy is invalid, or cannot be enforced as written |
 | `14` | `PHB-ETIMEOUT` | the run passed its timeout and was stopped |
 | `15` | `PHB-ERUNTIME` | something Phobos needs is missing or cannot be started |
-| `125` | — | `phobos-landlock-filesystem-and-networksystem`, the connect guard or the group lock refused to set the sandbox up |
-| `127` | — | the command itself could not be executed |
-| anything else | — | the command's own status. Phobos did not stop the run. |
+| `125` | none | `phobos-landlock-filesystem-and-networksystem`, the connect guard or the group lock refused to set the sandbox up |
+| `127` | none | the command itself could not be executed |
+| anything else | none | the command's own status. Phobos did not stop the run. |
 
 A signal sent to `phobos.sh` (`SIGTERM`, `SIGHUP`, `SIGINT` or `SIGQUIT`) is passed on to the
 command, and `phobos.sh` then ends with 128 plus the signal's number once the layers have cleaned
@@ -370,7 +370,7 @@ Landlock version 2 the right does not exist at all, and every such rename is ref
 
 ## Further reading
 
-- [phobos.sh](protect-anything/phobos-sh.md) — the options named above
-- [Policy Reference](/user/policy-reference/) — what each section means
-- [What does Phobos not protect against](phobos/what-does-phobos-not-protect-against.md) —
+- [phobos.sh](protect-anything/phobos-sh.md): the options named above
+- [Policy Reference](/user/policy-reference/): what each section means
+- [What does Phobos not protect against](phobos/what-does-phobos-not-protect-against.md):
   where a failure is not Phobos's to fix

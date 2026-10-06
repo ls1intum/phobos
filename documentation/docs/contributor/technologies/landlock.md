@@ -104,12 +104,12 @@ carries no port rule. Neither can widen the other.
 
 ## Further reading
 
-- [Landlock: unprivileged access control](https://docs.kernel.org/userspace-api/landlock.html) —
+- [Landlock: unprivileged access control](https://docs.kernel.org/userspace-api/landlock.html):
   the kernel documentation
-- [`landlock(7)`](https://man7.org/linux/man-pages/man7/landlock.7.html) — the manual page, with
+- [`landlock(7)`](https://man7.org/linux/man-pages/man7/landlock.7.html): the manual page, with
   the application binary interface (ABI) version each right arrived in
 - [`landlock_create_ruleset(2)`](https://man7.org/linux/man-pages/man2/landlock_create_ruleset.2.html),
   [`landlock_add_rule(2)`](https://man7.org/linux/man-pages/man2/landlock_add_rule.2.html),
   [`landlock_restrict_self(2)`](https://man7.org/linux/man-pages/man2/landlock_restrict_self.2.html)
-- [landlock.io](https://landlock.io/) — the project page
-- [`prctl(2)`](https://man7.org/linux/man-pages/man2/prctl.2.html) — `PR_SET_NO_NEW_PRIVS`
+- [landlock.io](https://landlock.io/): the project page
+- [`prctl(2)`](https://man7.org/linux/man-pages/man2/prctl.2.html): `PR_SET_NO_NEW_PRIVS`

@@ -114,5 +114,5 @@ that right is granted only by [`[restructure]`](restructure.md).
 
 ## Further reading
 
-- [`[restructure]`](restructure.md) — create, delete and move together
-- [Writing an output file](/user/policy-cookbook/writing-an-output-file) — the recipe
+- [`[restructure]`](restructure.md): create, delete and move together
+- [Writing an output file](/user/policy-cookbook/writing-an-output-file): the recipe

@@ -120,6 +120,6 @@ still counts.
 
 ## Further reading
 
-- [Filesystem subsystem](/contributor/subsystems/filesystem) — the same layer from the inside
-- [Landlock](/contributor/technologies/landlock) — the kernel mechanism and its versions
-- [Policy Reference](/user/policy-reference/) — every filesystem section in full
+- [Filesystem subsystem](/contributor/subsystems/filesystem): the same layer from the inside
+- [Landlock](/contributor/technologies/landlock): the kernel mechanism and its versions
+- [Policy Reference](/user/policy-reference/): every filesystem section in full

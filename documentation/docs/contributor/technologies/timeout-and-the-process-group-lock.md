@@ -62,9 +62,9 @@ the first and not the second.
 
 ## Further reading
 
-- [`timeout` invocation](https://www.gnu.org/software/coreutils/manual/html_node/timeout-invocation.html) —
+- [`timeout` invocation](https://www.gnu.org/software/coreutils/manual/html_node/timeout-invocation.html):
   the GNU coreutils manual
 - [`setsid(2)`](https://man7.org/linux/man-pages/man2/setsid.2.html) and
-  [`setpgid(2)`](https://man7.org/linux/man-pages/man2/setpgid.2.html) — the two calls the lock
+  [`setpgid(2)`](https://man7.org/linux/man-pages/man2/setpgid.2.html): the two calls the lock
   refuses
-- [Seccomp](seccomp.md) — the filter mechanism, and the guard that duplicates this cover
+- [Seccomp](seccomp.md): the filter mechanism, and the guard that duplicates this cover

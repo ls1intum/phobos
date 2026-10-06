@@ -65,9 +65,9 @@ its turn.
 
 ## Further reading
 
-- [`containers/bubblewrap`](https://github.com/containers/bubblewrap) — the source repository
+- [`containers/bubblewrap`](https://github.com/containers/bubblewrap): the source repository
   and the manual page
 - [`namespaces(7)`](https://man7.org/linux/man-pages/man7/namespaces.7.html)
 - [`mount_namespaces(7)`](https://man7.org/linux/man-pages/man7/mount_namespaces.7.html)
 - [`user_namespaces(7)`](https://man7.org/linux/man-pages/man7/user_namespaces.7.html)
-- [Pruning](../pruning.md) — the phase this tool serves
+- [Pruning](../pruning.md): the phase this tool serves

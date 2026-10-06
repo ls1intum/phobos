@@ -119,5 +119,5 @@ from Landlock version 6.
 
 ## Further reading
 
-- [`[create]`](create.md) — regular files and directories
-- [Landlock](/contributor/technologies/landlock) — the scoping the ruleset applies
+- [`[create]`](create.md): regular files and directories
+- [Landlock](/contributor/technologies/landlock): the scoping the ruleset applies

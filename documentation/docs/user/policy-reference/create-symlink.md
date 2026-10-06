@@ -111,5 +111,5 @@ link cannot redirect a rule.
 
 ## Further reading
 
-- [`[create]`](create.md) — regular files and directories
-- [`[write]`](write.md) — why a changeable rule refuses to follow a link
+- [`[create]`](create.md): regular files and directories
+- [`[write]`](write.md): why a changeable rule refuses to follow a link

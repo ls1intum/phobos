@@ -134,7 +134,7 @@ file can produce it. A policy that needs `ioctl` on a device has no way to ask.
 
 ## Further reading
 
-- [Landlock](../technologies/landlock.md) — the kernel mechanism and its versions
-- [phobos-filesystem.sh](/user/protect-anything/phobos-filesystem-sh) — the same layer, from the
+- [Landlock](../technologies/landlock.md): the kernel mechanism and its versions
+- [phobos-filesystem.sh](/user/protect-anything/phobos-filesystem-sh): the same layer, from the
   outside
-- [Policy subsystem](policy.md) — where the path sets come from
+- [Policy subsystem](policy.md): where the path sets come from

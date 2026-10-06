@@ -188,8 +188,8 @@ port, now that UDP bind is always handled.
 
 ## Further reading
 
-- [Network subsystem](/contributor/subsystems/network) — the same layer from the inside
-- [Seccomp](/contributor/technologies/seccomp) — how the guard traps a call
-- [HAProxy](/contributor/technologies/haproxy) — the two roles it plays here
-- [`[connect]`](/user/policy-reference/connect) and [`[bind]`](/user/policy-reference/bind) —
+- [Network subsystem](/contributor/subsystems/network): the same layer from the inside
+- [Seccomp](/contributor/technologies/seccomp): how the guard traps a call
+- [HAProxy](/contributor/technologies/haproxy): the two roles it plays here
+- [`[connect]`](/user/policy-reference/connect) and [`[bind]`](/user/policy-reference/bind):
   the rule syntax in full

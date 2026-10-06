@@ -65,6 +65,6 @@ table and a run filling the disk are the container's job.
 
 ## Further reading
 
-- [Resources subsystem](/contributor/subsystems/resources) — the same layer from the inside
-- [rlimits](/contributor/technologies/rlimits) — the mechanism and its units
-- [`[limits]`](/user/policy-reference/limits) — where a limit is written
+- [Resources subsystem](/contributor/subsystems/resources): the same layer from the inside
+- [rlimits](/contributor/technologies/rlimits): the mechanism and its units
+- [`[limits]`](/user/policy-reference/limits): where a limit is written

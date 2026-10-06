@@ -160,8 +160,8 @@ version brought which right.
 
 ## Further reading
 
-- [SECURITY.md](https://github.com/ls1intum/phobos/blob/main/SECURITY.md) — the threat model
+- [SECURITY.md](https://github.com/ls1intum/phobos/blob/main/SECURITY.md): the threat model
   and what is in scope for a report
-- [What does Phobos protect against](what-does-phobos-protect-against.md) — the other direction
-- [How the discovery phase decides](/contributor/pruning) — what the prune phase measures, and
+- [What does Phobos protect against](what-does-phobos-protect-against.md): the other direction
+- [How the discovery phase decides](/contributor/pruning): what the prune phase measures, and
   where it errs

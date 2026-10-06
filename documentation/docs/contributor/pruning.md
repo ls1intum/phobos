@@ -39,7 +39,7 @@ Then it descends. For each directory, in order:
 | 1 | an empty writable temporary filesystem (`--tmpfs`) | the run still works, so it was never needed. Stop, and do not descend. |
 | 2 | read-only (`--ro-bind`) | the run works read-only. Keep it so, and descend into it. |
 | 3 | writable (`--bind`) | the run needs to write there. Keep it so, and descend into it. |
-| — | it fails even writable | keep it writable and carry on; the cause lies elsewhere. |
+| after 3 | it fails even writable | keep it writable and carry on; the cause lies elsewhere. |
 
 The walk is top-down, so an unused subtree is dropped in one step rather than file by file, and
 a directory that is hidden is never descended into.
@@ -195,8 +195,8 @@ parser and attribution turn the record into exactly that one denial.
 
 ## Further reading
 
-- [Bubblewrap](technologies/bubblewrap.md) — the mechanism the measurement uses
-- [What does Phobos not protect against](/user/phobos/what-does-phobos-not-protect-against) —
+- [Bubblewrap](technologies/bubblewrap.md): the mechanism the measurement uses
+- [What does Phobos not protect against](/user/phobos/what-does-phobos-not-protect-against):
   what an empirical allow-list can and cannot promise
-- [`CONTRIBUTING.md`](https://github.com/ls1intum/phobos/blob/main/CONTRIBUTING.md) — the rules
+- [`CONTRIBUTING.md`](https://github.com/ls1intum/phobos/blob/main/CONTRIBUTING.md): the rules
   for changing this phase

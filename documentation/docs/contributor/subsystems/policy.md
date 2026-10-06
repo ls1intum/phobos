@@ -171,6 +171,6 @@ somebody runs it, rather than on every CI run.
 
 ## Further reading
 
-- [Policy Reference](/user/policy-reference/) — the same format, for whoever writes one
-- [Life of a sandboxed run](../life-of-a-sandboxed-run.md) — where this stage sits
-- [Filesystem subsystem](filesystem.md) — the consumer of the path sets
+- [Policy Reference](/user/policy-reference/): the same format, for whoever writes one
+- [Life of a sandboxed run](../life-of-a-sandboxed-run.md): where this stage sits
+- [Filesystem subsystem](filesystem.md): the consumer of the path sets

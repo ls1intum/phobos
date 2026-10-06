@@ -148,6 +148,6 @@ headings verbatim, and respect the character limit each section declares.
 
 ## Further reading
 
-- [Testing conventions](testing-conventions.md) — what the suites prove and how they report
-- [Life of a sandboxed run](life-of-a-sandboxed-run.md) — the chain a change moves through
-- [Pruning](pruning.md) — the discovery phase, and what a change there does to an allow-list
+- [Testing conventions](testing-conventions.md): what the suites prove and how they report
+- [Life of a sandboxed run](life-of-a-sandboxed-run.md): the chain a change moves through
+- [Pruning](pruning.md): the discovery phase, and what a change there does to an allow-list

@@ -110,5 +110,5 @@ name an execute path the image lacks, and Phobos drops that entry without a word
 
 ## Further reading
 
-- [`[read]`](read.md) — the other half of a program tree
-- [Running a program tree](/user/policy-cookbook/running-a-program-tree) — the recipe
+- [`[read]`](read.md): the other half of a program tree
+- [Running a program tree](/user/policy-cookbook/running-a-program-tree): the recipe

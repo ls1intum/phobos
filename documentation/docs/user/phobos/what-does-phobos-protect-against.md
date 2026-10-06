@@ -100,9 +100,9 @@ unprotected.
 
 ## Further reading
 
-- [What does Phobos not protect against](what-does-phobos-not-protect-against.md) — where the
+- [What does Phobos not protect against](what-does-phobos-not-protect-against.md): where the
   boundary ends
-- [Landlock](/contributor/technologies/landlock) — the kernel mechanism behind the filesystem
+- [Landlock](/contributor/technologies/landlock): the kernel mechanism behind the filesystem
   and port rules
-- [Seccomp](/contributor/technologies/seccomp) — the mechanism behind the connect guard and the
+- [Seccomp](/contributor/technologies/seccomp): the mechanism behind the connect guard and the
   process-group lock

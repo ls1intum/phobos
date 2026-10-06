@@ -114,11 +114,11 @@ stricter action, and denying one call twice denies it once.
 
 ## Further reading
 
-- [`seccomp(2)`](https://man7.org/linux/man-pages/man2/seccomp.2.html) — the system call and its
+- [`seccomp(2)`](https://man7.org/linux/man-pages/man2/seccomp.2.html): the system call and its
   return actions
-- [`seccomp_unotify(2)`](https://man7.org/linux/man-pages/man2/seccomp_unotify.2.html) — the
+- [`seccomp_unotify(2)`](https://man7.org/linux/man-pages/man2/seccomp_unotify.2.html): the
   user-notification mechanism, including the caveats around `CONTINUE`
-- [Seccomp BPF](https://docs.kernel.org/userspace-api/seccomp_filter.html) — the kernel
+- [Seccomp BPF](https://docs.kernel.org/userspace-api/seccomp_filter.html): the kernel
   documentation
 - [`process_vm_readv(2)`](https://man7.org/linux/man-pages/man2/process_vm_readv.2.html)
 - [`setsid(2)`](https://man7.org/linux/man-pages/man2/setsid.2.html) and

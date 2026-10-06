@@ -137,6 +137,6 @@ filter is not started and that the listener's port is not locked either.
 
 ## Further reading
 
-- [Exposing a listener](/user/policy-cookbook/exposing-a-listener) — the recipe
-- [SECURITY.md](https://github.com/ls1intum/phobos/blob/main/SECURITY.md) — the posture this
+- [Exposing a listener](/user/policy-cookbook/exposing-a-listener): the recipe
+- [SECURITY.md](https://github.com/ls1intum/phobos/blob/main/SECURITY.md): the posture this
   section assumes

@@ -150,5 +150,5 @@ of it.
 
 ## Further reading
 
-- [`[accept]`](accept.md) — fronting a listener with a source filter
-- [Exposing a listener](/user/policy-cookbook/exposing-a-listener) — the recipe
+- [`[accept]`](accept.md): fronting a listener with a source filter
+- [Exposing a listener](/user/policy-cookbook/exposing-a-listener): the recipe

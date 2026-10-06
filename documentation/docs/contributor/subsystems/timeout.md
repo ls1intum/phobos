@@ -76,5 +76,5 @@ seconds and is kept below it deliberately.
 ## Further reading
 
 - [timeout and the process-group lock](../technologies/timeout-and-the-process-group-lock.md)
-- [phobos-timeoutsystem.sh](/user/protect-anything/phobos-timeout-sh) — the same layer, from the
+- [phobos-timeoutsystem.sh](/user/protect-anything/phobos-timeout-sh): the same layer, from the
   outside

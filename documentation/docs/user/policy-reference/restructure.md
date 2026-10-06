@@ -117,5 +117,5 @@ it to `out` is the common shape, and it fails with `EXDEV` under `[write]`, `[cr
 
 ## Further reading
 
-- [`[create]`](create.md) and [`[delete]`](delete.md) — the two halves this section carries too
-- [Landlock](/contributor/technologies/landlock) — what REFER guards
+- [`[create]`](create.md) and [`[delete]`](delete.md): the two halves this section carries too
+- [Landlock](/contributor/technologies/landlock): what REFER guards

@@ -182,7 +182,7 @@ verdict: the count never changes the exit status.
 
 ## Further reading
 
-- [Troubleshooting](../troubleshooting.md) — what each message means and what to do next
-- [Policy Reference](/user/policy-reference/) — every section of a configuration file
-- [Life of a sandboxed run](/contributor/life-of-a-sandboxed-run) — the same chain, from the
+- [Troubleshooting](../troubleshooting.md): what each message means and what to do next
+- [Policy Reference](/user/policy-reference/): every section of a configuration file
+- [Life of a sandboxed run](/contributor/life-of-a-sandboxed-run): the same chain, from the
   inside

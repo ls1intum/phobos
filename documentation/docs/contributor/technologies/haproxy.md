@@ -100,9 +100,9 @@ rather than from HAProxy.
 
 ## Further reading
 
-- [HAProxy documentation](https://docs.haproxy.org/) — the configuration manual
-- [The PROXY protocol](https://www.haproxy.org/download/2.8/doc/proxy-protocol.txt) — the header
+- [HAProxy documentation](https://docs.haproxy.org/): the configuration manual
+- [The PROXY protocol](https://www.haproxy.org/download/2.8/doc/proxy-protocol.txt): the header
   the guard sends
-- [`haproxy/haproxy`](https://github.com/haproxy/haproxy) — the source repository
-- [RFC 6066](https://www.rfc-editor.org/rfc/rfc6066) — Server Name Indication, the field the
+- [`haproxy/haproxy`](https://github.com/haproxy/haproxy): the source repository
+- [RFC 6066](https://www.rfc-editor.org/rfc/rfc6066): Server Name Indication, the field the
   broker reads

@@ -59,7 +59,7 @@ section is not listed at all and stays denied.
 | `[create-symlink]` | `l` | create symbolic links |
 | `[restructure]` | `m`, `d`, `f` | create, delete, and move or rename across directories |
 | `[delete]` | `d` | delete files and directories |
-| — | `i` | `ioctl` on a character or block device |
+| no section | `i` | `ioctl` on a character or block device |
 
 The letters are the arguments `phobos-landlock-filesystem-and-networksystem` takes, and `--debug` prints them, so this table
 is what a verbose log is read with. One letter can stand for more than one kernel right: `r`
@@ -168,6 +168,6 @@ missing path they name. Make a path first when only the command creates it and `
 
 ## Further reading
 
-- [Policy Cookbook](/user/policy-cookbook/) — the same sections, one situation at a time
-- [phobos.sh](/user/protect-anything/phobos-sh) — how the files are found and combined
-- [Policy subsystem](/contributor/subsystems/policy) — the parser and the merge, from the inside
+- [Policy Cookbook](/user/policy-cookbook/): the same sections, one situation at a time
+- [phobos.sh](/user/protect-anything/phobos-sh): how the files are found and combined
+- [Policy subsystem](/contributor/subsystems/policy): the parser and the merge, from the inside

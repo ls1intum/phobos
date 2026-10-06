@@ -209,9 +209,9 @@ one, so the layer logs a notice and relies on the outer isolation instead of `--
 
 ## Further reading
 
-- [Seccomp](../technologies/seccomp.md) — how a call is trapped and answered
-- [HAProxy](../technologies/haproxy.md) — the two roles in detail
-- [phobos-networksystem.sh](/user/protect-anything/phobos-network-sh) — the same layer, from the
+- [Seccomp](../technologies/seccomp.md): how a call is trapped and answered
+- [HAProxy](../technologies/haproxy.md): the two roles in detail
+- [phobos-networksystem.sh](/user/protect-anything/phobos-network-sh): the same layer, from the
   outside
 - [`[connect]`](/user/policy-reference/connect), [`[bind]`](/user/policy-reference/bind),
   [`[accept]`](/user/policy-reference/accept)

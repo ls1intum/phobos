@@ -73,7 +73,7 @@ hold: `RLIMIT_AS` bounds one address space at a time.
 
 ## Further reading
 
-- [rlimits](../technologies/rlimits.md) — the mechanism, the units and what they are not
-- [phobos-resourcesystem.sh](/user/protect-anything/phobos-resources-sh) — the same layer, from the
+- [rlimits](../technologies/rlimits.md): the mechanism, the units and what they are not
+- [phobos-resourcesystem.sh](/user/protect-anything/phobos-resources-sh): the same layer, from the
   outside
-- [`[limits]`](/user/policy-reference/limits) — where the values are written
+- [`[limits]`](/user/policy-reference/limits): where the values are written

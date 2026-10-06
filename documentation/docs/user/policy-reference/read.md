@@ -126,6 +126,6 @@ phase hides a directory; a protected run refuses it.
 
 ## Further reading
 
-- [`[execute]`](execute.md) — the other half of a program tree
-- [Reading a data tree](/user/policy-cookbook/reading-a-data-tree) — the recipe
-- [Landlock](/contributor/technologies/landlock) — the rights and the versions they arrived in
+- [`[execute]`](execute.md): the other half of a program tree
+- [Reading a data tree](/user/policy-cookbook/reading-a-data-tree): the recipe
+- [Landlock](/contributor/technologies/landlock): the rights and the versions they arrived in

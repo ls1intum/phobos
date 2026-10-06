@@ -171,6 +171,6 @@ and a transport, or it does not.
 
 ## Further reading
 
-- [Allowing exactly one host](/user/policy-cookbook/allowing-exactly-one-host) — the recipe
-- [phobos-networksystem.sh](/user/protect-anything/phobos-network-sh) — the layer that applies it
-- [HAProxy](/contributor/technologies/haproxy) — how the broker decides
+- [Allowing exactly one host](/user/policy-cookbook/allowing-exactly-one-host): the recipe
+- [phobos-networksystem.sh](/user/protect-anything/phobos-network-sh): the layer that applies it
+- [HAProxy](/contributor/technologies/haproxy): how the broker decides

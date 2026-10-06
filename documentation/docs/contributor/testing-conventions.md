@@ -162,6 +162,6 @@ Two scripts under `tests/` report for themselves and gate no pull request:
 
 ## Further reading
 
-- [`tests/README.md`](https://github.com/ls1intum/phobos/blob/main/tests/README.md) — every
+- [`tests/README.md`](https://github.com/ls1intum/phobos/blob/main/tests/README.md): every
   suite, one row each
-- [How can you contribute](how-can-you-contribute.md) — the lint gate beside these suites
+- [How can you contribute](how-can-you-contribute.md): the lint gate beside these suites

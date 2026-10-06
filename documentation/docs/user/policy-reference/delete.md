@@ -107,4 +107,4 @@ and [`[restructure]`](restructure.md) where it moves files too.
 
 ## Further reading
 
-- [`[restructure]`](restructure.md) — create, delete and move together
+- [`[restructure]`](restructure.md): create, delete and move together

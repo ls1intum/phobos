@@ -85,7 +85,7 @@ across files. Where several configurations name a finite timeout, the largest wi
 
 ## Further reading
 
-- [Timeout subsystem](/contributor/subsystems/timeout) — the same layer from the inside
-- [timeout and the process-group lock](/contributor/technologies/timeout-and-the-process-group-lock) —
+- [Timeout subsystem](/contributor/subsystems/timeout): the same layer from the inside
+- [timeout and the process-group lock](/contributor/technologies/timeout-and-the-process-group-lock):
   the two mechanisms behind it
-- [`[limits]`](/user/policy-reference/limits) — where a timeout is written
+- [`[limits]`](/user/policy-reference/limits): where a timeout is written
