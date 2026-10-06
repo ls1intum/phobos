@@ -1,0 +1,127 @@
+"""A run's outcome, read from its exit status, its log and the JUnit reports its tests wrote.
+
+An exit status is not a result here (AGENTS.md): Gradle reports NO-SOURCE and Maven skips its tests
+with status zero, so two runs agree only when the same tests ran with the same outcomes. The patterns
+are the Bubblewrap pruner's (`var/tmp/pruning/detect_minimal_fs.sh`) and Maven's two lines measured
+in A.8 of the prune-on-the-layers plan, each named once here.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import pathlib
+import re
+
+# The reports are XML the exercise's own build wrote inside the disposable prune container, from
+# the reference's own tests, and defusedxml is not in the image; an entity expansion there could
+# only exhaust that container, so the standard parser is accepted for this input.
+from xml.etree import ElementTree  # nosec B405
+
+# The status phobos.sh ends with when the timeout layer ended the run (PHB_ETIMEOUT).
+TIMEOUT_STATUS = 14
+# Above this, a status is 128 plus the number of the signal that ended the command.
+SIGNAL_STATUS_BASE = 128
+# Where Gradle and Maven write their JUnit reports, relative to the exercise.
+DEFAULT_REPORT_GLOBS = ("build/test-results/**/*.xml", "target/surefire-reports/*.xml")
+# Lines that say no test source was compiled or no test ran although the status was zero: Gradle's
+# NO-SOURCE on the compile or test task, Maven's "No tests to run." or "No tests to run!" and its
+# "Tests are skipped.". A NO-SOURCE on another task, such as processResources, is ordinary.
+NO_SOURCE_PATTERNS = (
+    r"> Task :(?:compileJava|compileTestJava|test) NO-SOURCE",
+    r"No tests to run",
+    r"Tests are skipped\.",
+)
+# Maven's line for a pinned artefact the offline local repository lacks. Only the unsandboxed
+# baseline treats it as an abort; under the layers a refused file there can surface as the same line.
+MAVEN_OFFLINE_MISSING_PATTERN = "in offline mode and the artifact"
+# The lines that mean the build's own machinery failed rather than its tests, at the start of a line.
+INFRA_FAILURE_PATTERNS = (
+    r"^Could not import runpy module",
+    r"^Traceback \(most recent call last\):",
+    r"^Fatal [A-Za-z].*error:",
+    r"^ModuleNotFoundError: No module named ",
+)
+# The outcome a JUnit test case can have, and the one given to a report that cannot be read.
+PASSED = "passed"
+FAILED = "failed"
+SKIPPED = "skipped"
+UNREADABLE = "unreadable"
+
+
+@dataclasses.dataclass(frozen=True)
+class Verdict:
+    """What a run produced.
+
+    `exit_class` is one of success, tests-failed, failure, timeout and signalled. `tests` holds every
+    test case as (classname.name, outcome), sorted. `tests_ran` says whether any report named a test,
+    `no_source` whether the log says no test source or no test ran, `infra_failure` whether it shows
+    the build's own machinery failing; the last is recorded and decides nothing outside the baseline.
+    """
+
+    exit_class: str
+    tests: tuple[tuple[str, str], ...]
+    tests_ran: bool
+    no_source: bool
+    infra_failure: bool
+
+
+def outcome_of(case: ElementTree.Element) -> str:
+    """The outcome of one testcase element: failed with a failure or error child, skipped, or passed."""
+    if case.find("failure") is not None or case.find("error") is not None:
+        return FAILED
+    if case.find("skipped") is not None:
+        return SKIPPED
+    return PASSED
+
+
+def read_report(path: pathlib.Path) -> list[tuple[str, str]]:
+    """Every test case of one JUnit report; a report that cannot be parsed is one unreadable entry.
+
+    A report cut short (a run ended while writing it) must not read as "no tests", which another
+    cut-short run would agree with, so it counts as a test of its own with an outcome no run passes.
+    """
+    try:
+        root = ElementTree.parse(path).getroot()  # nosec B314
+    except (ElementTree.ParseError, OSError):
+        return [(str(path), UNREADABLE)]
+    return [(f"{case.get('classname', '')}.{case.get('name', '')}", outcome_of(case)) for case in root.iter("testcase")]
+
+
+def exit_class_of(status: int, tests: tuple[tuple[str, str], ...]) -> str:
+    """The class of a run's end: the timeout, a signal, failed tests, success, or another failure."""
+    if status == TIMEOUT_STATUS:
+        return "timeout"
+    if status > SIGNAL_STATUS_BASE:
+        return "signalled"
+    if any(outcome in (FAILED, UNREADABLE) for _, outcome in tests):
+        return "tests-failed"
+    if status == 0:
+        return "success"
+    return "failure"
+
+
+def matches_any(patterns: tuple[str, ...], log_text: str) -> bool:
+    """Whether any of the regular expressions matches somewhere in the log, line by line."""
+    return any(re.search(pattern, log_text, re.MULTILINE) for pattern in patterns)
+
+
+def read_verdict(status: int, log_text: str, report_paths: list[pathlib.Path]) -> Verdict:
+    """The verdict of one run from its status, its whole log and the report files it wrote."""
+    tests = tuple(sorted(case for path in report_paths for case in read_report(path)))
+    infra = matches_any(INFRA_FAILURE_PATTERNS, log_text) or MAVEN_OFFLINE_MISSING_PATTERN in log_text
+    return Verdict(
+        exit_class=exit_class_of(status, tests),
+        tests=tests,
+        tests_ran=bool(tests),
+        no_source=matches_any(NO_SOURCE_PATTERNS, log_text),
+        infra_failure=infra,
+    )
+
+
+def same_outcome(first: Verdict, second: Verdict) -> bool:
+    """Whether two runs agree: the same end, and the same tests with the same outcomes.
+
+    infra_failure is left out on purpose: under the layers it classifies nothing (A.8).
+    """
+    return (first.exit_class == second.exit_class and first.tests == second.tests
+            and first.tests_ran == second.tests_ran and first.no_source == second.no_source)
