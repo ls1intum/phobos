@@ -118,7 +118,7 @@ add_language_base() {
 
 # Sets language_value to the exact value of an environment variable, trailing newlines included,
 # or to nothing when the variable is unset. Only the process environment is read, through
-# printenv, never a shell variable of this script. printenv answers 1 for an unset variable; any
+# printenv, once, never a shell variable of this script. printenv answers 1 for an unset variable; any
 # other failure, printenv missing among them, ends the run with PHB-ERUNTIME rather than being taken
 # for an unset variable, which would put a fallback in the place of a value that exists. Takes the
 # variable's name. Assumes it runs inside load_language_configuration and that it is called plainly,
@@ -126,7 +126,7 @@ add_language_base() {
 read_environment_variable() {
   local variable="$1"
   local status=0
-  printenv -- "$variable" > /dev/null 2>&1 || status=$?
+  language_value="$(printenv -- "$variable" 2>/dev/null && printf 'x')" || status=$?
   if (( status == 1 )); then
     language_value=""
     return 0
@@ -135,7 +135,6 @@ read_environment_variable() {
     report "Runtime unusable: printenv could not be run to read the environment variable ${variable@Q} (status ${status}). GNU coreutils is what provides it. (PHB-ERUNTIME)"
     exit "${PHB_ERUNTIME}"
   fi
-  language_value="$(printenv -- "$variable" && printf 'x')"
   language_value="${language_value%x}"
   language_value="${language_value%$'\n'}"
 }
