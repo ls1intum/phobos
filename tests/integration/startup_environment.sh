@@ -211,6 +211,23 @@ for entry in "${ENTRIES[@]}"; do
       "exit 0, nothing planted ran" "exit ${RC}, planted: ${PLANTED}: ${OUT}"
   fi
 done
+# Nor does a layer run on its own look bash up when it starts itself again over the
+# specification it built: a bash first in an absolute PATH entry is never the one that runs.
+mkdir -p "$WORK/only-bash"
+cp "$SUB/bash" "$WORK/only-bash/bash"
+for entry in "${ENTRIES[@]}"; do
+  mapfile -d '' -t args < <(entry_args "$entry")
+  : > "$PLANTED_LOG"
+  OUT="$(cd "$SUB" && PATH="$WORK/only-bash:${CLEAN_PATH}" "${args[@]}" 2>&1)"
+  RC=$?
+  PLANTED="$(sort -u "$PLANTED_LOG" | tr '\n' ' ')"
+  if [[ "$RC" -eq 0 && -z "$PLANTED" ]]; then
+    ok "$entry with another bash first in PATH never runs that bash"
+  else
+    bad "$entry with another bash first in PATH never runs that bash" \
+      "exit 0, the other bash never ran" "exit ${RC}, planted: ${PLANTED}: ${OUT}"
+  fi
+done
 
 echo
 echo "== a trailing empty entry is not the fallback for a program the absolute entries lack =="
