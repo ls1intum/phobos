@@ -108,12 +108,36 @@ add_language_base() {
   if [[ ! -f "${folder}/${entry}" ]]; then
     refuse_cfg "the base policy ${entry@Q} named in [base] does not exist ${where}"
   fi
-  resolved_folder="$(realpath -e -- "$folder")"
-  resolved="$(realpath -e -- "${folder}/${entry}")"
+  resolved_folder="$(realpath -e -- "$folder")" || refuse_cfg "the folder ${folder@Q} of the base policy ${entry@Q} cannot be resolved"
+  resolved="$(realpath -e -- "${folder}/${entry}")" || refuse_cfg "the base policy ${entry@Q} named in [base] cannot be resolved"
   if [[ "$resolved" != "${resolved_folder%/}/"* ]]; then
     refuse_cfg "the base policy ${entry@Q} named in [base] is a symbolic link that leads out of the folder it is named in, to ${resolved@Q}"
   fi
   LANGUAGE_CONFIGURATION_BASES+=( "$resolved" )
+}
+
+# Sets language_value to the exact value of an environment variable, trailing newlines included,
+# or to nothing when the variable is unset. Only the process environment is read, through
+# printenv, never a shell variable of this script. printenv answers 1 for an unset variable; any
+# other failure, printenv missing among them, ends the run with PHB-ERUNTIME rather than being taken
+# for an unset variable, which would put a fallback in the place of a value that exists. Takes the
+# variable's name. Assumes it runs inside load_language_configuration and that it is called plainly,
+# so that a refusal ends the run.
+read_environment_variable() {
+  local variable="$1"
+  local status=0
+  printenv -- "$variable" > /dev/null 2>&1 || status=$?
+  if (( status == 1 )); then
+    language_value=""
+    return 0
+  fi
+  if (( status != 0 )); then
+    report "Runtime unusable: printenv could not be run to read the environment variable ${variable@Q} (status ${status}). GNU coreutils is what provides it. (PHB-ERUNTIME)"
+    exit "${PHB_ERUNTIME}"
+  fi
+  language_value="$(printenv -- "$variable" && printf 'x')"
+  language_value="${language_value%x}"
+  language_value="${language_value%$'\n'}"
 }
 
 # Sets language_value to the value of an environment variable, or to the fallback when the
@@ -133,7 +157,7 @@ determine_by_environment() {
   if [[ ! "$variable" =~ $LANGUAGE_VARIABLE_NAME_PATTERN ]]; then
     refuse_cfg "${variable@Q} in ${written@Q} is not a variable name"
   fi
-  language_value="$(printenv -- "$variable" || true)"
+  read_environment_variable "$variable"
   if [[ -z "$language_value" ]]; then
     language_value="$fallback"
   fi
@@ -169,7 +193,7 @@ determine_by_command_ancestor() {
   if [[ "$found" != /* ]]; then
     refuse_cfg "\${${placeholder}} cannot be determined: ${written@Q} found no command ${command@Q} on the PATH"
   fi
-  language_value="$(realpath -e -- "$found")"
+  language_value="$(realpath -e -- "$found")" || refuse_cfg "\${${placeholder}} cannot be determined: ${written@Q} found ${found@Q}, which cannot be resolved through its symbolic links"
   for (( step = 0; step < 10#$levels; step++ )); do
     if [[ "$language_value" == "/" ]]; then
       refuse_cfg "\${${placeholder}} cannot be determined: ${written@Q} resolved ${command@Q} to ${found@Q}, which has fewer than ${levels} levels above it"

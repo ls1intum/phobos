@@ -111,6 +111,25 @@ for case in \
     bad "refused, saying '${needle}', with file and line: ${text}" "status ${PHB_EPOLICY}" "${result}"
   fi
 done
+result="$(printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\na = environment PHOBOS_TEST_NEWLINE\n' | PHOBOS_TEST_NEWLINE="${WORK}/srv"$'\n' load_result NEWLINE_CONFIGURATION)"
+if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"control character"* && "${result#*|}" == *"NEWLINE_CONFIGURATION.cfg', line 4"* ]]; then
+  ok "a variable whose value ends in a newline is refused, not read without it"
+else
+  bad "a variable whose value ends in a newline is refused, not read without it" "status ${PHB_EPOLICY}" "${result}"
+fi
+
+mkdir -p "${WORK}/tools"
+for tool in head od tr wc realpath dirname; do
+  ln -s "$(type -P "$tool")" "${WORK}/tools/${tool}"
+done
+printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\na = environment HOME /tmp\n' > "${CONFIGURATIONS}/NO_PRINTENV_CONFIGURATION.cfg"
+if result="$( (PATH="${WORK}/tools" load_language_configuration NO_PRINTENV_CONFIGURATION "$HOME_DIR") 2>&1)"; then status=0; else status=$?; fi
+if (( status == PHB_ERUNTIME )) && [[ "$result" == *"printenv could not be run"* ]]; then
+  ok "an environment that cannot be read ends the run instead of falling back"
+else
+  bad "an environment that cannot be read ends the run instead of falling back" "status ${PHB_ERUNTIME}" "${status}|${result}"
+fi
+
 result="$(printf '[placeholders]\na = fixed /tmp\n' | load_result NO_BASE_CONFIGURATION)"
 if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"names no base policy"* && "${result#*|}" == *"NO_BASE_CONFIGURATION.cfg'"* ]]; then
   ok "a configuration that names no base is refused, naming the file"
