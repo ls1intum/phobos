@@ -133,3 +133,9 @@ def test_the_infrastructure_flag_does_not_decide_whether_two_runs_agree(tmp_path
 def test_no_source_in_a_subproject_or_for_kotlin_is_recognised():
     assert verdict.read_verdict(0, "> Task :app:test NO-SOURCE\n", []).no_source
     assert verdict.read_verdict(0, "> Task :compileKotlin NO-SOURCE\n", []).no_source
+
+
+def test_pytest_collecting_no_test_is_no_source_and_ran_no_tests():
+    result = verdict.read_verdict(5, "\n============================ no tests ran in 0.01s ============================\n", [])
+    assert result.no_source
+    assert not result.tests_ran

@@ -90,12 +90,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: prune java
-            slug: prune-java
-            context: docker/prune_phase/java
-          - name: prune python
-            slug: prune-python
-            context: docker/prune_phase/python
           - name: prune orchestrate
             slug: prune-orchestrate
             context: docker/prune_phase/orchestrate
@@ -432,6 +426,91 @@ jobs:
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
             -v "${PWD}:/repo:ro" phobos-prune-layers:ci bash /repo/tests/integration/layer_prune_egress.sh
+
+  # The run-phase image for Python, built FROM the official Python image rather than Artemis's
+  # ls1tum/artemis-python-docker (see its Dockerfile), on native runners for both architectures as
+  # the Java image is. It is held to every suite that does not need Java: the language-neutral
+  # acceptance suites and the whole protection matrix, which replace the image's base with their
+  # own whatever language it is for. The four acceptance suites that compile Java probes or run
+  # Maven (run-tests, extra-tests, phase-test, shipped-policy-test) stay with the Java job. The layer
+  # pruner is then built on this image and prunes the fixture on it, so the pruner is proven on the
+  # image it prunes Python exercises in.
+  run-phase-python:
+    name: Build the Python run-phase image (${{ matrix.platform }}) and hold it to the language-neutral suites
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 100
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: amd64
+            runner: ubuntu-26.04
+          - platform: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assemble the build context
+        run: .github/scripts/assemble-run-phase-context.sh "${RUNNER_TEMP}/run-phase-context"
+
+      - name: Build the Python run-phase image
+        id: build
+        env:
+          FRESH: ${{ github.event_name == 'schedule' && '--pull --no-cache' || '' }}
+        run: |
+          # shellcheck disable=SC2086
+          docker build ${FRESH} \
+            -f docker/run_phase/python/Dockerfile \
+            -t phobos-run-phase-python:ci \
+            "${RUNNER_TEMP}/run-phase-context"
+
+      # The same ordinary containers as the Java job: --network none, cgroup limits, and no
+      # --privileged, no --cap-add, no --security-opt. One step per suite would repeat the Java
+      # job's sixteen steps; a loop that names every suite it runs, and fails when any one does,
+      # says the same.
+      - name: The language-neutral acceptance suites and the protection matrix
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          failed=0
+          for suite in \
+              landlock-filesystem-and-networksystem-acceptance/network-port-test.sh \
+              landlock-filesystem-and-networksystem-acceptance/bind-port-test.sh \
+              landlock-filesystem-and-networksystem-acceptance/scoping-test.sh \
+              landlock-filesystem-and-networksystem-acceptance/seccomp-networksystem-test.sh \
+              landlock-filesystem-and-networksystem-acceptance/network-cleanup-test.sh \
+              protection-matrix/filesystem.sh protection-matrix/network.sh protection-matrix/timeout.sh \
+              protection-matrix/resources.sh protection-matrix/combinations.sh protection-matrix/cli.sh \
+              protection-matrix/lifecycle.sh protection-matrix/policy-syntax.sh \
+              protection-matrix/network-edge.sh protection-matrix/filesystem-edge.sh \
+              protection-matrix/resources-edge.sh protection-matrix/reporting.sh; do
+            echo "::group::${suite}"
+            if ! docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+                phobos-run-phase-python:ci bash "/tests/integration/${suite}"; then
+              failed=1
+              echo "::error::${suite} failed"
+            fi
+            echo "::endgroup::"
+          done
+          exit "${failed}"
+
+      - name: Build the prune image on the Python run-phase image
+        id: prune-build
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase-python:ci \
+            -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers-python:ci .
+
+      - name: The layer pruner on the Python image derives a policy that holds in both directions
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        timeout-minutes: 50
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci bash /repo/tests/integration/layer_prune.sh
 
   # Mutation testing installs clang and mull into a container and then runs the suite
   # once per mutant. It runs on every change like the other jobs, and a run that does

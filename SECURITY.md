@@ -60,15 +60,13 @@ rest exists to take privileges away. None of the following is a vulnerability.
   the guard keeps. A name written in two cases is resolved once. External
   egress in general is still a container started with `--network none`, and resolving needs a
   networked one, so a name in a udp rule assumes the same posture as one in a tcp rule.
-- `docker/prune_phase/` runs the discovery phase, which deliberately breaks a build over and
-  over: it hides a directory, runs the tests, and concludes from the failure that the
-  directory was needed. Its orchestrator therefore starts processes and interprets their
-  failures, and its output becomes the allow-list the sandbox later trusts. The discovery
-  phase uses Bubblewrap to hide directories; the sandbox an exercise runs in does not.
-  The layer pruner beside it (`docker/prune_phase/layers/`, `var/tmp/helpers/layer_prune/`)
-  runs the reference under the grading layers instead and records their refusals with
-  `strace`. strace and the containment probe are installed in the prune image only, never in
-  the run-phase image a submission is graded in, and the prune container needs no privilege.
+- `docker/prune_phase/` runs the discovery phase, which deliberately runs a reference under a
+  policy that refuses too much, over and over: the layer pruner (`docker/prune_phase/layers/`,
+  `var/tmp/helpers/layer_prune/`) records the grading layers' refusals with `strace` and grants
+  what each refusal proves, and its orchestrator merges the result into the allow-list the
+  sandbox later trusts. strace and the containment probe are installed in the prune image only,
+  never in the run-phase image a submission is graded in, and the prune container needs no
+  privilege. Nothing in either phase uses Bubblewrap any more.
 - The Dockerfiles under `docker/` extend the Artemis test images and compile the C products.
   The run-phase image needs no user namespaces, no added capabilities and no security
   options: Landlock, the connect guard and the timeout are all self-imposed by the

@@ -1,11 +1,10 @@
 # Reports what the runner can actually do.
 #
 # Two things the other workflows do depend on the machine rather than on this repository:
-# build.yml runs the Landlock acceptance suites inside an ordinary container, and test.yml
-# runs the pruner, which needs Bubblewrap and therefore unprivileged user namespaces. A
-# runner image can withdraw either without notice, so when one of those jobs starts
-# failing, this is where the question is asked, in one place and the same way every
-# time.
+# build.yml runs the Landlock acceptance suites inside an ordinary container, and the layer
+# pruner's observer traces a run with ptrace in one. A runner image can withdraw either without
+# notice, so when one of those jobs starts failing, this is where the question is asked, in
+# one place and the same way every time.
 #
 # The second job asks whether a runner can boot a virtual machine of its own under KVM, on
 # each hosted runner image. Landlock lives in the kernel, so a container always meets the
@@ -41,13 +40,6 @@ jobs:
         with:
           persist-credentials: false
 
-      # Not preinstalled on the hosted image, and the Bubblewrap assertion needs the real
-      # binary rather than a check for its absence.
-      - name: Install bubblewrap
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install --yes --no-install-recommends bubblewrap
-
       - name: Survey
         run: bash tests/runner-capability-probe.sh --report
 
@@ -58,11 +50,6 @@ jobs:
         id: landlock
         run: ./.github/scripts/record-capability.sh landlock --assert-landlock
 
-      - name: Assert that Bubblewrap sandboxes
-        id: bwrap
-        if: ${{ !cancelled() }}
-        run: ./.github/scripts/record-capability.sh bwrap --assert-bwrap
-
       - name: Assert that ptrace observes a Landlock denial
         id: ptrace
         if: ${{ !cancelled() }}
@@ -72,11 +59,9 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           LANDLOCK_VERDICT: ${{ steps.landlock.outputs.verdict }}
-          BWRAP_VERDICT: ${{ steps.bwrap.outputs.verdict }}
           PTRACE_VERDICT: ${{ steps.ptrace.outputs.verdict }}
         run: |
           landlock="${LANDLOCK_VERDICT:-indeterminate}"
-          bwrap="${BWRAP_VERDICT:-indeterminate}"
           ptrace="${PTRACE_VERDICT:-indeterminate}"
           {
             echo "## Runner capabilities"
@@ -84,14 +69,12 @@ jobs:
             echo "| Capability | Verdict | What depends on it |"
             echo "| --- | --- | --- |"
             echo "| Landlock enforces, host and plain container | ${landlock} | the acceptance suites |"
-            echo "| Bubblewrap builds a production-shaped sandbox | ${bwrap} | the prune phase |"
             echo "| ptrace observes a Landlock denial, plain container | ${ptrace} | the layer pruner's observer |"
             echo
             echo "Read the survey step for the kernel, the Landlock ABI, ptrace_scope and the AppArmor"
             echo "settings behind these answers."
           } >> "${GITHUB_STEP_SUMMARY}"
-          if [ "${landlock}" = "indeterminate" ] || [ "${bwrap}" = "indeterminate" ] \
-            || [ "${ptrace}" = "indeterminate" ]; then
+          if [ "${landlock}" = "indeterminate" ] || [ "${ptrace}" = "indeterminate" ]; then
             echo "::error::A probe could not reach a verdict, so this run answers nothing."
             exit 1
           fi

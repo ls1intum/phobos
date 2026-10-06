@@ -462,3 +462,11 @@ def test_an_execute_already_on_the_file_is_left_alone_without_a_comment():
     grants, notes = generalise.grants_and_notes([execute("/home/u/bin/tool"), create("/home/u/bin/new")], snapshot, FINE)
     assert grants == {"/home/u/bin/tool": frozenset({"execute"}), "/home/u/bin": frozenset({"create"})}
     assert notes.comments == {}
+
+
+@pytest.mark.parametrize("directory", ["/var/tmp", "/var"])
+def test_a_creation_in_a_directory_phobos_s_specification_lies_beneath_is_reported_not_granted(directory):
+    tree = snapshot_with(directories=("/var", "/var/tmp", "/tmp"))
+    grants, notes = generalise.grants_and_notes([create(directory), create("/tmp")], tree, FINE)
+    assert grants == {"/tmp": frozenset({"create"})}
+    assert [(item["path"], item["section"]) for item in notes.reported] == [(directory, "create")]

@@ -50,6 +50,10 @@ DEFAULT_COMPACTION_THRESHOLD = 3
 MINIMUM_COMPACTION_THRESHOLD = 2
 # The shallowest directory a grant may be widened to: never `/`, never a top-level directory.
 MINIMUM_WIDENING_DEPTH = 2
+# The directories phobos.sh's specification directory lies beneath (its default parent is /var/tmp):
+# phobos-policysystem.sh refuses a policy with a write-class right on any of them, since the graded
+# command could then rewrite its own policy.
+SPECIFICATION_ANCESTORS = ("/", "/var", "/var/tmp")
 # How many observed paths a per-run comment names before it only counts the rest.
 COMMENT_EXAMPLES = 3
 # The sections that may be widened to a containing directory or compacted; every other one is write-class.
@@ -348,6 +352,10 @@ def placed(path: str, section: str, snapshot: Snapshot, fine_roots: tuple[str, .
         target = nearest_existing(path, snapshot)
     if target is None:
         notes.report(path, section, "no path that existed before the run, inside the scanned roots and deep enough")
+        return None
+    if section not in READ_CLASS and target in SPECIFICATION_ANCESTORS:
+        notes.report(path, section, f"a write-class right on {target} would cover Phobos's own specification "
+                                    "directory, which phobos-policysystem.sh refuses")
         return None
     if writable(target):
         if section in READ_CLASS and within(target, fine_roots) and snapshot.is_directory(target):
