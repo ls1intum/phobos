@@ -297,7 +297,7 @@ class Notes:
         self.reported.append({"path": path, "section": section, "reason": reason})
 
 
-def read_class_target(path: str, snapshot: Snapshot, fine_roots: tuple[str, ...], notes: Notes) -> str | None:
+def read_class_target(path: str, snapshot: Snapshot, fine_roots: tuple[str, ...]) -> str | None:
     """Where a read or execute right on an object goes: itself, its directory, its nearest existing ancestor, or nowhere."""
     if not snapshot.existed(path):
         return nearest_existing(path, snapshot)
@@ -315,7 +315,7 @@ def placed(path: str, section: str, snapshot: Snapshot, fine_roots: tuple[str, .
         notes.report(path, section, "a /proc/self link of a denial without process ids")
         return None
     if section in READ_CLASS:
-        target = read_class_target(path, snapshot, fine_roots, notes)
+        target = read_class_target(path, snapshot, fine_roots)
     else:
         target = nearest_existing(path, snapshot)
     if target is None:
