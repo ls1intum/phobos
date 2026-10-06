@@ -423,3 +423,20 @@ def test_a_kept_file_that_can_itself_be_written_says_so():
                                                 BESIDE, FINE)
     assert grants == {"/srv/app/run.sh": frozenset({"write", "execute"})}
     assert notes.comments["/srv/app/run.sh"].endswith("can be overwritten in place")
+
+
+def test_the_comment_names_the_deepest_narrowed_directory():
+    tree = snapshot_with("/srv/app/sub/x/tool", directories=("/srv/app", "/srv/app/sub", "/srv/app/sub/x"))
+    notes = generalise.Notes()
+    generalise.narrow_execute({"/srv/app": frozenset({"execute"}), "/srv/app/sub/x": frozenset({"execute", "create"})},
+                              ["/srv/app/sub/x/tool"], tree, notes)
+    assert "because /srv/app/sub/x overlaps" in notes.comments["/srv/app/sub/x/tool"]
+
+
+def test_an_executable_a_held_write_lets_the_run_overwrite_is_noted_wherever_it_was_placed():
+    tree = snapshot_with("/root/.gradle/dist/bin/gradle", directories=("/root/.gradle", "/root/.gradle/dist/bin"))
+    grants, notes = generalise.grants_and_notes([execute("/root/.gradle/dist/bin/gradle")], tree, FINE,
+                                                held={"/root/.gradle": frozenset({"write"})})
+    assert grants == {"/root/.gradle/dist/bin/gradle": frozenset({"execute"})}
+    assert notes.comments["/root/.gradle/dist/bin/gradle"] == generalise.EXECUTE_WRITABLE_COMMENT
+    assert generalise.grants_for([execute("/root/.gradle/dist/bin/gradle")], tree, FINE) == grants

@@ -61,6 +61,8 @@ WRITE_CLASS = frozenset(cfgfile.WRITE_SECTIONS)
 EXECUTE_KEPT_COMMENT = ("execute: kept on the files the reference executed, because {directory} overlaps a "
                         "write-class right; a file written there is not executable")
 EXECUTE_KEPT_WRITABLE = ", but this file itself can be overwritten in place"
+# The comment above any other executable file a write-class right lets the run overwrite in place.
+EXECUTE_WRITABLE_COMMENT = "execute: this file can also be overwritten in place, and then executed"
 # A kernel-assigned id: 0 or a number without a leading zero.
 NUMBER = r"(?:0|[1-9][0-9]*)"
 # The table of A.6.5: each pattern names a path whose numbered components the kernel assigns, with
@@ -376,7 +378,8 @@ def narrow_execute(grants: dict[str, frozenset[str]], executed: Iterable[str], s
     policy the grants are layered on, whose write-class rights count as well. First every such
     directory loses [execute]; then each executed object beneath one of them that no remaining entry
     still lets execute gets [execute] on itself, when it was a file before the run and a name a
-    policy line can carry, with the comment saying why; any other is reported.
+    policy line can carry, with the comment saying why; any other is reported. Every other file left
+    with [execute] that a [write] on it or an ancestor lets the run overwrite gets a comment saying so.
     """
     narrowed = [path for path in sorted(grants) if "execute" in grants[path] and snapshot.is_directory(path)
                 and overlaps_write(path, grants, held)]
@@ -384,7 +387,7 @@ def narrow_execute(grants: dict[str, frozenset[str]], executed: Iterable[str], s
     for path in narrowed:
         result[path].discard("execute")
     for item in sorted(set(executed)):
-        directory = next((path for path in narrowed if item == path or is_beneath(item, path)), None)
+        directory = max((path for path in narrowed if item == path or is_beneath(item, path)), key=depth, default=None)
         if directory is None or holds(item, "execute", result):
             continue
         if not writable(item):
@@ -398,6 +401,10 @@ def narrow_execute(grants: dict[str, frozenset[str]], executed: Iterable[str], s
         else:
             notes.report(item, "execute", f"executed beneath {directory}, which overlaps a write-class right, "
                                           "and not a file that existed before the run")
+    for path, sections in sorted(result.items()):
+        if "execute" in sections and not snapshot.is_directory(path) and (
+                holds(path, "write", result) or holds(path, "write", held or {})):
+            notes.comments.setdefault(path, EXECUTE_WRITABLE_COMMENT)
     return {path: frozenset(sections) for path, sections in result.items() if sections}
 
 
@@ -430,13 +437,14 @@ def grants_and_notes(denials: list[Denial], snapshot: Snapshot, fine_roots: tupl
     return narrow_execute(found, executed, snapshot, notes, held), notes
 
 
-def grants_for(denials: list[Denial], snapshot: Snapshot, fine_roots: tuple[str, ...]) -> dict[str, frozenset[str]]:
+def grants_for(denials: list[Denial], snapshot: Snapshot, fine_roots: tuple[str, ...],
+               held: dict[str, frozenset[str]] | None = None) -> dict[str, frozenset[str]]:
     """The grants the filesystem denials ask for, generalised as the module docstring states.
 
     Denials of other layers are ignored, objects per_run_grants takes are left to it, and whatever no
-    rule covers is left out; grants_and_notes says why.
+    rule covers is left out; grants_and_notes says why. `held` is the policy the grants are layered on.
     """
-    return grants_and_notes(denials, snapshot, fine_roots)[0]
+    return grants_and_notes(denials, snapshot, fine_roots, held)[0]
 
 
 def compact(grants: dict[str, frozenset[str]], threshold: int, fine_roots: tuple[str, ...],
