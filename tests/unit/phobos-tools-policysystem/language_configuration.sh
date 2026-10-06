@@ -165,6 +165,65 @@ else
   bad "a configuration name that is not a name is refused" "status ${PHB_EPOLICY}" "${status}|${result}"
 fi
 
+echo "== the password database =="
+# The home directory the password database holds for this user, read the way the JVM reads
+# user.home. Each case changes HOME, so a value read from HOME would show.
+REAL_HOME="$(getent passwd "$UID" | cut -d: -f6)"
+result="$(printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\nuser.home = password-database home\n' | HOME="${WORK}/srv" load_result PASSWORD_CONFIGURATION)"
+check "password-database home gives the password database's home directory, not HOME" "base ${HOME_DIR}/BaseLanguage-x.cfg
+placeholder user.home=${REAL_HOME}" "$result"
+
+# A stand-in getent that answers for the uid it is asked about as PHOBOS_TEST_GETENT says, and fails
+# with status 3 when it is asked anything but "passwd <this uid>", which the loader turns into a
+# runtime error, so a wrong question shows as a failed check.
+mkdir -p "${WORK}/fakegetent"
+cat > "${WORK}/fakegetent/getent" <<'GETENT'
+#!/bin/sh
+[ "$1" = passwd ] && [ "$2" = "$(id -u)" ] || exit 3
+case "${PHOBOS_TEST_GETENT}" in
+  entry) printf 'tester:x:%s:0:Test User:%s:/bin/sh\n' "$2" "${PHOBOS_TEST_GETENT_HOME}" ;;
+  missing) exit 2 ;;
+  empty) printf 'tester:x:%s:0:Test User::/bin/sh\n' "$2" ;;
+  relative) printf 'tester:x:%s:0:Test User:home/tester:/bin/sh\n' "$2" ;;
+  nonexistent) printf 'tester:x:%s:0:Test User:/nonexistent:/bin/sh\n' "$2" ;;
+  control) printf 'tester:x:%s:0:Test User:/tmp\001x:/bin/sh\n' "$2" ;;
+  newline) printf 'tester:x:%s:0:Test User:/tmp\n:/bin/sh\n' "$2" ;;
+  short) printf 'tester:x:%s\n' "$2" ;;
+  broken) exit 1 ;;
+esac
+GETENT
+chmod +x "${WORK}/fakegetent/getent"
+result="$(printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\nuser.home = password-database home\n' | PATH="${WORK}/fakegetent:${PATH}" PHOBOS_TEST_GETENT=entry PHOBOS_TEST_GETENT_HOME="${WORK}/srv" HOME=/tmp load_result PASSWORD_CONFIGURATION)"
+check "the home field of the entry for this uid is the value" "base ${HOME_DIR}/BaseLanguage-x.cfg
+placeholder user.home=${WORK}/srv" "$result"
+for case in 'missing|found no entry for the uid' 'empty|empty home field' 'relative|not an absolute path' \
+  'nonexistent|not an existing directory' 'control|control character' 'newline|control character' \
+  'short|not seven colon-separated fields'; do
+  mode="${case%%|*}"
+  needle="${case#*|}"
+  result="$(printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\nuser.home = password-database home\n' | PATH="${WORK}/fakegetent:${PATH}" PHOBOS_TEST_GETENT="$mode" load_result PASSWORD_CONFIGURATION)"
+  if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"${needle}"* && "${result#*|}" == *"PASSWORD_CONFIGURATION.cfg', line 4"* ]]; then
+    ok "a password database entry that is ${mode} is refused, saying '${needle}', with file and line"
+  else
+    bad "a password database entry that is ${mode} is refused, saying '${needle}', with file and line" "status ${PHB_EPOLICY}" "${result}"
+  fi
+done
+for written in 'password-database' 'password-database shell' 'password-database home extra'; do
+  result="$(printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\nuser.home = %s\n' "$written" | load_result PASSWORD_CONFIGURATION)"
+  if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"takes the one field it reads"* && "${result#*|}" == *"line 4"* ]]; then
+    ok "refused, with file and line: ${written}"
+  else
+    bad "refused, with file and line: ${written}" "status ${PHB_EPOLICY}" "${result}"
+  fi
+done
+printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\nuser.home = password-database home\n' > "${CONFIGURATIONS}/BROKEN_GETENT_CONFIGURATION.cfg"
+if result="$( (PATH="${WORK}/fakegetent:${PATH}" PHOBOS_TEST_GETENT=broken load_language_configuration BROKEN_GETENT_CONFIGURATION "$HOME_DIR") 2>&1)"; then status=0; else status=$?; fi
+if (( status == PHB_ERUNTIME )) && [[ "$result" == *"getent could not be run"* ]]; then
+  ok "a password database that cannot be read ends the run instead of being taken for no entry"
+else
+  bad "a password database that cannot be read ends the run instead of being taken for no entry" "status ${PHB_ERUNTIME}" "${status}|${result}"
+fi
+
 echo "== the shipped configurations =="
 for file in "${CORE}"/config/language-configurations/*.cfg; do
   name="$(basename "$file" .cfg)"
@@ -175,8 +234,8 @@ for file in "${CORE}"/config/language-configurations/*.cfg; do
     printf '#!/bin/sh\nexit 0\n' > "${WORK}/shipped/${name}/jdk/bin/java"
     chmod +x "${WORK}/shipped/${name}/jdk/bin/java"
     PATH="${WORK}/shipped/${name}/jdk/bin:${PATH}" HOME="${WORK}/home" TMPDIR="" load_language_configuration "$name" "${WORK}/shipped/${name}" \
-      && printf '%s ' "${LANGUAGE_CONFIGURATION_BASES[@]##*/}" "${#LANGUAGE_CONFIGURATION_PLACEHOLDERS[@]}") 2>&1)"
-  check "${name} loads, names its base and determines its placeholders" "BaseLanguage-java.cfg 3 " "$result"
+      && printf '%s ' "${LANGUAGE_CONFIGURATION_BASES[@]##*/}" "${#LANGUAGE_CONFIGURATION_PLACEHOLDERS[@]}" "${LANGUAGE_CONFIGURATION_PLACEHOLDERS[user.home]}") 2>&1)"
+  check "${name} loads, names its base and determines its placeholders, user.home from the password database" "BaseLanguage-java.cfg 3 ${REAL_HOME} " "$result"
 done
 
 finish

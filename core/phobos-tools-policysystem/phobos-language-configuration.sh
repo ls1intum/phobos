@@ -11,9 +11,10 @@
 # language-configurations/ beside phobos-policysystem.sh. It is the one place a programming
 # language enters Phobos: it names the base policies a run under that configuration folds and how
 # each placeholder of the language is determined. The code here knows no language. It knows two
-# sections, [base] and [placeholders], and three generic ways of determining a value, and every
-# value it determines comes from the environment and the PATH of the process that loads it, from
-# the image and from the configuration file, all of which are fixed before the command exists.
+# sections, [base] and [placeholders], and four generic ways of determining a value, and every
+# value it determines comes from the environment, the PATH and the password database entry of the
+# process that loads it, from the image and from the configuration file, all of which are fixed
+# before the command exists.
 # PARSE_LOCATION is set here and read by refuse_cfg in phobos-policy-parse.sh, never in this file,
 # so SC2034 would fire on it by design.
 # shellcheck disable=SC2034
@@ -33,6 +34,13 @@ LANGUAGE_VARIABLE_NAME_PATTERN='^[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrst
 LANGUAGE_COMMAND_NAME_PATTERN='^[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._+-]+$'
 # How many directory levels command-ancestor goes up: one to ninety-nine.
 LANGUAGE_LEVELS_PATTERN='^[123456789][0123456789]?$'
+# The one field of a password database entry password-database reads, and where it sits in the
+# seven colon-separated fields of an entry, counted from zero.
+LANGUAGE_PASSWORD_DATABASE_FIELD="home"
+LANGUAGE_PASSWORD_DATABASE_HOME_INDEX=5
+LANGUAGE_PASSWORD_DATABASE_FIELDS=7
+# The status getent answers with when the database holds no entry for the key.
+LANGUAGE_GETENT_NOT_FOUND=2
 # The placeholder Phobos determines itself, from --project-root or the tail flags, and which a
 # programming language configuration therefore may not name.
 LANGUAGE_RESERVED_PLACEHOLDER="PROJECT_ROOT"
@@ -223,6 +231,48 @@ determine_by_command_ancestor() {
   done
 }
 
+# Sets language_value to the home directory of this process's real user as the password database
+# names it, the entry getent passwd prints for the uid, sixth field. That is where a runtime such as
+# the JVM takes a user's home directory from, whatever HOME says. getent consults the system's name
+# service, which in the image is its /etc/passwd. No entry for the uid, an entry that is not seven
+# fields, and an empty home field are refused; getent failing in any other way, getent missing among
+# them, ends the run with PHB-ERUNTIME. Takes the placeholder's name, the primitive as written, and
+# the primitive's one argument, the field, which is "home". Assumes it runs inside
+# load_language_configuration, with PARSE_LOCATION naming the line, and that it is called plainly,
+# so that a refusal ends the run.
+determine_by_password_database() {
+  local placeholder="$1"
+  local written="$2"
+  local field="${3:-}"
+  local entry=""
+  local status=0
+  local -a fields=()
+  if (( $# != 3 )) || [[ "$field" != "$LANGUAGE_PASSWORD_DATABASE_FIELD" ]]; then
+    refuse_cfg "'password-database' takes the one field it reads, as in 'password-database ${LANGUAGE_PASSWORD_DATABASE_FIELD}', not ${written@Q}"
+  fi
+  entry="$(getent passwd "$UID" 2>/dev/null && printf 'x')" || status=$?
+  if (( status == LANGUAGE_GETENT_NOT_FOUND )); then
+    refuse_cfg "\${${placeholder}} cannot be determined: ${written@Q} found no entry for the uid ${UID} in the password database"
+  fi
+  if (( status != 0 )); then
+    report "Runtime unusable: getent could not be run to read the password database entry of the uid ${UID} (status ${status}). The C library's getent is what provides it. (PHB-ERUNTIME)"
+    exit "${PHB_ERUNTIME}"
+  fi
+  entry="${entry%x}"
+  entry="${entry%$'\n'}"
+  if language_value_has_control_character "$entry"; then
+    refuse_cfg "\${${placeholder}} cannot be used: ${written@Q} found the password database entry ${entry@Q}, which holds a control character"
+  fi
+  IFS=: read -ra fields <<< "${entry}:"
+  if (( ${#fields[@]} != LANGUAGE_PASSWORD_DATABASE_FIELDS )); then
+    refuse_cfg "\${${placeholder}} cannot be determined: ${written@Q} found the password database entry ${entry@Q}, which is not seven colon-separated fields"
+  fi
+  language_value="${fields[LANGUAGE_PASSWORD_DATABASE_HOME_INDEX]}"
+  if [[ -z "$language_value" ]]; then
+    refuse_cfg "\${${placeholder}} cannot be determined: ${written@Q} found an empty home field for the uid ${UID} in the password database"
+  fi
+}
+
 # Sets language_value to a constant path. Takes the placeholder's name, the primitive as written,
 # and the primitive's one argument. Assumes it runs inside load_language_configuration, with
 # PARSE_LOCATION naming the line, and that it is called plainly, so that a refusal ends the run.
@@ -289,7 +339,8 @@ read_language_placeholder_line() {
     environment) determine_by_environment "$placeholder" "$written" "${words[@]:1}" ;;
     command-ancestor) determine_by_command_ancestor "$placeholder" "$written" "${words[@]:1}" ;;
     fixed) determine_fixed "$placeholder" "$written" "${words[@]:1}" ;;
-    *) refuse_cfg "unknown primitive ${primitive@Q} in ${line@Q}; the primitives are 'environment <variable> [<fallback>]', 'command-ancestor <command> <levels>' and 'fixed <absolute path>'" ;;
+    password-database) determine_by_password_database "$placeholder" "$written" "${words[@]:1}" ;;
+    *) refuse_cfg "unknown primitive ${primitive@Q} in ${line@Q}; the primitives are 'environment <variable> [<fallback>]', 'command-ancestor <command> <levels>', 'fixed <absolute path>' and 'password-database home'" ;;
   esac
   refuse_unusable_placeholder_value "$placeholder" "$written" "$language_value"
   LANGUAGE_CONFIGURATION_PLACEHOLDERS["$placeholder"]="$language_value"
