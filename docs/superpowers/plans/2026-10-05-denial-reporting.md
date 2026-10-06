@@ -472,7 +472,7 @@ Every behaviour is pinned in both directions, in the image where it needs Landlo
 
 ## A.14 Markus's decisions on the open questions
 
-All four questions the first version of this plan asked are decided, and so are the three points the second version left open; the plan carries each answer.
+All four questions the first version of this plan asked are decided, and so are the three points the second version left open and the two that implementing PR 2 raised; the plan carries each answer.
 
 - **Q1. The JVM's tolerated refusals: grant them,** as a widening of the Java base only, file by file inside `/etc`, `/dev`, `/proc` and `/sys`, with a reason per path, and with any path whose content could leak recommended explicitly rather than silently granted. A.16 and PR 5.
 - **Q2. Filter-level refusals: report every one,** in every run, although Node will print one on every start; enforcement stays in the kernel and fails closed. A.5.8, Tasks 2.6 and 3.4. The plan keeps that promise in every run whose supervisor is installed and serving, and states the three cases where it cannot (A.5.8, point 7): there the call is refused all the same, with `ENOSYS` and no line.
@@ -484,6 +484,8 @@ The follow-up decisions:
 - **D1. Filter refusals through `SECCOMP_RET_USER_NOTIF`: accepted, with safeguards as requirements.** The handler is a separate code path with no `CONTINUE` branch at all, structurally; a unit test proves every trapped refusal returns the fixed errno and never `CONTINUE`; the `ENOSYS` fallback with a dead or absent supervisor is tested; and the plan states that the refusal now depends on supervisor correctness where before it was kernel-only, as the residual risk (A.5.8, point 3).
 - **D2. The JVM: grant only the eleven, leave the six refused** (A.16, PR 5). Nothing is left open there.
 - **D3. "Every time" means once per distinct action per run** (A.7, "Per run"): Node's `io_uring` probe prints its line once in every run.
+- **D4. The notice for a kernel without synchronous wake-up stays visible in every run,** not only under `--verbose`, although on a kernel older than Linux 6.6 it then reaches the output a student sees: `Phobos: this kernel cannot wake the reporter synchronously, so reporting is slower.` It is printed once per run, it never changes an outcome, and it says why such a run is slower (A.4, point 5).
+- **D5. A notice says only what is lost.** When a report-only supervisor that would only have answered the group lock's refusals cannot be installed, its notice reads `Phobos: the group lock's refusals are not reported in this run, because ...`, and when both kinds of trap were wanted, `Phobos: filesystem denials and the group lock's refusals are not reported in this run, because ...`; `Phobos: filesystem denial reporting is off for this run, because ...` is kept for a run that loses only the filesystem's lines.
 
 Nothing is open for Markus in this plan.
 
