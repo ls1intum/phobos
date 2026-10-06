@@ -92,6 +92,7 @@ EXIT STATUS
   2         phobos-networksystem.sh was called the wrong way (PHB_EXIT_USAGE)
   11        the policy is invalid (PHB-EPOLICY)
   15        the guard, the broker or the inbound filter could not be started (PHB-ERUNTIME)
+  16        the command ran but the guard could not read its exit status (PHB-ESTATUS)
 
 EXAMPLES
   phobos-networksystem.sh --config exercise.cfg -- ./gradlew test

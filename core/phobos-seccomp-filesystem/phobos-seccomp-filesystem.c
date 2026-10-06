@@ -25,7 +25,8 @@
  * Reporting is a diagnostic, never a reason to refuse a run: a filter that cannot be installed (a
  * listener already held above it, EBUSY) is said once and the command runs without reporting.
  * Once its child has ended, a drainer it forks keeps answering whatever the child left behind, with
- * its output silenced, until no task is left, and the supervisor ends with the child's status.
+ * its output silenced, until no task is left, and the supervisor ends with the child's status, or
+ * with 16 (PHB-ESTATUS) when that status could not be read.
  *
  * This file is the sequence of stages and nothing else. What each stage works with lives beside it:
  *
@@ -174,8 +175,13 @@ static bool refusal_traps_wanted(const struct supervisor_options *options) {
     return true;
 }
 
-/* Becomes the command. */
+/* The SIGCHLD disposition this supervisor inherited. main gives SIGCHLD its default before anything
+ * forks, the probes included, and every way of becoming the command gives this one back. */
+static struct sigaction inherited_child_signal;
+
+/* Becomes the command, with the SIGCHLD disposition the supervisor's caller gave it. */
 [[noreturn]] static void exec_command(char **command) {
+    restore_child_signal(&inherited_child_signal);
     execvp(command[0], command);
     fprintf(stderr, "[phobos-seccomp-filesystem] exec %s: %s\n", command[0], strerror(errno));
     _exit(EXIT_CODE_COMMAND_NOT_EXECUTABLE);
@@ -306,16 +312,22 @@ static int supervise_child(pid_t child, int socket_descriptor, const sigset_t *f
             listener = -1;
         }
     }
-    reap_command(child, forwarded, &status);
+    bool reaped = reap_command(child, forwarded, &status);
     if (listener >= 0) {
         start_drainer(listener, forwarded, request, request_size, response);
         close(listener);
+    }
+    if (!reaped) {
+        fprintf(stderr, "[phobos-seccomp-filesystem] the command's exit status could not be read, "
+                        "so the run cannot say whether it succeeded (PHB-ESTATUS)\n");
+        return EXIT_CODE_STATUS_UNREAD;
     }
     return exit_code_from_status(status);
 }
 
 int main(int argument_count, char *arguments[]) {
     struct supervisor_options options;
+    take_default_child_signal(&inherited_child_signal);
     read_supervisor_arguments(argument_count, arguments, &options);
     int landlock_version = options.no_landlock ? 0 : query_landlock_version();
     bool file_traps = file_traps_wanted(&options, landlock_version);

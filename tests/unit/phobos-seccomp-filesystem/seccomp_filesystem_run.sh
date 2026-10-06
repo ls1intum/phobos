@@ -9,7 +9,9 @@
 #
 # Before anything is built, the file that answers the calls a Phobos filter refuses outright is
 # checked to hold no way to continue a call (A.5.8 of the denial-reporting plan): it must never name
-# the continue flag, the continuing helper or the shared answering helper.
+# the continue flag, the continuing helper or the connect guard's answering helper (answer). It
+# may send through send_notification_response, which sends exactly the response it is given and
+# never adds a flag; the connect guard's unit suite pins that.
 #
 # The file holding main is included by the test file; the modules beside it are linked. The
 # enforcer's diagnostics-free model is linked without the enforcer's -diagnostics.c, which is the
@@ -75,6 +77,7 @@ WRAPS=(
   -Wl,--wrap=statx
   -Wl,--wrap=read_small_file
   -Wl,--wrap=geteuid
+  -Wl,--wrap=sigaction
   -Wl,--wrap=_exit
   -Wl,--wrap=calloc
   -Wl,--wrap=fork

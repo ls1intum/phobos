@@ -4,12 +4,12 @@
 #include "phobos-seccomp-filesystem-access.h"
 #include "phobos-seccomp-filesystem-path.h"
 
-#include <errno.h>
+#include "../phobos-seccomp-networksystem/phobos-seccomp-networksystem-handoff.h"
+
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <unistd.h>
 
 /* Room for the enforcer's whole command line, which the kernel limits to a quarter of the stack
@@ -77,18 +77,14 @@ bool reporter_handles(const struct seccomp_notif *request) {
 }
 
 /* Lets the kernel run the trapped call unchanged. This is the only answer an observation trap ever
- * gets. A send that finds the task gone fails with ENOENT, which is nobody's concern. A send
- * interrupted by a signal while it waits for the filter's lock fails with EINTR and is sent again:
- * the notification has been received, so the kernel never offers it a second time, and the call
- * would otherwise wait until its task is signalled. */
+ * gets. The shared send resends it after an interrupting signal and ignores a task that is gone. */
 static void answer_continue(int notify_descriptor, struct seccomp_notif_resp *response, __u64 id) {
     memset(response, 0, sizeof(*response));
     response->id = id;
     response->val = 0;
     response->error = 0;
     response->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
-    while (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_SEND, response) != 0 && errno == EINTR) {
-    }
+    (void)send_notification_response(notify_descriptor, response);
 }
 
 /* How many seccomp filters a status says its task carries, or -1 when it does not say. */
