@@ -31,6 +31,9 @@ CORE="${HERE}/../../../core"
 # The reporter's own sources, each held to every line.
 MODULES=(
   "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-message.c"
+  "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-access.c"
+  "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-path.c"
+  "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-judge.c"
 )
 # The enforcer's diagnostics-free model, linked without its diagnostics.
 MODEL=(
@@ -39,6 +42,22 @@ MODEL=(
   "${CORE}/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-model.c"
 )
 UNIT_TEST_DEFINE=-DPHOBOS_REPORTER_UNIT_TEST
+
+# What the supervisor reads about the command, and the few answers a case has to force, are
+# interposed through the linker. Each wrap passes through to the real call unless a case fakes it.
+# The commas belong to the -Wl, linker flags, not to the array syntax.
+# shellcheck disable=SC2054
+WRAPS=(
+  -Wl,--wrap=process_vm_readv
+  -Wl,--wrap=readlink
+  -Wl,--wrap=ioctl
+  -Wl,--wrap=faccessat
+  -Wl,--wrap=statvfs
+  -Wl,--wrap=statx
+  -Wl,--wrap=read_small_file
+  -Wl,--wrap=geteuid
+  -Wl,--wrap=realpath
+)
 
 # Holds the reporter's quoting to bash's own: a corpus of names is quoted by both and compared.
 # The empty name cannot pass through a NUL-separated list and is covered by a C case instead.
@@ -60,7 +79,7 @@ check_quoting_against_bash() {
 
 if [[ "${1:-}" == "--coverage" ]]; then
   "$COMPILER" -std=gnu23 -O0 -g --coverage "$UNIT_TEST_DEFINE" -o "$WORK/unit" \
-    "${HERE}/seccomp_filesystem_unit.c" "${MODULES[@]}" "${MODEL[@]}"
+    "${HERE}/seccomp_filesystem_unit.c" "${MODULES[@]}" "${MODEL[@]}" "${WRAPS[@]}"
   ( cd "$WORK" && ./unit )
   check_quoting_against_bash
   ( cd "$WORK" && for notes in unit-*.gcno; do
@@ -94,7 +113,7 @@ if [[ "${1:-}" == "--coverage" ]]; then
   printf 'every line of the reporter ran\n'
 else
   "$COMPILER" -std=gnu23 -O0 -g -Wall -Wextra -Werror "$UNIT_TEST_DEFINE" -o "$WORK/unit" \
-    "${HERE}/seccomp_filesystem_unit.c" "${MODULES[@]}" "${MODEL[@]}"
+    "${HERE}/seccomp_filesystem_unit.c" "${MODULES[@]}" "${MODEL[@]}" "${WRAPS[@]}"
   "$WORK/unit"
   check_quoting_against_bash
 fi
