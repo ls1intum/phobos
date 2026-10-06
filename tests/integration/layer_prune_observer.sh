@@ -7,6 +7,8 @@
 # phobos-policysystem.sh still accepts it, strace records a Landlock refusal made inside the
 # chain with its path and errno while a permitted read beside it succeeds, and the parser and
 # attribution turn that record into exactly one filesystem denial and none for the permitted read.
+# A fourth fact is about what the pruner writes: every policy cfgfile.render produces is accepted by
+# the real parser and runs a command, and the strict subset it refuses is one Phobos refuses too.
 #
 # Runs inside the prune image (docker/prune_phase/layers/Dockerfile) with tests/ mounted at
 # /tests and var/tmp/helpers at /var/tmp/helpers, both read-only, in an ordinary container:
@@ -205,6 +207,65 @@ check_attribution_of_the_permitted_run() {
     "granted 0 " "$(grep '^granted' <<<"${summary}" || printf '%s' "${summary}")"
 }
 
+# Writes into the file named by $2 what cfgfile.render makes of the policy named by $1: "permissive",
+# the permissive policy of this image's own root; "small", a policy with every filesystem section, a
+# comment, network rules and limits; or "subset", a nested strict subset, which render must refuse,
+# in which case it writes "refused" instead. Assumes the helpers are mounted at ${HELPERS}.
+rendered_policy() {
+  HELPERS="${HELPERS}" python3 - "$1" >"$2" 2>&1 <<'PY'
+import os
+import pathlib
+import sys
+
+sys.path.insert(0, os.environ["HELPERS"])
+
+from layer_prune import cfgfile
+
+small = cfgfile.Policy(
+    fs={"/usr": frozenset({"read", "execute"}), "/var/tmp/testing-dir": frozenset(cfgfile.WRITE_SECTIONS),
+        "/dev/null": frozenset({"read", "write"}), "/proc": frozenset({"read"})},
+    connect=("allow 127.0.0.1:*", "allow [::1]"), bind=("allow 0", "allow 0 udp"),
+    limits={"timeout": 60, "cpu": 30, "nproc": 64, "nofile": 256, "fsize_mb": 16},
+    comments={"/proc": "per-run name: /proc/<pid>/status, observed as /proc/7/status; granted on /proc"})
+subset = cfgfile.Policy(fs={"/usr": frozenset({"read", "execute"}), "/usr/bin": frozenset({"read"})},
+                        connect=(), bind=(), limits={})
+policies = {"permissive": cfgfile.permissive_policy(pathlib.Path("/")), "small": small, "subset": subset}
+try:
+    sys.stdout.write(cfgfile.render(policies[sys.argv[1]]))
+except ValueError:
+    sys.stdout.write("refused\n")
+PY
+}
+
+# The renderer and the real parser agree in both directions: every policy render writes is accepted
+# by phobos-policysystem.sh and runs a command through the whole phobos.sh chain, and the nested strict
+# subset that render refuses is the one the filesystem layer refuses at run time with PHB-EPOLICY.
+check_rendered_policies_meet_the_parser() {
+  local name
+  local spec
+  local status
+  for name in permissive small; do
+    rendered_policy "${name}" "${WORK}/${name}.cfg"
+    spec="$(mktemp -d /var/tmp/phobos-spec-check.XXXXXX)"
+    "${PHOBOS_HOME}/phobos-policysystem.sh" --spec-dir "${spec}" --config "${WORK}/${name}.cfg" >"${WORK}/${name}.log" 2>&1
+    status=$?
+    rm -rf "${spec}"
+    check "the ${name} policy render writes is accepted by phobos-policysystem.sh" "0" "${status}"
+    "${PHOBOS_HOME}/phobos.sh" --config "${WORK}/${name}.cfg" -- /bin/true >"${WORK}/${name}-run.log" 2>&1
+    check "a command runs under the ${name} policy through phobos.sh" "0" "$?"
+  done
+  rendered_policy subset "${WORK}/subset.out"
+  check "render refuses a nested strict subset" "refused" "$(cat "${WORK}/subset.out")"
+  printf '[read]\n/usr\n/usr/bin\n\n[execute]\n/usr\n' >"${WORK}/subset.cfg"
+  "${PHOBOS_HOME}/phobos.sh" --config "${WORK}/subset.cfg" -- /bin/true >"${WORK}/subset-run.log" 2>&1
+  status=$?
+  if [[ "${status}" -eq 11 ]] && grep -q 'PHB-EPOLICY' "${WORK}/subset-run.log"; then
+    ok "phobos.sh refuses the same nested strict subset with PHB-EPOLICY"
+  else
+    bad "phobos.sh refuses the same nested strict subset with PHB-EPOLICY" "status ${status}: $(tail -2 "${WORK}/subset-run.log")"
+  fi
+}
+
 check_only_the_prune_base_is_shipped
 check_empty_base_is_accepted
 check_the_observer_is_installed
@@ -214,4 +275,5 @@ check_strace_sees_a_landlock_refusal
 check_a_permitted_read_still_works_under_strace
 check_attribution_of_the_refusal
 check_attribution_of_the_permitted_run
+check_rendered_policies_meet_the_parser
 finish

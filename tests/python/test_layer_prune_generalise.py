@@ -1,0 +1,191 @@
+"""Checks how filesystem denials become grants, and in which direction each rule errs (A.6.5, A.7)."""
+
+from __future__ import annotations
+
+import os
+import pathlib
+import sys
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "var" / "tmp" / "helpers"))
+
+from layer_prune import generalise, record
+
+FINE = generalise.DEFAULT_FINE_ROOTS
+
+
+def denial(path: str, section: str, run: int = 1, pid: int = 300, tid: int | None = None,
+           operation: str = "openat") -> record.Denial:
+    """A filesystem denial of one section on one path."""
+    return record.Denial(pid=pid, layer=record.LAYER_FILESYSTEM, operation=operation, objects=(path,),
+                         sections=frozenset({section}), address=None, port=None, transport=None, errno="EACCES",
+                         run=run, tid=pid if tid is None else tid)
+
+
+def read(path: str, **keywords) -> record.Denial:
+    """A refused read of one path."""
+    return denial(path, "read", **keywords)
+
+
+def create(path: str) -> record.Denial:
+    """A refused creation in one directory."""
+    return denial(path, "create", operation="mkdirat")
+
+
+def snapshot_with(*paths: str, directories: tuple[str, ...] = ()) -> generalise.Snapshot:
+    """A hermetic snapshot: the whole tree was scanned and holds exactly these paths and directories."""
+    return generalise.Snapshot(existing=frozenset(paths) | frozenset(directories),
+                               directories=frozenset(directories), scanned=("/",))
+
+
+def test_a_read_outside_fine_roots_is_granted_on_the_directory_permissively():
+    grants = generalise.grants_for([read("/usr/lib/jvm/lib/modules")],
+                                   snapshot_with("/usr/lib/jvm/lib/modules", directories=("/usr/lib/jvm/lib",)), FINE)
+    assert grants == {"/usr/lib/jvm/lib": frozenset({"read"})}
+
+
+def test_a_read_under_etc_is_granted_on_the_file_only():
+    grants = generalise.grants_for([read("/etc/hosts")], snapshot_with("/etc/hosts", directories=("/etc",)), FINE)
+    assert grants == {"/etc/hosts": frozenset({"read"})}
+
+
+def test_a_read_of_a_directory_is_granted_on_the_directory_itself():
+    grants = generalise.grants_for([read("/usr/share/doc")], snapshot_with(directories=("/usr/share/doc",)), FINE)
+    assert grants == {"/usr/share/doc": frozenset({"read"})}
+
+
+def test_a_read_of_a_top_level_file_is_never_widened_to_the_root():
+    grants = generalise.grants_for([read("/opt/tool.jar")], snapshot_with("/opt/tool.jar", directories=("/opt",)),
+                                   ("/x",))
+    assert grants == {"/opt/tool.jar": frozenset({"read"})}
+
+
+def test_a_file_the_run_created_is_granted_on_the_nearest_pre_existing_ancestor():
+    grants = generalise.grants_for([create("/w/build/tmp/x123")], snapshot_with(directories=("/w", "/w/build")), FINE)
+    assert grants == {"/w/build": frozenset({"create"})}
+
+
+def test_a_write_on_an_existing_file_stays_on_that_file():
+    grants = generalise.grants_for([denial("/usr/lib/out.log", "write")],
+                                   snapshot_with("/usr/lib/out.log", directories=("/usr/lib",)), FINE)
+    assert grants == {"/usr/lib/out.log": frozenset({"write"})}
+
+
+def test_compaction_never_reaches_the_root_or_a_top_level_write():
+    grants = {"/usr/a": frozenset({"write"}), "/usr/b": frozenset({"write"}), "/usr/c": frozenset({"write"})}
+    assert generalise.compact(grants, 3, FINE) == grants
+
+
+def test_compaction_never_joins_into_a_top_level_directory():
+    grants = {"/usr/a": frozenset({"read"}), "/usr/b": frozenset({"read"}), "/usr/c": frozenset({"read"})}
+    assert generalise.compact(grants, 3, FINE) == grants
+
+
+def test_compaction_never_happens_inside_a_fine_grained_root():
+    grants = {"/etc/a": frozenset({"read"}), "/etc/b": frozenset({"read"}), "/etc/c": frozenset({"read"}),
+              "/root/.m2/repository/x/1/x.jar": frozenset({"read"}),
+              "/root/.m2/repository/x/1/x.pom": frozenset({"read"}),
+              "/root/.m2/repository/x/1/x.jar.sha1": frozenset({"read"})}
+    assert generalise.compact(grants, 3, FINE) == grants
+
+
+def test_three_siblings_with_equal_read_rights_compact_into_their_parent():
+    grants = {"/usr/lib/a": frozenset({"read"}), "/usr/lib/b": frozenset({"read"}), "/usr/lib/c": frozenset({"read"})}
+    assert generalise.compact(grants, 3, FINE) == {"/usr/lib": frozenset({"read"})}
+
+
+def test_two_siblings_or_unequal_rights_are_not_compacted():
+    two = {"/usr/lib/a": frozenset({"read"}), "/usr/lib/b": frozenset({"read"})}
+    mixed = {"/usr/lib/a": frozenset({"read"}), "/usr/lib/b": frozenset({"read"}),
+             "/usr/lib/c": frozenset({"read", "execute"})}
+    assert generalise.compact(two, 3, FINE) == two
+    assert generalise.compact(mixed, 3, FINE) == mixed
+
+
+def test_a_process_id_seen_changing_is_granted_on_proc_with_its_reason():
+    grants, comments = generalise.per_run_grants([read("/proc/412/status", run=1, pid=300),
+                                                  read("/proc/977/status", run=2, pid=301)])
+    assert grants == {"/proc": frozenset({"read"})}
+    assert comments["/proc"].startswith("per-run name: /proc/<pid>/status")
+    assert "observed as /proc/412/status and /proc/977/status" in comments["/proc"]
+
+
+def test_the_callers_own_process_id_is_a_per_run_name_from_one_run():
+    grants, _ = generalise.per_run_grants([read("/proc/412/stat", run=1, pid=412)])
+    assert grants == {"/proc": frozenset({"read"})}
+
+
+def test_the_callers_own_thread_id_is_a_per_run_name_in_its_task_directory():
+    grants, _ = generalise.per_run_grants([read("/proc/1/task/415/stat", run=1, pid=412, tid=415)])
+    assert grants == {"/proc/1/task": frozenset({"read"})}
+
+
+def test_another_processes_id_seen_once_is_granted_file_by_file_elsewhere():
+    denials = [read("/proc/1/cmdline", run=1, pid=300)]
+    grants, _ = generalise.per_run_grants(denials)
+    assert grants == {}
+    assert generalise.grants_for(denials, snapshot_with("/proc/1/cmdline", directories=("/proc/1",)), FINE) == {
+        "/proc/1/cmdline": frozenset({"read"})}
+
+
+def test_the_same_value_in_two_runs_is_not_seen_changing():
+    grants, _ = generalise.per_run_grants([read("/proc/1/cmdline", run=1), read("/proc/1/cmdline", run=2)])
+    assert grants == {}
+
+
+def test_a_pseudo_terminal_number_seen_changing_is_granted_on_dev_pts():
+    grants, _ = generalise.per_run_grants([denial("/dev/pts/3", "write", run=1), denial("/dev/pts/7", "write", run=2)])
+    assert grants == {"/dev/pts": frozenset({"write"})}
+
+
+def test_a_changing_name_outside_the_table_is_never_generalised():
+    grants, _ = generalise.per_run_grants([read("/run/lock/a8f3", run=1, pid=300), read("/run/lock/c91d", run=2, pid=301)])
+    assert grants == {}
+
+
+def test_grants_for_leaves_a_per_run_name_to_per_run_grants():
+    denials = [read("/proc/412/status", run=1, pid=412)]
+    assert generalise.grants_for(denials, snapshot_with("/proc/412/status"), FINE) == {}
+
+
+def test_proc_self_is_rewritten_with_the_thread_group_never_the_thread_or_the_pruner():
+    assert generalise.rewrite_self("/proc/self/status", tgid=412, tid=415) == "/proc/412/status"
+    assert generalise.rewrite_self("/proc/thread-self/stat", tgid=412, tid=415) == "/proc/412/task/415/stat"
+    assert generalise.rewrite_self("/proc/self/status", tgid=412, tid=415) != f"/proc/{os.getpid()}/status"
+    assert generalise.rewrite_self("/proc/selfish", tgid=412, tid=415) == "/proc/selfish"
+
+
+def test_a_strict_subset_under_a_wider_ancestor_is_raised_not_dropped():
+    grants = {"/usr": frozenset({"read", "execute"}), "/usr/bin": frozenset({"read"})}
+    assert generalise.normalise_hierarchy(grants) == {"/usr": frozenset({"read", "execute"}),
+                                                      "/usr/bin": frozenset({"read", "execute"})}
+
+
+def test_different_rights_on_a_nested_entry_are_left_alone():
+    grants = {"/usr": frozenset({"read", "execute"}), "/usr/out": frozenset({"write"})}
+    assert generalise.normalise_hierarchy(grants) == grants
+
+
+def test_a_path_with_a_wildcard_character_is_generalised_to_its_parent():
+    grants = generalise.grants_for([read("/srv/a[1]/f")], snapshot_with("/srv/a[1]/f", directories=("/srv", "/srv/a[1]")),
+                                   ("/srv",))
+    assert all("[" not in path for path in grants)
+    assert grants == {"/srv": frozenset({"read"})}
+
+
+def test_other_layers_are_ignored():
+    network = record.Denial(pid=1, layer=record.LAYER_NETWORK, operation="connect", objects=(),
+                            sections=frozenset({"connect"}), address="10.0.0.1", port=80, transport="tcp",
+                            errno="EACCES")
+    assert generalise.grants_for([network], snapshot_with(), FINE) == {}
+
+
+def test_a_snapshot_taken_from_disk_tells_files_the_run_created_from_files_that_were_there(tmp_path):
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "kept.txt").write_text("x")
+    snapshot = generalise.Snapshot.take([str(tmp_path)])
+    (tmp_path / "build" / "new.txt").write_text("y")
+    assert snapshot.existed(str(tmp_path / "build" / "kept.txt"))
+    assert not snapshot.existed(str(tmp_path / "build" / "new.txt"))
+    assert snapshot.is_directory(str(tmp_path / "build"))
+    assert generalise.nearest_existing(str(tmp_path / "build" / "new.txt"), snapshot) == str(tmp_path / "build")

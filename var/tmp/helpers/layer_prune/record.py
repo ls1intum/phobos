@@ -43,6 +43,9 @@ class Denial:
     directory for a creation, a removal or a rename), and `sections` the configuration sections that
     would grant it, empty where no section can. `address`, `port` and `transport` describe a network
     destination or a local port and are None otherwise. `operation` names the refused system call.
+    `pid` is the refusing process (its thread-group id) and `tid` the refusing thread, the id strace
+    printed; `run` numbers the observed run the denial came from, which the caller sets, so that a
+    name seen changing between runs can be told apart from one seen once.
     """
 
     pid: int
@@ -54,3 +57,5 @@ class Denial:
     port: int | None
     transport: str | None
     errno: str
+    run: int = 0
+    tid: int = 0
