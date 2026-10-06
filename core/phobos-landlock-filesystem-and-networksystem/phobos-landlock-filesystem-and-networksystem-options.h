@@ -47,6 +47,8 @@ struct options {
     bool close_bind;
     bool ephemeral_bind_tcp;
     bool ephemeral_bind_udp;
+    /* --mark-reported-domain: install the report marker right after the restriction. */
+    bool mark_reported_domain;
     char **command;
 };
 

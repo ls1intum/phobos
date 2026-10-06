@@ -55,6 +55,7 @@
 #include "../../../core/phobos-seccomp-filesystem/phobos-seccomp-filesystem-judge.h"
 #include "../../../core/phobos-seccomp-filesystem/phobos-seccomp-filesystem-message.h"
 #include "../../../core/phobos-seccomp-filesystem/phobos-seccomp-filesystem-path.h"
+#include "../../../core/phobos-seccomp-filesystem/phobos-seccomp-filesystem-reporter.h"
 
 /* ------------------------------------------------------------- test driver */
 
@@ -682,8 +683,11 @@ ssize_t __wrap_readlink(const char *path, char *buffer, size_t size) {
     return __real_readlink(path, buffer, size);
 }
 
-/* Whether the notification is still pending. */
+/* Whether the notification is still pending, and every answer sent on the listener. */
 static bool fake_notification_valid = true;
+static unsigned int responses_sent = 0;
+static struct seccomp_notif_resp last_response;
+static bool every_response_continued = true;
 
 int __real_ioctl(int descriptor, unsigned long request, ...);
 int __wrap_ioctl(int descriptor, unsigned long request, ...) {
@@ -697,6 +701,14 @@ int __wrap_ioctl(int descriptor, unsigned long request, ...) {
         }
         errno = ENOENT;
         return -1;
+    }
+    if (request == SECCOMP_IOCTL_NOTIF_SEND) {
+        memcpy(&last_response, argument, sizeof(last_response));
+        responses_sent++;
+        every_response_continued = every_response_continued
+                                   && last_response.flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE
+                                   && last_response.error == 0 && last_response.val == 0;
+        return 0;
     }
     return __real_ioctl(descriptor, request, argument);
 }
@@ -750,24 +762,74 @@ int __wrap_statx(int directory, const char *path, int flags, unsigned int mask,
     return result;
 }
 
-/* The supervisor's own status and the command's UNIX socket table, when a case fakes them. */
+/* The supervisor's own status and the command's UNIX socket table, when a case fakes them, and
+ * further small files by path. A faked file whose bytes are NULL cannot be read. A file under
+ * /proc/<pid> of a fake process that is not faked cannot be read either. */
 static const char *fake_own_status = NULL;
 static const char *fake_unix_table = NULL;
+static constexpr size_t FAKE_FILE_COUNT = 8;
+struct fake_file {
+    char path[64];
+    const char *bytes;
+    size_t length;
+};
+static struct fake_file fake_files[FAKE_FILE_COUNT];
+static size_t fake_file_count = 0;
 
-bool __real_read_small_file(const char *path, char *out, size_t size);
-bool __wrap_read_small_file(const char *path, char *out, size_t size) {
+static void fake_small_file(const char *path, const char *bytes, size_t length) {
+    for (size_t slot = 0; slot < fake_file_count; slot++) {
+        if (strcmp(fake_files[slot].path, path) == 0) {
+            fake_files[slot].bytes = bytes;
+            fake_files[slot].length = length;
+            return;
+        }
+    }
+    snprintf(fake_files[fake_file_count].path, sizeof(fake_files[0].path), "%s", path);
+    fake_files[fake_file_count].bytes = bytes;
+    fake_files[fake_file_count].length = length;
+    fake_file_count++;
+}
+
+/* The faked contents of a path, and whether the path is faked at all. */
+static bool faked_file(const char *path, const char **bytes, size_t *length) {
     if (strcmp(path, "/proc/self/status") == 0 && fake_own_status != NULL) {
-        snprintf(out, size, "%s", fake_own_status);
+        *bytes = fake_own_status;
+        *length = strlen(fake_own_status);
         return true;
     }
     if (strcmp(path, "/proc/42/net/unix") == 0) {
-        if (fake_unix_table == NULL) {
-            return false;
-        }
-        snprintf(out, size, "%s", fake_unix_table);
+        *bytes = fake_unix_table;
+        *length = fake_unix_table == NULL ? 0 : strlen(fake_unix_table);
         return true;
     }
-    return __real_read_small_file(path, out, size);
+    for (size_t slot = 0; slot < fake_file_count; slot++) {
+        if (strcmp(fake_files[slot].path, path) == 0) {
+            *bytes = fake_files[slot].bytes;
+            *length = fake_files[slot].length;
+            return true;
+        }
+    }
+    *bytes = NULL;
+    *length = 0;
+    return strncmp(path, "/proc/42/", strlen("/proc/42/")) == 0;
+}
+
+bool __real_read_small_file(const char *path, char *out, size_t size, size_t *length);
+bool __wrap_read_small_file(const char *path, char *out, size_t size, size_t *length) {
+    const char *bytes = NULL;
+    size_t bytes_length = 0;
+    if (!faked_file(path, &bytes, &bytes_length)) {
+        return __real_read_small_file(path, out, size, length);
+    }
+    if (bytes == NULL || bytes_length >= size) {
+        return false;
+    }
+    memcpy(out, bytes, bytes_length);
+    out[bytes_length] = '\0';
+    if (length != NULL) {
+        *length = bytes_length;
+    }
+    return true;
 }
 
 /* Whether realpath fails, as it does for a path that grew past PATH_MAX since it was examined. */
@@ -807,6 +869,10 @@ static void reset_fakes(void) {
     fake_unix_table = NULL;
     fake_euid_set = false;
     fake_realpath_fails = false;
+    fake_file_count = 0;
+    responses_sent = 0;
+    memset(&last_response, 0, sizeof(last_response));
+    every_response_continued = true;
     reset_judge_for_tests();
 }
 
@@ -946,15 +1012,20 @@ static void test_resolving_names(void) {
 static void test_reading_small_files(void) {
     printf("\nReading a small file whole\n");
     static char buffer[1 << 16];
-    check("a file is read whole", __real_read_small_file("/proc/self/status", buffer, sizeof(buffer))
-                                      && strstr(buffer, "Uid:") != NULL);
+    size_t length = 0;
+    check("a file is read whole, with its length",
+          __real_read_small_file("/proc/self/status", buffer, sizeof(buffer), &length)
+              && strstr(buffer, "Uid:") != NULL && length == strlen(buffer));
+    check("a file holding NUL bytes is read whole, the NULs counted",
+          __real_read_small_file("/proc/self/cmdline", buffer, sizeof(buffer), &length)
+              && length > strlen(buffer));
     check("a missing file is refused",
-          !__real_read_small_file("/no/such/file", buffer, sizeof(buffer)));
+          !__real_read_small_file("/no/such/file", buffer, sizeof(buffer), NULL));
     char small[8];
     check("a file that does not fit is refused",
-          !__real_read_small_file("/proc/self/status", small, sizeof(small)));
+          !__real_read_small_file("/proc/self/status", small, sizeof(small), NULL));
     check("a directory, which cannot be read, is refused",
-          !__real_read_small_file("/proc", buffer, sizeof(buffer)));
+          !__real_read_small_file("/proc", buffer, sizeof(buffer), NULL));
 }
 
 /* --------------------------------------------------------------------- the judge */
@@ -1612,7 +1683,7 @@ static void test_judging_links(void) {
           silent(judged_two_names(&judge_model, __NR_linkat, in_tree("rw/data"),
                                   in_tree("ro/hard"), 0)));
     reset_fakes();
-    __real_read_small_file("/proc/self/status", task_status, sizeof(task_status));
+    __real_read_small_file("/proc/self/status", task_status, sizeof(task_status), NULL);
 }
 
 static void test_judging_truncation(void) {
@@ -1800,6 +1871,282 @@ static void test_judging_port_binds(void) {
     check("a call that is no bind is silent", silent(capture_stderr_end()));
 }
 
+/* ------------------------------------------------------------- arming and membership */
+
+/* The seccomp filters a fake task carries: the enforcer at its restriction, and one more for the
+ * tasks it starts, which carry the marker. */
+static constexpr int ARMED_FILTERS = 3;
+static constexpr int MARKED_FILTERS = ARMED_FILTERS + 1;
+
+/* A copy of the supervisor's own status whose Seccomp_filters line says count, so the credentials
+ * still match. A negative count leaves the line out. */
+static const char *status_with_filters(int count) {
+    static char texts[2][1 << 14];
+    static size_t next = 0;
+    char *text = texts[next];
+    next = (next + 1) % 2;
+    size_t used = 0;
+    char *state = NULL;
+    static char copy[1 << 14];
+    snprintf(copy, sizeof(copy), "%s", task_status);
+    for (char *line = strtok_r(copy, "\n", &state); line != NULL; line = strtok_r(NULL, "\n", &state)) {
+        if (strncmp(line, "Seccomp_filters:", strlen("Seccomp_filters:")) != 0) {
+            used += (size_t)snprintf(text + used, sizeof(texts[0]) - used, "%s\n", line);
+        }
+    }
+    if (count >= 0) {
+        snprintf(text + used, sizeof(texts[0]) - used, "Seccomp_filters:\t%d\n", count);
+    }
+    return text;
+}
+
+/* Fakes the command line of /proc/42 as the given words, each ended by a NUL. */
+static void fake_cmdline(const char *const *words) {
+    static char bytes[1 << 20];
+    size_t length = 0;
+    for (size_t index = 0; words[index] != NULL; index++) {
+        size_t word = strlen(words[index]) + 1;
+        memcpy(bytes + length, words[index], word);
+        length += word;
+    }
+    fake_small_file("/proc/42/cmdline", bytes, length);
+}
+
+/* A notification of one native call from the fake task. */
+static struct seccomp_notif notification_of(struct seccomp_data data) {
+    struct seccomp_notif request;
+    memset(&request, 0, sizeof(request));
+    request.id = FAKE_NOTIFICATION_ID;
+    request.pid = FAKE_PID;
+    request.data = data;
+    return request;
+}
+
+/* Services one notification and answers what was printed meanwhile. */
+static const char *serviced(struct seccomp_data data) {
+    struct seccomp_notif request = notification_of(data);
+    struct seccomp_notif_resp response;
+    capture_stderr_begin();
+    reporter_service(FAKE_NOTIFY_DESCRIPTOR, &request, &response);
+    return capture_stderr_end();
+}
+
+/* The enforcer's path as the reporter is configured with it, and as /proc/42/exe names it. */
+static const char *enforcer(void) {
+    return in_tree("ro/exe");
+}
+
+/* Lets the fake task call landlock_restrict_self as the enforcer, with the given command line and
+ * filter count, and answers what was printed. */
+static const char *arm_with(const char *const *words, int filters) {
+    fake_readlink("/proc/42/exe", enforcer());
+    fake_cmdline(words);
+    fake_small_file("/proc/42/status", status_with_filters(filters),
+                    strlen(status_with_filters(filters)));
+    return serviced(native_call(SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF, 0, 0, 0, 0, 0));
+}
+
+/* Makes the fake task one carrying the given number of filters, for the next observation. */
+static void fake_filters(int filters) {
+    const char *status = status_with_filters(filters);
+    fake_small_file("/proc/42/status", status, strlen(status));
+}
+
+static void start_reporter(void) {
+    reset_fakes();
+    reset_reporter_for_tests();
+    reset_report_for_tests();
+    reporter_configure(enforcer(), 8);
+}
+
+static void test_arming_and_membership(void) {
+    printf("\nArming on the enforcer, and the tasks of its domain\n");
+    start_reporter();
+    const char *filesystem_enforcer[] = {"enforcer", "--mark-reported-domain", "--rights=rx",
+                                         in_tree("ro"), "--", "/bin/cat", NULL};
+    check("before arming, a refused open is not judged",
+          silent((fake_string(NAME_ADDRESS, in_tree("none/secret")),
+                  serviced(native_call(__NR_openat, AT_FDCWD_ARGUMENT, NAME_ADDRESS, O_RDONLY, 0,
+                                       0)))));
+    check("arming prints nothing", silent(arm_with(filesystem_enforcer, ARMED_FILTERS)));
+    check("and arms the filesystem model", reporter_current_state() == REPORTER_FILESYSTEM_ARMED
+                                               && reporter_filesystem_rule_count() == 1);
+    fake_filters(MARKED_FILTERS);
+    fake_string(NAME_ADDRESS, in_tree("none/secret"));
+    check("a task of the domain is judged",
+          strcmp(serviced(native_call(__NR_openat, AT_FDCWD_ARGUMENT, NAME_ADDRESS, O_RDONLY, 0,
+                                      0)),
+                 line_for("read", "File", in_tree("none/secret"))) == 0);
+    check("and its call is continued, with error and value 0",
+          last_response.flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE && last_response.error == 0
+              && last_response.val == 0 && last_response.id == FAKE_NOTIFICATION_ID);
+    fake_filters(ARMED_FILTERS);
+    fake_string(NAME_ADDRESS, in_tree("none/dir"));
+    check("a task beside the domain, with the count recorded at arming, is not judged",
+          silent(serviced(native_call(__NR_openat, AT_FDCWD_ARGUMENT, NAME_ADDRESS, O_RDONLY, 0,
+                                      0))));
+    fake_small_file("/proc/42/status", NULL, 0);
+    check("a task whose status cannot be read is not judged",
+          silent(serviced(native_call(__NR_openat, AT_FDCWD_ARGUMENT, NAME_ADDRESS, O_RDONLY, 0,
+                                      0))));
+    fake_filters(MARKED_FILTERS);
+    const char *copied[] = {"enforcer", "--rights=rwxmd", "/", "--", "/bin/cat", NULL};
+    check("nothing re-arms once the filesystem model is armed",
+          silent(arm_with(copied, ARMED_FILTERS)) && reporter_filesystem_rule_count() == 1);
+    check("a call the reporter does not decode is continued all the same",
+          silent(serviced(native_call(__NR_getpid, 0, 0, 0, 0, 0)))
+              && last_response.flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+    check("every answer of the run was CONTINUE with error and value 0",
+          responses_sent > 0 && every_response_continued);
+}
+
+static void test_arming_in_order(void) {
+    printf("\nThe network enforcer arms the bind model, the filesystem enforcer after it\n");
+    start_reporter();
+    const char *network_enforcer[] = {"enforcer", "--no-filesystem", "--close-bind",
+                                      "--bind-tcp", "8080", "--", "bash", NULL};
+    const char *filesystem_enforcer[] = {"enforcer", "--rights=rx", in_tree("ro"), "--",
+                                         "/bin/cat", NULL};
+    check("the network enforcer arms", silent(arm_with(network_enforcer, ARMED_FILTERS - 1)));
+    check("only the bind model", reporter_current_state() == REPORTER_NETWORK_ARMED);
+    fake_filters(MARKED_FILTERS);
+    fake_string(NAME_ADDRESS, in_tree("none/secret"));
+    check("so a refused open is not yet judged",
+          silent(serviced(native_call(__NR_openat, AT_FDCWD_ARGUMENT, NAME_ADDRESS, O_RDONLY, 0,
+                                      0))));
+    check("a second network enforcer changes nothing",
+          silent(arm_with(network_enforcer, ARMED_FILTERS))
+              && reporter_current_state() == REPORTER_NETWORK_ARMED);
+    check("the filesystem enforcer arms after it", silent(arm_with(filesystem_enforcer,
+                                                                   ARMED_FILTERS))
+                                                       && reporter_current_state()
+                                                              == REPORTER_FILESYSTEM_ARMED);
+    fake_filters(MARKED_FILTERS);
+    fake_string(NAME_ADDRESS, in_tree("none/secret"));
+    check("and a refused open is judged from then on",
+          strcmp(serviced(native_call(__NR_openat, AT_FDCWD_ARGUMENT, NAME_ADDRESS, O_RDONLY, 0,
+                                      0)),
+                 line_for("read", "File", in_tree("none/secret"))) == 0);
+    struct sockaddr_in refused_port = {.sin_family = AF_INET, .sin_port = htons(8081)};
+    fake_memory(OTHER_NAME_ADDRESS, &refused_port, sizeof(refused_port));
+    struct seccomp_data bind_call = native_call(__NR_bind, DIRECTORY_DESCRIPTOR,
+                                                OTHER_NAME_ADDRESS, sizeof(refused_port), 0, 0);
+    check("without a socket table no bind is judged by its port", silent(serviced(bind_call)));
+    reporter_use_socket_types(fake_socket_type_of);
+    fake_socket_type = SOCK_STREAM;
+    check("with one, a refused port is a line",
+          strcmp(serviced(bind_call), "Phobos Security Error: the program tried to illegally bind "
+                                      "the Port 8081 over TCP but was blocked by Phobos.\n")
+              == 0);
+}
+
+static void test_arming_refusals(void) {
+    printf("\nWhat does not arm, or turns reporting off\n");
+    start_reporter();
+    const char *filesystem_enforcer[] = {"enforcer", "--rights=rx", in_tree("ro"), "--",
+                                         "/bin/cat", NULL};
+    fake_readlink("/proc/42/exe", "/usr/bin/python3");
+    fake_cmdline(filesystem_enforcer);
+    fake_filters(ARMED_FILTERS);
+    check("a caller that is not the enforcer never arms",
+          silent(serviced(native_call(SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF, 0, 0, 0, 0, 0)))
+              && reporter_current_state() == REPORTER_UNARMED);
+    fake_link_count = 0;
+    fake_readlink("/proc/42/root", "/");
+    check("nor one whose executable cannot be read",
+          silent(serviced(native_call(SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF, 0, 0, 0, 0, 0)))
+              && reporter_current_state() == REPORTER_UNARMED);
+    reporter_configure(in_tree("ro/missing-enforcer"), 8);
+    check("an enforcer path that does not resolve arms nothing",
+          silent(arm_with(filesystem_enforcer, ARMED_FILTERS))
+              && reporter_current_state() == REPORTER_UNARMED);
+    start_reporter();
+    fake_notification_valid = false;
+    check("a notification that vanished arms nothing",
+          silent(arm_with(filesystem_enforcer, ARMED_FILTERS))
+              && reporter_current_state() == REPORTER_UNARMED);
+    const char *notice = "Phobos: filesystem denial reporting is off for this run";
+    start_reporter();
+    const char *rejected[] = {"enforcer", "--rights=zz", in_tree("ro"), "--", "/bin/cat", NULL};
+    check("a command line the parser rejects turns reporting off with one notice",
+          strstr(arm_with(rejected, ARMED_FILTERS), notice) != NULL
+              && reporter_current_state() == REPORTER_FILESYSTEM_ARMED);
+    fake_filters(MARKED_FILTERS);
+    fake_string(NAME_ADDRESS, in_tree("none/secret"));
+    check("after which nothing is judged",
+          silent(serviced(native_call(__NR_openat, AT_FDCWD_ARGUMENT, NAME_ADDRESS, O_RDONLY, 0,
+                                      0))));
+    start_reporter();
+    const char *missing_rule[] = {"enforcer", "--rights=r", in_tree("ro/gone"), "--", "/bin/cat",
+                                  NULL};
+    check("rules that cannot be modelled turn reporting off",
+          strstr(arm_with(missing_rule, ARMED_FILTERS), notice) != NULL);
+    start_reporter();
+    check("a status that does not count the filters turns reporting off",
+          strstr(arm_with(filesystem_enforcer, -1), notice) != NULL);
+    start_reporter();
+    fake_readlink("/proc/42/exe", enforcer());
+    fake_cmdline(filesystem_enforcer);
+    fake_small_file("/proc/42/status", "Seccomp_filters:\n\nSeccomp_filters:\tmany\n",
+                    strlen("Seccomp_filters:\n\nSeccomp_filters:\tmany\n"));
+    check("so does one whose count is not a number",
+          strstr(serviced(native_call(SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF, 0, 0, 0, 0, 0)),
+                 notice)
+              != NULL);
+    start_reporter();
+    fake_readlink("/proc/42/exe", enforcer());
+    fake_small_file("/proc/42/cmdline", NULL, 0);
+    fake_filters(ARMED_FILTERS);
+    check("a command line that cannot be read turns reporting off",
+          strstr(serviced(native_call(SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF, 0, 0, 0, 0, 0)),
+                 notice)
+              != NULL);
+    start_reporter();
+    fake_readlink("/proc/42/exe", enforcer());
+    fake_small_file("/proc/42/cmdline", "", 0);
+    fake_filters(ARMED_FILTERS);
+    check("so does an empty one",
+          strstr(serviced(native_call(SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF, 0, 0, 0, 0, 0)),
+                 notice)
+              != NULL);
+    start_reporter();
+    fake_readlink("/proc/42/exe", enforcer());
+    fake_small_file("/proc/42/cmdline", "enforcer", strlen("enforcer"));
+    check("and one that does not end in a NUL",
+          strstr(serviced(native_call(SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF, 0, 0, 0, 0, 0)),
+                 notice)
+              != NULL);
+    start_reporter();
+    static const char *many[16400];
+    for (size_t index = 0; index < 16390; index++) {
+        many[index] = "x";
+    }
+    many[16390] = NULL;
+    check("and one with more arguments than any enforcer takes",
+          strstr(arm_with(many, ARMED_FILTERS), notice) != NULL);
+    start_reporter();
+    fake_readlink("/proc/42/exe", enforcer());
+    fake_cmdline(filesystem_enforcer);
+    fake_small_file("/proc/42/status", NULL, 0);
+    check("and an enforcer whose status cannot be read",
+          strstr(serviced(native_call(SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF, 0, 0, 0, 0, 0)),
+                 notice)
+              != NULL);
+}
+
+static void test_reporter_handles(void) {
+    printf("\nWhich notifications are observation traps\n");
+    struct seccomp_notif request = notification_of(native_call(__NR_openat, 0, 0, 0, 0, 0));
+    check("a native path call is", reporter_handles(&request));
+    request = notification_of(native_call(__NR_bind, 0, 0, 0, 0, 0));
+    check("a bind is", reporter_handles(&request));
+    request = notification_of(native_call(__NR_getpid, 0, 0, 0, 0, 0));
+    check("a call outside the set is not", !reporter_handles(&request));
+    request = notification_of(native_call(__NR_openat, 0, 0, 0, 0, 0));
+    request.data.arch = AUDIT_ARCH_I386;
+    check("a foreign ABI is not, whatever its number", !reporter_handles(&request));
+}
+
 int main(int argument_count, char *arguments[]) {
     if (argument_count == 3 && strcmp(arguments[1], "--quote") == 0) {
         static char out[REPORT_QUOTED_MAXIMUM];
@@ -1825,7 +2172,7 @@ int main(int argument_count, char *arguments[]) {
     test_report_set_is_disjoint();
     build_tree();
     build_narrow_model();
-    __real_read_small_file("/proc/self/status", task_status, sizeof(task_status));
+    __real_read_small_file("/proc/self/status", task_status, sizeof(task_status), NULL);
     test_reading_names();
     test_resolving_names();
     test_reading_small_files();
@@ -1841,6 +2188,10 @@ int main(int argument_count, char *arguments[]) {
     test_judging_truncation();
     test_judging_unix_binds();
     test_judging_port_binds();
+    test_arming_and_membership();
+    test_arming_in_order();
+    test_arming_refusals();
+    test_reporter_handles();
     remove_tree();
     printf("\n%d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;

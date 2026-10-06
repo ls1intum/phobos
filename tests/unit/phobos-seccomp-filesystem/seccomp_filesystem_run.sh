@@ -34,6 +34,7 @@ MODULES=(
   "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-access.c"
   "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-path.c"
   "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-judge.c"
+  "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-reporter.c"
 )
 # The enforcer's diagnostics-free model, linked without its diagnostics.
 MODEL=(

@@ -77,6 +77,15 @@ struct syscall_record {
     char entered_directory[RECORDED_PATH_LENGTH];
     size_t closed_descriptor_count;
     int closed_descriptor[RECORDED_RULE_LIMIT];
+    unsigned int sequence;
+    unsigned int restricted_at;
+    unsigned int seccomp_at;
+    unsigned int seccomp_calls;
+    unsigned int seccomp_operation;
+    unsigned int seccomp_flags;
+    unsigned int seccomp_length;
+    unsigned int seccomp_first_code;
+    unsigned int seccomp_first_value;
 };
 
 static struct syscall_record *record;
@@ -101,6 +110,7 @@ static int fail_create = 0;
 static int fail_add_path = 0;
 static int fail_add_port = 0;
 static int fail_restrict = 0;
+static int fail_seccomp = 0;
 static int fail_open = 0;
 static int fail_fstat = 0;
 static int fail_prctl = 0;
@@ -211,8 +221,26 @@ static long mock_add_rule(int ruleset_descriptor, int rule_type, const void *rul
 
 static long mock_restrict_self(int ruleset_descriptor) {
     record->restricted_ruleset_descriptor = ruleset_descriptor;
+    record->restricted_at = ++record->sequence;
     if (fail_restrict) {
         errno = EPERM;
+        return -1;
+    }
+    return 0;
+}
+
+/* Stands in for seccomp, which the enforcer calls only to install the report marker. */
+static long mock_seccomp(unsigned int operation, unsigned int flags,
+                         const struct sock_fprog *program) {
+    record->seccomp_calls++;
+    record->seccomp_at = ++record->sequence;
+    record->seccomp_operation = operation;
+    record->seccomp_flags = flags;
+    record->seccomp_length = program->len;
+    record->seccomp_first_code = program->filter[0].code;
+    record->seccomp_first_value = program->filter[0].k;
+    if (fail_seccomp) {
+        errno = EINVAL;
         return -1;
     }
     return 0;
@@ -244,6 +272,10 @@ long __wrap_syscall(long number, ...) {
         result = mock_add_rule(ruleset_descriptor, rule_type, rule_attributes);
     } else if (number == SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF) {
         result = mock_restrict_self(va_arg(arguments, int));
+    } else if (number == SYS_seccomp) {
+        unsigned int operation = va_arg(arguments, unsigned int);
+        unsigned int flags = va_arg(arguments, unsigned int);
+        result = mock_seccomp(operation, flags, va_arg(arguments, const struct sock_fprog *));
     }
     va_end(arguments);
     return result;
@@ -360,6 +392,7 @@ static void reset_mocks(void) {
     fail_add_path = 0;
     fail_add_port = 0;
     fail_restrict = 0;
+    fail_seccomp = 0;
     fail_open = 0;
     fail_fstat = 0;
     fail_prctl = 0;
@@ -1763,6 +1796,37 @@ static void test_model_of_bind(void) {
           model_bind_permitted(&model_under_test, false, 0));
 }
 
+/* The marker that tells a reporting supervisor which tasks are in this domain: one filter that
+ * allows everything, installed with no flags after the restriction and only when asked for, and a
+ * failure to install it refuses the run rather than leaving the reporter to guess. */
+static void test_report_marker(void) {
+    printf("\nThe report marker\n");
+    char *marked[] = {"phobos-landlock-filesystem-and-networksystem", "--mark-reported-domain",
+                      "--rights=r", "/usr", "--", "/bin/true", NULL};
+    char *unmarked[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=r", "/usr", "--",
+                        "/bin/true", NULL};
+    expect_exit("a marked run goes through", 0, marked);
+    check("exactly one filter is installed", record->seccomp_calls == 1);
+    check("as a plain filter with no flags and no listener",
+          record->seccomp_operation == SECCOMP_SET_MODE_FILTER && record->seccomp_flags == 0);
+    check("of one instruction that allows everything",
+          record->seccomp_length == 1 && record->seccomp_first_code == (BPF_RET | BPF_K)
+              && record->seccomp_first_value == SECCOMP_RET_ALLOW);
+    check("after the restriction, so the enforcer itself is not marked",
+          record->restricted_at != 0 && record->seccomp_at > record->restricted_at);
+    expect_exit("an unmarked run goes through", 0, unmarked);
+    check("and installs no filter", record->seccomp_calls == 0);
+    fail_seccomp = 1;
+    expect_exit("a marker that cannot be installed refuses the run", EXIT_CODE_POLICY_ERROR,
+                marked);
+    check("and says why", stderr_says("seccomp marker"));
+    static struct options options;
+    char error[MODEL_ERROR_LENGTH];
+    check("the checked parser accepts the flag",
+          parse_arguments_checked(6, marked, &options, error, sizeof(error))
+              && options.mark_reported_domain);
+}
+
 int main(void) {
     record = mmap(NULL, sizeof(*record), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (record == MAP_FAILED) {
@@ -1794,6 +1858,7 @@ int main(void) {
     test_query_landlock_version();
     test_model_of_the_ruleset();
     test_model_of_bind();
+    test_report_marker();
     printf("\n%d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }

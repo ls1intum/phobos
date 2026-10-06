@@ -66,7 +66,7 @@ static char unix_table[UNIX_TABLE_LENGTH];
 /* The supervisor's own /proc/self/status, read once: its credentials do not change. */
 static const char *supervisor_status(void) {
     if (!own_status_known) {
-        own_status_known = read_small_file("/proc/self/status", own_status, sizeof(own_status));
+        own_status_known = read_small_file("/proc/self/status", own_status, sizeof(own_status), NULL);
     }
     return own_status_known ? own_status : "";
 }
@@ -582,7 +582,7 @@ static bool socket_is_unix(const struct task_view *task, int descriptor) {
     char path[PROC_PATH_LENGTH];
     unsigned long inode = socket_inode(task, descriptor);
     snprintf(path, sizeof(path), "/proc/%d/net/unix", (int)task->pid);
-    if (inode == 0 || !read_small_file(path, unix_table, sizeof(unix_table))
+    if (inode == 0 || !read_small_file(path, unix_table, sizeof(unix_table), NULL)
         || !notification_still_valid(task)) {
         return false;
     }

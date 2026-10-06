@@ -51,8 +51,9 @@ bool make_absolute(const struct task_view *task, int directory, const char *name
 bool resolve_for_landlock(const char *absolute, bool parent, char *anchor, size_t anchor_size,
                           char *shown, size_t shown_size);
 
-/* Reads a whole small file, such as one under /proc, NUL-terminated. Answers false when it cannot
- * be opened or read, or does not fit. */
-bool read_small_file(const char *path, char *out, size_t size);
+/* Reads a whole small file, such as one under /proc, NUL-terminated, and its length in bytes into
+ * length unless that is NULL; the length counts NUL bytes inside the file, as /proc/<pid>/cmdline
+ * holds them. Answers false when it cannot be opened or read, or does not fit. */
+bool read_small_file(const char *path, char *out, size_t size, size_t *length);
 
 #endif

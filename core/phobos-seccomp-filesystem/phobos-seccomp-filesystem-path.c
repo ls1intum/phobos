@@ -141,7 +141,7 @@ bool resolve_for_landlock(const char *absolute, bool parent, char *anchor, size_
            && (size_t)snprintf(shown, shown_size, "%s%s%s", resolved, separator, last) < shown_size;
 }
 
-bool read_small_file(const char *path, char *out, size_t size) {
+bool read_small_file(const char *path, char *out, size_t size, size_t *length) {
     int descriptor = open(path, O_RDONLY | O_CLOEXEC);
     if (descriptor < 0) {
         return false;
@@ -156,5 +156,8 @@ bool read_small_file(const char *path, char *out, size_t size) {
     } while (got > 0 && used < size - 1);
     close(descriptor);
     out[used] = '\0';
+    if (length != NULL) {
+        *length = used;
+    }
     return got == 0;
 }
