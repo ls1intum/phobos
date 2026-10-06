@@ -304,6 +304,12 @@ struct behaviour {
     int connect_calls;
     int recorded_child_status;
     int waitpid_eintr_once;
+    int waitpid_echild;
+    int notif_send_eintr;
+    /* sigaction on SIGCHLD: how often the default was taken (with the old one kept) and how
+     * often a kept disposition was given back */
+    int child_signal_taken;
+    int child_signal_restored;
     int calloc_fails;
     /* signal and kill: the handlers the supervisor installed, and what they then sent */
     void (*signal_handler[SIGNAL_SLOTS])(int);
@@ -474,6 +480,18 @@ void (*__wrap_signal(int signum, void (*handler)(int)))(int) {
     return NULL;
 }
 
+/* Records each change of SIGCHLD's disposition, then makes it: giving it the default while keeping
+ * the old one is the supervisor taking it over, and setting one without keeping is giving it back. */
+int __real_sigaction(int signum, const struct sigaction *action, struct sigaction *old);
+int __wrap_sigaction(int signum, const struct sigaction *action, struct sigaction *old) {
+    if (signum == SIGCHLD && action != NULL && old != NULL && action->sa_handler == SIG_DFL) {
+        bx->child_signal_taken++;
+    } else if (signum == SIGCHLD && action != NULL && old == NULL) {
+        bx->child_signal_restored++;
+    }
+    return __real_sigaction(signum, action, old);
+}
+
 int __wrap_kill(pid_t pid, int signum) {
     bx->kill_calls++;
     bx->last_kill_pid = (int)pid;
@@ -505,6 +523,10 @@ pid_t __wrap_waitpid(pid_t pid, int *status, int options) {
     if (bx->waitpid_eintr_once) {
         bx->waitpid_eintr_once = 0;
         errno = EINTR;
+        return -1;
+    }
+    if (bx->waitpid_echild) {
+        errno = ECHILD;
         return -1;
     }
     if (status != NULL) {
@@ -1244,6 +1266,11 @@ int __wrap_ioctl(int fd, unsigned long request, ...) {
         bx->last_answer_val = resp->val;
         bx->last_answer_flags = resp->flags;
         bx->answers++;
+        if (bx->notif_send_eintr > 0) {
+            bx->notif_send_eintr--;
+            errno = EINTR;
+            return -1;
+        }
         if (bx->notif_send_result != 0) {
             errno = bx->notif_send_result == FAKE_FAILS_TARGET_GONE ? ENOENT : EPIPE;
             return -1;
@@ -1566,6 +1593,35 @@ static void test_exit_code_mapping(void) {
     status = SIGKILL;
     check("a signal maps to 128 plus the signal", exit_code_from_status(status) == SIGNAL_EXIT_CODE_BASE + SIGKILL);
     check("an unusual status maps to the setup error", exit_code_from_status(WAIT_STATUS_STOPPED) == EXIT_CODE_SETUP_ERROR);
+}
+
+/* The disposition SIGCHLD has right now in this process. */
+static void (*child_signal_handler(void))(int) {
+    struct sigaction current;
+    sigaction(SIGCHLD, NULL, &current);
+    return current.sa_handler;
+}
+
+/* Sets SIGCHLD's disposition with sigaction, since signal() is faked in this suite. */
+static void set_child_signal_handler(void (*handler)(int)) {
+    struct sigaction wanted;
+    memset(&wanted, 0, sizeof(wanted));
+    wanted.sa_handler = handler;
+    sigemptyset(&wanted.sa_mask);
+    sigaction(SIGCHLD, &wanted, NULL);
+}
+
+static void test_child_signal_disposition(void) {
+    struct sigaction inherited;
+    set_child_signal_handler(SIG_IGN);
+    take_default_child_signal(&inherited);
+    check("an inherited ignored SIGCHLD is given its default in the supervisor, so its child is not "
+          "reaped by the kernel",
+          child_signal_handler() == SIG_DFL && inherited.sa_handler == SIG_IGN);
+    restore_child_signal(&inherited);
+    check("and the child gets the disposition its caller gave back before it becomes the command",
+          child_signal_handler() == SIG_IGN);
+    set_child_signal_handler(SIG_DFL);
 }
 
 /* Logs once quiet, which returns without writing, and once verbose, which writes and so
@@ -3219,6 +3275,28 @@ static void test_connect_on_behalf_paths(void) {
     answer(FAKE_NOTIFY_DESCRIPTOR, &response, 1, 0, -EACCES);
     set_verbose(false);
     check("a send error is logged", bx->answers == 1);
+
+    reset_behaviour();
+    bx->notif_send_eintr = 2;
+    answer(FAKE_NOTIFY_DESCRIPTOR, &response, 1, 0, -EACCES);
+    check("an answer a signal interrupts is sent again until it is delivered",
+          bx->answers == 3 && bx->notif_send_eintr == 0 && bx->last_answer_error == -EACCES
+              && bx->last_answer_flags == 0);
+
+    reset_behaviour();
+    memset(&response, 0, sizeof(response));
+    response.error = -EACCES;
+    bx->notif_send_eintr = 1;
+    bool refusal_sent = send_notification_response(FAKE_NOTIFY_DESCRIPTOR, &response);
+    check("the shared send sends a refusal exactly as given, never adding the continue flag",
+          refusal_sent && bx->answers == 2 && bx->last_answer_flags == 0
+              && bx->last_answer_error == -EACCES && response.flags == 0);
+    reset_behaviour();
+    response.flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
+    response.error = 0;
+    bool continue_sent = send_notification_response(FAKE_NOTIFY_DESCRIPTOR, &response);
+    check("and a continue exactly as given",
+          continue_sent && bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
 }
 
 static void test_read_peer_address_edges(void) {
@@ -3682,6 +3760,31 @@ static void test_parent_paths(void) {
 
     reset_behaviour();
     bx->fork_result = FAKE_CHILD_PID;
+    bx->waitpid_echild = 1;
+    check("a status that cannot be read ends the run with PHB-ESTATUS, never with 0",
+          run_main(argv) == EXIT_CODE_STATUS_UNREAD);
+
+    reset_behaviour();
+    bx->fork_result = FAKE_CHILD_PID;
+    (void)run_main(argv);
+    check("the supervisor takes SIGCHLD's default before it forks, and gives nothing back itself",
+          bx->child_signal_taken == 1 && bx->child_signal_restored == 0);
+
+    reset_behaviour();
+    bx->fork_result = 0;
+    (void)run_main(argv);
+    check("and the child gives back the disposition it inherited before it becomes the command",
+          bx->child_signal_taken == 1 && bx->child_signal_restored == 1);
+
+    reset_behaviour();
+    bx->fork_result = FAKE_CHILD_PID;
+    bx->recvmsg_result = -1;
+    bx->waitpid_echild = 1;
+    check("and a run refused before supervision with an unread status still ends refused",
+          run_main(argv) == EXIT_CODE_SETUP_ERROR);
+
+    reset_behaviour();
+    bx->fork_result = FAKE_CHILD_PID;
     check("the supervisor takes SIGTERM, SIGHUP, SIGINT and SIGQUIT, passes each on to the command while it exists and to no one once it is reaped",
           signals_taken_and_passed_on(argv) == SIGNALS_PASSED_ON);
 }
@@ -3703,6 +3806,7 @@ int main(void) {
     test_connect_ranges();
     test_address_and_destination();
     test_exit_code_mapping();
+    test_child_signal_disposition();
     test_verbose_logging();
     test_read_peer_address_edges();
     test_receive_descriptor();

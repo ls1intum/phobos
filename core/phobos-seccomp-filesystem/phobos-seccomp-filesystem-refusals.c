@@ -3,10 +3,11 @@
 
 #include "phobos-seccomp-filesystem-access.h"
 
+#include "../phobos-seccomp-networksystem/phobos-seccomp-networksystem-handoff.h"
+
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <sys/syscall.h>
 
 /* The only response this file ever sends, but for the notification's id: the call fails with
@@ -80,7 +81,6 @@ void answer_filter_refusal(int notify_descriptor, const struct seccomp_notif *re
                            struct seccomp_notif_resp *response, enum report_layer layer) {
     memcpy(response, &REFUSAL, sizeof(REFUSAL));
     response->id = request->id;
-    while (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_SEND, response) != 0 && errno == EINTR) {
-    }
+    (void)send_notification_response(notify_descriptor, response);
     report_refusal(&request->data, layer);
 }

@@ -6,11 +6,16 @@
 # Every variable here is read by the scripts that source it, never in this file.
 # shellcheck disable=SC2034
 
-# The statuses a Phobos run ends with when Phobos itself stops it. They are an external
-# contract, read by whatever grades the run, and tests/integration/cli_flags.sh pins each one to its value.
+# The statuses a Phobos run ends with when Phobos itself stops it, or cannot say how the command
+# ended. They are an external contract, read by whatever grades the run, and
+# tests/integration/cli_flags.sh pins each one to its value.
 PHB_EPOLICY=11
 PHB_ETIMEOUT=14
 PHB_ERUNTIME=15
+# The command ran but its exit status could not be read, so the run cannot say whether it
+# succeeded; the connect guard and the report-only supervisor end with it rather than with 0.
+# The C sources name it EXIT_CODE_STATUS_UNREAD.
+PHB_ESTATUS=16
 # The status a script ends with when it was called the wrong way.
 PHB_EXIT_USAGE=2
 # The status phobos-landlock-filesystem-and-networksystem and the connect guard end with when they refuse to set up the

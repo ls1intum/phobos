@@ -95,7 +95,7 @@ static bool continue_one_notification(int listener) {
     if (ioctl(listener, SECCOMP_IOCTL_NOTIF_RECV, request) == 0) {
         response->id = request->id;
         response->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
-        continued = ioctl(listener, SECCOMP_IOCTL_NOTIF_SEND, response) == 0;
+        continued = send_notification_response(listener, response);
     }
     free(request);
     free(response);

@@ -86,13 +86,14 @@ WHAT IT REPORTS
 
   When the command's stderr carried lines that look like a refusal, the layer prints
   "Sandbox denials: network=N, filesystem=N. (PHB-EDENY)" after the command has ended. That
-  is a report, never a status: the command's own exit status is always passed through
-  unchanged.
+  is a report, never a status: the command's own exit status is passed through unchanged,
+  unless it could not be read at all (16, below).
 
 EXIT STATUS
   0 to 255  the command's own status, passed through unchanged
   2         phobos-filesystem.sh was called the wrong way (PHB_EXIT_USAGE)
   11        the policy is invalid (PHB-EPOLICY)
+  16        the command ran but the reporter could not read its exit status (PHB-ESTATUS)
 
 EXAMPLES
   phobos-filesystem.sh --config exercise.cfg -- ./gradlew test

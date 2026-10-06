@@ -753,6 +753,9 @@ struct process_script {
     bool wait_fails;
     int reaped_status;
     bool reap_faked;
+    bool reap_unread;
+    unsigned int child_signal_taken;
+    unsigned int child_signal_restored;
     int fake_landlock_version;
     bool landlock_version_faked;
     int fake_continue;
@@ -987,13 +990,27 @@ pid_t __wrap_waitpid(pid_t pid, int *status, int options) {
     return pid;
 }
 
-void __real_reap_command(pid_t child, const sigset_t *forwarded, int *status);
-void __wrap_reap_command(pid_t child, const sigset_t *forwarded, int *status) {
+/* Records each change of SIGCHLD's disposition while a case is scripted, then makes it: giving it
+ * the default while keeping the old one is the supervisor taking it over, and setting one without
+ * keeping is giving it back. */
+int __real_sigaction(int signum, const struct sigaction *action, struct sigaction *old);
+int __wrap_sigaction(int signum, const struct sigaction *action, struct sigaction *old) {
+    if (scripted() && signum == SIGCHLD && action != NULL && old != NULL
+        && action->sa_handler == SIG_DFL) {
+        script->child_signal_taken++;
+    } else if (scripted() && signum == SIGCHLD && action != NULL && old == NULL) {
+        script->child_signal_restored++;
+    }
+    return __real_sigaction(signum, action, old);
+}
+
+bool __real_reap_command(pid_t child, const sigset_t *forwarded, int *status);
+bool __wrap_reap_command(pid_t child, const sigset_t *forwarded, int *status) {
     if (!scripted() || !script->reap_faked) {
-        __real_reap_command(child, forwarded, status);
-        return;
+        return __real_reap_command(child, forwarded, status);
     }
     *status = script->reaped_status;
+    return !script->reap_unread;
 }
 
 int __real_execvp(const char *file, char *const arguments[]);
@@ -3628,6 +3645,28 @@ static void test_supervisor_parent(void) {
     script->reaped_status = 9 << 8;
     check("a child that ran without a filter is waited for and its status kept",
           supervisor_ended_with(watch) == 9 && script->responses_sent == 0);
+    script_supervisor();
+    script->receive_result = -1;
+    script->reaped_status = 0;
+    script->reap_unread = true;
+    check("a status that cannot be read ends the run with PHB-ESTATUS, never with 0",
+          supervisor_ended_with(watch) == EXIT_CODE_STATUS_UNREAD
+              && strstr(captured_text, "exit status could not be read") != NULL);
+    script_supervisor();
+    script->receive_result = -1;
+    check("the supervisor takes SIGCHLD's default before anything forks, and keeps it itself",
+          supervisor_ended_with(watch) == 0 && script->child_signal_taken == 1
+              && script->child_signal_restored == 0);
+    script_supervisor();
+    script->forks[0] = 0;
+    check("and its child gives back the disposition it inherited before it becomes the command",
+          supervisor_ended_with(watch) == EXIT_CODE_STAND_IN && script->child_signal_taken == 1
+              && script->child_signal_restored == 1);
+    script_supervisor();
+    script->fake_landlock_version = 0;
+    check("as does a supervisor that has nothing to watch and becomes the command at once",
+          supervisor_ended_with(watch) == EXIT_CODE_STAND_IN && script->child_signal_taken == 1
+              && script->child_signal_restored == 1);
     script_supervisor();
     script->calloc_fails = true;
     check("no memory for notifications is said before anything is forked, and the command runs "

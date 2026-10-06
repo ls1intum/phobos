@@ -26,7 +26,8 @@
  *           decides against the allow-list, and for an allowed connection makes
  *           the connection itself and hands the connected socket back. Ignores
  *           SIGTERM and waits for the child, so an outer timeout's kill escalation
- *           reaches the command, then exits with the child's status.
+ *           reaches the command, then exits with the child's status, or with 16
+ *           (PHB-ESTATUS) when that status could not be read.
  *   child   installs a seccomp filter that traps connect() to a user-notification
  *           file descriptor, sends that descriptor up to the supervisor, and execs
  *           the rest of the layer chain. The filter, and so the supervision,
@@ -137,6 +138,8 @@ int main(int argument_count, char *arguments[]) {
 
     sigset_t forwarded;
     sigset_t before_fork;
+    struct sigaction inherited_child_signal;
+    take_default_child_signal(&inherited_child_signal);
     block_forwarded_signals(&forwarded, &before_fork);
     pid_t child = fork();
     if (child < 0) {
@@ -144,6 +147,7 @@ int main(int argument_count, char *arguments[]) {
         return EXIT_CODE_SETUP_ERROR;
     }
     if (child == 0) {
+        restore_child_signal(&inherited_child_signal);
         sigprocmask(SIG_SETMASK, &before_fork, nullptr);
         close(pair[0]);
         run_child(pair[1], options.command);
@@ -157,9 +161,9 @@ int main(int argument_count, char *arguments[]) {
     close(pair[0]);
     if (notify_descriptor < 0) {
         int status = 0;
-        reap_command(child, &forwarded, &status);
+        bool reaped = reap_command(child, &forwarded, &status);
         report_failure("the sandboxed command could not be supervised; refusing to run it");
-        int code = exit_code_from_status(status);
+        int code = reaped ? exit_code_from_status(status) : EXIT_CODE_SETUP_ERROR;
         return code == 0 ? EXIT_CODE_SETUP_ERROR : code;
     }
 
@@ -167,6 +171,10 @@ int main(int argument_count, char *arguments[]) {
     close(notify_descriptor);
 
     int status = 0;
-    reap_command(child, &forwarded, &status);
+    if (!reap_command(child, &forwarded, &status)) {
+        report_failure("the command's exit status could not be read, so the run cannot say "
+                       "whether it succeeded (PHB-ESTATUS)");
+        return EXIT_CODE_STATUS_UNREAD;
+    }
     return exit_code_from_status(status);
 }

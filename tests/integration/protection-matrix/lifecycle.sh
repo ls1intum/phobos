@@ -50,7 +50,11 @@ spec_dirs() {
   find "$SPEC_PARENT" -mindepth 1 -maxdepth 1 -name 'phobos-spec.*' | wc -l | tr -d ' '
 }
 helpers_alive() {
-  pgrep -f 'phobos-seccomp-networksystem|phobos-seccomp-timeoutsystem|phobos-timeoutsystem|phobos-networksystem|phobos-filesystem|haproxy' | wc -l | tr -d ' '
+  pgrep -f 'phobos-seccomp-networksystem|phobos-seccomp-timeoutsystem|phobos-seccomp-filesystem|phobos-timeoutsystem|phobos-networksystem|phobos-filesystem|haproxy' | wc -l | tr -d ' '
+}
+# The report-only supervisor and its drainer still alive.
+reporters_alive() {
+  pgrep -f 'phobos-seccomp-filesystem' | wc -l | tr -d ' '
 }
 # leaves_nothing TITLE EXPECTED_STATUS_OR_EMPTY ARGS...: one run through phobos.sh with the specification parent
 # set aside, and then nothing of it may be left.
@@ -158,6 +162,92 @@ elif grep -q '^phobos-' "$PM/out/tmplister.out"; then
 else
   ok "a concurrent command sees none of a run's temporary files in /tmp, while it does see a file put there"
 fi
+
+echo
+echo "== a process the command leaves behind, with the network layer off =="
+# With the network layer off the report-only supervisor watches the command. Once the command's
+# direct child has ended, a drainer keeps answering what it left behind: a granted read must still
+# work, a refused one must still fail with EACCES (not ENOSYS, which a dead supervisor would give),
+# and once the leftover has ended nothing of the supervisor may be left. The drainer sees the
+# leftover go only once its zombie is reaped; the suite's own shell is the container's first process
+# and reaps it, but under an init that reaps nothing the last check would fail.
+c_left="$(cfg leftover <<EOF2
+[read]
+$PM/ro
+$PM/rw
+[write]
+$PM/rw
+[create]
+$PM/rw
+[limits]
+timeout=60
+EOF2
+)"
+rm -f "$PM/rw/left.out" "$PM/rw/left.err" "$PM/rw/left.done"
+run_pm --spec-parent "$SPEC_PARENT" -nnr --config "$c_left" -- /bin/sh -c \
+  "( sleep 1; cat $PM/ro/data.txt > $PM/rw/left.out; cat $PM/none/secret.txt 2> $PM/rw/left.err > /dev/null; echo done > $PM/rw/left.done ) < /dev/null > /dev/null 2>&1 & exit 0"
+run_status="$PM_STATUS"
+for _ in $(seq 1 50); do
+  [[ -s "$PM/rw/left.done" ]] && break
+  sleep 0.1
+done
+sleep 0.5
+if (( run_status == 0 )) && [[ "$(cat "$PM/rw/left.out" 2> /dev/null)" == "READ-OK" ]]; then
+  ok "a granted read by a process left behind still works through the drainer"
+else
+  bad "a granted read by a process left behind still works" "status ${run_status}, out: $(cat "$PM/rw/left.out" 2> /dev/null), err: $(cat "$PM/rw/left.err" 2> /dev/null): $(pm_describe)"
+fi
+if grep -q 'Permission denied' "$PM/rw/left.err" 2> /dev/null && ! grep -q 'Function not implemented' "$PM/rw/left.err"; then
+  ok "and a refused read by it is still refused with EACCES, not ENOSYS"
+else
+  bad "a refused read by a process left behind is still EACCES" "err: $(cat "$PM/rw/left.err" 2> /dev/null)"
+fi
+if [[ "$(reporters_alive)" == 0 && "$(helpers_alive)" == 0 && "$(spec_dirs)" == 0 ]]; then
+  ok "and once it has ended, no supervisor, drainer or helper of the run is left"
+else
+  bad "nothing of the run is left once the leftover has ended" "$(reporters_alive) reporters, $(helpers_alive) helpers, $(spec_dirs) directories"
+fi
+leaves_nothing "a run with the network layer off whose command fails" 3 -nnr --config "$c_ok" -- "$P" exitwith 3
+leaves_nothing "and one with the timeout layer off as well" 0 -nnr -ntr --config "$c_ok" -- "$P" cwd
+
+echo
+echo "== a caller that ignores SIGCHLD still gets the command's own status =="
+# An ignored SIGCHLD is handed on across exec and makes the kernel reap every child by itself. A
+# supervisor that inherits it could then never read its command's status, and ended with 0, which
+# would grade a command that failed as one that passed. The supervisors give SIGCHLD its default
+# for themselves and give the command back what its caller gave it. With the timeout layer on, GNU
+# timeout already gives its child the default, so the command sees what its caller gave it only
+# without that layer.
+# ignoring_sigchld SWITCHES COMMAND...: one run through phobos.sh, started by a caller that ignores
+# SIGCHLD, the layer switches given as one word.
+ignoring_sigchld() {
+  local -a switches
+  read -r -a switches <<< "$1"
+  shift
+  rm -rf "${SPEC_PARENT:?}"/*
+  PM_OUT="$PM/out/last.out"
+  PM_ERR="$PM/out/last.err"
+  timeout --kill-after=5 "$WATCHDOG_SECONDS" bash -c 'trap "" CHLD; exec "$@"' _ \
+    phobos.sh --tail-flags-file "$PM/tail.flags" --spec-parent "$SPEC_PARENT" "${switches[@]}" --config "$c_ok" -- "$@" \
+    > "$PM_OUT" 2> "$PM_ERR" < /dev/null
+  PM_STATUS=$?
+}
+for shape in "-nnr -ntr" "-ntr" "-nnr" ""; do
+  ignoring_sigchld "$shape" "$P" exitwith 3
+  if (( PM_STATUS == 3 )); then
+    ok "with SIGCHLD ignored by the caller, phobos.sh ${shape:-with every layer} ends with the command's 3"
+  else
+    bad "with SIGCHLD ignored by the caller, phobos.sh ${shape:-with every layer} ends with the command's 3" "$(pm_describe)"
+  fi
+done
+for shape in "-nnr -ntr" "-ntr"; do
+  ignoring_sigchld "$shape" "$PM/bin/pedge" sigdisp
+  if (( PM_STATUS == 0 )) && grep -q "^SIG $(kill -l CHLD) ign" "$PM_OUT"; then
+    ok "and under phobos.sh ${shape} the command still starts with SIGCHLD ignored, as its caller gave it"
+  else
+    bad "under phobos.sh ${shape} the command starts with the SIGCHLD disposition its caller gave" "$(pm_describe)"
+  fi
+done
 
 echo
 echo "== the hosts file is as it was =="

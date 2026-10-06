@@ -4,6 +4,7 @@
 #include "phobos-seccomp-networksystem-datagram.h"
 #include "phobos-seccomp-networksystem-destination.h"
 #include "phobos-seccomp-networksystem-diagnostics.h"
+#include "phobos-seccomp-networksystem-handoff.h"
 #include "phobos-seccomp-networksystem-held-sockets.h"
 #include "phobos-seccomp-networksystem-rules.h"
 #include "phobos-seccomp-networksystem-seccomp-compat.h"
@@ -52,7 +53,7 @@ void answer(int notify_descriptor, struct seccomp_notif_resp *response, __u64 id
     response->val = value;
     response->error = error;
     response->flags = 0;
-    if (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_SEND, response) != 0 && errno != ENOENT) {
+    if (!send_notification_response(notify_descriptor, response) && errno != ENOENT) {
         log_verbose("notify send: %s", strerror(errno));
     }
 }
@@ -67,7 +68,7 @@ static void answer_continue(int notify_descriptor, struct seccomp_notif_resp *re
     response->val = 0;
     response->error = 0;
     response->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
-    if (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_SEND, response) != 0 && errno != ENOENT) {
+    if (!send_notification_response(notify_descriptor, response) && errno != ENOENT) {
         log_verbose("notify continue: %s", strerror(errno));
     }
 }

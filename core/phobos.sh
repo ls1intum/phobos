@@ -152,6 +152,8 @@ EXIT STATUS
   11        the policy is invalid or missing (PHB-EPOLICY)
   14        the command ran past its timeout (PHB-ETIMEOUT)
   15        something the run needs could not be started (PHB-ERUNTIME)
+  16        the command ran but its exit status could not be read, so the run cannot say
+            whether it succeeded (PHB-ESTATUS)
 
 EXAMPLES
   phobos.sh --config exercise.cfg -- ./gradlew test

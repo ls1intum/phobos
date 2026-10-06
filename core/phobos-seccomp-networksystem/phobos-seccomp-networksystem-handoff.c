@@ -7,6 +7,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 
@@ -102,16 +103,38 @@ void forward_signals_to(pid_t command) {
     }
 }
 
-void reap_command(pid_t child, const sigset_t *forwarded, int *status) {
+void take_default_child_signal(struct sigaction *inherited) {
+    struct sigaction standard;
+    memset(&standard, 0, sizeof(standard));
+    standard.sa_handler = SIG_DFL;
+    sigemptyset(&standard.sa_mask);
+    sigaction(SIGCHLD, &standard, inherited);
+}
+
+void restore_child_signal(const struct sigaction *inherited) {
+    sigaction(SIGCHLD, inherited, nullptr);
+}
+
+bool reap_command(pid_t child, const sigset_t *forwarded, int *status) {
     siginfo_t ended;
     sigset_t outside;
+    pid_t reaped = -1;
     while (waitid(P_PID, (id_t)child, &ended, WEXITED | WNOWAIT) < 0 && errno == EINTR) {
     }
     sigprocmask(SIG_BLOCK, forwarded, &outside);
-    while (waitpid(child, status, 0) < 0 && errno == EINTR) {
+    while ((reaped = waitpid(child, status, 0)) < 0 && errno == EINTR) {
     }
     command_to_signal = 0;
     sigprocmask(SIG_SETMASK, &outside, nullptr);
+    return reaped == child;
+}
+
+bool send_notification_response(int notify_descriptor, struct seccomp_notif_resp *response) {
+    int sent = -1;
+    while ((sent = ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_SEND, response)) != 0
+           && errno == EINTR) {
+    }
+    return sent == 0;
 }
 
 int exit_code_from_status(int status) {

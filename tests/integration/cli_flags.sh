@@ -242,8 +242,8 @@ echo "== the exit statuses keep their documented values =="
 # The statuses a run ends with are read by whatever grades it, so they are a contract, not a
 # detail. Every other suite compares against the names; this is the one place that pins the
 # names to the values the documentation promises.
-for pair in "PHB_EPOLICY=11" "PHB_ETIMEOUT=14" "PHB_ERUNTIME=15" "PHB_EXIT_USAGE=2" \
-            "PHB_ENFORCER_REFUSED_EXIT=125"; do
+for pair in "PHB_EPOLICY=11" "PHB_ETIMEOUT=14" "PHB_ERUNTIME=15" "PHB_ESTATUS=16" \
+            "PHB_EXIT_USAGE=2" "PHB_ENFORCER_REFUSED_EXIT=125"; do
   constant="${pair%%=*}"
   documented="${pair#*=}"
   if [[ "${!constant}" == "$documented" ]]; then

@@ -58,6 +58,7 @@ WRAPS=(
   -Wl,--wrap=getrlimit
   -Wl,--wrap=dup2
   -Wl,--wrap=signal
+  -Wl,--wrap=sigaction
   -Wl,--wrap=kill
   -Wl,--wrap=execvp
   -Wl,--wrap=_exit
