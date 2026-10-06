@@ -137,6 +137,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/unit/phobos-tools-policysystem/address_literals.sh
 
+      # Which YAML an Ares 2 policy may be written in: every construct of the subset is read into
+      # the exact records, and every construct two YAML readers could read differently is refused
+      # with its line rather than read one way.
+      - name: The YAML subset a policy may be written in
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/phobos-tools-policysystem/yaml_subset.sh
+
       - name: The connect guard enforces the allow-list by host and port
         if: ${{ !cancelled() }}
         run: bash tests/integration/seccomp_networksystem.sh
