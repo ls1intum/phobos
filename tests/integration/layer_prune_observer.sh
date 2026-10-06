@@ -212,7 +212,7 @@ check_attribution_of_the_permitted_run() {
 # comment, network rules and limits; or "subset", a nested strict subset, which render must refuse,
 # in which case it writes "refused" instead. Assumes the helpers are mounted at ${HELPERS}.
 rendered_policy() {
-  HELPERS="${HELPERS}" python3 - "$1" >"$2" 2>&1 <<'PY'
+  HELPERS="${HELPERS}" python3 - "$1" >"$2" 2>"$2.err" <<'PY'
 import os
 import pathlib
 import sys
@@ -224,7 +224,8 @@ from layer_prune import cfgfile
 small = cfgfile.Policy(
     fs={"/usr": frozenset({"read", "execute"}), "/var/tmp/testing-dir": frozenset(cfgfile.WRITE_SECTIONS),
         "/dev/null": frozenset({"read", "write"}), "/proc": frozenset({"read"})},
-    connect=("allow 127.0.0.1:*", "allow [::1]"), bind=("allow 0", "allow 0 udp"),
+    connect=("allow 127.0.0.1:*", "allow 127.0.0.2:*", "allow [::1]", "allow localhost udp"),
+    bind=("allow 0", "allow 0 udp"),
     limits={"timeout": 60, "cpu": 30, "nproc": 64, "nofile": 256, "fsize_mb": 16},
     comments={"/proc": "per-run name: /proc/<pid>/status, observed as /proc/7/status; granted on /proc"})
 subset = cfgfile.Policy(fs={"/usr": frozenset({"read", "execute"}), "/usr/bin": frozenset({"read"})},
@@ -246,7 +247,7 @@ check_rendered_policies_meet_the_parser() {
   local status
   for name in permissive small; do
     rendered_policy "${name}" "${WORK}/${name}.cfg"
-    spec="$(mktemp -d /var/tmp/phobos-spec-check.XXXXXX)"
+    spec="$(mktemp -d /var/tmp/phobos-spec-check.XXXXXX)" || { bad "a specification directory can be made"; continue; }
     "${PHOBOS_HOME}/phobos-policysystem.sh" --spec-dir "${spec}" --config "${WORK}/${name}.cfg" >"${WORK}/${name}.log" 2>&1
     status=$?
     rm -rf "${spec}"

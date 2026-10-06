@@ -113,3 +113,39 @@ def test_the_permissive_policy_keeps_the_specification_parent_out_of_every_write
 def test_the_permissive_policy_of_the_real_root_never_writes_the_root_or_var_tmp():
     result = cfgfile.permissive_policy(pathlib.Path("/"))
     assert not any(path in ("/", "/var", "/var/tmp", "/run") for path, sections in result.fs.items() if "write" in sections)
+
+
+@pytest.mark.parametrize("path", ["/srv/x\x85/etc", "/srv/x\u2028/etc", "/srv/x\u2029/etc", "/srv/x\x0b/etc",
+                                  "/a/../etc", "/usr/", "//usr", "/usr/./bin"])
+def test_a_path_another_reader_would_split_or_that_is_not_normal_is_refused(path):
+    with pytest.raises(ValueError):
+        cfgfile.render(policy({path: {"read"}}))
+
+
+@pytest.mark.parametrize("text", ["[read]\r\n/usr\r\n", "[limits]\ncpu=\u0661\u0662\n"])
+def test_reading_refuses_what_the_parser_refuses_in_its_own_way(text):
+    with pytest.raises(ValueError):
+        cfgfile.read_policy(text)
+
+
+def test_reading_splits_only_at_lf_and_trims_only_what_bash_trims():
+    read_back = cfgfile.read_policy("[read]\n/srv/a\x85b\n /srv/c\t\n/srv/d\xa0\n")
+    assert set(read_back.fs) == {"/srv/a\x85b", "/srv/c", "/srv/d\xa0"}
+
+
+def test_a_limit_named_twice_is_merged_as_the_parser_merges_it():
+    assert cfgfile.read_policy("[limits]\ncpu=30\ncpu=60\n").limits == {"cpu": 60}
+    assert cfgfile.read_policy("[limits]\ncpu=0\ncpu=30\n").limits == {"cpu": 0}
+    assert cfgfile.read_policy("[limits]\ncpu=30\ncpu=0\n").limits == {"cpu": 0}
+
+
+@pytest.mark.parametrize("limits", [{"cpu": -5}, {"nproc": True}, {"cpu": 10 ** 18}, {"cpu": "30"}])
+def test_a_limit_value_the_parser_refuses_is_refused(limits):
+    with pytest.raises(ValueError):
+        cfgfile.render(policy(limits=limits))
+
+
+@pytest.mark.parametrize(("connect", "bind"), [(("deny all",), ()), ((), ("allow 99999",)), ((), ("allow 80 sctp",))])
+def test_a_network_line_not_in_its_sections_shape_is_refused(connect, bind):
+    with pytest.raises(ValueError):
+        cfgfile.render(policy(connect=connect, bind=bind))

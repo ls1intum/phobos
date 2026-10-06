@@ -21,12 +21,12 @@ def network_denial(section: str, address: str | None, port: int | None, transpor
                          errno="EACCES")
 
 
-def connect(address: str, port: int, transport: str) -> record.Denial:
+def connect(address: str, port: int, transport: str | None) -> record.Denial:
     """A refused connect or datagram to one destination."""
     return network_denial(attribute.SECTION_CONNECT, address, port, transport)
 
 
-def bind(port: int, transport: str, address: str = "0.0.0.0") -> record.Denial:
+def bind(port: int, transport: str | None, address: str = "0.0.0.0") -> record.Denial:
     """A refused bind of one local port."""
     return network_denial(attribute.SECTION_BIND, address, port, transport, operation="bind")
 
@@ -125,3 +125,54 @@ def test_bound_ports_come_from_successful_binds_and_getsockname_inside_the_domai
          'inet_pton(AF_INET6, "::1", &sin6_addr), sin6_scope_id=0}, 28) = 0'),
     ]
     assert network.bound_ports(strace_parse.parse_trace(lines)) == frozenset({("AF_INET", 43521, "tcp")})
+
+
+def test_another_loopback_address_gets_a_wildcard_of_its_own():
+    decision = network.network_rules([connect("127.0.0.2", 43521, "tcp"), connect("127.0.0.2", 5432, "tcp")],
+                                     frozenset({("AF_INET", 43521, "tcp")}), ())
+    assert decision.connect == ("allow 127.0.0.2:*",)
+
+
+def test_an_ipv4_mapped_loopback_destination_is_reported_not_granted():
+    decision = network.network_rules([connect("::ffff:127.0.0.1", 43521, "tcp")], frozenset({("AF_INET6", 43521, "tcp")}), ())
+    assert decision.connect == ()
+    assert decision.refused_external == ()
+    assert "IPv4-mapped" in decision.reported[0]
+
+
+def test_a_dual_stack_server_matches_an_ipv4_client_by_port_and_transport():
+    decision = network.network_rules([connect("127.0.0.1", 43521, "tcp")], frozenset({("AF_INET6", 43521, "tcp")}), ())
+    assert decision.connect == ("allow 127.0.0.1:*",)
+
+
+def test_tcp_and_udp_wildcards_stay_apart_and_an_exact_udp_rule_keeps_its_marker():
+    decision = network.network_rules([connect("127.0.0.1", 40000, "tcp"), connect("127.0.0.1", 53, "udp")],
+                                     frozenset({("AF_INET", 40000, "tcp")}), ())
+    assert decision.connect == ("allow 127.0.0.1:*", "allow 127.0.0.1:53 udp")
+
+
+def test_an_unknown_transport_or_a_missing_destination_is_never_granted():
+    unknown = network.network_rules([connect("127.0.0.1", 40000, None), bind(0, None)], frozenset(), ())
+    missing = network.network_rules([network_denial(attribute.SECTION_CONNECT, None, None, "udp")], frozenset(), ())
+    assert (unknown.connect, unknown.bind) == ((), ())
+    assert len(unknown.reported) == 2
+    assert (missing.connect, missing.refused_external) == ((), ())
+
+
+def test_a_trailing_newline_never_passes_as_a_declared_host():
+    with pytest.raises(ValueError):
+        network.seed_rules(("api.example.org:443\n",))
+
+
+def test_the_ephemeral_port_of_a_client_socket_is_not_a_server():
+    lines = [
+        "300 landlock_restrict_self(3, 0) = 0",
+        "300 socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 4<socket:[1]>",
+        ('300 getsockname(4<socket:[1]>, {sa_family=AF_INET, sin_port=htons(51000), sin_addr=inet_addr("127.0.0.1")}, '
+         "[16]) = 0"),
+        "300 socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP) = 5<socket:[2]>",
+        "300 listen(5<socket:[2]>, 50) = 0",
+        ('300 getsockname(5<socket:[2]>, {sa_family=AF_INET6, sin6_port=htons(43000), sin6_flowinfo=htonl(0), '
+         'inet_pton(AF_INET6, "::", &sin6_addr), sin6_scope_id=0}, [28]) = 0'),
+    ]
+    assert network.bound_ports(strace_parse.parse_trace(lines)) == frozenset({("AF_INET6", 43000, "tcp")})

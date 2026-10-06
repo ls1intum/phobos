@@ -189,6 +189,10 @@ int main(int argc, char **argv) {
     }
     if (argc >= 4 && strcmp(argv[1], "inet6") == 0) {
         int fd = socket(AF_INET6, SOCK_STREAM, 0);
+        if (fd < 0) {
+            fprintf(stderr, "socket: %s\n", strerror(errno));
+            return PROBE_SEND_FAILED;
+        }
         struct sockaddr_in6 address;
         memset(&address, 0, sizeof(address));
         address.sin6_family = AF_INET6;
@@ -202,7 +206,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (argc < 4 || strcmp(argv[1], "inet") != 0) {
-        fprintf(stderr, "usage: probe inet <host> <port> | probe unix <path>\n");
+        fprintf(stderr, "usage: probe inet <host> <port> | probe inet6 <host> <port> | probe unix <path>\n");
         return PROBE_USAGE;
     }
     int fd = socket(AF_INET, SOCK_STREAM, 0);

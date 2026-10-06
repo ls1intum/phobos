@@ -1,25 +1,34 @@
 """From attributed filesystem denials to grants on paths (A.6.5, "Filesystem"; decision 7).
 
-The rules, each erring in the direction A.7 names:
+The rules, each erring in the direction A.7 names, and every case no rule covers reported, not granted:
 
 - Write-class rights are never widened: [write] goes on the file, the create, delete and restructure
   sections on the directory Landlock checks them on; an object the run itself created moves to its
-  nearest ancestor that existed before the run, because only existing paths can be named.
+  nearest ancestor that existed before the run, because only existing paths can be named. That climb
+  stays inside the roots the snapshot scanned: a missing path elsewhere (a /proc entry of a process
+  that has ended) is reported.
 - [read] and [execute] on an object that existed go on the object inside the fine-grained roots, file
-  by file, and on its containing directory elsewhere (a directory object on itself). A containing
-  directory nearer the root than MINIMUM_WIDENING_DEPTH is never used: the file is granted instead.
-- A per-run name (a kernel-assigned id in PER_RUN_PATTERNS, seen changing or equal to the refusing
-  process's or thread's own id) is granted on its smallest stable directory, with a comment.
+  by file, and on its containing directory elsewhere. A directory object goes on itself, with a
+  comment when it lies inside a fine-grained root, since Phobos has no list-only right.
+- No directory nearer the root than MINIMUM_WIDENING_DEPTH is granted, except a write-class right on
+  the directory Landlock checks it on (a creation in /tmp); a [read] of such a directory, or a
+  widening or a climb that would reach one, is reported instead.
+- A per-run name (a kernel-assigned id in PER_RUN_PATTERNS whose value differs between observed runs,
+  or equals the refusing process's or thread's own id) is granted on its smallest stable directory,
+  with a comment, and only for [read] and [execute]; a write-class right on a per-run name is reported.
 - Compaction joins at least `threshold` read-class children into their directory, never inside a
   fine-grained root, never at a depth below MINIMUM_WIDENING_DEPTH.
 
-Paths are compared as written: the caller passes them through os.path.realpath first.
+The caller rewrites /proc/self and /proc/thread-self with rewrite_self first and then resolves every
+path outside /proc and /dev with os.path.realpath; never the other way round, which would resolve the
+pruner's own process. grants_and_notes rewrites them again, so a path the caller left is still safe.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import os
+import posixpath
 import re
 from collections.abc import Iterable
 
@@ -30,8 +39,12 @@ from layer_prune.record import LAYER_FILESYSTEM, Denial
 DEFAULT_FINE_ROOTS = ("/etc", "/dev", "/proc", "/sys", "/root", "/home", "/run")
 # How many children with equal read-class rights compaction joins into their directory (A.6.5).
 DEFAULT_COMPACTION_THRESHOLD = 3
+# The fewest children compaction may ever be asked to join.
+MINIMUM_COMPACTION_THRESHOLD = 2
 # The shallowest directory a grant may be widened to: never `/`, never a top-level directory.
 MINIMUM_WIDENING_DEPTH = 2
+# How many observed paths a per-run comment names before it only counts the rest.
+COMMENT_EXAMPLES = 3
 # The sections that may be widened to a containing directory or compacted; every other one is write-class.
 READ_CLASS = frozenset({"read", "execute"})
 # A kernel-assigned id: 0 or a number without a leading zero.
@@ -44,15 +57,18 @@ PER_RUN_PATTERNS = (
     (re.compile(rf"^/proc/(?P<pid>{NUMBER})(?:/.*)?$"), ("<pid>",)),
     (re.compile(rf"^/dev/pts/(?P<pty>{NUMBER})$"), ("<n>",)),
 )
+# The magic links procfs resolves to the process doing the lookup.
+SELF_LINKS = ("/proc/self", "/proc/thread-self")
 
 
 @dataclasses.dataclass(frozen=True)
 class Snapshot:
     """What existed before a run: every path and every directory under the scanned roots.
 
-    `existed` and `is_directory` answer from the snapshot for a path under a scanned root, the
-    exercise and the write grants, which a run may change, and from the filesystem now for any
-    other path, which no run could write to.
+    `existed` and `is_directory` answer from the snapshot for a path under a scanned root (the
+    exercise and the write grants, which a run may change) and from the filesystem now for any other
+    path, which no run could have created; such a path that is missing now is reported by the
+    callers, never climbed from.
     """
 
     existing: frozenset[str]
@@ -61,22 +77,23 @@ class Snapshot:
 
     @classmethod
     def take(cls, roots: Iterable[str]) -> Snapshot:
-        """Walks each root without following symbolic links and records every path beneath it."""
+        """Walks each root, resolved first, without following symbolic links beneath it; an unreadable directory raises."""
         existing: set[str] = set()
         directories: set[str] = set()
-        scanned = tuple(roots)
+        scanned = tuple(os.path.realpath(root) for root in roots)
         for root in scanned:
             if not os.path.lexists(root):
                 continue
             existing.add(root)
-            if os.path.isdir(root) and not os.path.islink(root):
+            if os.path.isdir(root):
                 directories.add(root)
-            for current, subdirectories, files in os.walk(root):
+            for current, subdirectories, files in os.walk(root, onerror=raise_walk_error):
                 for name in subdirectories:
-                    existing.add(os.path.join(current, name))
-                    directories.add(os.path.join(current, name))
-                for name in files:
-                    existing.add(os.path.join(current, name))
+                    full = os.path.join(current, name)
+                    existing.add(full)
+                    if not os.path.islink(full):
+                        directories.add(full)
+                existing.update(os.path.join(current, name) for name in files)
         return cls(existing=frozenset(existing), directories=frozenset(directories), scanned=scanned)
 
     def scanned_path(self, path: str) -> bool:
@@ -90,6 +107,11 @@ class Snapshot:
     def is_directory(self, path: str) -> bool:
         """Whether the path was a directory before the run."""
         return path in self.directories if self.scanned_path(path) else os.path.isdir(path)
+
+
+def raise_walk_error(error: OSError) -> None:
+    """Raises the error os.walk met, so an unreadable directory never reads as one the run created."""
+    raise error
 
 
 def is_beneath(path: str, ancestor: str) -> bool:
@@ -107,20 +129,28 @@ def within(path: str, roots: tuple[str, ...]) -> bool:
     return any(path == root or is_beneath(path, root) for root in roots)
 
 
-def nearest_existing(path: str, snapshot: Snapshot) -> str:
-    """The path itself if it existed before the run, otherwise its nearest ancestor that did."""
-    candidate = path
-    while candidate != "/" and not snapshot.existed(candidate):
+def nearest_existing(path: str, snapshot: Snapshot) -> str | None:
+    """The path if it existed before the run, otherwise its nearest ancestor that did, climbing only
+    inside the scanned roots and never above MINIMUM_WIDENING_DEPTH; None where no such ancestor is."""
+    if snapshot.existed(path):
+        return path
+    if not snapshot.scanned_path(path):
+        return None
+    candidate = os.path.dirname(path)
+    while snapshot.scanned_path(candidate) and depth(candidate) >= MINIMUM_WIDENING_DEPTH:
+        if snapshot.existed(candidate):
+            return candidate
         candidate = os.path.dirname(candidate)
-    return candidate
+    return None
 
 
-def writable_name(path: str) -> str:
-    """The path, or its nearest ancestor a policy line can carry (no wildcard, `#` or control character)."""
-    candidate = path
-    while candidate != "/" and cfgfile.FORBIDDEN_PATH_CHARACTERS.search(candidate):
-        candidate = os.path.dirname(candidate)
-    return candidate
+def writable(path: str) -> bool:
+    """Whether a policy line can carry the path as it is (cfgfile.check_path would accept it)."""
+    try:
+        cfgfile.check_path(path)
+    except ValueError:
+        return False
+    return True
 
 
 def rewrite_self(path: str, tgid: int, tid: int) -> str:
@@ -135,17 +165,28 @@ def rewrite_self(path: str, tgid: int, tid: int) -> str:
     return path
 
 
+def object_paths(denial: Denial) -> list[str]:
+    """The denial's objects with /proc/self rewritten; a self link of a denial without ids is left as it is."""
+    if not denial.pid or not denial.tid:
+        return list(denial.objects)
+    return [rewrite_self(path, denial.pid, denial.tid) for path in denial.objects]
+
+
+def is_self_link(path: str) -> bool:
+    """Whether a path still goes through /proc/self or /proc/thread-self."""
+    return any(path == link or path.startswith(link + "/") for link in SELF_LINKS)
+
+
 @dataclasses.dataclass(frozen=True)
 class PerRunMatch:
-    """One object matching the per-run table: its pattern's placeholders and the values in it."""
+    """One object matching the per-run table: its shape and each id's (placeholder, value, offset)."""
 
     shape: str
     values: tuple[tuple[str, int, int], ...]
 
 
 def per_run_match(path: str) -> PerRunMatch | None:
-    """The per-run match of a path: the path with each kernel-assigned id replaced by its placeholder,
-    and each id's (placeholder, value, offset of the component that ends before it); None if no entry matches."""
+    """The per-run match of a path, with each kernel-assigned id replaced by its placeholder in the shape."""
     for pattern, placeholders in PER_RUN_PATTERNS:
         match = pattern.match(path)
         if match is None:
@@ -165,32 +206,45 @@ def per_run_key(denial: Denial, match: PerRunMatch) -> tuple[str, frozenset[str]
     return denial.operation, denial.sections, match.shape
 
 
-def stable_directory(path: str, denial: Denial, match: PerRunMatch, changing: set[int]) -> str | None:
-    """The parent of the leftmost per-run component of a path, or None where no component is per-run.
+def changing_values(denials: list[Denial], observations: list[tuple[int, str, PerRunMatch]]) -> set[tuple[int, int]]:
+    """The (position, value) pairs seen changing: a value in some observed run that another run of the same call lacks.
 
-    A component is per-run when its value is seen changing (its position is in `changing`) or, for a
-    process or thread id, equals the refusing process's or thread's own id.
+    A value present in every run that made the call is stable, however many values there are.
     """
+    changing: set[tuple[int, int]] = set()
+    for position in range(len(observations[0][2].values)):
+        by_run: dict[int, set[int]] = {}
+        for index, _, match in observations:
+            by_run.setdefault(denials[index].run, set()).add(match.values[position][1])
+        if len(by_run) < 2:
+            continue
+        stable = set.intersection(*by_run.values())
+        changing.update((position, value) for values in by_run.values() for value in values - stable)
+    return changing
+
+
+def stable_directory(path: str, denial: Denial, match: PerRunMatch, changing: set[tuple[int, int]]) -> str | None:
+    """The parent of the leftmost per-run component of a path, or None where no component is per-run."""
     own = {denial.pid, denial.tid}
     for position, (placeholder, value, start) in enumerate(match.values):
-        if position in changing or (placeholder in ("<pid>", "<tid>") and value in own):
+        if (position, value) in changing or (placeholder in ("<pid>", "<tid>") and value in own):
             return path[:start].rstrip("/") or "/"
     return None
 
 
 def classify_per_run(denials: list[Denial]) -> dict[tuple[int, str], tuple[str, str]]:
-    """Every (denial index, object) that is a per-run name, mapped to (stable directory, shape)."""
+    """Every (denial index, object as rewritten) that is a per-run name, mapped to (stable directory, shape)."""
     observed: dict[tuple[str, frozenset[str], str], list[tuple[int, str, PerRunMatch]]] = {}
     for index, denial in enumerate(denials):
         if denial.layer != LAYER_FILESYSTEM:
             continue
-        for path in denial.objects:
+        for path in object_paths(denial):
             match = per_run_match(path)
             if match is not None:
                 observed.setdefault(per_run_key(denial, match), []).append((index, path, match))
     taken: dict[tuple[int, str], tuple[str, str]] = {}
     for observations in observed.values():
-        changing = changing_positions(denials, observations)
+        changing = changing_values(denials, observations)
         for index, path, match in observations:
             directory = stable_directory(path, denials[index], match, changing)
             if directory is not None:
@@ -198,67 +252,117 @@ def classify_per_run(denials: list[Denial]) -> dict[tuple[int, str], tuple[str, 
     return taken
 
 
-def changing_positions(denials: list[Denial], observations: list[tuple[int, str, PerRunMatch]]) -> set[int]:
-    """The positions of the per-run components whose value differs between two observed runs."""
-    changing: set[int] = set()
-    for position in range(len(observations[0][2].values)):
-        by_run: dict[int, set[int]] = {}
-        for index, _, match in observations:
-            by_run.setdefault(denials[index].run, set()).add(match.values[position][1])
-        values = {value for run_values in by_run.values() for value in run_values}
-        if len(by_run) >= 2 and len(values) >= 2:
-            changing.add(position)
-    return changing
+def per_run_comment(directory: str, shapes: dict[str, set[str]]) -> str:
+    """The comment above a per-run grant: each shape with a few of the paths observed, and the directory."""
+    parts = []
+    for shape, paths in sorted(shapes.items()):
+        examples = sorted(paths)[:COMMENT_EXAMPLES]
+        more = f" and {len(paths) - len(examples)} more" if len(paths) > len(examples) else ""
+        parts.append(f"{shape}, observed as {' and '.join(examples)}{more}")
+    return f"per-run name: {'; '.join(parts)}; granted on {directory}"
 
 
 def per_run_grants(denials: list[Denial]) -> tuple[dict[str, frozenset[str]], dict[str, str]]:
-    """The grants on smallest stable directories for per-run names, and the comment above each.
+    """The [read] and [execute] grants on smallest stable directories for per-run names, and the comment above each.
 
     A matching name seen with one value only, in another process than the refusing one, is not taken
-    here and stays file by file in grants_for; a changing name outside the table is never taken.
+    here and stays file by file in grants_for; a changing name outside the table is never taken; a
+    write-class right on a per-run name is never granted (grants_and_notes reports it).
     """
     grants: dict[str, set[str]] = {}
     seen: dict[str, dict[str, set[str]]] = {}
     for (index, path), (directory, shape) in classify_per_run(denials).items():
-        grants.setdefault(directory, set()).update(denials[index].sections)
+        sections = denials[index].sections & READ_CLASS
+        if not sections:
+            continue
+        grants.setdefault(directory, set()).update(sections)
         seen.setdefault(directory, {}).setdefault(shape, set()).add(path)
-    comments = {}
-    for directory, shapes in seen.items():
-        parts = [f"{shape}, observed as {' and '.join(sorted(paths))}" for shape, paths in sorted(shapes.items())]
-        comments[directory] = f"per-run name: {'; '.join(parts)}; granted on {directory}"
+    comments = {directory: per_run_comment(directory, shapes) for directory, shapes in seen.items()}
     return {directory: frozenset(sections) for directory, sections in grants.items()}, comments
 
 
-def read_class_target(path: str, snapshot: Snapshot, fine_roots: tuple[str, ...]) -> str:
-    """Where a read or execute right on an object goes: itself, its directory, or its nearest existing ancestor."""
+@dataclasses.dataclass
+class Notes:
+    """What grants_and_notes found beside its grants: the comment above a grant, and what it left ungranted."""
+
+    comments: dict[str, str] = dataclasses.field(default_factory=dict)
+    reported: list[dict[str, str]] = dataclasses.field(default_factory=list)
+
+    def report(self, path: str, section: str, reason: str) -> None:
+        """Records a requested grant left out, with the reason."""
+        self.reported.append({"path": path, "section": section, "reason": reason})
+
+
+def read_class_target(path: str, snapshot: Snapshot, fine_roots: tuple[str, ...], notes: Notes) -> str | None:
+    """Where a read or execute right on an object goes: itself, its directory, its nearest existing ancestor, or nowhere."""
     if not snapshot.existed(path):
         return nearest_existing(path, snapshot)
-    if snapshot.is_directory(path) or within(path, fine_roots):
+    if snapshot.is_directory(path):
+        if within(path, fine_roots) and depth(path) >= MINIMUM_WIDENING_DEPTH:
+            notes.comments.setdefault(path, f"listed: [read] on the directory {path} makes every entry beneath it "
+                                            "readable; Phobos has no list-only right")
+        return path if depth(path) >= MINIMUM_WIDENING_DEPTH else None
+    if within(path, fine_roots):
         return path
     parent = os.path.dirname(path)
     return parent if depth(parent) >= MINIMUM_WIDENING_DEPTH else path
 
 
-def grants_for(denials: list[Denial], snapshot: Snapshot, fine_roots: tuple[str, ...]) -> dict[str, frozenset[str]]:
-    """The grants the filesystem denials ask for, generalised as the module docstring states.
+def placed(path: str, section: str, snapshot: Snapshot, fine_roots: tuple[str, ...], notes: Notes) -> str | None:
+    """Where one section asked for on one object is granted, or None when it is reported instead."""
+    if is_self_link(path):
+        notes.report(path, section, "a /proc/self link of a denial without process ids")
+        return None
+    if section in READ_CLASS:
+        target = read_class_target(path, snapshot, fine_roots, notes)
+    else:
+        target = nearest_existing(path, snapshot)
+    if target is None:
+        notes.report(path, section, "no path that existed before the run, inside the scanned roots and deep enough")
+        return None
+    if writable(target):
+        return target
+    if section not in READ_CLASS or within(target, fine_roots):
+        notes.report(path, section, "a name a policy line cannot carry, and the right may not be widened here")
+        return None
+    parent = posixpath.dirname(target)
+    while parent != "/" and not writable(parent):
+        parent = posixpath.dirname(parent)
+    if depth(parent) < MINIMUM_WIDENING_DEPTH:
+        notes.report(path, section, "a name a policy line cannot carry, with no carriable ancestor deep enough")
+        return None
+    notes.report(path, section, f"a name a policy line cannot carry; widened to {parent}")
+    return parent
 
-    Denials of other layers are ignored, and objects per_run_grants takes are left to it.
-    """
+
+def grants_and_notes(denials: list[Denial], snapshot: Snapshot,
+                     fine_roots: tuple[str, ...]) -> tuple[dict[str, frozenset[str]], Notes]:
+    """The grants the filesystem denials ask for outside per-run names, with the comments and reports beside them."""
     taken = classify_per_run(denials)
+    notes = Notes()
     grants: dict[str, set[str]] = {}
     for index, denial in enumerate(denials):
         if denial.layer != LAYER_FILESYSTEM:
             continue
-        for path in denial.objects:
-            if (index, path) in taken:
-                continue
-            for section in denial.sections:
-                if section in READ_CLASS:
-                    target = read_class_target(path, snapshot, fine_roots)
-                else:
-                    target = nearest_existing(path, snapshot)
-                grants.setdefault(writable_name(target), set()).add(section)
-    return {path: frozenset(sections) for path, sections in grants.items()}
+        for path in object_paths(denial):
+            for section in sorted(denial.sections):
+                if (index, path) in taken:
+                    if section not in READ_CLASS:
+                        notes.report(path, section, "a write-class right on a per-run name is never widened")
+                    continue
+                target = placed(path, section, snapshot, fine_roots, notes)
+                if target is not None:
+                    grants.setdefault(target, set()).add(section)
+    return {path: frozenset(sections) for path, sections in grants.items()}, notes
+
+
+def grants_for(denials: list[Denial], snapshot: Snapshot, fine_roots: tuple[str, ...]) -> dict[str, frozenset[str]]:
+    """The grants the filesystem denials ask for, generalised as the module docstring states.
+
+    Denials of other layers are ignored, objects per_run_grants takes are left to it, and whatever no
+    rule covers is left out; grants_and_notes says why.
+    """
+    return grants_and_notes(denials, snapshot, fine_roots)[0]
 
 
 def compact(grants: dict[str, frozenset[str]], threshold: int, fine_roots: tuple[str, ...]) -> dict[str, frozenset[str]]:
@@ -267,15 +371,16 @@ def compact(grants: dict[str, frozenset[str]], threshold: int, fine_roots: tuple
     Never inside a fine-grained root (the directory is neither one nor beneath one), never into a
     directory at a depth below MINIMUM_WIDENING_DEPTH. The directory keeps any rights it already had.
     """
+    if threshold < MINIMUM_COMPACTION_THRESHOLD:
+        raise ValueError(f"a compaction threshold below {MINIMUM_COMPACTION_THRESHOLD} would widen a single grant")
     result = dict(grants)
     changed = True
     while changed:
         changed = False
         families: dict[tuple[str, frozenset[str]], list[str]] = {}
         for path, sections in result.items():
-            parent = os.path.dirname(path)
             if path != "/" and sections <= READ_CLASS:
-                families.setdefault((parent, sections), []).append(path)
+                families.setdefault((os.path.dirname(path), sections), []).append(path)
         for (parent, sections), children in sorted(families.items()):
             if len(children) < threshold or depth(parent) < MINIMUM_WIDENING_DEPTH or within(parent, fine_roots):
                 continue

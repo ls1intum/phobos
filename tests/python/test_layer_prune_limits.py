@@ -82,3 +82,7 @@ def test_an_exhausted_resource_counts_only_for_a_limit_the_run_had_and_on_its_ow
     assert limits.limit_signature(1, [], {"nproc": 64}, [limit_denial("clone3", "EAGAIN")], []) == "nproc"
     assert limits.limit_signature(1, [], {"nproc": 64}, [limit_denial("openat", "EMFILE")], []) is None
     assert limits.limit_signature(1, [], {"nofile": 256}, [limit_denial("read", "EMFILE")], []) is None
+
+
+def test_a_limit_switched_off_is_never_the_signature():
+    assert limits.limit_signature(1, [], {"nofile": 0}, [limit_denial("openat", "EMFILE")], []) is None

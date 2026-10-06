@@ -95,7 +95,7 @@ def test_a_report_cut_short_never_agrees_with_a_run_without_tests(tmp_path):
     broken = tmp_path / "TEST-cut.xml"
     broken.write_text('<testsuite><testcase classname="T" name="a">')
     cut = verdict.read_verdict(0, "", [broken])
-    assert cut.tests_ran
+    assert not cut.tests_ran
     assert cut.exit_class == "tests-failed"
     assert not verdict.same_outcome(cut, verdict.read_verdict(0, "", []))
 
@@ -128,3 +128,8 @@ def test_the_infrastructure_flag_does_not_decide_whether_two_runs_agree(tmp_path
     noisy = verdict.read_verdict(0, "Fatal Python error: x\n", [report])
     assert noisy.infra_failure
     assert verdict.same_outcome(plain, noisy)
+
+
+def test_no_source_in_a_subproject_or_for_kotlin_is_recognised():
+    assert verdict.read_verdict(0, "> Task :app:test NO-SOURCE\n", []).no_source
+    assert verdict.read_verdict(0, "> Task :compileKotlin NO-SOURCE\n", []).no_source

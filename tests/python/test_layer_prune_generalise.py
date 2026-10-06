@@ -6,6 +6,8 @@ import os
 import pathlib
 import sys
 
+import pytest
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "var" / "tmp" / "helpers"))
 
@@ -133,9 +135,20 @@ def test_the_same_value_in_two_runs_is_not_seen_changing():
     assert grants == {}
 
 
-def test_a_pseudo_terminal_number_seen_changing_is_granted_on_dev_pts():
-    grants, _ = generalise.per_run_grants([denial("/dev/pts/3", "write", run=1), denial("/dev/pts/7", "write", run=2)])
-    assert grants == {"/dev/pts": frozenset({"write"})}
+def test_a_pseudo_terminal_number_seen_changing_is_granted_on_dev_pts_for_reading_only():
+    denials = [denial("/dev/pts/3", "read", run=1), denial("/dev/pts/7", "read", run=2)]
+    grants, _ = generalise.per_run_grants(denials)
+    assert grants == {"/dev/pts": frozenset({"read"})}
+
+
+def test_a_write_class_right_on_a_per_run_name_is_never_widened_and_is_reported():
+    denials = [denial("/dev/pts/3", "write", run=1), denial("/dev/pts/7", "write", run=2),
+               denial("/proc/412/oom_score_adj", "write", run=1, pid=412)]
+    grants, _ = generalise.per_run_grants(denials)
+    assert grants == {}
+    found, notes = generalise.grants_and_notes(denials, snapshot_with("/dev/pts/3", "/dev/pts/7"), FINE)
+    assert found == {}
+    assert len(notes.reported) == 3
 
 
 def test_a_changing_name_outside_the_table_is_never_generalised():
@@ -166,11 +179,97 @@ def test_different_rights_on_a_nested_entry_are_left_alone():
     assert generalise.normalise_hierarchy(grants) == grants
 
 
-def test_a_path_with_a_wildcard_character_is_generalised_to_its_parent():
-    grants = generalise.grants_for([read("/srv/a[1]/f")], snapshot_with("/srv/a[1]/f", directories=("/srv", "/srv/a[1]")),
-                                   ("/srv",))
-    assert all("[" not in path for path in grants)
-    assert grants == {"/srv": frozenset({"read"})}
+def test_a_path_with_a_wildcard_character_is_generalised_to_its_parent_and_reported():
+    grants, notes = generalise.grants_and_notes(
+        [read("/srv/data/a[1]/f")], snapshot_with("/srv/data/a[1]/f", directories=("/srv/data", "/srv/data/a[1]")), FINE)
+    assert grants == {"/srv/data": frozenset({"read"})}
+    assert "widened to /srv/data" in notes.reported[0]["reason"]
+
+
+@pytest.mark.parametrize(("path", "sections"), [("/srv/x[1]/f", ("read", "write")), ("/etc/a#b", ("read", "write")),
+                                               ("/usr/lib/a\x1bb", ("write",))])
+def test_a_name_no_policy_line_can_carry_is_never_widened_to_a_shallow_directory_or_a_write(path, sections):
+    for section in sections:
+        grants, notes = generalise.grants_and_notes([denial(path, section)], snapshot_with(path), FINE)
+        assert grants == {}
+        assert notes.reported
+
+
+def test_a_missing_path_outside_the_scanned_roots_is_reported_never_climbed_from():
+    snapshot = generalise.Snapshot(existing=frozenset({"/w"}), directories=frozenset({"/w"}), scanned=("/w",))
+    for section in ("read", "write", "create"):
+        grants, notes = generalise.grants_and_notes([denial("/proc/999999/stat", section, pid=1)], snapshot, FINE)
+        assert grants == {}
+        assert notes.reported
+
+
+def test_a_climb_never_reaches_a_shallow_directory():
+    snapshot = generalise.Snapshot(existing=frozenset({"/w"}), directories=frozenset({"/w"}), scanned=("/w",))
+    grants, notes = generalise.grants_and_notes([create("/w/build/x")], snapshot, FINE)
+    assert grants == {}
+    assert notes.reported
+
+
+def test_values_seen_in_every_run_are_stable_however_many_there_are():
+    denials = [read("/proc/1/stat", run=1), read("/proc/50/stat", run=1), read("/proc/1/stat", run=2),
+               read("/proc/50/stat", run=2)]
+    grants, _ = generalise.per_run_grants(denials)
+    assert grants == {}
+
+
+def test_a_value_one_run_lacks_is_changing_and_a_value_every_run_has_is_not():
+    denials = [read("/proc/1/stat", run=1), read("/proc/412/stat", run=1), read("/proc/1/stat", run=2),
+               read("/proc/977/stat", run=2)]
+    taken = generalise.classify_per_run(denials)
+    assert {path for _, path in taken} == {"/proc/412/stat", "/proc/977/stat"}
+
+
+def test_a_directory_object_is_granted_on_itself_only_deep_enough_and_with_a_comment_in_a_fine_root():
+    shallow, notes = generalise.grants_and_notes([read("/opt")], snapshot_with(directories=("/opt",)), FINE)
+    assert shallow == {}
+    assert notes.reported
+    deep, notes = generalise.grants_and_notes([read("/etc/ssl/certs")], snapshot_with(directories=("/etc/ssl/certs",)), FINE)
+    assert deep == {"/etc/ssl/certs": frozenset({"read"})}
+    assert notes.comments["/etc/ssl/certs"].startswith("listed:")
+
+
+def test_proc_self_is_rewritten_before_it_is_granted_and_reported_without_ids():
+    grants = generalise.grants_for([read("/proc/self/status", pid=412, tid=415)], snapshot_with(), FINE)
+    assert grants == {}
+    assert generalise.per_run_grants([read("/proc/self/status", pid=412, tid=415)])[0] == {"/proc": frozenset({"read"})}
+    unnamed = record.Denial(pid=0, layer=record.LAYER_FILESYSTEM, operation="openat", objects=("/proc/self/status",),
+                            sections=frozenset({"read"}), address=None, port=None, transport=None, errno="EACCES")
+    grants, notes = generalise.grants_and_notes([unnamed], snapshot_with(), FINE)
+    assert grants == {}
+    assert notes.reported
+
+
+def test_a_compaction_threshold_below_two_is_refused():
+    with pytest.raises(ValueError):
+        generalise.compact({}, 1, FINE)
+
+
+def test_compaction_cascades_and_normalisation_reaches_every_level():
+    grants = {f"/usr/lib/{parent}/{child}": frozenset({"read"}) for parent in "abc" for child in "xyz"}
+    assert generalise.compact(grants, 3, FINE) == {"/usr/lib": frozenset({"read"})}
+    nested = {"/usr": frozenset({"read", "execute"}), "/usr/lib": frozenset({"read"}), "/usr/lib/jvm": frozenset({"read"})}
+    assert all(sections == frozenset({"read", "execute"}) for sections in generalise.normalise_hierarchy(nested).values())
+
+
+def test_a_snapshot_resolves_its_roots_and_refuses_an_unreadable_directory(tmp_path):
+    (tmp_path / "real").mkdir()
+    (tmp_path / "link").symlink_to(tmp_path / "real")
+    snapshot = generalise.Snapshot.take([str(tmp_path / "link")])
+    assert snapshot.scanned == (str((tmp_path / "real").resolve()),)
+    locked = tmp_path / "real" / "locked"
+    locked.mkdir()
+    locked.chmod(0)
+    try:
+        if os.geteuid() != 0:
+            with pytest.raises(OSError):
+                generalise.Snapshot.take([str(tmp_path / "real")])
+    finally:
+        locked.chmod(0o755)
 
 
 def test_other_layers_are_ignored():

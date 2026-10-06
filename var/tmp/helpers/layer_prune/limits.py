@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import math
 
+from layer_prune import attribute
 from layer_prune.record import LAYER_LIMIT, Denial
 
 # [limits] with every limit switched off: zero means unbounded for each key (README, [limits]).
@@ -26,12 +27,12 @@ CPU_KILL_WINDOW_SECONDS = 1.0
 # The digits a measurement is rounded to before a margin is applied, so that floating-point noise in
 # a product such as 30.2 x 5 cannot push a limit one rounding step up.
 MEASUREMENT_DIGITS = 6
-# The exhausted resource each limit shows as, and the calls it shows on (A.6.5), checked in this order.
+# The exhausted resource each limit shows as, checked in this order, on the calls attribution names
+# for it (A.6.5).
 ERRNO_SIGNATURES = (
-    ("nofile", "EMFILE", frozenset({"open", "openat", "openat2", "creat", "socket", "socketpair", "pipe", "pipe2",
-                                    "dup", "dup2", "dup3", "accept", "accept4", "fcntl"})),
-    ("nproc", "EAGAIN", frozenset({"clone", "clone3", "fork", "vfork"})),
-    ("mem_mb", "ENOMEM", frozenset({"mmap", "brk", "clone", "clone3", "fork", "vfork"})),
+    ("nofile", "EMFILE", attribute.LIMIT_CALLS["EMFILE"]),
+    ("nproc", "EAGAIN", attribute.LIMIT_CALLS["EAGAIN"]),
+    ("mem_mb", "ENOMEM", attribute.LIMIT_CALLS["ENOMEM"]),
 )
 
 
@@ -118,7 +119,7 @@ def limit_signature(status: int, last_samples: list[dict], limits: dict[str, int
     a SIGKILL far from it is the container's OOM killer, no Phobos limit. Otherwise an exhausted
     resource in the diagnostic observed run counts only when the run with the limits off did not show
     it too, since a JVM probes large reservations and falls back on its own; and only for a limit the
-    run had.
+    run had switched on (a value above 0).
     """
     if status == TIMEOUT_STATUS:
         return "timeout"
@@ -130,6 +131,6 @@ def limit_signature(status: int, last_samples: list[dict], limits: dict[str, int
         return None
     new = errno_signatures(diagnosis) - errno_signatures(control)
     for limit, errno, calls in ERRNO_SIGNATURES:
-        if limit in limits and any(call in calls and seen == errno for call, seen in new):
+        if limits.get(limit, 0) > 0 and any(call in calls and seen == errno for call, seen in new):
             return limit
     return None

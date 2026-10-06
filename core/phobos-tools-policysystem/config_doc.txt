@@ -16,7 +16,7 @@ the same rules, with an optional third for host names:
   loopback range (every 127.x.x.x address and ::1), an IP-range rule (addr/prefix)
   to that network, and a rule that names a DNS
   hostname it cannot tie to an address to its port alone. Run verbosely (--debug),
-  it names each destination it refuses by address and port, an IPv6 address in
+  it names each destination the allow-list does not name by address and port, an IPv6 address in
   brackets: "does not name: 203.0.113.7:443" or "does not name: [2001:db8::1]:443".
 - A rule that names a DNS hostname is enforced by host by the egress broker,
   which the network layer starts automatically whenever a [connect] rule names a

@@ -1,16 +1,23 @@
 """A Phobos policy as data, written as the configuration file phobos-policysystem.sh reads, and read back.
 
-`render` refuses, with ValueError, everything the policy parser would refuse or misread, so a
-candidate the pruner builds never reaches a run in a shape Phobos would stop: a relative path, a
-wildcard character, a line break, a `#` (the parser cuts a line there), a nested entry whose rights
-are a strict subset of an ancestor's (resolve_rights_hierarchy refuses it, because Landlock can never
-take a right away). Paths are compared as written; the caller canonicalises them first.
+`render` refuses, with ValueError, what would make the parser read another policy than the one
+given, or refuse it on its face: a path that is relative or not in normal form, a wildcard character,
+a `#` (the parser cuts a line there), any character that ends or corrupts a line, a network rule or a
+limit not in its section's shape, and a nested entry whose rights are a strict subset of an
+ancestor's (resolve_rights_hierarchy refuses it, because Landlock can never take a right away).
+Paths are compared as written, so the caller passes them through os.path.realpath first; what only
+the system can answer (whether a [read] path exists, a dangling link, the hierarchy after links are
+resolved) is left to the phobos-policysystem.sh gate and the run, which refuse it with PHB-EPOLICY.
+
+`read_policy` reads text exactly as phobos-policy-parse.sh does: lines end at LF only, a carriage
+return is refused, and only the whitespace bash's [[:space:]] names is trimmed.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import pathlib
+import posixpath
 import re
 
 from layer_prune import network
@@ -34,9 +41,19 @@ WRITE_SECTIONS = ("write", "create", "create-ipc", "create-symlink", "delete", "
 # The [limits] keys, in the order they are written.
 LIMIT_KEYS = ("timeout", "cpu", "mem_mb", "nproc", "nofile", "fsize_mb")
 # Characters a path may not hold: the parser takes wildcards literally, cuts a line at `#`, and a
-# line break or any other control character would end or corrupt the line.
-FORBIDDEN_PATH_CHARACTERS = re.compile(r"[*?\[#\x00-\x1f\x7f]")
-FORBIDDEN_RULE_CHARACTERS = re.compile(r"[#\x00-\x1f\x7f]")
+# control character, or a character another reader of the file would take as a line break, would end
+# or corrupt the line.
+FORBIDDEN_PATH_CHARACTERS = re.compile("[*?\\[#\x00-\x1f\x7f\x85\u2028\u2029]")
+FORBIDDEN_RULE_CHARACTERS = re.compile("[#\x00-\x1f\x7f\x85\u2028\u2029]")
+# The shapes a [connect] and a [bind] line must have: allow, a destination or a port, a transport.
+CONNECT_RULE = re.compile(r"allow [^\s]+(?: (?:tcp|udp))?")
+BIND_RULE = re.compile(r"allow (?P<port>0|[1-9][0-9]{0,4})(?: (?:tcp|udp))?")
+# The highest port, and the most digits a limit may have (PHB_LARGEST_LIMIT_DIGITS).
+PORT_MAXIMUM = 65535
+LIMIT_DIGITS_MAXIMUM = 18
+# The whitespace bash's [[:space:]] trims around a line, and the digits its [[:digit:]] accepts.
+PARSER_WHITESPACE = " \t\n\v\f\r"
+DIGITS = re.compile(r"[0-9]+")
 # The top-level directories the permissive policy never grants writing on: the pseudo filesystems,
 # /var (whose child /var/tmp holds the run's specification) and /run (which holds the candidate).
 NEVER_WRITABLE_TOP_LEVEL = frozenset({"/var", "/proc", "/sys", "/dev", "/run"})
@@ -74,17 +91,39 @@ def is_beneath(path: str, ancestor: str) -> bool:
 
 
 def check_path(path: str) -> None:
-    """Refuses a path the parser would refuse or misread."""
+    """Refuses a path the parser would refuse or misread, or one not in normal form (`..`, `//`, a trailing `/`)."""
     if not path.startswith("/"):
         raise ValueError(f"{path!r} is not an absolute path")
     if FORBIDDEN_PATH_CHARACTERS.search(path) or path != path.strip():
         raise ValueError(f"{path!r} holds a character a policy path cannot carry")
+    if posixpath.normpath(path) != path or path.startswith("//"):
+        raise ValueError(f"{path!r} is not in normal form")
 
 
 def check_rule(rule: str) -> None:
-    """Refuses a network rule or comment line that a `#` or a control character would cut or break."""
+    """Refuses a network rule or comment line that a `#` or a line-breaking character would cut or break."""
     if FORBIDDEN_RULE_CHARACTERS.search(rule):
         raise ValueError(f"{rule!r} holds a character a policy line cannot carry")
+
+
+def check_network(policy: Policy) -> None:
+    """Refuses a [connect] or [bind] line that is not in its section's shape."""
+    for rule in policy.connect:
+        if not CONNECT_RULE.fullmatch(rule):
+            raise ValueError(f"{rule!r} is not a [connect] rule")
+    for rule in policy.bind:
+        match = BIND_RULE.fullmatch(rule)
+        if match is None or int(match.group("port")) > PORT_MAXIMUM:
+            raise ValueError(f"{rule!r} is not a [bind] rule")
+
+
+def check_limits(limits: dict[str, int]) -> None:
+    """Refuses an unknown limit, and a value that is not a whole number from 0 with at most 18 digits."""
+    for key, value in limits.items():
+        if key not in LIMIT_KEYS:
+            raise ValueError(f"unknown limit {key!r}")
+        if type(value) is not int or value < 0 or len(str(value)) > LIMIT_DIGITS_MAXIMUM:
+            raise ValueError(f"limit {key}={value!r} is not a whole number from 0")
 
 
 def check_hierarchy(fs: dict[str, frozenset[str]]) -> None:
@@ -106,9 +145,8 @@ def check_policy(policy: Policy) -> None:
     check_hierarchy(policy.fs)
     for rule in policy.connect + policy.bind + tuple(policy.comments.values()):
         check_rule(rule)
-    unknown_limits = set(policy.limits) - set(LIMIT_KEYS)
-    if unknown_limits:
-        raise ValueError(f"unknown limits {sorted(unknown_limits)}")
+    check_network(policy)
+    check_limits(policy.limits)
 
 
 def render(policy: Policy) -> str:
@@ -143,13 +181,15 @@ def read_policy(text: str) -> Policy:
     leading and trailing whitespace is stripped. A line outside any section, an unknown section and a
     malformed limit raise ValueError. [accept] rules are not part of a Policy and are refused.
     """
+    if "\r" in text:
+        raise ValueError("a carriage return would become part of a value; the parser refuses it")
     fs: dict[str, set[str]] = {}
     connect: list[str] = []
     bind: list[str] = []
     limits: dict[str, int] = {}
     section = ""
-    for raw in text.splitlines():
-        line = raw.split("#", 1)[0].strip()
+    for raw in text.split("\n"):
+        line = raw.split("#", 1)[0].strip(PARSER_WHITESPACE)
         if not line:
             continue
         header = re.fullmatch(r"\[(.+)\]", line)
@@ -165,14 +205,23 @@ def read_policy(text: str) -> Policy:
         elif section == "bind":
             bind.append(line)
         elif section == "limits":
-            key, separator, value = (part.strip() for part in line.partition("="))
-            if not separator or key not in LIMIT_KEYS or not value.isdigit():
+            key, separator, value = (part.strip(PARSER_WHITESPACE) for part in line.partition("="))
+            if not separator or key not in LIMIT_KEYS or not DIGITS.fullmatch(value):
                 raise ValueError(f"malformed limit {line!r}")
-            limits[key] = int(value)
+            limits[key] = merged_limit(limits.get(key), int(value))
         else:
             raise ValueError(f"{line!r} appears before any section")
     return Policy(fs={path: frozenset(sections) for path, sections in fs.items()},
                   connect=tuple(connect), bind=tuple(bind), limits=limits)
+
+
+def merged_limit(earlier: int | None, value: int) -> int:
+    """A limit named twice, merged as set_parsed_limit merges it: zero (off) wins, otherwise the largest."""
+    if earlier is None:
+        return value
+    if earlier == 0 or value == 0:
+        return 0
+    return max(earlier, value)
 
 
 def covered_rights(path: str, base: Policy) -> frozenset[str]:

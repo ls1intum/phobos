@@ -24,10 +24,11 @@ SIGNAL_STATUS_BASE = 128
 # Where Gradle and Maven write their JUnit reports, relative to the exercise.
 DEFAULT_REPORT_GLOBS = ("build/test-results/**/*.xml", "target/surefire-reports/*.xml")
 # Lines that say no test source was compiled or no test ran although the status was zero: Gradle's
-# NO-SOURCE on the compile or test task, Maven's "No tests to run." or "No tests to run!" and its
-# "Tests are skipped.". A NO-SOURCE on another task, such as processResources, is ordinary.
+# NO-SOURCE on a Java or Kotlin compile task or the test task, of the root project or a subproject,
+# Maven's "No tests to run." or "No tests to run!" and its "Tests are skipped.". A NO-SOURCE on
+# another task, such as processResources, is ordinary.
 NO_SOURCE_PATTERNS = (
-    r"> Task :(?:compileJava|compileTestJava|test) NO-SOURCE",
+    r"> Task (?::[\w.-]+)*:(?:compileJava|compileTestJava|compileKotlin|compileTestKotlin|test) NO-SOURCE",
     r"No tests to run",
     r"Tests are skipped\.",
 )
@@ -65,7 +66,7 @@ class Verdict:
     """What a run produced.
 
     `exit_class` is one of success, tests-failed, failure, timeout and signalled. `tests` holds every
-    test case as (classname.name, outcome), sorted. `tests_ran` says whether any report named a test,
+    test case as (classname.name, outcome), sorted. `tests_ran` says whether a readable report named a test,
     `no_source` whether the log says no test source or no test ran, `infra_failure` whether it shows
     the build's own machinery failing; the last is recorded and decides nothing outside the baseline.
     """
@@ -124,7 +125,7 @@ def read_verdict(status: int, log_text: str, report_paths: list[pathlib.Path]) -
     return Verdict(
         exit_class=exit_class_of(status, tests),
         tests=tests,
-        tests_ran=bool(tests),
+        tests_ran=any(outcome != UNREADABLE for _, outcome in tests),
         no_source=matches_any(NO_SOURCE_PATTERNS, log_text),
         infra_failure=infra,
     )
@@ -134,7 +135,8 @@ def phobos_stopped(status: int, stderr_before_command: str) -> str | None:
     """The line showing Phobos itself stopped a run before its command started, or None (A.6.4).
 
     `stderr_before_command` is what the run printed on stderr before the command started; a caller
-    that cannot tell where that was passes the whole of it. A run counts as stopped by Phobos only
+    that cannot tell where that was passes the whole of it. The run must not have been started with
+    --debug, whose lines under an enforcer's prefix would read as stops. A run counts as stopped by Phobos only
     when its status is one of PHOBOS_STOP_STATUSES and that text holds one of Phobos's markers: the
     usage text, an error code, or an enforcer's line that is not a warning. Such a run is never a
     verdict but a defect of the caller, because reading it as "the policy is too narrow" would turn a
