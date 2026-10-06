@@ -25,3 +25,7 @@ venv/
 # core/config; everything a run drops beside them is scratch.
 /var/tmp/path_sets/
 /var/tmp/pruning/*.log
+
+# Sessions of the recording pruner (phobos-record), written by its compose services. A recording
+# describes one instructor's sessions and is reviewed before its policy is kept anywhere.
+/var/tmp/recordings/

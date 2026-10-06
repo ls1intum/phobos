@@ -57,17 +57,21 @@ class Refused(Exception):
         self.message = message
 
 
-def refuse_grading_options(arguments: list[str]) -> None:
+def refuse_grading_options(arguments: list[str], allowed: frozenset[str] = frozenset()) -> None:
     """Refuses a phobos.sh grading option among the recorder's own arguments.
 
     Assumes the arguments are the recorder's command line without the program name, and that
     everything after the first `--` belongs to the recorded command, so it is not looked at.
-    An option given as `--option=value` is refused like `--option value`.
+    An option given as `--option=value` is refused like `--option value`. `allowed` names options
+    a subcommand takes on purpose, as the replay check takes --resolver for phobos.sh.
     """
     for argument in arguments:
         if argument == "--":
             return
-        if argument in GRADING_OPTIONS or argument.split("=", 1)[0] in GRADING_OPTIONS:
+        name = argument.split("=", 1)[0]
+        if name in allowed:
+            continue
+        if argument in GRADING_OPTIONS or name in GRADING_OPTIONS:
             raise Refused(EXIT_USAGE, f"{GRADING_MESSAGE} (refused option: {argument})")
 
 
@@ -89,16 +93,18 @@ def refuse_outside_prune_image(phobos_home: pathlib.Path) -> None:
                       f"{', '.join(others)}, which the prune image never ships.")
 
 
-def refuse_layer_command(command: list[str], phobos_home: pathlib.Path) -> None:
+def refuse_layer_command(command: list[str], phobos_home: pathlib.Path, cwd: pathlib.Path | None = None) -> None:
     """Refuses a command any of whose words resolves to a file under PHOBOS_HOME.
 
-    Assumes relative words are relative to the current directory and that the first word is
-    also looked up in PATH, as a shell would. That catches `phobos.sh`, a link to it and
-    `sh phobos.sh`; a wrapper script or `bash -c` that starts the layers is not caught.
+    Assumes relative words are relative to `cwd`, the directory the command will run in (the
+    current directory when None), and that the first word is also looked up in PATH, as a shell
+    would. That catches `phobos.sh`, a link to it and `sh phobos.sh`; a wrapper script or `bash -c`
+    that starts the layers is not caught.
     """
     home = os.path.realpath(phobos_home)
+    base = os.fspath(cwd) if cwd is not None else os.getcwd()
     for word in _candidate_files(command):
-        resolved = os.path.realpath(word)
+        resolved = os.path.realpath(os.path.join(base, word))
         if os.path.isfile(resolved) and os.path.commonpath([home, resolved]) == home:
             raise Refused(EXIT_USAGE,
                           f"phobos-record does not record Phobos itself: {word} is part of the layers under "

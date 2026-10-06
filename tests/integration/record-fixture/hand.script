@@ -1,0 +1,27 @@
+# Keystrokes of record_replay.sh's phase hand: a person at an interactive bash runs the replay check
+# by hand around python3 -q and types into Python under the layers. @RECORDER@ is replaced with the
+# recorder's path before the script is used.
+expect SHELL[$]
+send @RECORDER@ check --name python -- python3 -q
+expect >>>
+send import time
+send print("OK-" + "H1")
+expect OK-H1
+send time.sleep(30)
+sleep 1
+key ctrl-c
+expect KeyboardInterrupt
+send print("OK-" + "H2")
+expect OK-H2
+key ctrl-z
+expect Stopped
+send fg
+sleep 1
+send print("OK-" + "H3")
+expect OK-H3
+send exit(0)
+expect regressions
+expect SHELL[$]
+send echo "STATUS-""$?"
+expect STATUS-0
+send exit

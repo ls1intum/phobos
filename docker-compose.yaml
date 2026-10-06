@@ -15,6 +15,35 @@ services:
         target: /var/tmp
     command: ["--verbose", "--cache-dir", "/home/sandboxuser/.gradle", "java" ]
 
+  # The recording pruner: records the instructor's reference program while a person uses it, with
+  # no sandbox at all, and replays it under the layers with `check`. Started only on purpose, as
+  #   RECORD_EXERCISE=<exercise directory> docker compose --profile record run --rm record record -- <command>
+  # and each `run` is a new container, which is what a replay check needs. Offline; the networked
+  # service is for a program that must reach hosts. Never point either at an untrusted submission.
+  # No privilege, capability or security option: strace traces only the recorder's own children.
+  # The image is built on the run-phase image docker/run_phase/java/docker-compose.yaml builds. The
+  # recordings are written as root under ./var/tmp/recordings, so removing one may need sudo; without
+  # RECORD_EXERCISE an empty directory there stands in for the exercise.
+  record: &record
+    profiles: ["record"]
+    image: phobos-prune-layers-record
+    build:
+      context: docker/prune_phase/layers
+      args:
+        RUN_PHASE_IMAGE: ${RUN_PHASE_IMAGE:-phobos-run-phase-java}
+    entrypoint: ["/var/tmp/helpers/layer_record/phobos-record"]
+    stdin_open: true
+    tty: true
+    network_mode: none
+    volumes:
+      - ./var/tmp/helpers:/var/tmp/helpers:ro
+      - ${RECORD_EXERCISE:-./var/tmp/recordings/.no-exercise}:/srv/phobos-record-exercise:ro
+      - ./var/tmp/recordings:/var/tmp/recordings
+
+  record_networked:
+    <<: *record
+    network_mode: bridge
+
   orchestrate:
     build: docker/prune_phase/orchestrate
     volumes:

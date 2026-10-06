@@ -1,0 +1,19 @@
+#!/bin/bash
+# The only way into the recording pruner. It records a program with no sandbox at all, so it lives
+# in the prune image alone and nothing under core/ names it; main.py says the rest.
+#
+# python3 is in the prune image and not in the run-phase image, so its absence is answered with
+# the recorder's own status for the wrong place (3) rather than with a bare "command not found".
+set -euo pipefail
+
+# The status phobos-record ends with when it is started where it must not record (guard.py).
+readonly EXIT_ENVIRONMENT=3
+
+if ! command -v python3 > /dev/null 2>&1; then
+  printf 'phobos-record runs only in the prune image: this image has no python3, so it looks like an image an exercise is graded in.\n' >&2
+  exit "${EXIT_ENVIRONMENT}"
+fi
+# No bytecode files: a __pycache__ written under the image while recording would make a container's
+# starting state differ from the next one's, and the replay check would refuse it as changed.
+export PYTHONDONTWRITEBYTECODE=1
+exec python3 "$(dirname "$(readlink -f "$0")")/main.py" "$@"

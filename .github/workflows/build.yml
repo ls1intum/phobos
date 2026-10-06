@@ -403,6 +403,14 @@ jobs:
             -v "${PWD}/tests:/tests:ro" -v "${PWD}/var/tmp/helpers:/var/tmp/helpers:ro" \
             phobos-prune-layers:ci bash /tests/integration/layer_prune_observer.sh
 
+      # The recording pruner, in the prune image just built: its refusals (record_safety.sh), a real
+      # terminal with Ctrl+C, Ctrl+Z and fg (record_interactive.sh), and its replay check in both
+      # directions, each phase in a new container (record_replay.sh); from outside, the run-phase
+      # image holds no strace and refuses the recorder. Every container is ordinary.
+      - name: The recording pruner records with the terminal passed through and replays under the layers
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        run: bash tests/integration/record_host.sh phobos-prune-layers:ci phobos-run-phase:ci
+
   # Mutation testing installs clang and mull into a container and then runs the suite
   # once per mutant. It runs on every change like the other jobs, and a run that does
   # not reach a score fails it, so a toolchain that stops compiling the sources is
