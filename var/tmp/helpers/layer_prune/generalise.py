@@ -19,9 +19,12 @@ The rules, each erring in the direction A.7 names, and every case no rule covers
 - Compaction joins at least `threshold` read-class children into their directory, never inside a
   fine-grained root, never at a depth below MINIMUM_WIDENING_DEPTH.
 - [execute] is never left on, nor compacted into, a directory that overlaps a write-class right of the
-  same grants: one on the directory itself, on an ancestor, or on an entry beneath it. A file written
-  there could then be executed. Execute stays on the exact files the reference executed there, each
-  with a comment saying why, and an executed file that did not exist before the run is reported.
+  grants, or of the policy they are layered on (`held`): one on the directory itself, on an ancestor,
+  or on an entry beneath it, since a file written there could then be executed. Execute stays on the
+  exact files the reference executed there, each with a comment saying why, and saying so when the
+  file itself stays writable. An executed object that did not exist before the run was written by it,
+  so it is reported and never granted, wherever it lies. Per-run directories (/proc, /dev/pts) are
+  left to per_run_grants: a run cannot create a regular file in them.
 
 The caller rewrites /proc/self and /proc/thread-self with rewrite_self first and then resolves every
 path outside /proc and /dev with os.path.realpath; never the other way round, which would resolve the
@@ -51,10 +54,13 @@ MINIMUM_WIDENING_DEPTH = 2
 COMMENT_EXAMPLES = 3
 # The sections that may be widened to a containing directory or compacted; every other one is write-class.
 READ_CLASS = frozenset({"read", "execute"})
+# The sections that change what a directory holds or what a file contains.
 WRITE_CLASS = frozenset(cfgfile.WRITE_SECTIONS)
-# The comment above a file whose [execute] was kept on the file rather than on its directory.
+# The comment above a file whose [execute] was kept on the file rather than on its directory, and what
+# it adds when the file itself can be written in place.
 EXECUTE_KEPT_COMMENT = ("execute: kept on the files the reference executed, because {directory} overlaps a "
-                        "write-class right; a writable tree is never made executable")
+                        "write-class right; a file written there is not executable")
+EXECUTE_KEPT_WRITABLE = ", but this file itself can be overwritten in place"
 # A kernel-assigned id: 0 or a number without a leading zero.
 NUMBER = r"(?:0|[1-9][0-9]*)"
 # The table of A.6.5: each pattern names a path whose numbered components the kernel assigns, with
@@ -322,6 +328,9 @@ def placed(path: str, section: str, snapshot: Snapshot, fine_roots: tuple[str, .
     if is_self_link(path):
         notes.report(path, section, "a /proc/self link of a denial without process ids")
         return None
+    if section == "execute" and not snapshot.existed(path):
+        notes.report(path, section, "the run executed what it wrote; a written file is never made executable")
+        return None
     if section in READ_CLASS:
         target = read_class_target(path, snapshot, fine_roots)
     else:
@@ -347,43 +356,57 @@ def placed(path: str, section: str, snapshot: Snapshot, fine_roots: tuple[str, .
     return parent
 
 
-def overlaps_write(path: str, grants: dict[str, frozenset[str]]) -> bool:
-    """Whether the grants hold a write-class right on the path, on an ancestor of it, or on an entry beneath it."""
+def overlaps_write(path: str, grants: dict[str, frozenset[str]],
+                   held: dict[str, frozenset[str]] | None = None) -> bool:
+    """Whether the grants or the held entries hold a write-class right on the path, an ancestor, or an entry beneath it."""
     return any(sections & WRITE_CLASS and (other == path or is_beneath(path, other) or is_beneath(other, path))
-               for other, sections in grants.items())
+               for entries in (grants, held or {}) for other, sections in entries.items())
+
+
+def holds(path: str, section: str, entries: dict[str, frozenset[str]] | dict[str, set[str]]) -> bool:
+    """Whether an entry on the path or on an ancestor of it grants the section."""
+    return any(section in sections and (other == path or is_beneath(path, other)) for other, sections in entries.items())
 
 
 def narrow_execute(grants: dict[str, frozenset[str]], executed: Iterable[str], snapshot: Snapshot,
-                   notes: Notes) -> dict[str, frozenset[str]]:
+                   notes: Notes, held: dict[str, frozenset[str]] | None = None) -> dict[str, frozenset[str]]:
     """The grants with [execute] taken off every directory that overlaps a write-class right, and put on the files.
 
-    `executed` names the objects the reference was refused executing. Each one beneath, or equal to,
-    such a directory gets [execute] on itself when it was a file before the run, with the comment
-    saying why; any other is reported, since a policy can only name what exists.
+    `executed` names the objects the reference was refused executing, and `held` the entries of the
+    policy the grants are layered on, whose write-class rights count as well. First every such
+    directory loses [execute]; then each executed object beneath one of them that no remaining entry
+    still lets execute gets [execute] on itself, when it was a file before the run and a name a
+    policy line can carry, with the comment saying why; any other is reported.
     """
+    narrowed = [path for path in sorted(grants) if "execute" in grants[path] and snapshot.is_directory(path)
+                and overlaps_write(path, grants, held)]
     result = {path: set(sections) for path, sections in grants.items()}
-    for path in sorted(grants):
-        if "execute" not in grants[path] or not snapshot.is_directory(path) or not overlaps_write(path, grants):
-            continue
+    for path in narrowed:
         result[path].discard("execute")
-        for item in sorted(set(executed)):
-            if item != path and not is_beneath(item, path):
-                continue
-            if snapshot.existed(item) and not snapshot.is_directory(item) and writable(item):
-                result.setdefault(item, set()).add("execute")
-                notes.comments.setdefault(item, EXECUTE_KEPT_COMMENT.format(directory=path))
-            else:
-                notes.report(item, "execute", f"executed beneath {path}, which overlaps a write-class right, "
-                                              "and not a file a policy line could name before the run")
+    for item in sorted(set(executed)):
+        directory = next((path for path in narrowed if item == path or is_beneath(item, path)), None)
+        if directory is None or holds(item, "execute", result):
+            continue
+        if not writable(item):
+            notes.report(item, "execute", f"its widening to {directory} is withdrawn: that overlaps a write-class right")
+        elif snapshot.existed(item) and not snapshot.is_directory(item):
+            result.setdefault(item, set()).add("execute")
+            comment = EXECUTE_KEPT_COMMENT.format(directory=directory)
+            if holds(item, "write", result) or holds(item, "write", held or {}):
+                comment += EXECUTE_KEPT_WRITABLE
+            notes.comments.setdefault(item, comment)
+        else:
+            notes.report(item, "execute", f"executed beneath {directory}, which overlaps a write-class right, "
+                                          "and not a file that existed before the run")
     return {path: frozenset(sections) for path, sections in result.items() if sections}
 
 
-def grants_and_notes(denials: list[Denial], snapshot: Snapshot,
-                     fine_roots: tuple[str, ...]) -> tuple[dict[str, frozenset[str]], Notes]:
+def grants_and_notes(denials: list[Denial], snapshot: Snapshot, fine_roots: tuple[str, ...],
+                     held: dict[str, frozenset[str]] | None = None) -> tuple[dict[str, frozenset[str]], Notes]:
     """The grants the filesystem denials ask for outside per-run names, with the comments and reports beside them.
 
     [execute] is narrowed to the executed files wherever it would sit on a directory that overlaps a
-    write-class right of these grants (narrow_execute).
+    write-class right of these grants or of `held`, the policy they are layered on (narrow_execute).
     """
     taken = classify_per_run(denials)
     notes = Notes()
@@ -398,13 +421,13 @@ def grants_and_notes(denials: list[Denial], snapshot: Snapshot,
                     if section not in READ_CLASS:
                         notes.report(path, section, "a write-class right on a per-run name is never widened")
                     continue
-                if section == "execute":
+                if section == "execute" and snapshot.existed(path):
                     executed.add(path)
                 target = placed(path, section, snapshot, fine_roots, notes)
                 if target is not None:
                     grants.setdefault(target, set()).add(section)
     found = {path: frozenset(sections) for path, sections in grants.items()}
-    return narrow_execute(found, executed, snapshot, notes), notes
+    return narrow_execute(found, executed, snapshot, notes, held), notes
 
 
 def grants_for(denials: list[Denial], snapshot: Snapshot, fine_roots: tuple[str, ...]) -> dict[str, frozenset[str]]:
@@ -416,12 +439,14 @@ def grants_for(denials: list[Denial], snapshot: Snapshot, fine_roots: tuple[str,
     return grants_and_notes(denials, snapshot, fine_roots)[0]
 
 
-def compact(grants: dict[str, frozenset[str]], threshold: int, fine_roots: tuple[str, ...]) -> dict[str, frozenset[str]]:
+def compact(grants: dict[str, frozenset[str]], threshold: int, fine_roots: tuple[str, ...],
+            held: dict[str, frozenset[str]] | None = None) -> dict[str, frozenset[str]]:
     """Joins at least `threshold` children with equal read-class rights into their directory, repeatedly.
 
     Never inside a fine-grained root (the directory is neither one nor beneath one), never into a
     directory at a depth below MINIMUM_WIDENING_DEPTH, and never [execute] into a directory that
-    overlaps a write-class right of the grants. The directory keeps any rights it already had.
+    overlaps a write-class right of the grants or of `held`, the policy they are layered on. The
+    directory keeps any rights it already had.
     """
     if threshold < MINIMUM_COMPACTION_THRESHOLD:
         raise ValueError(f"a compaction threshold below {MINIMUM_COMPACTION_THRESHOLD} would widen a single grant")
@@ -436,7 +461,7 @@ def compact(grants: dict[str, frozenset[str]], threshold: int, fine_roots: tuple
         for (parent, sections), children in sorted(families.items()):
             if len(children) < threshold or depth(parent) < MINIMUM_WIDENING_DEPTH or within(parent, fine_roots):
                 continue
-            if "execute" in sections and overlaps_write(parent, result):
+            if "execute" in sections and overlaps_write(parent, result, held):
                 continue
             for child in children:
                 del result[child]

@@ -339,13 +339,14 @@ def test_a_file_the_run_created_and_executed_in_a_writable_directory_is_reported
     assert [(item["path"], item["section"]) for item in notes.reported] == [("/srv/app/built", "execute")]
 
 
-def test_execute_on_a_directory_from_an_earlier_round_is_narrowed_once_a_write_beneath_it_is_granted():
+def test_narrow_execute_on_a_whole_policy_takes_execute_off_a_directory_with_a_write_beneath_it():
     notes = generalise.Notes()
     narrowed = generalise.narrow_execute({"/srv/app": frozenset({"read", "execute"}),
                                           "/srv/app/data": frozenset({"write", "create"})},
                                          ["/srv/app/run.sh"], APP, notes)
     assert narrowed == {"/srv/app": frozenset({"read"}), "/srv/app/run.sh": frozenset({"execute"}),
                         "/srv/app/data": frozenset({"write", "create"})}
+    assert "/srv/app overlaps a write-class right" in notes.comments["/srv/app/run.sh"]
 
 
 def test_executable_siblings_are_not_compacted_into_a_directory_that_overlaps_a_write():
@@ -354,3 +355,71 @@ def test_executable_siblings_are_not_compacted_into_a_directory_that_overlaps_a_
     assert generalise.compact(siblings, 3, FINE) == {"/srv/app": frozenset({"execute"})}
     writable = {**siblings, "/srv/app/cache": frozenset({"create"})}
     assert generalise.compact(writable, 3, FINE) == writable
+
+
+BESIDE = snapshot_with("/srv/app/run.sh", "/srv/app/bin/tool", "/srv/app/data/out.txt", "/srv/app-data/x",
+                       "/srv/app/we#ird", directories=("/srv/app", "/srv/app/bin", "/srv/app/data", "/srv/app-data"))
+
+
+def test_a_write_beside_the_executed_directory_leaves_its_execute_where_it_was():
+    grants, notes = generalise.grants_and_notes([execute("/srv/app/bin/tool"), denial("/srv/app/data/out.txt", "write")],
+                                                BESIDE, FINE)
+    assert grants == {"/srv/app/bin": frozenset({"execute"}), "/srv/app/data/out.txt": frozenset({"write"})}
+    assert notes.comments == {}
+
+
+def test_a_write_in_a_directory_that_only_shares_a_prefix_does_not_overlap():
+    grants, _ = generalise.grants_and_notes([execute("/srv/app/run.sh"), denial("/srv/app-data/x", "write")],
+                                            BESIDE, FINE)
+    assert grants["/srv/app"] == frozenset({"execute"})
+
+
+def test_an_execute_on_the_writable_directory_itself_is_reported_not_granted():
+    grants, notes = generalise.grants_and_notes([execute("/srv/app"), create("/srv/app/new")], BESIDE, FINE)
+    assert grants == {"/srv/app": frozenset({"create"})}
+    assert ("/srv/app", "execute") in [(item["path"], item["section"]) for item in notes.reported]
+
+
+def test_read_siblings_still_compact_into_a_directory_that_overlaps_a_write():
+    grants = {"/srv/app/a": frozenset({"read"}), "/srv/app/b": frozenset({"read"}), "/srv/app/c": frozenset({"read"}),
+              "/srv/app/cache": frozenset({"create"})}
+    assert generalise.compact(grants, 3, FINE) == {"/srv/app": frozenset({"read"}),
+                                                   "/srv/app/cache": frozenset({"create"})}
+
+
+def test_an_executed_name_no_policy_line_can_carry_is_reported_when_its_widening_is_withdrawn():
+    grants, notes = generalise.grants_and_notes([execute("/srv/app/we#ird"), create("/srv/app/new")], BESIDE, FINE)
+    assert grants == {"/srv/app": frozenset({"create"})}
+    assert any(item["path"] == "/srv/app/we#ird" and "withdrawn" in item["reason"] for item in notes.reported)
+
+
+def test_a_file_a_deeper_directory_still_lets_execute_is_not_moved_and_the_result_renders():
+    denials = [execute("/srv/app/run.sh"), read("/srv/app/run.sh"), execute("/srv/app/bin/tool"),
+               read("/srv/app/bin/tool"), create("/srv/app/data/new")]
+    grants, notes = generalise.grants_and_notes(denials, BESIDE, FINE)
+    assert grants == {"/srv/app": frozenset({"read"}), "/srv/app/run.sh": frozenset({"execute"}),
+                      "/srv/app/bin": frozenset({"read", "execute"}), "/srv/app/data": frozenset({"create"})}
+    assert set(notes.comments) == {"/srv/app/run.sh"}
+    generalise.cfgfile.check_hierarchy(grants)
+
+
+def test_an_executable_the_run_wrote_is_reported_even_where_no_write_was_refused():
+    grants, notes = generalise.grants_and_notes([execute("/srv/app/gen/tool")], BESIDE, FINE)
+    assert grants == {}
+    assert [(item["path"], item["section"]) for item in notes.reported] == [("/srv/app/gen/tool", "execute")]
+
+
+def test_a_write_class_right_of_the_policy_the_grants_are_layered_on_counts_too():
+    grants, _ = generalise.grants_and_notes([execute("/srv/app/run.sh")], BESIDE, FINE,
+                                            held={"/srv/app/data": frozenset({"write"})})
+    assert grants == {"/srv/app/run.sh": frozenset({"execute"})}
+    siblings = {"/srv/app/a": frozenset({"execute"}), "/srv/app/b": frozenset({"execute"}),
+                "/srv/app/c": frozenset({"execute"})}
+    assert generalise.compact(siblings, 3, FINE, held={"/srv/app": frozenset({"create"})}) == siblings
+
+
+def test_a_kept_file_that_can_itself_be_written_says_so():
+    grants, notes = generalise.grants_and_notes([execute("/srv/app/run.sh"), denial("/srv/app/run.sh", "write")],
+                                                BESIDE, FINE)
+    assert grants == {"/srv/app/run.sh": frozenset({"write", "execute"})}
+    assert notes.comments["/srv/app/run.sh"].endswith("can be overwritten in place")
