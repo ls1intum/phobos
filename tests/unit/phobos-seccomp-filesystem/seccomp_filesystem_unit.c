@@ -1523,6 +1523,17 @@ static void test_walking_names_as_the_task(void) {
               && strcmp(out, "/tmp") == 0);
     check("the root resolves to itself", resolve_as_task(&task, "///", true, out, sizeof(out))
                                              && strcmp(out, "/") == 0);
+    snprintf(fake_refused_access, sizeof(fake_refused_access), "%s", in_tree("ro/dir"));
+    fake_refused_mode = X_OK;
+    check("a step up from a directory the task may not search ends the walk",
+          !resolve_as_task(&task, in_tree("ro/dir/../file"), true, out, sizeof(out)));
+    check("and so does a dot in it",
+          !resolve_as_task(&task, in_tree("ro/dir/."), true, out, sizeof(out)));
+    fake_refused_access[0] = '\0';
+    fake_refused_mode = R_OK | W_OK | X_OK;
+    check("while a searchable one is stepped up from",
+          resolve_as_task(&task, in_tree("ro/dir/../file"), true, out, sizeof(out))
+              && strcmp(out, in_tree("ro/file")) == 0);
     fake_readlink(in_tree("rw/up"), "");
     check("a link that cannot be read ends the walk",
           !resolve_as_task(&task, in_tree("rw/up/dir"), true, out, sizeof(out)));
@@ -2473,6 +2484,25 @@ static void test_judging_sticky_directories(void) {
           strcmp(judged_open(in_tree("ro/file"), O_WRONLY | O_CREAT),
                  line_for("write", "File", in_tree("ro/file"))) == 0);
     unlink(sticky_file);
+    reset_fakes();
+    char sticky_link[] = "/tmp/phobos-sticky-link-XXXXXX";
+    if (mkdtemp(sticky_link) == NULL || rmdir(sticky_link) != 0
+        || symlink(in_tree("none/secret"), sticky_link) != 0) {
+        perror("a link in a sticky /tmp");
+        exit(2);
+    }
+    if (__real_geteuid() == 0 && lchown(sticky_link, FAKE_CHILD_PID, FAKE_CHILD_PID) != 0) {
+        perror("lchown");
+        exit(2);
+    }
+    fake_euid_set = true;
+    fake_euid = __real_geteuid() == 0 ? FAKE_CHILD_PID : __real_geteuid();
+    check("a link the task owns in a sticky directory is followed",
+          strstr(judged_open(sticky_link, O_RDONLY), "' (named as '") != NULL);
+    fake_euid = FAKE_CHILD_PID + 1;
+    check("one owned by neither the task nor the directory's owner is not, so it is silent",
+          silent(judged_open(sticky_link, O_RDONLY)));
+    unlink(sticky_link);
     reset_fakes();
 }
 

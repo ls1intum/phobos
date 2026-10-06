@@ -182,6 +182,24 @@ static bool link_target(const char *directory, const char *name, const char *pat
     return true;
 }
 
+/* Whether the task may search a resolved directory, in which an empty string stands for the root,
+ * the supervisor's credentials standing in for the task's. The kernel asks this before every name
+ * it looks up there, "." and ".." included. */
+static bool searchable(const char *done) {
+    return faccessat(AT_FDCWD, done[0] == '\0' ? "/" : done, X_OK, AT_EACCESS) == 0;
+}
+
+/* Whether the kernel's protection of symbolic links may refuse the task to follow this one before
+ * Landlock is asked: a link in a sticky directory that others may write, owned by neither the
+ * task nor that directory's owner. The protected_symlinks setting is not read, so this errs
+ * towards silence. */
+static bool link_protected(const char *done, const struct stat *link) {
+    struct stat directory;
+    return stat(done[0] == '\0' ? "/" : done, &directory) != 0
+           || ((directory.st_mode & S_ISVTX) != 0 && (directory.st_mode & S_IWOTH) != 0
+               && link->st_uid != geteuid() && link->st_uid != directory.st_uid);
+}
+
 /* Whether nothing but slashes is left of a name. */
 static bool only_slashes(const char *rest) {
     return rest[strspn(rest, "/")] == '\0';
@@ -211,8 +229,10 @@ static bool join_name(const char *done, const char *name, size_t length, char *o
  * directory resolved so far, a symbolic link is read and walked in place of its name, and a name
  * with a slash after it must be a directory and is followed. The last name is followed only with
  * follow_last or a slash after it; otherwise it is joined unresolved and not examined. Answers false
- * for a name that does not exist on the way, a file used as a directory, too many links, or a
- * result that does not fit. Needs every directory on the way to be searchable by the supervisor. */
+ * for a name that does not exist on the way, a file used as a directory, a "." or ".." in a
+ * directory the task may not search, a link the protection of symbolic links may refuse to follow,
+ * too many links, or a result that does not fit: the kernel ends each of those before Landlock.
+ * The supervisor's credentials stand in for the task's, as the judge's caller has checked. */
 static bool walk_name(const char *absolute, bool follow_last, const char *task_status,
                       bool *met_reader_link, char *out, size_t size) {
     char done[PATH_MAX];
@@ -235,6 +255,9 @@ static bool walk_name(const char *absolute, bool follow_last, const char *task_s
         bool last = only_slashes(rest);
         struct stat status;
         if (is_dot_name(cursor, length, 1) || is_dot_name(cursor, length, 2)) {
+            if (!searchable(done)) {
+                return false;
+            }
             if (length == 2) {
                 drop_last_name(done);
             }
@@ -257,7 +280,7 @@ static bool walk_name(const char *absolute, bool follow_last, const char *task_s
             continue;
         }
         snprintf(name, sizeof(name), "%.*s", (int)length, cursor);
-        if (++links > SYMBOLIC_LINKS_MAXIMUM
+        if (++links > SYMBOLIC_LINKS_MAXIMUM || link_protected(done, &status)
             || !link_target(done, name, candidate, task_status, met_reader_link, target,
                             sizeof(target))
             || (size_t)snprintf(joined, sizeof(joined), "%s%s", target, rest) >= sizeof(joined)) {
