@@ -280,7 +280,10 @@ determine_fixed() {
 refuse_malformed_written_path() {
   local path="$1"
   local written="$2"
-  if language_value_has_control_character "$path" || [[ "$path" != /* ]]; then
+  if language_value_has_control_character "$path"; then
+    refuse_cfg "${path@Q} in ${written@Q} holds a control character"
+  fi
+  if [[ "$path" != /* ]]; then
     refuse_cfg "${path@Q} in ${written@Q} is not an absolute path"
   fi
 }

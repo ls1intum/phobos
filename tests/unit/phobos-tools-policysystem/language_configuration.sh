@@ -262,7 +262,8 @@ else
   bad "a placeholder the configuration does not name is refused where it was used" "status ${PHB_EPOLICY}" "${status}|${result}"
 fi
 for line in 'a = guess x' 'a = fixed srv' 'a = environment 1BAD' 'a = environment PHOBOS_TEST_UNSET rel/dir' \
-  'a = command-ancestor tool 0' 'a = command-ancestor ../bin/tool 2' 'a = password-database shell' 'a = fixed /tmp extra'; do
+  'a = command-ancestor tool 0' 'a = command-ancestor ../bin/tool 2' 'a = password-database shell' 'a = fixed /tmp extra' \
+  $'a = fixed /tmp\x01x'; do
   printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\n%s\nb = fixed /tmp\n' "$line" > "${CONFIGURATIONS}/STATIC_CONFIGURATION.cfg"
   if result="$( (load_language_configuration STATIC_CONFIGURATION "$HOME_DIR" && echo "loaded") 2>&1)"; then status=0; else status=$?; fi
   if (( status == PHB_EPOLICY )) && [[ "$result" == *"STATIC_CONFIGURATION.cfg', line 4."* && "$result" != *"loaded"* ]]; then
@@ -315,7 +316,9 @@ for file in "${CORE}"/config/language-configurations/*.cfg; do
     cp "$file" "${WORK}/shipped/${name}/language-configurations/"
     printf '#!/bin/sh\nexit 0\n' > "${WORK}/shipped/${name}/jdk/bin/java"
     chmod +x "${WORK}/shipped/${name}/jdk/bin/java"
-    export PATH="${WORK}/shipped/${name}/jdk/bin:${PATH}" HOME="${WORK}/home" TMPDIR=""
+    export PATH="${WORK}/shipped/${name}/jdk/bin:${PATH}"
+    export HOME="${WORK}/home"
+    export TMPDIR=""
     load_language_configuration "$name" "${WORK}/shipped/${name}" \
       && determine_language_placeholder java.home && determine_language_placeholder java.io.tmpdir \
       && determine_language_placeholder user.home \
