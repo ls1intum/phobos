@@ -111,9 +111,12 @@ def grow(run: Callable[[cfgfile.Policy], Any], seed: cfgfile.Policy, reference: 
     grants its attributed, Landlock-caused denials ask for. A run that matches the reference ends the
     loop, and the denials it still had are left ungranted. A failing run that asks for nothing is made
     once more with `rerun` (unobserved): when that rerun matches, the failure was the observer's, and the
-    policy is returned as it stands, since grading runs unobserved; otherwise it aborts. A run that asks
-    for a grant adding nothing to the policy aborts: the policy already held that right, so the refusal
-    was not caused by its absence. An exhausted budget aborts too.
+    policy is returned as it stands, since grading runs unobserved; otherwise it aborts. A run whose
+    grants all add nothing to the policy aborts: the policy already held every right it asked for, so
+    its refusals were not caused by their absence. A round that asks for something new as well goes on,
+    since one refused call names several objects (an execve the program and its loader), of which only
+    some may lack a right; a refusal that keeps surviving beside new grants ends at the budget. An
+    exhausted budget aborts too.
     """
     policy = seed
     for _ in range(rounds):
@@ -122,7 +125,7 @@ def grow(run: Callable[[cfgfile.Policy], Any], seed: cfgfile.Policy, reference: 
             return policy
         grants = derive(result)
         survived = already_granted(policy, grants)
-        if survived:
+        if grants and len(survived) == len(grants):
             raise PruneAbort("a refusal survived its own grant", {"grants": {path: sorted(sections) for path, sections
                                                                               in survived.items()}})
         if not grants:

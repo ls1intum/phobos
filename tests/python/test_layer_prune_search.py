@@ -138,3 +138,12 @@ def test_a_refusal_that_survives_under_an_ancestor_grant_aborts_at_once():
     with pytest.raises(search.PruneAbort, match="survived its own grant"):
         search.grow(run=lambda policy: FakeRun(FAILING, {"/d/f": frozenset({"read"})}), seed=seed,
                     reference=PASSING, rounds=5, derive=asks_of)
+
+
+def test_a_round_that_asks_for_a_new_right_beside_one_already_held_goes_on():
+    calls = iter([FakeRun(FAILING, {"/usr/lib": frozenset({"execute"})}),
+                  FakeRun(FAILING, {"/usr/lib": frozenset({"execute"}), "/usr/local/bin": frozenset({"execute"})}),
+                  FakeRun(PASSING, {})])
+    policy = search.grow(run=lambda policy: next(calls), seed=empty_policy(), reference=PASSING, rounds=5,
+                         derive=asks_of)
+    assert policy.fs == {"/usr/lib": frozenset({"execute"}), "/usr/local/bin": frozenset({"execute"})}
