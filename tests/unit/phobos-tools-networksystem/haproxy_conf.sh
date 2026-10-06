@@ -51,11 +51,12 @@ echo "== a DNS name is resolved by the broker itself, and everything else is ref
 out="$(emit "repo.maven.apache.org 443")"
 has "the name becomes an exact SNI acl" "$out" "acl exact_sni_p443 req.ssl_sni -m str -i repo.maven.apache.org"
 has "the name is held to the port the rule names" "$out" "acl exact_port_p443 dst_port 443"
-has "the broker resolves the name rather than trust the header" "$out" "do-resolve(txn.hostip,phobosdns,ipv4) req.ssl_sni if exact_sni_p443 exact_port_p443"
-has "the destination is set to the resolved address" "$out" "set-dst var(txn.hostip) if exact_sni_p443 exact_port_p443 { var(txn.hostip) -m found }"
-has "a name that does not resolve is refused" "$out" "reject if exact_sni_p443 exact_port_p443 !{ var(txn.hostip) -m found }"
-has "an allowed SNI routes to the destination backend" "$out" "use_backend to_dst if exact_sni_p443 exact_port_p443"
+has "the broker resolves the name rather than trust the header" "$out" "do-resolve(txn.hostip,phobosdns,ipv4) req.ssl_sni if exact_port_p443 exact_sni_p443"
+has "the destination is set to the resolved address" "$out" "set-dst var(txn.hostip) if exact_port_p443 exact_sni_p443 { var(txn.hostip) -m found }"
+has "a name that does not resolve is refused" "$out" "reject if exact_port_p443 exact_sni_p443 !{ var(txn.hostip) -m found }"
+has "an allowed SNI routes to the destination backend" "$out" "use_backend to_dst if exact_port_p443 exact_sni_p443"
 has "everything else is refused" "$out" "default_backend refuse"
+has "the port is tested before the TLS name, so a connection to another port is decided without waiting for a ClientHello" "$out" "!exact_sni_p443 exact_port_p443"
 
 echo
 echo "== a wildcard host name is refused, never turned into a rule =="
@@ -143,7 +144,7 @@ out="$(emit "repo.example.org 443
 192.0.2.10 443")"
 has "the name has an SNI acl" "$out" "acl exact_sni_p443 req.ssl_sni -m str -i repo.example.org"
 has "the address has a destination acl" "$out" "acl allowed_dst dst -m ip 192.0.2.10"
-has "the SNI allow routes to the destination" "$out" "use_backend to_dst if exact_sni_p443 exact_port_p443"
+has "the SNI allow routes to the destination" "$out" "use_backend to_dst if exact_port_p443 exact_sni_p443"
 has "the destination allow routes to the destination" "$out" "use_backend to_dst if allowed_dst"
 
 echo
@@ -156,14 +157,14 @@ has "the name of another port has its own acl" "$out" "acl exact_sni_p8443 req.s
 has "the first port is an acl of its own" "$out" "acl exact_port_p443 dst_port 443"
 has "the second port is an acl of its own" "$out" "acl exact_port_p8443 dst_port 8443"
 has "a name is not matched on the other name's port" "$out" "!exact_sni_p8443 req.ssl_sni -m str -i a.example"
-has "each pair resolves only for its own port" "$out" "do-resolve(txn.hostip,phobosdns,ipv4) req.ssl_sni if exact_sni_p8443 exact_port_p8443"
-has "each pair routes only for its own port" "$out" "use_backend to_dst if exact_sni_p8443 exact_port_p8443"
+has "each pair resolves only for its own port" "$out" "do-resolve(txn.hostip,phobosdns,ipv4) req.ssl_sni if exact_port_p8443 exact_sni_p8443"
+has "each pair routes only for its own port" "$out" "use_backend to_dst if exact_port_p8443 exact_sni_p8443"
 out="$(emit "a.example 443
 a.example 8443")"
 has "one name on two ports is in both groups" "$out" "acl exact_sni_p8443 req.ssl_sni -m str -i a.example"
 out="$(emit "localhost *
 example.org 443")"
-has "a loopback wildcard beside a name leaves the name held to its port" "$out" "do-resolve(txn.hostip,phobosdns,ipv4) req.ssl_sni if exact_sni_p443 exact_port_p443"
+has "a loopback wildcard beside a name leaves the name held to its port" "$out" "do-resolve(txn.hostip,phobosdns,ipv4) req.ssl_sni if exact_port_p443 exact_sni_p443"
 has "the loopback range is still an address allow" "$out" "use_backend to_dst if allowed_dst"
 out="$(emit "example.org *")"
 has "a name with no port is held to no port, as written" "$out" "acl exact_sni_pany req.ssl_sni -m str -i example.org"
@@ -178,7 +179,7 @@ has "it binds the given loopback endpoint and reads the PROXY header" "$conf" "b
 has "it sets the destination from the header" "$conf" "tcp-request content set-dst dst"
 has "it reads the ClientHello" "$conf" "req.ssl_hello_type 1"
 has "it emits the resolver the name is resolved through" "$conf" "nameserver dns1 127.0.0.11:53"
-has "it carries the allow-list" "$conf" "use_backend to_dst if exact_sni_p443 exact_port_p443"
+has "it carries the allow-list" "$conf" "use_backend to_dst if exact_port_p443 exact_sni_p443"
 has "it has a destination backend" "$conf" "backend to_dst"
 has "it has a refuse backend" "$conf" "backend refuse"
 
