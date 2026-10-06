@@ -188,6 +188,7 @@ core/                      the sandbox itself
     phobos-policy-parse.sh one cfg in, the parsed state and the specification files out
     phobos-policy-yaml.sh  a strict subset of YAML in, flat records with line numbers out
     phobos-language-configuration.sh  a programming language configuration in, its bases and placeholder values out
+    phobos-policy-ares.sh  an Ares 2 security policy in, the same parsed state a cfg gives out
     config_doc.txt         the configuration format, documented
   phobos-tools-filesystem/
     phobos-rights.sh       a parsed policy to the --rights= arguments phobos-landlock-filesystem-and-networksystem takes

@@ -14,6 +14,10 @@ CORE="${HERE}/../../../core"
 source "${CORE}/phobos-tools-common/phobos-common.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+# The scratch directory the parse helpers make their files in, which a layer sets beneath its
+# specification directory; the helpers refuse to run without one.
+export PHOBOS_SCRATCH="$WORK/scratch"
+mkdir -p "$PHOBOS_SCRATCH"
 
 HOME_DIR="${WORK}/home"
 PROJ="${WORK}/proj"

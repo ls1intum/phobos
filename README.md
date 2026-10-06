@@ -49,6 +49,7 @@ core/                      the sandbox itself
     phobos-policy-parse.sh one cfg in, the parsed state and the specification files out
     phobos-policy-yaml.sh  a strict subset of YAML in, flat records with line numbers out
     phobos-language-configuration.sh  a programming language configuration in, its bases and placeholder values out
+    phobos-policy-ares.sh  an Ares 2 security policy in, the same parsed state a cfg gives out
     config_doc.txt         the [connect] and [bind] sections in full: what enforces what
   phobos-tools-filesystem/
     phobos-rights.sh       a parsed policy to the --rights= arguments phobos-landlock-filesystem-and-networksystem takes
@@ -194,6 +195,28 @@ policies are exempt from the existence check, because they are written to fit mo
 - `[limits]`: `timeout=<seconds>`, the wall-clock bound on the run, and optionally `mem_mb`, `nproc`, `nofile`, `fsize_mb` and `cpu`, applied as rlimits to bound the memory, processes, open files, file size and CPU time the run may use. They are set as the last step before Landlock, so they bind the command and everything it starts, and none of the helpers Phobos runs beside it: the command's output is never cut short because a helper met the command's limit. A value written as `0` switches that limit off. Each key must be named; a bare value is refused.
 
 Every text file is stored with LF line endings: the path sets are read line by line, and a carriage return would become part of a path, so the run would silently lose access the policy granted. `.gitattributes` enforces this.
+
+### Ares 2 policy files
+
+A `--config` file whose name ends in `.yaml` or `.yml` is read as an [Ares 2](https://github.com/ls1intum/Ares2) security policy (version 1), every other one as a Phobos configuration. Each reader refuses the other's format, so a misnamed file is refused, never misread. The YAML is read as a strict subset: anything two YAML readers could read differently (anchors, tags, block scalars, `yes`, `010`, a tab, an escape other than `\\` and `\"`, invalid UTF-8) is refused with its line, and a value that should be text is best quoted.
+
+**The programming language configuration decides the base.** `theFollowingProgrammingLanguageConfigurationIsUsed` names a file `language-configurations/<NAME>.cfg` beside `phobos-policysystem.sh`. It lists the base policies a run under it folds, instead of every `Base*.cfg`, says how each placeholder such as `${java.home}` is determined (`environment`, `command-ancestor`, `fixed` or `password-database home`, each only when a path uses it), and may add loopback `[connect]` rules without a port. This file is the one place a programming language enters Phobos. The image ships the four `JAVA_USING_GRADLE_*` configurations; a configuration with no file, `JAVA_USING_MAVEN_*` among them for now, is refused, and every Ares policy of a run names the same configuration.
+
+| Ares 2 | Phobos |
+| --- | --- |
+| `readAllFiles` | `[read]` |
+| `overwriteAllFiles` | `[write]` |
+| `createAllFiles` | `[create]` and `[create-symlink]`, since Ares counts a symbolic link as created |
+| `executeAllFiles` | `[execute]` |
+| `deleteAllFiles` | `[delete]` |
+| `createAllFiles` with `deleteAllFiles` | `[restructure]` as well, since Ares lets such an entry move files |
+| a network entry with all three flags true | a `[connect]` rule for TCP and the same rule with `udp`, `onThePort: 0` meaning every port of loopback |
+| a network entry with all three flags false | nothing |
+| the tightest `timeout` | `[limits] timeout`, converted from milliseconds exactly, never rounded |
+
+`onThisPathAndAllPathsBelow` is resolved against the project root: `--project-root` where it is given, otherwise the last `--chdir` of the tail flags, otherwise a relative path and `${PROJECT_ROOT}` are refused. That directory must be the one the build tool starts the test JVM in. Refused, with the file and the line: a path of `*`, a backslash, a `..` segment, a placeholder the configuration does not name, a path that does not exist (in every section, since Ares does not say whether a path is a file or a directory), a network entry that grants only some of its three flags, a host name ending in a dot, a host other than loopback with port 0, a timeout of 0, any version but 1 and any key the schema does not have.
+
+**Phobos adds, Ares narrows.** An imported policy is an exercise configuration, so it is folded on top of the base and can only widen it. An entry the base already grants on the same path or an ancestor, after both are resolved through their symbolic links, is not written, since Landlock would add nothing for it, and the summary line counts it: the narrower intent of such an entry ("this one file, and nothing else") is enforced by Ares inside the JVM, not by Phobos. Each imported file gets one summary line on stderr, which also names what Phobos does not enforce: commands, thread and package entries, and the exemption Ares gives test classes. An imported timeout bounds the whole run, the build tool included, not only the supervised code. A configuration's `allow localhost udp` lets every UDP rule an import brings start on a kernel below Landlock version 10, held by the connect guard alone, and permits UDP to every loopback port for such a run.
 
 ## Testing
 

@@ -111,3 +111,49 @@ and inbound connections a [accept] rule does not front are governed by the
 container the run is placed in
 (`--network none`, or the operator's firewall in a networked posture), as
 SECURITY.md states.
+
+4. What an Ares 2 policy becomes
+
+A --config file whose name ends in .yaml or .yml is an Ares 2 security policy, version 1, and
+is folded in as an exercise configuration. phobos-policy-ares.sh reads it; the programming
+language configuration it names, language-configurations/<NAME>.cfg beside
+phobos-policysystem.sh, decides the base policies of the run and the placeholders.
+
+File system, per regardingFileSystemInteractions entry, onThisPathAndAllPathsBelow:
+  readAllFiles                         [read]
+  overwriteAllFiles                    [write]
+  createAllFiles                       [create] and [create-symlink]
+  executeAllFiles                      [execute]
+  deleteAllFiles                       [delete]
+  createAllFiles and deleteAllFiles    [restructure] as well (refer)
+  all five false                       nothing
+The path is resolved in this order, and refused at the first step that fails: '*', a
+backslash, a placeholder (${PROJECT_ROOT} is the project root, every other one the value the
+programming language configuration determines on its first use), a '..' segment, a relative
+path without an absolute project root (--project-root, else the tail flags' last --chdir),
+then the checks of a cfg path, existence included in every section. A row the folded base
+already grants on the same path or an ancestor, both resolved through their symbolic links,
+is not written and is counted in the summary line.
+
+Network, per regardingNetworkConnections entry:
+  all three flags true     the rule below for TCP and the same rule with udp
+  all three flags false    nothing
+  any other combination    refused
+  localhost                allow localhost:<port>, or allow localhost for port 0
+  an IPv4 address          allow <a>:<port>, or allow <a>:* for port 0
+  an IPv6 address          allow [<a>]:<port>, or allow [<a>] for port 0
+  a host name              allow <name>:<port>; port 0 and a trailing dot are refused
+  *                        allow *:<port>, with a notice; port 0 is refused
+Every rule then goes through append_connect_rule and the merged-policy check, as a cfg line
+does. The [connect] section of a programming language configuration may add only loopback
+rules that name no port; the shipped ones add allow localhost udp, so the UDP rules of an
+import that name a port are enforced by the connect guard alone and start below Landlock
+version 10 (section 1).
+
+Timeout: the tightest regardingTimeouts entry, milliseconds turned into seconds with three
+decimals exactly; an empty list imports none. It bounds the whole run.
+
+Not enforced, named in the summary line each imported file gets on stderr: commands, thread
+and package entries, the package, the main class and the test classes, which get no
+exemption from Phobos. Their structure is checked, and a placeholder in any of them but a
+command is refused.
