@@ -60,14 +60,21 @@ jobs:
         if: ${{ !cancelled() }}
         run: ./.github/scripts/record-capability.sh bwrap --assert-bwrap
 
+      - name: Assert that ptrace observes a Landlock denial
+        id: ptrace
+        if: ${{ !cancelled() }}
+        run: ./.github/scripts/record-capability.sh ptrace --assert-ptrace
+
       - name: Write the verdict
         if: ${{ !cancelled() }}
         env:
           LANDLOCK_VERDICT: ${{ steps.landlock.outputs.verdict }}
           BWRAP_VERDICT: ${{ steps.bwrap.outputs.verdict }}
+          PTRACE_VERDICT: ${{ steps.ptrace.outputs.verdict }}
         run: |
           landlock="${LANDLOCK_VERDICT:-indeterminate}"
           bwrap="${BWRAP_VERDICT:-indeterminate}"
+          ptrace="${PTRACE_VERDICT:-indeterminate}"
           {
             echo "## Runner capabilities"
             echo
@@ -75,19 +82,22 @@ jobs:
             echo "| --- | --- | --- |"
             echo "| Landlock enforces, host and plain container | ${landlock} | the acceptance suites |"
             echo "| Bubblewrap builds a production-shaped sandbox | ${bwrap} | the prune phase |"
+            echo "| ptrace observes a Landlock denial, plain container | ${ptrace} | the layer pruner's observer |"
             echo
-            echo "Read the survey step for the kernel, the Landlock ABI and the AppArmor settings"
-            echo "behind these two answers."
+            echo "Read the survey step for the kernel, the Landlock ABI, ptrace_scope and the AppArmor"
+            echo "settings behind these answers."
           } >> "${GITHUB_STEP_SUMMARY}"
-          if [ "${landlock}" = "indeterminate" ] || [ "${bwrap}" = "indeterminate" ]; then
+          if [ "${landlock}" = "indeterminate" ] || [ "${bwrap}" = "indeterminate" ] \
+            || [ "${ptrace}" = "indeterminate" ]; then
             echo "::error::A probe could not reach a verdict, so this run answers nothing."
             exit 1
           fi
 
   # Whether QEMU can use KVM on each hosted runner. The runner's own kernel is the guest, which
   # proves that a guest boots and how fast, not which Landlock version a newer kernel offers.
+  # Beside it, whether a tracer without privileges sees a Landlock refusal on that runner.
   kvm:
-    name: KVM on ${{ matrix.runner }}
+    name: KVM and ptrace on ${{ matrix.runner }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     permissions:
@@ -122,23 +132,32 @@ jobs:
         id: kvm
         run: ./.github/scripts/record-capability.sh kvm --assert-kvm
 
+      # The layer pruner runs on both architectures, so each runner image answers this too.
+      - name: Assert that ptrace observes a Landlock denial
+        id: ptrace
+        if: ${{ !cancelled() }}
+        run: ./.github/scripts/record-capability.sh ptrace --assert-ptrace
+
       - name: Write the verdict
         if: ${{ !cancelled() }}
         env:
           KVM_VERDICT: ${{ steps.kvm.outputs.verdict }}
+          PTRACE_VERDICT: ${{ steps.ptrace.outputs.verdict }}
           RUNNER_LABEL: ${{ matrix.runner }}
         run: |
           kvm="${KVM_VERDICT:-indeterminate}"
+          ptrace="${PTRACE_VERDICT:-indeterminate}"
           {
-            echo "## KVM on ${RUNNER_LABEL}"
+            echo "## KVM and ptrace on ${RUNNER_LABEL}"
             echo
             echo "| Capability | Verdict | What depends on it |"
             echo "| --- | --- | --- |"
             echo "| A guest kernel boots under KVM | ${kvm} | a kernel newer than the runner's, for Landlock 10 |"
+            echo "| ptrace observes a Landlock denial, plain container | ${ptrace} | the layer pruner's observer |"
             echo
-            echo "Read the survey step for the access to /dev/kvm and the boot times."
+            echo "Read the survey step for the access to /dev/kvm, the boot times and ptrace_scope."
           } >> "${GITHUB_STEP_SUMMARY}"
-          if [ "${kvm}" = "indeterminate" ]; then
-            echo "::error::The probe could not reach a verdict, so this run answers nothing."
+          if [ "${kvm}" = "indeterminate" ] || [ "${ptrace}" = "indeterminate" ]; then
+            echo "::error::A probe could not reach a verdict, so this run answers nothing."
             exit 1
           fi

@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # Answers what a machine can actually do, before Phobos CI asks it to.
 #
-# Two of the things Phobos wants to test in CI depend on the machine rather
+# Some of the things Phobos wants to test in CI depend on the machine rather
 # than on this repository: whether Landlock enforces inside an ordinary
-# container, and whether Bubblewrap can build a sandbox at all. Neither can be
-# read out of the source, and a runner image can withdraw either without
-# warning, so the question is asked here and asked the same way every time.
+# container, whether Bubblewrap can build a sandbox at all, and whether ptrace
+# sees a traced Landlock refusal. None can be read out of the source, and a runner
+# image can withdraw any without warning, so each question is asked here, the same way.
 #
 #   runner-capability-probe.sh --report           survey, always exits 0
 #   runner-capability-probe.sh --assert-landlock  0 enforced, 1 not, 3 cannot tell
 #   runner-capability-probe.sh --assert-bwrap     0 sandboxed, 1 not, 3 cannot tell
 #   runner-capability-probe.sh --assert-kvm       0 a guest kernel boots under KVM, 1 not, 3 cannot tell
+#   runner-capability-probe.sh --assert-ptrace    0 a traced Landlock denial is seen, 1 not, 3 cannot tell
 #
 # The assert modes are three-valued on purpose. "The machine cannot do this"
 # and "the probe could not find out" call for different responses, and folding
@@ -27,6 +28,7 @@ EXIT_INDETERMINATE=3
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROBE_SOURCE="${HERE}/landlock-filesystem-and-networksystem-capability-probe.c"
+PTRACE_PROBE_SOURCE="${HERE}/ptrace-observer-capability-probe.c"
 CONTAINER_IMAGE="${PROBE_CONTAINER_IMAGE:-ubuntu:26.04}"
 # How long a guest kernel may take to boot to its end, in seconds, with the host's virtualisation and without.
 KVM_BOOT_SECONDS=90
@@ -444,6 +446,89 @@ assert_kvm() {
   return "${EXIT_INDETERMINATE}"
 }
 
+# Compiles the ptrace probe statically, so that it runs in a container image without a compiler.
+build_ptrace_probe() {
+  if ! command -v gcc >/dev/null 2>&1; then
+    printf 'gcc is not installed\n' >"${WORK}/ptrace-build.log"
+    return 1
+  fi
+  gcc -O2 -Wall -Wextra -static -o "${WORK}/ptrace-probe" "${PTRACE_PROBE_SOURCE}" 2>"${WORK}/ptrace-build.log"
+}
+
+# The ptrace probe in a plain docker run, as the prune container is started: --network none and
+# nothing else, no --privileged, no --cap-add, no --security-opt. Its one line goes to standard
+# output and its reasons to ${WORK}/ptrace-container.log.
+run_ptrace_probe_in_container() {
+  docker run --rm --network none \
+    -v "${WORK}/ptrace-probe:/probe:ro" \
+    "${CONTAINER_IMAGE}" \
+    /probe 2>"${WORK}/ptrace-container.log"
+}
+
+# The three-valued verdict for one line of the ptrace probe. Only the line decides, never the
+# status, because docker's own failures end with statuses of their own.
+ptrace_status_for_line() {
+  case "$1" in
+    "OBSERVED "*) printf '%s' "${EXIT_AVAILABLE}" ;;
+    "TRACEME-REFUSED "*|"NOT-OBSERVED") printf '%s' "${EXIT_UNAVAILABLE}" ;;
+    *) printf '%s' "${EXIT_INDETERMINATE}" ;;
+  esac
+}
+
+# The ptrace probe's line from a plain container, or a note saying why there is none. Assumes
+# build_ptrace_probe has run.
+ptrace_line_in_container() {
+  if ! command -v docker >/dev/null 2>&1; then
+    printf 'docker is absent'
+    return
+  fi
+  if [[ ! -x "${WORK}/ptrace-probe" ]]; then
+    printf 'the probe could not be built'
+    return
+  fi
+  local line
+  line="$(run_ptrace_probe_in_container | head -1)"
+  printf '%s' "${line:-no line, the container did not run the probe}"
+}
+
+# Whether the layer pruner's observer can work here: ptrace as the kernel restricts it, and the
+# probe's answer on this host and inside a plain container.
+report_ptrace() {
+  hdr "ptrace"
+  local scope="absent"
+  [[ -r /proc/sys/kernel/yama/ptrace_scope ]] && scope="$(cat /proc/sys/kernel/yama/ptrace_scope)"
+  fact "yama ptrace_scope" "${scope}"
+  if ! build_ptrace_probe; then
+    fact "probe" "cannot be built; see the log below"
+    sed 's/^/    /' "${WORK}/ptrace-build.log"
+    return
+  fi
+  fact "observes a denial on this host" "$("${WORK}/ptrace-probe" 2>/dev/null | head -1)"
+  fact "observes a denial in a container" "$(ptrace_line_in_container)"
+}
+
+# A tracer without privileges has to see a traced process's Landlock refusal inside an ordinary
+# container, or the layer pruner has no observer.
+assert_ptrace() {
+  hdr "Assert: ptrace observes a Landlock denial"
+  if ! build_ptrace_probe; then
+    unknown "the probe could not be built"
+    sed 's/^/    /' "${WORK}/ptrace-build.log"
+    return "${EXIT_INDETERMINATE}"
+  fi
+  local line
+  line="$(ptrace_line_in_container)"
+  local status
+  status="$(ptrace_status_for_line "${line}")"
+  case "${status}" in
+    "${EXIT_AVAILABLE}") ok "a traced child's Landlock refusal was seen inside ${CONTAINER_IMAGE}: ${line}" ;;
+    "${EXIT_UNAVAILABLE}") bad "a traced child's Landlock refusal was not seen inside ${CONTAINER_IMAGE}: ${line}" ;;
+    *) unknown "the probe could not reach a verdict inside ${CONTAINER_IMAGE}: ${line}" ;;
+  esac
+  [[ -s "${WORK}/ptrace-container.log" ]] && sed 's/^/    /' "${WORK}/ptrace-container.log"
+  return "${status}"
+}
+
 # One line naming the verdict, so a log reader never has to decode a number.
 announce() {
   case "$1" in
@@ -457,7 +542,7 @@ announce() {
 # The lines of this file's header comment that are its usage text, and the status a call made
 # the wrong way ends with.
 USAGE_FIRST_LINE=2
-USAGE_LAST_LINE=21
+USAGE_LAST_LINE=22
 EXIT_USAGE=2
 
 usage() {
@@ -471,6 +556,7 @@ case "${1:-}" in
     report_landlock
     report_bwrap
     report_kvm
+    report_ptrace
     printf '\nA survey only. Nothing here fails the run; use the assert modes for that.\n'
     ;;
   --assert-landlock)
@@ -483,6 +569,10 @@ case "${1:-}" in
     ;;
   --assert-kvm)
     assert_kvm
+    announce "$?"
+    ;;
+  --assert-ptrace)
+    assert_ptrace
     announce "$?"
     ;;
   *)
