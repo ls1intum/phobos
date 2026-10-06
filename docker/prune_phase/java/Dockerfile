@@ -1,4 +1,4 @@
-FROM maven:3.10.0-eclipse-temurin-17@sha256:39410d47e240f9177259242e63bf78232808ed77968ebf7e3957b0fa4656f31d
+FROM maven:3.10.0-eclipse-temurin-17@sha256:bafb2ffd7e223feddf58616ef00971e9d750958d3c55b64271874422d15fdf92
 
 # bubblewrap is what the discovery phase measures with: it hides a directory behind an
 # empty tmpfs, which is the one thing Landlock cannot do and the reason this phase does not
