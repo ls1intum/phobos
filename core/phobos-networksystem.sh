@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 set -euo pipefail
-HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# This script's directory, found in bash alone so that PATH and CDPATH are cleaned before any
+# program is looked up or any cd made, and made absolute once they are: phobos-environment.sh.
+case "${BASH_SOURCE[0]}" in */*) HERE="${BASH_SOURCE[0]%/*}/" ;; *) HERE="./" ;; esac
+# shellcheck source=phobos-tools-common/phobos-environment.sh
+source "${HERE}phobos-tools-common/phobos-environment.sh"
+clean_startup_environment
+HERE="$(cd -- "$HERE" && pwd)"
 # shellcheck source=phobos-tools-common/phobos-common.sh
 source "${HERE}/phobos-tools-common/phobos-common.sh"
 # shellcheck source=phobos-tools-networksystem/phobos-haproxy.sh

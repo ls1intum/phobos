@@ -3,8 +3,9 @@
 #
 # The Dockerfile copies the layer scripts flat (*.sh), the phobos-tools-* helper folders whole,
 # the enforcer sources flattened (phobos-landlock-filesystem-and-networksystem*.c and .h,
-# phobos-seccomp-networksystem*.c and .h, phobos-seccomp-timeoutsystem.c) for its build stage, and
-# config/*.cfg. Those files live across several directories of this repository, so the context has
+# phobos-seccomp-networksystem*.c and .h, phobos-seccomp-timeoutsystem.c) for its build stage,
+# config/*.cfg and the folder config/language-configurations/. Those files live across several
+# directories of this repository, so the context has
 # to be put together before docker build can see it, and no compose file or plain `docker build .`
 # can express that.
 #
@@ -51,6 +52,7 @@ cp "${REPOSITORY}"/core/phobos-seccomp-networksystem/phobos-seccomp-networksyste
 cp "${REPOSITORY}"/core/phobos-seccomp-networksystem/phobos-seccomp-networksystem*.h "${DESTINATION}/"
 cp "${REPOSITORY}"/core/phobos-seccomp-timeoutsystem/phobos-seccomp-timeoutsystem.c "${DESTINATION}/"
 cp "${REPOSITORY}"/core/config/*.cfg "${DESTINATION}/config/"
+cp -R "${REPOSITORY}"/core/config/language-configurations "${DESTINATION}/config/"
 
 touch "${DESTINATION}/${MARKER}"
 

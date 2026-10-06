@@ -155,6 +155,19 @@ PHB_DEBUG_ENABLED=1 run_pm --config "$c_ro" -- "$P" cwd
 if ! grep -q '^\[phobos\]' "$PM_ERR"; then ok "debug output cannot be switched on from the environment"; else bad "debug stays off without --debug" "$(pm_describe)"; fi
 run_pm --debug --config "$c_ro" -- "$P" cwd
 if grep -q '^\[phobos\] policy: read.paths:' "$PM_ERR" && grep -q "^CWD " "$PM_OUT"; then ok "--debug prints the effective policy on standard error and leaves the command's output alone"; else bad "--debug prints the policy" "$(pm_describe)"; fi
+# A program planted in the current directory, which a grader may have made the submission's tree, is never
+# run by Phobos through a relative or empty PATH entry, and the command sees PATH with its absolute entries
+# alone. dirname and realpath are the first programs phobos.sh looked up, before any sandbox existed.
+for planted in dirname realpath; do
+  printf '#!/bin/sh\necho %s >> %s/out/planted\nexec %s "$@"\n' "$planted" "$PM" "$(command -v "$planted")" > "$PM/work/$planted"
+  chmod 0755 "$PM/work/$planted"
+done
+rm -f "$PM/out/planted"
+PATH=".:${PATH}::" run_pm --config "$c_ro" -- "$P" env PATH
+if [[ ! -e "$PM/out/planted" ]] && grep -qxF "ENV PATH=${PATH}" "$PM_OUT"; then ok "a program planted in the current directory is never run through a relative PATH entry, and the command sees the absolute entries"; else bad "a planted program is never run through a relative PATH entry" "planted: $(cat "$PM/out/planted" 2>/dev/null); $(pm_describe)"; fi
+PATH="$PATH" run_pm --config "$c_ro" -- "$P" env PATH
+if grep -qxF "ENV PATH=${PATH}" "$PM_OUT" && ! grep -q NOTICE "$PM_ERR"; then ok "and a PATH of absolute entries reaches the command unchanged"; else bad "an absolute PATH reaches the command unchanged" "$(pm_describe)"; fi
+rm -f "$PM/work/dirname" "$PM/work/realpath" "$PM/out/planted"
 
 echo
 echo "== the override options =="
