@@ -125,6 +125,31 @@ def replay_create(path: str) -> bool:
     return True
 
 
+def address_family(address: str | None) -> socket.AddressFamily:
+    """The socket family an address strace printed belongs to: IPv6 when it holds a colon."""
+    return socket.AF_INET6 if address and ":" in address else socket.AF_INET
+
+
+def replay_connect(denial: Denial) -> bool:
+    """Whether the kernel lets the pruner itself address the refused destination.
+
+    The connect guard passes the kernel's own answer to its connect through, so a destination the
+    kernel refuses with EACCES (a broadcast address on a socket without SO_BROADCAST) reaches the
+    command as EACCES although the allow-list named it. The replay connects a datagram socket, which
+    only looks up the route and checks the address and sends nothing, whatever transport the refused
+    call used, and only EACCES counts against the grant: an unreachable network says nothing about
+    permission, and an external destination is refused later for its own reason (A.6.5).
+    """
+    if denial.address is None or denial.port is None:
+        return False
+    try:
+        with socket.socket(address_family(denial.address), socket.SOCK_DGRAM) as probe:
+            probe.connect((denial.address, denial.port))
+    except OSError as refusal:
+        return refusal.errno != errno.EACCES
+    return True
+
+
 def replay_bind(denial: Denial) -> bool:
     """Whether the pruner can bind the refused port itself, on loopback of the address's family.
 
@@ -135,7 +160,7 @@ def replay_bind(denial: Denial) -> bool:
     """
     if not denial.port:
         return True
-    family = socket.AF_INET6 if denial.address and ":" in denial.address else socket.AF_INET
+    family = address_family(denial.address)
     kind = socket.SOCK_DGRAM if denial.transport == "udp" else socket.SOCK_STREAM
     loopback = "::1" if family == socket.AF_INET6 else "127.0.0.1"
     try:
@@ -179,14 +204,14 @@ def replay(path: str, section: str) -> bool:
 def landlock_caused(denial: Denial) -> bool:
     """Whether granting the denial could help, because the access it was refused succeeds unsandboxed.
 
-    A refused connect or datagram needs no replay: in the prune container only the connect guard and
-    Landlock's port rules answer EACCES there. A refused bind is replayed, because the kernel also
+    A refused connect or datagram is replayed with a datagram connect, because the guard passes the
+    kernel's own EACCES through; a refused bind is replayed with a bind, because the kernel also
     refuses a privileged port with EACCES. A fixed rule, a limit or another mechanism's refusal is
     never one a grant could undo. A rename or link refused with EXDEV is Landlock's only when both
     parents share a filesystem; otherwise it is the filesystem's own answer.
     """
     if denial.layer == LAYER_NETWORK:
-        return SECTION_BIND not in denial.sections or replay_bind(denial)
+        return replay_bind(denial) if SECTION_BIND in denial.sections else replay_connect(denial)
     if denial.layer != LAYER_FILESYSTEM or not denial.objects:
         return False
     if denial.errno == "EXDEV" and SECTION_RESTRUCTURE in denial.sections and not same_filesystem(denial.objects):

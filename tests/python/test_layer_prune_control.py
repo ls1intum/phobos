@@ -175,10 +175,37 @@ def test_a_refused_bind_of_a_port_the_kernel_refuses_this_uid_is_not_landlock_ca
     pytest.skip("this uid may bind port 80 here, so the kernel's own refusal cannot be shown")
 
 
-def test_a_network_refusal_needs_no_replay_and_the_other_layers_are_never_landlock_caused():
-    network = record.Denial(pid=1, layer=record.LAYER_NETWORK, operation="connect", objects=(),
-                            sections=frozenset({attribute.SECTION_CONNECT}), address="10.0.0.1", port=80,
-                            transport="tcp", errno="EACCES")
-    assert control.landlock_caused(network) is True
+def connect_denial(address: str, port: int, transport: str) -> record.Denial:
+    """A refused connect or datagram to one destination."""
+    return record.Denial(pid=1, layer=record.LAYER_NETWORK, operation="connect", objects=(),
+                         sections=frozenset({attribute.SECTION_CONNECT}), address=address, port=port,
+                         transport=transport, errno="EACCES")
+
+
+def test_a_refused_connect_to_a_destination_the_kernel_lets_the_uid_address_is_landlock_caused():
+    assert control.landlock_caused(connect_denial("10.0.0.1", 80, "tcp")) is True
+    assert control.landlock_caused(connect_denial("127.0.0.1", free_port(), "tcp")) is True
+
+
+def test_a_refused_datagram_to_a_destination_the_kernel_refuses_is_not_landlock_caused():
+    broadcast = "255.255.255.255"
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect((broadcast, 9))
+    except PermissionError:
+        assert control.landlock_caused(connect_denial(broadcast, 9, "udp")) is False
+        return
+    except OSError:
+        pytest.skip("the broadcast address is unreachable here, so the kernel's own refusal cannot be shown")
+    pytest.skip("the kernel lets this uid address the broadcast address here")
+
+
+def test_a_refused_connect_without_a_destination_is_never_landlock_caused():
+    assert control.landlock_caused(record.Denial(
+        pid=1, layer=record.LAYER_NETWORK, operation="sendto", objects=(), sections=frozenset({attribute.SECTION_CONNECT}),
+        address=None, port=None, transport="udp", errno="EACCES")) is False
+
+
+def test_the_fixed_limit_and_other_layers_are_never_landlock_caused():
     for layer in (record.LAYER_FIXED, record.LAYER_LIMIT, record.LAYER_OTHER):
         assert control.landlock_caused(denial(("/dev/null",), frozenset(), layer=layer)) is False

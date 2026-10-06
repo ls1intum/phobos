@@ -286,7 +286,9 @@ class ReusedProcessId(ValueError):
     """The kernel handed one process id to two processes within one trace.
 
     Calls are told apart only by the id strace prints, so the calls of the two processes could not be
-    separated, and a refusal of one could be attributed to the other. A trace like this is refused
+    separated, and a refusal of one could be attributed to the other. Two clones returning one id,
+    or a clone returning the id of the trace's root process, can only come from reuse, never from
+    strace printing a clone's result after the child's own lines. A trace like this is refused
     rather than guessed at; the pruner aborts the run. With pid_max at 4194304, as in the prune
     containers measured, it needs millions of processes in one run.
     """
@@ -302,6 +304,16 @@ class DomainWalk:
     entries: list[tuple[int, int, bool]] = dataclasses.field(default_factory=list)
     births: list[tuple[int, int, int, bool]] = dataclasses.field(default_factory=list)
     born: set[int] = dataclasses.field(default_factory=set)
+    root: int | None = None
+
+    def noting_root(self, lines: Iterable[str]) -> Iterable[str]:
+        """Yields the lines unchanged, noting the id on the first of them as the trace's root process."""
+        for line in lines:
+            if self.root is None:
+                match = re.match(r"^(\d+) ", line)
+                if match:
+                    self.root = int(match.group(1))
+            yield line
 
     def take(self, call: Syscall) -> None:
         """Records one completed call: the process tree, the domain entries, and what to keep."""
@@ -313,7 +325,7 @@ class DomainWalk:
                 self.port_only.discard(call.pid)
         child = forked_child(call)
         if child is not None:
-            if child in self.born:
+            if child in self.born or child == self.root:
                 raise ReusedProcessId(f"process id {child} was created twice in one trace")
             self.born.add(child)
             self.seen.add(child)
@@ -374,7 +386,7 @@ def parse_trace(lines: Iterable[str]) -> Trace:
     one id was given to two processes.
     """
     walk = DomainWalk()
-    for line in joined_lines(lines):
+    for line in joined_lines(walk.noting_root(lines)):
         call = parse_line(line)
         if call is not None:
             walk.take(call)

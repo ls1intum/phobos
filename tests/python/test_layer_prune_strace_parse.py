@@ -83,6 +83,16 @@ def test_a_process_id_handed_out_twice_is_refused_rather_than_guessed_at():
         strace_parse.parse_trace(lines)
 
 
+def test_a_clone_returning_the_root_process_id_is_refused():
+    lines = [
+        "100 clone(child_stack=NULL, flags=SIGCHLD) = 101",
+        "100 exit_group(0) = ?",
+        "101 clone(child_stack=NULL, flags=SIGCHLD) = 100",
+    ]
+    with pytest.raises(strace_parse.ReusedProcessId):
+        strace_parse.parse_trace(lines)
+
+
 def test_only_processes_after_landlock_restrict_self_are_in_the_domain():
     lines = [
         "100 clone(child_stack=NULL, flags=SIGCHLD) = 101",
