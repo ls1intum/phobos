@@ -36,6 +36,10 @@ intention.
 - The acceptance suites must run in an ordinary container with no `--privileged`, no
   `--cap-add` and no `--security-opt`. A suite that needs any of those is measuring a
   different sandbox from the one an exercise gets.
+- A shell script under `core/` begins with `#!/bin/bash`, and Phobos starts bash itself only
+  as `/bin/bash`. `#!/usr/bin/env bash` or a bare `bash` looks the interpreter up through the
+  caller's `PATH` before any sandbox exists, which the current directory, the submission's
+  tree, can then decide.
 
 The policy itself is additive by design, and that is not a hole to close. Everything is denied
 first, and the platform, language and exercise configurations each only widen the allow-list;

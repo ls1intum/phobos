@@ -296,8 +296,9 @@ debug_log filesystem "run" "${reporter_prefix[@]}" "${limit_prefix[@]}" "${LANDL
 # need. This shell's own dispositions are put back straight afterwards, so this layer discards a
 # hangup, quit or interrupt that reaches it in the brief interval while the pass-through is made;
 # whatever else the signal reaches acts on it as it otherwise would, GNU timeout above this layer
-# among them when a timeout is set. SIGTERM is ignored outside run_forwarding_signals anyway. Setting the dispositions inside the pass-through instead would leave it a gap after the
-# command has started, which is the failure this exists to remove.
+# among them when a timeout is set. SIGTERM is ignored outside run_forwarding_signals anyway.
+# Setting the dispositions inside the pass-through instead would leave it a gap after the command
+# has started, which is the failure this exists to remove.
 exec {denial_counts}<> <(:)
 saved_term="$(trap -p TERM)"
 saved_hup="$(trap -p HUP)"

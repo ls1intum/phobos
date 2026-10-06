@@ -105,8 +105,8 @@ and dropping what is not absolute from `TMPDIR`, `GCONV_PATH`, `LOCPATH`, `NLSPA
 `HOSTALIASES` and `TZDIR`, before it runs any program, because the current directory may be the
 submission's tree. The command sees the cleaned environment, so it is named by its path
 (`./gradlew`), and a `PATH` with no absolute entry is refused with `PHB-ERUNTIME`. Every script
-under `core/` begins with `#!/bin/bash`, so bash itself is never looked up through `PATH`; keep
-it that way in a new one. What no script can clean, `BASH_ENV` and the loader's `LD_*`, is an
+under `core/` begins with `#!/bin/bash`, so bash itself is never looked up through `PATH`
+(AGENTS.md states the rule). What no script can clean, `BASH_ENV` and the loader's `LD_*`, is an
 integration requirement in SECURITY.md.
 
 ### The linters, which are the gate
