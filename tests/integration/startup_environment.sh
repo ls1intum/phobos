@@ -45,8 +45,9 @@ IFS=: read -r -a clean_entries <<< "$CLEAN_PATH"
 BASH_BIN="$(command -v bash)"
 
 # A copy of core with a minimal base policy, and one pass-through stand-in that serves as the
-# Landlock enforcer, the timeout's group lock and the connect guard: it skips its own options up
-# to -- and execs the rest, so a run reaches the command without a kernel feature.
+# Landlock enforcer, the timeout's group lock, the connect guard and the filesystem layer's denial
+# reporter: it skips its own options up to -- and execs the rest, so a run reaches the command
+# without a kernel feature, and no layer prints a notice for a program the copy does not hold.
 CORE_X="$WORK/core-x"
 cp -R "$CORE" "$CORE_X"
 chmod +x "$CORE_X"/*.sh
@@ -127,7 +128,7 @@ entry_args() {
       printf '%s\0' "$CORE_X/phobos-policysystem.sh" --spec-dir "$(mktemp -d "$WORK/policy.XXXXXX")" --config "$BASE" ;;
     phobos-filesystem.sh)
       printf '%s\0' "$CORE_X/phobos-filesystem.sh" --spec-parent "$SPECS" --landlock-bin "$PASS" \
-        --config "$BASE" -- /usr/bin/env ;;
+        --reporter-bin "$PASS" --config "$BASE" -- /usr/bin/env ;;
     phobos-networksystem.sh)
       printf '%s\0' "$CORE_X/phobos-networksystem.sh" --spec-parent "$SPECS" --connect-guard-bin "$PASS" \
         --landlock-bin "$PASS" --config "$BASE" -- /usr/bin/env ;;
