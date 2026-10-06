@@ -45,7 +45,12 @@ OPTIONS
                               filter refusing setsid and setpgid so that nothing under the
                               timeout can leave the process group the kill reaches. It is
                               refused when missing rather than skipped, so a timed run
-                              cannot outlive its timeout through a detached child.
+                              cannot outlive its timeout through a detached child. On its
+                              own it refuses those calls with ENOSYS and reports nothing.
+                              In a run of phobos.sh with the network layer off, the
+                              filesystem layer's reporter answers them with EACCES and
+                              reports each one; with it on, the connect guard's own filter
+                              refuses them with EACCES.
   --config <file>, -c <file>  Standalone mode: an exercise configuration to build a
                               specification from. May be given repeatedly.
   --spec-parent <dir>         Standalone mode only: where that specification directory is

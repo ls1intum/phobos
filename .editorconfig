@@ -34,8 +34,8 @@ indent_size = 2
 end_of_line = lf
 indent_size = 4
 
-# phobos-landlock-filesystem-and-networksystem, the connect guard and the timeout's group lock. cppcheck and the compiler
-# warnings gate them. Four spaces, which is what every C file here is written in.
+# phobos-landlock-filesystem-and-networksystem, the connect guard, the timeout's group lock and the report-only
+# supervisor. cppcheck and the compiler warnings gate them. Four spaces, which is what every C file here is written in.
 [{*.c,*.h}]
 end_of_line = lf
 indent_size = 4

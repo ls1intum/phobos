@@ -119,6 +119,26 @@ ENVIRONMENT
   with a PATH of absolute directories and without BASH_ENV, LD_LIBRARY_PATH, LD_PRELOAD or
   LD_AUDIT, which take effect before its first line; SECURITY.md says why.
 
+WHAT IT REPORTS
+  stdout carries the command's own output and nothing else; every message of Phobos goes to
+  stderr. With the network restriction off (-nnr), the filesystem layer's report-only
+  supervisor (phobos-seccomp-filesystem beside this script) prints a line for each distinct
+  blocked action it can attribute with certainty, at most 100 per run, such as
+    Phobos Security Error: the program tried to illegally read the File '/etc/shadow' but was blocked by Phobos.
+  It covers the refusals of the filesystem sandbox and, when the timeout layer applies a
+  timeout, the setsid, setpgid and foreign-ABI calls the timeout's group lock refuses. Every
+  doubt ends in silence, so a run without such a line may still have been refused something.
+  It never lets a refused call succeed nor a permitted one fail;
+  the one difference it makes is that the group lock's refusals fail with EACCES rather than
+  ENOSYS. Should it die, the calls it watches fail with ENOSYS, so nothing is granted. When
+  the kernel or the setup cannot support it, it prints a notice naming what goes unreported
+  and why, and the run is enforced all the same; on a kernel older than Linux 6.6 it says
+  once that reporting is slower. With the network restriction on, the connect guard is the
+  run's one supervisor and no such line is printed.
+  After the command has ended, the filesystem layer may also print "Sandbox denials:
+  network=N, filesystem=N. (PHB-EDENY)", counted from the command's own stderr. Neither is a
+  status: the command's exit status is passed through unchanged.
+
 SIGNALS
   A SIGTERM, SIGHUP, SIGINT or SIGQUIT sent to phobos.sh is passed on to the command, and the run
   ends when the command does, once the layers have cleaned up. phobos.sh then answers 128 plus the
@@ -327,6 +347,13 @@ if (( enable_network ));   then chain+=( "${HERE}/phobos-networksystem.sh"   "${
 fs_flags=( "${dbg[@]}" --landlock-bin "$landlock_bin" )
 if (( enable_resources )); then fs_flags+=( --resources-layer "${HERE}/phobos-resourcesystem.sh" ); fi
 if (( ! enable_filesystem )); then fs_flags+=( --no-landlock ); fi
+# Only one seccomp listener may exist per filter tree, so with the network layer on its connect
+# guard is the run's one supervisor and the filesystem layer starts no reporter of its own. The
+# group lock is above the filesystem layer exactly when the timeout layer applies it, which it
+# does when it is in the chain and a timeout is set; this is the trusted half of what lets the
+# reporter answer the lock's refusals, its signature being the other.
+if (( enable_network )); then fs_flags+=( --no-own-reporter ); fi
+if (( enable_timeout )) && [[ -s "${SPEC_DIR}/timeout.sec" ]]; then fs_flags+=( --group-lock-above ); fi
 chain+=( "${HERE}/phobos-filesystem.sh" "${fs_flags[@]}" "$SPEC_DIR" -- )
 debug_log phobos "run the layer chain" "${chain[@]}" "${cmd[@]}"
 exec "${chain[@]}" "${cmd[@]}"

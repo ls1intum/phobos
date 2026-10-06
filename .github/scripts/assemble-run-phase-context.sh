@@ -2,12 +2,13 @@
 # Assembles the build context the run-phase image expects.
 #
 # The Dockerfile copies the layer scripts flat (*.sh), the phobos-tools-* helper folders whole,
-# the enforcer sources flattened (phobos-landlock-filesystem-and-networksystem*.c and .h,
-# phobos-seccomp-networksystem*.c and .h, phobos-seccomp-timeoutsystem.c) for its build stage,
-# config/*.cfg and the folder config/language-configurations/. Those files live across several
-# directories of this repository, so the context has
-# to be put together before docker build can see it, and no compose file or plain `docker build .`
-# can express that.
+# the four C source folders whole (phobos-landlock-filesystem-and-networksystem,
+# phobos-seccomp-networksystem, phobos-seccomp-filesystem and phobos-seccomp-timeoutsystem) for its
+# build stage, config/*.cfg and the folder config/language-configurations/. The C folders keep
+# their names because the report-only supervisor's sources include the other three folders'
+# headers by paths relative to their own. Those files live across several directories of this
+# repository, so the context has to be put together before docker build can see it, and no compose
+# file or plain `docker build .` can express that.
 #
 # It exists so that the recipe is written once. The acceptance README used to
 # carry its own copy, and the two drifted apart the moment the wrapper was split
@@ -48,11 +49,10 @@ cp "${REPOSITORY}"/core/*.sh "${DESTINATION}/"
 # runtime, so it is dropped rather than shipped in the image.
 cp -R "${REPOSITORY}"/core/phobos-tools-* "${DESTINATION}/"
 rm -f "${DESTINATION}/phobos-tools-policysystem/config_doc.txt"
-cp "${REPOSITORY}"/core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem*.c "${DESTINATION}/"
-cp "${REPOSITORY}"/core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem*.h "${DESTINATION}/"
-cp "${REPOSITORY}"/core/phobos-seccomp-networksystem/phobos-seccomp-networksystem*.c "${DESTINATION}/"
-cp "${REPOSITORY}"/core/phobos-seccomp-networksystem/phobos-seccomp-networksystem*.h "${DESTINATION}/"
-cp "${REPOSITORY}"/core/phobos-seccomp-timeoutsystem/phobos-seccomp-timeoutsystem.c "${DESTINATION}/"
+for source_folder in phobos-landlock-filesystem-and-networksystem phobos-seccomp-networksystem \
+                     phobos-seccomp-filesystem phobos-seccomp-timeoutsystem; do
+  cp -R "${REPOSITORY}/core/${source_folder}" "${DESTINATION}/"
+done
 cp "${REPOSITORY}"/core/config/*.cfg "${DESTINATION}/config/"
 cp -R "${REPOSITORY}"/core/config/language-configurations "${DESTINATION}/config/"
 

@@ -1,6 +1,6 @@
 # Builds the images this repository can build, and tests the one it ships.
 #
-# The run-phase image is the artefact: it is where both C products are compiled, in a
+# The run-phase image is the artefact: it is where the four C products are compiled, in a
 # stage of their own, and it is what an exercise actually runs in. It is built here so
 # that the acceptance suites run against it on every change rather than by hand.
 #
@@ -62,6 +62,16 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/unit/phobos-seccomp-networksystem/seccomp_networksystem_run.sh --coverage
 
+      # The denial reporter's sources are held to the same line gate as the guard, and its
+      # quoting to bash's own over a corpus of names.
+      - name: Run the denial reporter unit tests
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/phobos-seccomp-filesystem/seccomp_filesystem_run.sh
+
+      - name: Every line of the denial reporter ran
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/phobos-seccomp-filesystem/seccomp_filesystem_run.sh --coverage
+
       # No coverage step, deliberately. The suite interposes open and close, which is
       # also how the gcov runtime writes its .gcda files, so an instrumented run has
       # gcov's own diagnostics landing on stderr. That breaks the test asserting that a
@@ -120,7 +130,7 @@ jobs:
   # Built and tested once per architecture on a native runner, never under emulation:
   # Landlock and the seccomp user-notification the acceptance suites rest on are absent or
   # unreliable under QEMU, so an emulated arm64 run would test nothing. Each leg builds the
-  # image for its own architecture, compiling the library and both C products from source
+  # image for its own architecture, compiling the four C products from source
   # there, and runs the whole acceptance suite against that exact image, so both
   # architectures are proven before the image is published by hand (see AGENTS.md).
   run-phase:
@@ -363,6 +373,15 @@ jobs:
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/resources-edge.sh
+
+      # Every blocked action is reported once and every result is the one Landlock alone gives,
+      # and the group lock's refusals are reported while they stay refused in every state.
+      - name: The reporter reports each blocked action and changes no outcome
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+            phobos-run-phase:ci \
+            bash /tests/integration/protection-matrix/reporting.sh
 
       # The prune image is the run-phase image this job just built plus strace and python3, with a
       # base that grants nothing. It is built on top of that exact image, so the layer pruner's

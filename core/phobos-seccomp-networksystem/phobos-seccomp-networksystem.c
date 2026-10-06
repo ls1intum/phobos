@@ -67,6 +67,7 @@
  *   phobos-seccomp-networksystem-rules.h           the allow-list and the decision on a destination
  *   phobos-seccomp-networksystem-child.h           the sandboxed half: install the filter, hand over
  *   phobos-seccomp-networksystem-supervisor.h      the supervising half: decide every trapped call
+ *   phobos-seccomp-networksystem-handoff.h         the listener's handoff, signals, reaping, status
  *   phobos-seccomp-networksystem-destination.h     a destination read out of the command's memory
  *   phobos-seccomp-networksystem-datagram.h        the datagram connects and sends the supervisor makes
  *   phobos-seccomp-networksystem-held-sockets.h    the sockets the supervisor created and still holds
@@ -85,6 +86,7 @@
 #include "phobos-seccomp-networksystem-child.h"
 #include "phobos-seccomp-networksystem-datagram.h"
 #include "phobos-seccomp-networksystem-diagnostics.h"
+#include "phobos-seccomp-networksystem-handoff.h"
 #include "phobos-seccomp-networksystem-options.h"
 #include "phobos-seccomp-networksystem-resolve.h"
 #include "phobos-seccomp-networksystem-rules.h"
@@ -99,36 +101,6 @@
 #include <sys/wait.h>
 
 /* ------------------------------------------------------------------ the call */
-
-/* The command the supervisor passes a caller's signals on to, and the signals it passes on. */
-static pid_t command_to_signal = 0;
-static constexpr int FORWARDED_SIGNALS[] = { SIGTERM, SIGHUP, SIGINT, SIGQUIT };
-
-/* Passes a signal the supervisor received on to the command. The supervisor itself does not stop:
- * it stays until the command is gone, to reap it and map its status. */
-static void forward_signal_to_command(int number) {
-    pid_t target = command_to_signal;
-    if (target > 0) {
-        kill(target, number);
-    }
-}
-
-/* Waits for the command to end, still passing signals on while it runs, then reaps it with the
- * four signals blocked and forgets it before they are let in again. Reaping frees the process
- * number for reuse, and a signal handled after that would be sent to whichever process took it. The
- * command is waited for without being reaped first, so until the last step its number is still its
- * own. */
-static void reap_command(pid_t child, const sigset_t *forwarded, int *status) {
-    siginfo_t ended;
-    sigset_t outside;
-    while (waitid(P_PID, (id_t)child, &ended, WEXITED | WNOWAIT) < 0 && errno == EINTR) {
-    }
-    sigprocmask(SIG_BLOCK, forwarded, &outside);
-    while (waitpid(child, status, 0) < 0 && errno == EINTR) {
-    }
-    command_to_signal = 0;
-    sigprocmask(SIG_SETMASK, &outside, nullptr);
-}
 
 /* Loads the rules, forks the sandboxed child and supervises it until it is gone, then ends
  * with its status. The supervisor passes SIGTERM, SIGHUP, SIGINT and SIGQUIT on to the command
@@ -165,11 +137,7 @@ int main(int argument_count, char *arguments[]) {
 
     sigset_t forwarded;
     sigset_t before_fork;
-    sigemptyset(&forwarded);
-    for (size_t index = 0; index < sizeof(FORWARDED_SIGNALS) / sizeof(FORWARDED_SIGNALS[0]); index++) {
-        sigaddset(&forwarded, FORWARDED_SIGNALS[index]);
-    }
-    sigprocmask(SIG_BLOCK, &forwarded, &before_fork);
+    block_forwarded_signals(&forwarded, &before_fork);
     pid_t child = fork();
     if (child < 0) {
         report_failure("fork: %s", strerror(errno));
@@ -181,10 +149,7 @@ int main(int argument_count, char *arguments[]) {
         run_child(pair[1], options.command);
     }
 
-    command_to_signal = child;
-    for (size_t index = 0; index < sizeof(FORWARDED_SIGNALS) / sizeof(FORWARDED_SIGNALS[0]); index++) {
-        signal(FORWARDED_SIGNALS[index], forward_signal_to_command);
-    }
+    forward_signals_to(child);
     sigprocmask(SIG_SETMASK, &before_fork, nullptr);
 
     close(pair[1]);

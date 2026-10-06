@@ -60,6 +60,7 @@ own on exit, so no suite depends on another and none leaves the image changed.
 | `network-edge.sh` | where a CIDR range ends, the port boundaries, special addresses, IPv6 spellings, non-blocking connects, odd address lengths, which kinds of socket can be made, a TCP destination rewritten while the connect runs, and the rules that are accepted and do not mean what they say |
 | `filesystem-edge.sh` | names that try to leave a granted tree (links, dot-dot, magic links, path descriptors, the working directory), what a right on a file, a directory and the root does, nested and odd policy entries, long and strange names, the calls Landlock does not cover, and a link swapped while it is opened |
 | `resources-edge.sh` | each limit met through the call that meets it (descriptors, pipes, sockets, threads, file mappings, the data segment, growing a file), the limits Phobos does not set, and a sleeping command that uses no processor time |
+| `reporting.sh` | the denial reporter with the network layer off and through the standalone filesystem layer: every filesystem action granted with no line or refused exactly as without the reporter with exactly one line, a repeated refusal printed once, the cap of 100 lines, quoting, only the Landlock domain judged, the group lock's refusals answered with `EACCES` and reported, and `ENOSYS` once the reporter is dead or never installed |
 
 ## What each of the eleven promises is checked by
 

@@ -44,41 +44,6 @@ static constexpr int SOCKET_ARGUMENT_PROTOCOL = 2;
 /* listen(fd, backlog). */
 static constexpr int LISTEN_ARGUMENT_DESCRIPTOR = 0;
 static constexpr int LISTEN_ARGUMENT_BACKLOG = 1;
-/* A shell reports a command killed by a signal as this plus the signal's number. */
-static constexpr int SIGNALLED_EXIT_BASE = 128;
-
-int receive_descriptor(int socket_descriptor) {
-    char payload = 0;
-    struct iovec vector = { .iov_base = &payload, .iov_len = 1 };
-    union {
-        char buffer[CMSG_SPACE(sizeof(int))];
-        struct cmsghdr alignment;
-    } control;
-    memset(&control, 0, sizeof(control));
-
-    struct msghdr message;
-    memset(&message, 0, sizeof(message));
-    message.msg_iov = &vector;
-    message.msg_iovlen = 1;
-    message.msg_control = control.buffer;
-    message.msg_controllen = sizeof(control.buffer);
-
-    ssize_t received;
-    do {
-        received = recvmsg(socket_descriptor, &message, MSG_CMSG_CLOEXEC);
-    } while (received < 0 && errno == EINTR);
-    if (received != 1) {
-        return -1;
-    }
-    struct cmsghdr *header = CMSG_FIRSTHDR(&message);
-    if (header == nullptr || header->cmsg_level != SOL_SOCKET ||
-        header->cmsg_type != SCM_RIGHTS || header->cmsg_len != CMSG_LEN(sizeof(int))) {
-        return -1;
-    }
-    int descriptor = -1;
-    memcpy(&descriptor, CMSG_DATA(header), sizeof(int));
-    return descriptor;
-}
 
 void answer(int notify_descriptor, struct seccomp_notif_resp *response, __u64 id,
             __s64 value, __s32 error) {
@@ -580,16 +545,6 @@ void supervise(int notify_descriptor) {
     }
     free(request);
     free(response);
-}
-
-int exit_code_from_status(int status) {
-    if (WIFEXITED(status)) {
-        return WEXITSTATUS(status);
-    }
-    if (WIFSIGNALED(status)) {
-        return SIGNALLED_EXIT_BASE + WTERMSIG(status);
-    }
-    return EXIT_CODE_SETUP_ERROR;
 }
 
 #ifdef PHOBOS_CONNECT_GUARD_UNIT_TEST

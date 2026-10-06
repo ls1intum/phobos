@@ -44,6 +44,15 @@ OPTIONS
                               layer as the very last step before the enforcer, so the limits
                               bind the command and none of the helpers around it. Without
                               this option no rlimit is set.
+  --reporter-bin <path>       The report-only supervisor that reports each blocked action
+                              (default: "${HERE}/phobos-seccomp-filesystem").
+  --no-own-reporter           Start no reporter of this layer's own. phobos.sh passes it when
+                              the network layer is on, whose connect guard is then the run's
+                              one supervisor.
+  --group-lock-above          The timeout layer's group lock is above this layer, so the
+                              reporter answers and reports the calls it refuses outright
+                              (setsid, setpgid, a foreign ABI), once the lock's signature
+                              confirms it. phobos.sh passes it exactly when it applies the lock.
   --config <file>, -c <file>  Standalone mode: an exercise configuration to build a
                               specification from. May be given repeatedly.
   --spec-parent <dir>         Standalone mode only: where that specification directory is
@@ -64,6 +73,17 @@ WHAT IT READS FROM THE SPECIFICATION DIRECTORY
   default. Creating device nodes is never granted.
 
 WHAT IT REPORTS
+  Unless --no-own-reporter is given, the reporter prints a line on stderr for each distinct
+  action it can attribute with certainty to Landlock, such as "Phobos Security Error: the
+  program tried to illegally read the File '/etc/shadow' but was blocked by Phobos.", at
+  most 100 per run, and, with --group-lock-above, one for each distinct call the group lock
+  refuses outright. Every doubt ends in silence, so a run without such a line may still have
+  been refused something. While it runs, no refused call succeeds and no permitted one
+  fails, the group lock's refusals failing with EACCES rather than ENOSYS; should it die, the
+  calls it watches fail with ENOSYS, so nothing is granted. When the reporter is missing, or
+  the kernel cannot support it, a notice names what goes unreported and why, and the run is
+  enforced all the same.
+
   When the command's stderr carried lines that look like a refusal, the layer prints
   "Sandbox denials: network=N, filesystem=N. (PHB-EDENY)" after the command has ended. That
   is a report, never a status: the command's own exit status is always passed through
@@ -97,6 +117,9 @@ usage() {
 NO_LANDLOCK=0
 LANDLOCK_BIN_OPT=""
 RESOURCES_LAYER_OPT=""
+REPORTER_BIN_OPT=""
+NO_OWN_REPORTER=0
+GROUP_LOCK_ABOVE=0
 CONFIGS=()
 SPEC_PARENT="/var/tmp"
 TAIL_FLAGS_FILE_OPT=""
@@ -108,6 +131,9 @@ while [[ "${1:-}" == -* ]]; do
     --no-landlock) NO_LANDLOCK=1; LAYER_FLAGS+=( --no-landlock ); shift ;;
     --landlock-bin) shift; LANDLOCK_BIN_OPT="${1:-}"; LAYER_FLAGS+=( --landlock-bin "${1:-}" ); shift ;;
     --resources-layer) shift; RESOURCES_LAYER_OPT="${1:-}"; LAYER_FLAGS+=( --resources-layer "${1:-}" ); shift ;;
+    --reporter-bin) shift; REPORTER_BIN_OPT="${1:-}"; LAYER_FLAGS+=( --reporter-bin "${1:-}" ); shift ;;
+    --no-own-reporter) NO_OWN_REPORTER=1; LAYER_FLAGS+=( --no-own-reporter ); shift ;;
+    --group-lock-above) GROUP_LOCK_ABOVE=1; LAYER_FLAGS+=( --group-lock-above ); shift ;;
     --config|-c) shift; CONFIGS+=( "${1:-}" ); shift ;;
     --spec-parent) shift; SPEC_PARENT="${1:-}"; shift ;;
     --tail-flags-file) shift; TAIL_FLAGS_FILE_OPT="${1:-}"; shift ;;
@@ -188,21 +214,47 @@ if [[ -n "$RESOURCES_LAYER_OPT" ]]; then
   limit_prefix+=( "$SPEC_DIR" -- )
 fi
 
+# The report-only supervisor reports what Landlock and the timeout layer's group lock refuse, and
+# changes the outcome of no call. It is started in front of the resource layer and the enforcer,
+# so it forks before the rlimits and the Landlock domain exist and its supervising half runs under
+# neither. With the network layer on, the connect guard is the run's one supervisor, because only
+# one seccomp listener may exist per filter tree, and phobos.sh says so with --no-own-reporter. It
+# is started with --no-landlock too, where it may still answer the group lock's refusals, and
+# execs the command without forking when it has nothing to watch. A reporter that is missing is
+# said once, never refused: reporting is a diagnostic, and the run is enforced all the same.
+reporter_prefix=()
+if (( ! NO_OWN_REPORTER )); then
+  REPORTER="${REPORTER_BIN_OPT:-${HERE}/phobos-seccomp-filesystem}"
+  if [[ -f "$REPORTER" && -x "$REPORTER" ]]; then
+    reporter_prefix=( "$REPORTER" )
+    if (( PHB_DEBUG_ENABLED )); then reporter_prefix+=( --verbose ); fi
+    if (( NO_LANDLOCK )); then reporter_prefix+=( --no-landlock ); fi
+    if (( GROUP_LOCK_ABOVE )); then reporter_prefix+=( --group-lock-above ); fi
+    reporter_prefix+=( --landlock-bin "$LANDLOCK" -- )
+  elif (( ! NO_LANDLOCK || GROUP_LOCK_ABOVE )); then
+    _log "NOTICE: the denial reporter '${REPORTER}' is missing, so blocked actions are enforced but not reported in this run."
+  fi
+fi
+
 # With --no-landlock the filesystem restriction is off, so run the command without Landlock.
 # Run it as this layer's child with the default signal dispositions, so an outer timeout's kill
 # escalation and the signals this layer passes on reach it, while this layer keeps ignoring
 # SIGTERM between them and stays to remove the specification directory.
 if (( NO_LANDLOCK )); then
-  debug_log filesystem "filesystem layer disabled; run" "${limit_prefix[@]}" "${CMD[@]}"
+  debug_log filesystem "filesystem layer disabled; run" "${reporter_prefix[@]}" "${limit_prefix[@]}" "${CMD[@]}"
 
   set +e
-  run_forwarding_signals "${limit_prefix[@]}" "${CMD[@]}"
+  run_forwarding_signals "${reporter_prefix[@]}" "${limit_prefix[@]}" "${CMD[@]}"
   rc=$?
   set -e
   exit "$rc"
 fi
 
-args=()
+# --mark-reported-domain has the enforcer install, right after the restriction, a seccomp filter
+# that allows everything, so a supervisor tells the tasks of this Landlock domain from the layers'
+# helpers beside it by their filter count. It changes no outcome, and it is passed whoever reports,
+# since the connect guard is the reporter when the network layer is on.
+args=( --mark-reported-domain )
 if (( PHB_DEBUG_ENABLED )); then args+=( --verbose ); fi
 
 # One --rights=LETTERS rule per allow-listed path, the letters being exactly the sections the
@@ -227,7 +279,7 @@ if [[ -s "${TAIL}" ]]; then
   done < "${TAIL}"
 fi
 
-debug_log filesystem "run" "${limit_prefix[@]}" "${LANDLOCK}" "${args[@]}" -- "${CMD[@]}"
+debug_log filesystem "run" "${reporter_prefix[@]}" "${limit_prefix[@]}" "${LANDLOCK}" "${args[@]}" -- "${CMD[@]}"
 
 # The command's stderr passes through tee to this layer's stderr unchanged, and a copy goes to
 # count_denials, whose counts come back over an anonymous pipe. Nothing is written to a file, so
@@ -259,13 +311,16 @@ restore_signal_traps "$saved_term" "$saved_hup" "$saved_int" "$saved_quit"
 # and phobos-landlock-filesystem-and-networksystem, which exec's it, so they and the command are
 # one process that an outer timeout's kill escalation and the signals passed on reach directly,
 # while this layer ignores SIGTERM between them and waits so it can report the denials. The
+# reporter, when there is one, comes first and forks: its supervising half is this layer's child,
+# passes every signal it receives on to that process and ends with its status, and the kill
+# escalation reaches both, since they share the run's process group. The
 # timeout itself, when set, is phobos-timeoutsystem.sh's. The two variables hand the helper the
 # command's standard error and the descriptors it must not inherit, instead of a redirection on
 # the call: that would be this shell's own standard error for as long as the helper runs, and
 # bash reports a child that died of a signal there, into a pipe whose reader the same signal
 # may have killed, and so ends this layer with SIGPIPE.
 set +e
-PHB_FORWARD_STDERR_FD="$filtered_stderr" PHB_FORWARD_CLOSE_FDS="$filtered_stderr $denial_counts" run_forwarding_signals "${limit_prefix[@]}" "${LANDLOCK}" "${args[@]}" -- "${CMD[@]}"
+PHB_FORWARD_STDERR_FD="$filtered_stderr" PHB_FORWARD_CLOSE_FDS="$filtered_stderr $denial_counts" run_forwarding_signals "${reporter_prefix[@]}" "${limit_prefix[@]}" "${LANDLOCK}" "${args[@]}" -- "${CMD[@]}"
 rc=$?
 set -e
 exec {filtered_stderr}>&-
