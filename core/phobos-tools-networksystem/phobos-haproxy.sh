@@ -361,9 +361,14 @@ stop_haproxy_child() {
 # another rule, would otherwise carry that port to the name; names are grouped by port, one acl
 # pair for each; this
 # needs the resolvers section build_haproxy_conf emits, which the network layer guarantees by
-# refusing an exact-name rule with no resolver. An address rule is
-# accepted the moment its destination matches, so a connection with no ClientHello does not wait
-# out the inspect-delay. Name matching is case-insensitive. Assumes
+# refusing an exact-name rule with no resolver. Each pair tests the port before the TLS name, and
+# the order is load-bearing: HAProxy stops at the first term that is false, while reading the TLS
+# name of a connection that has sent nothing waits for its first bytes until the inspect-delay ends.
+# Tested first, the port lets a connection to any other port reach the address rules at once, so a
+# server that speaks first, as SMTP, MySQL or SSH do, gets its banner to the client without delay.
+# On a port a name rule names, the broker cannot tell a TLS client that has not written yet from a
+# server that speaks first, so a connection there still waits out the inspect-delay before an
+# address rule accepts it. Name matching is case-insensitive. Assumes
 # it is called where its output belongs, inside the frontend and after set-dst, and that
 # refuse_wildcard_host_name is defined, as it is wherever phobos-common.sh was sourced.
 haproxy_allow_rules() {
@@ -408,7 +413,7 @@ haproxy_allow_rules() {
     printf '    acl exact_sni_%s req.ssl_sni -m str -i %s\n' "$tag" "$(printf '%s\n' ${names_by_port[$key]} | sort -u | tr '\n' ' ' | sed 's/ $//')"
     if [[ "$key" != "*" ]]; then
       printf '    acl exact_port_%s dst_port %s\n' "$tag" "$key"
-      condition="exact_sni_${tag} exact_port_${tag}"
+      condition="exact_port_${tag} exact_sni_${tag}"
     fi
     printf '    tcp-request content do-resolve(txn.hostip,phobosdns,ipv4) req.ssl_sni if %s\n' "$condition"
     printf '    tcp-request content set-dst var(txn.hostip) if %s { var(txn.hostip) -m found }\n' "$condition"

@@ -15,8 +15,12 @@ set -euo pipefail
 
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY="$(cd -- "${HERE}/../../.." && pwd)"
-LLVM_VERSION=18
-MULL_VERSION=0.34.0
+# The C sources are C23 and name their constants with constexpr, which clang accepts from version 19, so the
+# version here is 20, the one Ubuntu 26.04 carries, and the mull build is the one made for that release.
+LLVM_VERSION=20
+LLVM_FULL_VERSION=20.1.8
+MULL_VERSION=0.34.1
+UBUNTU_VERSION=26.04
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -26,6 +30,8 @@ trap 'rm -rf "$WORK"' EXIT
 # is mounted read-only and never gains a file.
 # How long one mutant's run may take, in milliseconds, before mull counts it as killed by timeout.
 MUTANT_TIMEOUT_MILLISECONDS=30000
+# How much processor time any process of the mutated run may use, in seconds, before the kernel ends it.
+MUTANT_CPU_SECONDS=60
 cat > "$WORK/mull.yml" <<CONFIG
 mutators:
   - cxx_all
@@ -51,7 +57,7 @@ case "$(uname -m)" in
 esac
 curl --fail --silent --show-error --location \
   --output /tmp/mull.deb \
-  "https://github.com/mull-project/mull/releases/download/${MULL_VERSION}/Mull-${LLVM_VERSION}-${MULL_VERSION}-LLVM-18.1.3-ubuntu-${MULL_ARCHITECTURE}-24.04.deb"
+  "https://github.com/mull-project/mull/releases/download/${MULL_VERSION}/Mull-${LLVM_VERSION}-${MULL_VERSION}-LLVM-${LLVM_FULL_VERSION}-ubuntu-${MULL_ARCHITECTURE}-${UBUNTU_VERSION}.deb"
 dpkg -i /tmp/mull.deb > /dev/null 2>&1 || apt-get install -f -y -qq > /dev/null
 
 mkdir -p /tmp/objects
@@ -69,6 +75,10 @@ done
 
 # The mutants run in parallel on this many workers.
 MULL_WORKERS=4
+# A mutant whose loop never ends is killed at mull's timeout, but the unit program forks, so its child
+# outlives the kill, keeps the pipe mull reads open and holds the whole run for as long as it spins. A
+# processor-time limit, which every child inherits, ends such a child on its own.
+ulimit -t "${MUTANT_CPU_SECONDS}"
 "mull-runner-${LLVM_VERSION}" --workers "${MULL_WORKERS}" /tmp/unit-mutated
 INNER
 
@@ -77,8 +87,11 @@ docker run --rm \
   -v "$WORK:/work" \
   -w / \
   -e "LLVM_VERSION=${LLVM_VERSION}" \
+  -e "LLVM_FULL_VERSION=${LLVM_FULL_VERSION}" \
   -e "MULL_VERSION=${MULL_VERSION}" \
-  ubuntu:24.04 sh /work/run-inside.sh > "$WORK/report.txt" 2>&1 || true
+  -e "MUTANT_CPU_SECONDS=${MUTANT_CPU_SECONDS}" \
+  -e "UBUNTU_VERSION=${UBUNTU_VERSION}" \
+  "ubuntu:${UBUNTU_VERSION}" sh /work/run-inside.sh > "$WORK/report.txt" 2>&1 || true
 
 if ! grep -q "Mutation score" "$WORK/report.txt"; then
   echo "the mutation run did not finish, its output was:" >&2

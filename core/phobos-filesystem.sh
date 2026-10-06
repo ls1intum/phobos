@@ -229,8 +229,25 @@ debug_log filesystem "run" "${limit_prefix[@]}" "${LANDLOCK}" "${args[@]}" -- "$
 # command inherits neither descriptor, so it sees only its standard three and can neither feed
 # the counter directly nor keep it alive through a hidden descriptor. tee -p keeps passing the
 # output through should the counter die at its own limits, which only means no counts.
+# The pass-through and the counter are started with SIGTERM, SIGHUP, SIGINT and SIGQUIT ignored,
+# and inherit that from this shell at the moment they are made, so no signal can reach them first.
+# They share the run's process group, and a terminal sends a Ctrl+C, a quit or a hangup to that
+# whole group: at their default action they died with the command, which then lost everything it
+# wrote while it handled the signal, its traceback among it, and the counts went with them. They
+# end when the last writer of the command's stderr has closed it, which is the only ending they
+# need. This shell's own dispositions are put back straight afterwards, so a hangup, quit or
+# interrupt that arrives in the brief interval while the pass-through is made is discarded, and
+# the run starts as if it had not been sent; SIGTERM is ignored outside run_forwarding_signals
+# anyway. Setting the dispositions inside the pass-through instead would leave it a gap after the
+# command has started, which is the failure this exists to remove.
 exec {denial_counts}<> <(:)
+saved_term="$(trap -p TERM)"
+saved_hup="$(trap -p HUP)"
+saved_int="$(trap -p INT)"
+saved_quit="$(trap -p QUIT)"
+trap '' TERM HUP INT QUIT
 exec {filtered_stderr}> >(tee -p >(count_denials >&"$denial_counts") >&2)
+restore_signal_traps "$saved_term" "$saved_hup" "$saved_int" "$saved_quit"
 
 # The command runs as this layer's child, started through the resource layer, when there is one,
 # and phobos-landlock-filesystem-and-networksystem, which exec's it, so they and the command are

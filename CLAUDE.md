@@ -178,6 +178,7 @@ core/                      the sandbox itself
     phobos-signals.sh      passing a caller's signal on to the command a layer waits for
   phobos-tools-policysystem/
     phobos-policy-parse.sh one cfg in, the parsed state and the specification files out
+    phobos-policy-yaml.sh  a strict subset of YAML in, flat records with line numbers out
   phobos-tools-filesystem/
     phobos-rights.sh       a parsed policy to the --rights= arguments phobos-landlock-filesystem-and-networksystem takes
   phobos-tools-networksystem/

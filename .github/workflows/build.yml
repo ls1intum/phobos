@@ -68,7 +68,7 @@ jobs:
       # run which goes through says nothing, and it means the figures come from a
       # perturbed run in the first place.
       # tests/unit/phobos-landlock-filesystem-and-networksystem/mutation.sh is the stronger
-      # measure of this suite and already runs weekly below.
+      # measure of this suite and runs as the mutation job below.
 
   images:
     name: Build the ${{ matrix.name }} image
@@ -364,12 +364,32 @@ jobs:
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/resources-edge.sh
 
+      # The prune image is the run-phase image this job just built plus strace and python3, with a
+      # base that grants nothing. It is built on top of that exact image, so the layer pruner's
+      # observer is held to the layers this job has just proven.
+      - name: Build the prune image on the run-phase image
+        id: prune-build
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci \
+            -t phobos-prune-layers:ci docker/prune_phase/layers
+
+      # strace observes a Landlock refusal made inside the shipped chain, a permitted read beside it
+      # still works, and the parser and attribution turn the record into exactly that one denial. An
+      # ordinary container, as for every suite above: ptrace of one's own child needs no privilege.
+      - name: The prune image's observer sees what the layers refuse, and only that
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}/tests:/tests:ro" -v "${PWD}/var/tmp/helpers:/var/tmp/helpers:ro" \
+            phobos-prune-layers:ci bash /tests/integration/layer_prune_observer.sh
+
   # Mutation testing installs clang and mull into a container and then runs the suite
-  # once per mutant, which is minutes rather than seconds. Weekly and on request, so it
-  # reports on the suite's strength without being in the way of a pull request.
+  # once per mutant. It runs on every change like the other jobs, and a run that does
+  # not reach a score fails it, so a toolchain that stops compiling the sources is
+  # noticed in the pull request that broke it and not a week later.
   mutation:
     name: Mutation score of the wrapper suite
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:

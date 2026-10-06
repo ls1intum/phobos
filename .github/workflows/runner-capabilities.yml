@@ -7,9 +7,16 @@
 # failing, this is where the question is asked, in one place and the same way every
 # time.
 #
-# Manual on purpose. It is a diagnostic, not a gate: the two assert steps are allowed to
-# fail and the verdict is written to the run summary, so one dispatch answers both
-# questions without turning a red check into the answer.
+# The second job asks whether a runner can boot a virtual machine of its own under KVM, on
+# each hosted runner image. Landlock lives in the kernel, so a container always meets the
+# runner's kernel, and trying a newer kernel than the runner has needs a virtual machine.
+#
+# Both jobs also ask whether ptrace, without privileges, sees a traced process's Landlock
+# refusal inside an ordinary container, which the layer pruner's observer relies on.
+#
+# Manual on purpose. It is a diagnostic, not a gate: the assert steps are allowed to fail
+# and the verdict is written to the run summary, so one dispatch answers every question
+# without turning a red check into the answer.
 name: Runner Capabilities
 
 on:
@@ -56,14 +63,21 @@ jobs:
         if: ${{ !cancelled() }}
         run: ./.github/scripts/record-capability.sh bwrap --assert-bwrap
 
+      - name: Assert that ptrace observes a Landlock denial
+        id: ptrace
+        if: ${{ !cancelled() }}
+        run: ./.github/scripts/record-capability.sh ptrace --assert-ptrace
+
       - name: Write the verdict
         if: ${{ !cancelled() }}
         env:
           LANDLOCK_VERDICT: ${{ steps.landlock.outputs.verdict }}
           BWRAP_VERDICT: ${{ steps.bwrap.outputs.verdict }}
+          PTRACE_VERDICT: ${{ steps.ptrace.outputs.verdict }}
         run: |
           landlock="${LANDLOCK_VERDICT:-indeterminate}"
           bwrap="${BWRAP_VERDICT:-indeterminate}"
+          ptrace="${PTRACE_VERDICT:-indeterminate}"
           {
             echo "## Runner capabilities"
             echo
@@ -71,11 +85,82 @@ jobs:
             echo "| --- | --- | --- |"
             echo "| Landlock enforces, host and plain container | ${landlock} | the acceptance suites |"
             echo "| Bubblewrap builds a production-shaped sandbox | ${bwrap} | the prune phase |"
+            echo "| ptrace observes a Landlock denial, plain container | ${ptrace} | the layer pruner's observer |"
             echo
-            echo "Read the survey step for the kernel, the Landlock ABI and the AppArmor settings"
-            echo "behind these two answers."
+            echo "Read the survey step for the kernel, the Landlock ABI, ptrace_scope and the AppArmor"
+            echo "settings behind these answers."
           } >> "${GITHUB_STEP_SUMMARY}"
-          if [ "${landlock}" = "indeterminate" ] || [ "${bwrap}" = "indeterminate" ]; then
+          if [ "${landlock}" = "indeterminate" ] || [ "${bwrap}" = "indeterminate" ] \
+            || [ "${ptrace}" = "indeterminate" ]; then
+            echo "::error::A probe could not reach a verdict, so this run answers nothing."
+            exit 1
+          fi
+
+  # Whether QEMU can use KVM on each hosted runner. The runner's own kernel is the guest, which
+  # proves that a guest boots and how fast, not which Landlock version a newer kernel offers.
+  # Beside it, whether a tracer without privileges sees a Landlock refusal on that runner.
+  kvm:
+    name: KVM and ptrace on ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-26.04
+            qemu: qemu-system-x86
+          - runner: ubuntu-24.04
+            qemu: qemu-system-x86
+          - runner: ubuntu-24.04-arm
+            qemu: qemu-system-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install QEMU
+        env:
+          QEMU_PACKAGE: ${{ matrix.qemu }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends "${QEMU_PACKAGE}"
+
+      - name: Survey
+        run: bash tests/runner-capability-probe.sh --report
+
+      - name: Assert that a guest boots under KVM
+        id: kvm
+        run: ./.github/scripts/record-capability.sh kvm --assert-kvm
+
+      # The layer pruner runs on both architectures, so each runner image answers this too.
+      - name: Assert that ptrace observes a Landlock denial
+        id: ptrace
+        if: ${{ !cancelled() }}
+        run: ./.github/scripts/record-capability.sh ptrace --assert-ptrace
+
+      - name: Write the verdict
+        if: ${{ !cancelled() }}
+        env:
+          KVM_VERDICT: ${{ steps.kvm.outputs.verdict }}
+          PTRACE_VERDICT: ${{ steps.ptrace.outputs.verdict }}
+          RUNNER_LABEL: ${{ matrix.runner }}
+        run: |
+          kvm="${KVM_VERDICT:-indeterminate}"
+          ptrace="${PTRACE_VERDICT:-indeterminate}"
+          {
+            echo "## KVM and ptrace on ${RUNNER_LABEL}"
+            echo
+            echo "| Capability | Verdict | What depends on it |"
+            echo "| --- | --- | --- |"
+            echo "| A guest kernel boots under KVM | ${kvm} | a kernel newer than the runner's, for Landlock 10 |"
+            echo "| ptrace observes a Landlock denial, plain container | ${ptrace} | the layer pruner's observer |"
+            echo
+            echo "Read the survey step for the access to /dev/kvm, the boot times and ptrace_scope."
+          } >> "${GITHUB_STEP_SUMMARY}"
+          if [ "${kvm}" = "indeterminate" ] || [ "${ptrace}" = "indeterminate" ]; then
             echo "::error::A probe could not reach a verdict, so this run answers nothing."
             exit 1
           fi
