@@ -196,7 +196,7 @@ core/                      the sandbox itself
     phobos-network-args.sh [connect] and [bind] to the TCP and UDP port rules Landlock enforces
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
     language-configurations/  one file per Ares 2 programming language configuration: its bases, placeholders and [connect] rows
-docker/prune_phase/        one image per language, the layer pruner's, and the orchestrator
+docker/prune_phase/        the layer pruner's image and the orchestrator's
   layers/                  the layer pruner's image: the run-phase image, strace, the probe, an empty base
 docker/run_phase/          the images an exercise actually runs in, one per language (java/, python/)
 tests/                     the acceptance and probe suites

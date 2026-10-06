@@ -36,7 +36,8 @@ RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
 # the suites compile their C probes inside the image they test, readelf checks the hardening below,
 # and haproxy is the egress broker. procps and openssl are in the Java image's base and not in the
 # slim Python one: the suites look for leftover processes with pgrep and send a ClientHello with
-# openssl. pytest is what a Python exercise's tests run with.
+# openssl. pytest is what a Python exercise's tests run with; it and every package it pulls in are
+# pinned, so the weekly rebuild cannot change what a pruned base names without a pull request.
 FROM python:3.13-slim-trixie@sha256:bf44cdfcb76cd3b41e879bc058fc37ec5872002ccfde7fcb765e218cde0cd79c
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -47,7 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssl \
     procps \
  && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir pytest==8.4.2
+RUN pip install --no-cache-dir pytest==8.4.2 iniconfig==2.3.0 packaging==26.3 pluggy==1.6.0 Pygments==2.21.0
 
 ENV PHOBOS_HOME=/var/tmp/opt/core
 RUN mkdir -p "${PHOBOS_HOME}"
@@ -62,6 +63,8 @@ COPY --from=enforcers /build/bin/phobos-seccomp-timeoutsystem ${PHOBOS_HOME}/
 COPY --from=enforcers /build/bin/phobos-seccomp-filesystem ${PHOBOS_HOME}/
 COPY config/BaseLanguage-python.cfg ${PHOBOS_HOME}/
 COPY config/TailPhobos.cfg          ${PHOBOS_HOME}/
+# No config/language-configurations: every Ares 2 programming language configuration there is a
+# Java one, so the Python image has none to import.
 RUN readelf -h ${PHOBOS_HOME}/phobos-landlock-filesystem-and-networksystem > /tmp/wrapper-header.txt \
  && readelf -d ${PHOBOS_HOME}/phobos-landlock-filesystem-and-networksystem > /tmp/wrapper-dynamic.txt \
  && readelf -h ${PHOBOS_HOME}/phobos-seccomp-networksystem > /tmp/guard-header.txt \

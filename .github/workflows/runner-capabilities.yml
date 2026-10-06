@@ -71,8 +71,7 @@ jobs:
             echo "| Landlock enforces, host and plain container | ${landlock} | the acceptance suites |"
             echo "| ptrace observes a Landlock denial, plain container | ${ptrace} | the layer pruner's observer |"
             echo
-            echo "Read the survey step for the kernel, the Landlock ABI, ptrace_scope and the AppArmor"
-            echo "settings behind these answers."
+            echo "Read the survey step for the kernel, the Landlock ABI and ptrace_scope behind these answers."
           } >> "${GITHUB_STEP_SUMMARY}"
           if [ "${landlock}" = "indeterminate" ] || [ "${ptrace}" = "indeterminate" ]; then
             echo "::error::A probe could not reach a verdict, so this run answers nothing."

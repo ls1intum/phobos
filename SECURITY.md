@@ -67,7 +67,8 @@ rest exists to take privileges away. None of the following is a vulnerability.
   sandbox later trusts. strace and the containment probe are installed in the prune image only,
   never in the run-phase image a submission is graded in, and the prune container needs no
   privilege. Nothing in either phase uses Bubblewrap any more.
-- The Dockerfiles under `docker/` extend the Artemis test images and compile the C products.
+- The Dockerfiles under `docker/` extend the Artemis Java test image and, for Python, the official
+  Python image, and compile the C products.
   The run-phase image needs no user namespaces, no added capabilities and no security
   options: Landlock, the connect guard and the timeout are all self-imposed by the
   unprivileged process. The container the grader starts should add `--network none` and

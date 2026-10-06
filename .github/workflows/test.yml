@@ -31,8 +31,8 @@ jobs:
           persist-credentials: false
 
       # Every suite invokes its script through `bash`, so a mode lost in a commit would go
-      # unnoticed. phobos.sh runs
-      # phobos-policysystem.sh and every layer as a program rather than through `bash`, and the
+      # unnoticed. phobos.sh runs phobos-policysystem.sh and every layer as a program rather than
+      # through `bash`, and the
       # README and CLAUDE.md tell a reader to call core/phobos.sh directly, so a mode lost
       # here ends a run with exit 126 outside the image, which sets the modes itself.
       # phobos-common.sh and phobos-constants.sh are absent on purpose: they are sourced,

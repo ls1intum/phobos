@@ -126,6 +126,17 @@ the kernel lacks, a missing tool or too few processor cores.
 | `filesystem-edge.sh` | links, dot-dot, magic links, rights on files and the root, odd names, a link swapped while it is opened |
 | `resources-edge.sh` | each limit met through the call that meets it, and the limits Phobos does not set |
 
+## The Python run-phase image, run by the `run-phase-python` job of `build.yml`
+
+The Python run-phase image (`docker/run_phase/python/`) is held to every suite above that needs no
+Java: `network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`, `seccomp-networksystem-test.sh`,
+`network-cleanup-test.sh` and the whole protection matrix, in one looped step that names each suite and
+fails when any one does. The four acceptance suites that compile Java probes or run Maven
+(`run-tests.sh`, `extra-tests.sh`, `phase-test.sh`, `shipped-policy-test.sh`) stay with the Java job.
+The prune image is then built on the Python image and runs `layer_prune_observer.sh`, `layer_prune.sh`
+and `layer_prune_egress.sh` there, and prunes `var/tmp/testing-dir/python/python-reference`, which has
+to end in a policy.
+
 ## The environment variables the suites read
 
 | Variable | Read by | Meaning |

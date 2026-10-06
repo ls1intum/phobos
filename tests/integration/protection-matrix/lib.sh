@@ -36,8 +36,12 @@ PM_STATUS=0
 
 # The base policy the image ships beside phobos-policysystem.sh, whichever language it is for, which the
 # suites replace with the minimal one below: a second Base*.cfg left beside it would widen every case.
-PM_BASE="$(compgen -G "${PHOBOS_HOME}/Base*.cfg" | head -n 1)"
-PM_BASE="${PM_BASE:-${PHOBOS_HOME}/BaseLanguage-java.cfg}"
+mapfile -t PM_BASES < <(compgen -G "${PHOBOS_HOME}/Base*.cfg")
+if (( ${#PM_BASES[@]} > 1 )); then
+  echo "the image ships ${#PM_BASES[@]} Base*.cfg files, and the matrix replaces exactly one" >&2
+  exit 1
+fi
+PM_BASE="${PM_BASES[0]:-${PHOBOS_HOME}/BaseLanguage-java.cfg}"
 
 export PATH="${PHOBOS_HOME}:${PATH}"
 

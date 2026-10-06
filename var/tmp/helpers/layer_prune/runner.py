@@ -31,7 +31,7 @@ from layer_prune import cfgfile, limits, network, sampler, strace_parse, verdict
 PHOBOS_HOME = "/var/tmp/opt/core"
 TESTING_DIR = "/var/tmp/testing-dir"
 CANDIDATE_DIR = "/run/layer-prune"
-SPEC_PARENT = "/var/tmp"
+SPEC_PARENT = cfgfile.SPEC_PARENT
 # The status a run gets when the pruner's own hard limit ended it, read as a timeout by the verdict.
 HARD_LIMIT_STATUS = verdict.TIMEOUT_STATUS
 # The status and the marker Phobos ends a run with when it could not read the command's exit status.

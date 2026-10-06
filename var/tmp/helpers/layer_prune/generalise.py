@@ -38,6 +38,7 @@ import os
 import posixpath
 import re
 from collections.abc import Iterable
+from pathlib import PurePosixPath
 
 from layer_prune import cfgfile
 from layer_prune.record import LAYER_FILESYSTEM, Denial
@@ -50,10 +51,11 @@ DEFAULT_COMPACTION_THRESHOLD = 3
 MINIMUM_COMPACTION_THRESHOLD = 2
 # The shallowest directory a grant may be widened to: never `/`, never a top-level directory.
 MINIMUM_WIDENING_DEPTH = 2
-# The directories phobos.sh's specification directory lies beneath (its default parent is /var/tmp):
-# phobos-policysystem.sh refuses a policy with a write-class right on any of them, since the graded
-# command could then rewrite its own policy.
-SPECIFICATION_ANCESTORS = ("/", "/var", "/var/tmp")
+# The directories phobos.sh's specification directory lies beneath (its default parent, and every
+# ancestor of it): phobos-policysystem.sh refuses a policy with a write-class right on any of them,
+# since the graded command could then rewrite its own policy.
+SPECIFICATION_ANCESTORS = tuple(str(path) for path in (PurePosixPath(cfgfile.SPEC_PARENT),
+                                                         *PurePosixPath(cfgfile.SPEC_PARENT).parents))
 # How many observed paths a per-run comment names before it only counts the rest.
 COMMENT_EXAMPLES = 3
 # The sections that may be widened to a containing directory or compacted; every other one is write-class.
