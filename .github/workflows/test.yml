@@ -121,6 +121,11 @@ jobs:
       - name: The command-line contract
         if: ${{ !cancelled() }}
         run: bash tests/integration/cli_flags.sh
+      # No entry point finds a program through a relative or empty PATH entry, which names the
+      # current directory, and the submission's tree when a grader starts Phobos there.
+      - name: No entry point looks a program up in the current directory
+        if: ${{ !cancelled() }}
+        run: bash tests/integration/startup_environment.sh
 
       # How the network allow-list becomes Landlock TCP-port rules: a concrete port is
       # enforced, a loopback host with no port is tolerated, a non-loopback host with no
@@ -136,6 +141,24 @@ jobs:
       - name: The spellings of an address in a connect rule
         if: ${{ !cancelled() }}
         run: bash tests/unit/phobos-tools-policysystem/address_literals.sh
+
+      # Which YAML an Ares 2 policy may be written in: every construct of the subset is read into
+      # the exact records, and every construct two YAML readers could read differently is refused
+      # with its line rather than read one way.
+      - name: The YAML subset a policy may be written in
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/phobos-tools-policysystem/yaml_subset.sh
+
+      # A programming language configuration is the one place a language enters Phobos: the loader
+      # takes its two sections and three primitives and refuses everything else with file and line,
+      # and no code under core/ outside core/config/ names a language configuration or its placeholders.
+      - name: The programming language configurations
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/phobos-tools-policysystem/language_configuration.sh
+
+      - name: No programming language in the code
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/phobos-tools-policysystem/no_language_in_code.sh
 
       - name: The connect guard enforces the allow-list by host and port
         if: ${{ !cancelled() }}

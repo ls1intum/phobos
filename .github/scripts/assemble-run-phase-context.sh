@@ -4,11 +4,11 @@
 # The Dockerfile copies the layer scripts flat (*.sh), the phobos-tools-* helper folders whole,
 # the four C source folders whole (phobos-landlock-filesystem-and-networksystem,
 # phobos-seccomp-networksystem, phobos-seccomp-filesystem and phobos-seccomp-timeoutsystem) for its
-# build stage, and config/*.cfg. The C folders keep their names because the report-only
-# supervisor's sources include the other three folders' headers by paths relative to their own.
-# Those files live across several directories of this repository, so the context has to be put
-# together before docker build can see it, and no compose file or plain `docker build .` can
-# express that.
+# build stage, config/*.cfg and the folder config/language-configurations/. The C folders keep
+# their names because the report-only supervisor's sources include the other three folders'
+# headers by paths relative to their own. Those files live across several directories of this
+# repository, so the context has to be put together before docker build can see it, and no compose
+# file or plain `docker build .` can express that.
 #
 # It exists so that the recipe is written once. The acceptance README used to
 # carry its own copy, and the two drifted apart the moment the wrapper was split
@@ -54,6 +54,7 @@ for source_folder in phobos-landlock-filesystem-and-networksystem phobos-seccomp
   cp -R "${REPOSITORY}/core/${source_folder}" "${DESTINATION}/"
 done
 cp "${REPOSITORY}"/core/config/*.cfg "${DESTINATION}/config/"
+cp -R "${REPOSITORY}"/core/config/language-configurations "${DESTINATION}/config/"
 
 touch "${DESTINATION}/${MARKER}"
 

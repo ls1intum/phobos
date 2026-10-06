@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 set -euo pipefail
-HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# This script's directory, found in bash alone so that PATH and CDPATH are cleaned before any
+# program is looked up or any cd made, and made absolute once they are: phobos-environment.sh.
+case "${BASH_SOURCE[0]}" in */*) HERE="${BASH_SOURCE[0]%/*}/" ;; *) HERE="./" ;; esac
+# shellcheck source=phobos-tools-common/phobos-environment.sh
+source "${HERE}phobos-tools-common/phobos-environment.sh"
+clean_startup_environment
+HERE="$(cd -- "$HERE" && pwd)"
 # shellcheck source=phobos-tools-common/phobos-common.sh
 source "${HERE}/phobos-tools-common/phobos-common.sh"
 
@@ -102,6 +108,16 @@ left in the environment cannot change which binary applies the sandbox)
                               timeout layer when a timeout bounds the run, since the
                               filesystem layer is then group-killed with the command, and
                               the filesystem layer otherwise.
+
+ENVIRONMENT
+  Before it runs anything, phobos.sh, like every layer, removes from PATH each entry that is not
+  absolute (".", any other relative directory, an empty one, one beginning with "~"), unsets
+  CDPATH, and drops what is not absolute from TMPDIR, GCONV_PATH, LOCPATH, NLSPATH, HOSTALIASES
+  and TZDIR, so nothing is looked up in the current directory before the sandbox exists. The
+  command is given the cleaned environment too, so name it by its path (./gradlew). A PATH with
+  no absolute entry is refused (PHB-ERUNTIME). Start phobos.sh
+  with a PATH of absolute directories and without BASH_ENV, LD_LIBRARY_PATH, LD_PRELOAD or
+  LD_AUDIT, which take effect before its first line; SECURITY.md says why.
 
 SIGNALS
   A SIGTERM, SIGHUP, SIGINT or SIGQUIT sent to phobos.sh is passed on to the command, and the run

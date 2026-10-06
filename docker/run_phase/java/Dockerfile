@@ -80,6 +80,10 @@ COPY --from=enforcers /build/bin/phobos-seccomp-timeoutsystem ${PHOBOS_HOME}/
 COPY --from=enforcers /build/bin/phobos-seccomp-filesystem ${PHOBOS_HOME}/
 COPY config/BaseLanguage-java.cfg                     ${PHOBOS_HOME}/
 COPY config/TailPhobos.cfg                     ${PHOBOS_HOME}/
+# The programming language configurations, one per configuration name an Ares 2 policy can give.
+# They sit in a folder of their own beside the base policies, which the Base*.cfg glob every run
+# folds does not reach, so a run that imports no Ares policy never reads them.
+COPY config/language-configurations ${PHOBOS_HOME}/language-configurations
 # The hardening is measured, not assumed: a DYN type proves -static-pie kept the
 # binary position independent, and a BIND_NOW entry proves RELRO is complete. It is
 # measured here, on the copies the image actually ships, rather than in the stage that

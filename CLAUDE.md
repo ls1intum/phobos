@@ -96,6 +96,14 @@ and drops every `[connect]`, `[bind]` and `[accept]` rule the base granted, loop
 included, so a Gradle build cannot reach its own daemon. The filesystem keeps what the base
 granted, because a command whose binary and libraries were denied could not start at all.
 
+Every entry point starts by removing each `PATH` entry that is not absolute, unsetting `CDPATH`
+and dropping what is not absolute from `TMPDIR`, `GCONV_PATH`, `LOCPATH`, `NLSPATH`,
+`HOSTALIASES` and `TZDIR`, before it runs any program, because the current directory may be the
+submission's tree. The command sees the cleaned environment, so it is named by its path
+(`./gradlew`), and a `PATH` with no absolute entry is refused with `PHB-ERUNTIME`. What no
+script can clean, the `env` of the `#!` line, `BASH_ENV` and the loader's `LD_*`, is an
+integration requirement in SECURITY.md.
+
 ### The linters, which are the gate
 
 `lint.yml` runs seven lint jobs, and `actionlint.yml` lints the workflows beside it, weekly
@@ -162,6 +170,7 @@ core/                      the sandbox itself
   phobos-seccomp-networksystem/  its *.c/.h: the connect guard, supervises connect() and enforces [connect] by host and port
   phobos-seccomp-timeoutsystem/  its *.c: the group lock, a seccomp filter refusing setsid and setpgid, then exec's
   phobos-tools-common/     sourced by every layer through phobos-common.sh, which sources the rest here and the three per-subsystem helpers
+    phobos-environment.sh  sourced first by every entry point: PATH and the other lookup variables made safe before anything is looked up
     phobos-common.sh       the shared entry the layers source; it sources the others
     phobos-constants.sh    the numbers the scripts share, named once, the exit statuses among them
     phobos-log.sh          reporting, and counting what a run was denied
@@ -171,6 +180,8 @@ core/                      the sandbox itself
     phobos-signals.sh      passing a caller's signal on to the command a layer waits for
   phobos-tools-policysystem/
     phobos-policy-parse.sh one cfg in, the parsed state and the specification files out
+    phobos-policy-yaml.sh  a strict subset of YAML in, flat records with line numbers out
+    phobos-language-configuration.sh  a programming language configuration in, its bases and placeholder values out
     config_doc.txt         the configuration format, documented
   phobos-tools-filesystem/
     phobos-rights.sh       a parsed policy to the --rights= arguments phobos-landlock-filesystem-and-networksystem takes
@@ -178,6 +189,7 @@ core/                      the sandbox itself
     phobos-haproxy.sh      the egress broker and inbound filter: turns [connect]/[accept] into an haproxy.cfg
     phobos-network-args.sh [connect] and [bind] to the TCP and UDP port rules Landlock enforces
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
+    language-configurations/  one file per Ares 2 programming language configuration: its bases and placeholders
 docker/prune_phase/        one image per language, plus the orchestrator
 docker/run_phase/          the image an exercise actually runs in
 tests/                     the acceptance and probe suites
