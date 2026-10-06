@@ -228,6 +228,16 @@ ares_accepted "an entry that grants nothing" "fs $PM/none -"
 ares_accepted "a loopback network entry with a port" "net 127.0.0.1 80"
 ares_accepted "localhost on every port" "net localhost 0"
 ares_accepted "a timeout" "timeout 30000"
+# The shipped configuration determines these three from the image: the JDK the java on the PATH belongs to, the password
+# database's home of the user running the suite, and /tmp.
+ares_accepted "the shipped configuration's three placeholders" 'fs ${java.home}/lib r' 'fs ${user.home} r' 'fs ${java.io.tmpdir} r'
+run_pm --debug --config "$PM/cfg/syntax.yaml" -- "$P" cwd
+if grep -q "\${java.home} is $(dirname "$(dirname "$(readlink -f "$(command -v java)")")")" "$PM_ERR" && grep -q "\${java.io.tmpdir} is /tmp" "$PM_ERR" \
+  && grep -q "\${user.home} is $(getent passwd "$(id -u)" | cut -d: -f6)" "$PM_ERR"; then
+  ok "and each resolves to what the image and the password database say"
+else
+  bad "the shipped configuration's placeholders resolve to what the image says" "$(pm_describe)"
+fi
 ares_refused "version 2" "PolicyVersion: 1" "PolicyVersion: 2"
 ares_refused "an unknown configuration" "$PM_ARES_CONFIGURATION" "NO_SUCH_CONFIGURATION"
 ares_refused "a boolean spelt yes" "readAllFiles: true" "readAllFiles: yes"

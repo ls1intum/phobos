@@ -151,6 +151,9 @@ ares_cfg() {
         net+="        openConnections: true\n        sendData: true\n        receiveData: true\n" ;;
       timeout)
         timeouts+="      - timeout: ${fields[1]}\n" ;;
+      *)
+        bad "the Ares policy ${path##*/} is written" "an entry of an unknown kind, ${entry@Q}, so the policy would not be what its case says"
+        return 1 ;;
     esac
   done
   {

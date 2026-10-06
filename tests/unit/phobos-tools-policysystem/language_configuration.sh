@@ -196,13 +196,15 @@ connect_result() {
   fi
 }
 check "allow localhost udp loads into the row append_connect_rule writes for it" "localhost * udp" "$(connect_result 'allow localhost udp')"
-check "loopback rules with no port, by name and by address, load" $'localhost * udp\n127.0.0.1 * udp\n::1 *' "$(connect_result 'allow localhost udp\nallow 127.0.0.1 udp\nallow [::1]')"
+check "loopback rules with no port, by name and by address, load" $'localhost * udp\n127.0.0.1 * udp\n127.0.0.2 * udp\n::1 *' "$(connect_result 'allow localhost udp\nallow 127.0.0.1 udp\nallow 127.0.0.2 udp\nallow [::1]')"
 result="$( (load_language_configuration GOOD_CONFIGURATION "$HOME_DIR" && wc -c < "$LANGUAGE_CONFIGURATION_CONNECT_FILE") 2>&1)"
 check "a configuration without [connect] holds no rows" "0" "$(tr -d ' ' <<< "$result")"
-for case in 'allow *.example.org udp|wildcard host name' 'allow localhost:0 udp|port' 'allow localhost udx|not a transport' \
+for case in 'allow *.example.org udp|wildcard host name' 'allow localhost:0 udp|no usable port' 'allow localhost udx|not a transport' \
+  'allow 127.0.0.1/1 udp|not a loopback rule that names no port' 'allow 127.0.0.0/8 udp|not a loopback rule that names no port' \
+  'allow 127.evil.example udp|not a loopback rule that names no port' 'allow [::ffff:127.0.0.1] udp|not a loopback rule that names no port' \
   'allow 127.0.0.1:53 udp|not a loopback rule that names no port' 'allow 10.0.0.1:53 udp|not a loopback rule that names no port' \
   'allow example.org:443|not a loopback rule that names no port' 'allow *:53 udp|not a loopback rule that names no port' \
-  'allow 10.0.0.1 udp|not a loopback rule that names no port' 'deny localhost|is not an'; do
+  'allow 10.0.0.1 udp|not a loopback rule that names no port' "deny localhost|is not an 'allow <host>[:<port>] [udp|tcp]' line"; do
   result="$(connect_result "${case%|*}")"
   if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"${case##*|}"* && "${result#*|}" == *"CONNECT_CONFIGURATION.cfg', line 4."* ]]; then
     ok "refused in [connect], with file and line: ${case%|*}"

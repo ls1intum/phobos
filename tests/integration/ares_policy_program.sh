@@ -36,7 +36,7 @@ ln -s "$OUTSIDE" "$PROJ/link"
 CORE_X="$WORK/core-x"
 cp -R "$CORE" "$CORE_X"
 chmod +x "$CORE_X"/*.sh
-printf '[read]\n/usr\n/usr/bin\n%s\n%s/missing\n[execute]\n/usr\n/usr/bin\n%s\n[connect]\nallow localhost\n' "$PROJ" "$WORK" "$PROJ" > "$CORE_X/BaseLanguage-test.cfg"
+printf '[read]\n/usr\n/usr/bin\n%s\n[execute]\n/usr\n/usr/bin\n%s\n[connect]\nallow localhost\n' "$PROJ" "$PROJ" > "$CORE_X/BaseLanguage-test.cfg"
 printf '[read]\n%s\n' "$OTHER" > "$CORE_X/BaseOther.cfg"
 mkdir -p "$CORE_X/language-configurations"
 printf '[base]\nBaseLanguage-test.cfg\n[placeholders]\ntool.home = fixed %s\n[connect]\nallow localhost udp\n' "$JDK" \
@@ -49,13 +49,15 @@ printf -- '--foo\n' > "$WORK/no-chdir.flags"
 
 # Prints an Ares 2 policy with one file system entry for the path given, granting the rights named
 # among read, write, create, execute and delete, under the configuration given, which defaults to
-# the test one, with a timeout and a network entry when they are given.
+# the test one, with a timeout and a network entry when they are given, the entry on the port
+# given, 8080 by default.
 policy() {
   local path="$1"
   local rights="$2"
   local configuration="${3:-TEST_CONFIGURATION}"
   local timeout="${4:-}"
   local host="${5:-}"
+  local port="${6:-8080}"
   local right
   printf 'thisPolicyFileCompliesToThePolicyVersion: 1\nregardingTheSupervisedCode:\n'
   printf '  theFollowingProgrammingLanguageConfigurationIsUsed: %s\n' "$configuration"
@@ -69,7 +71,7 @@ policy() {
     fi
   done
   if [[ -n "$host" ]]; then
-    printf '    regardingNetworkConnections:\n      - onTheHost: "%s"\n        onThePort: 8080\n' "$host"
+    printf '    regardingNetworkConnections:\n      - onTheHost: "%s"\n        onThePort: %s\n' "$host" "$port"
     printf '        openConnections: true\n        sendData: true\n        receiveData: true\n'
   else
     printf '    regardingNetworkConnections: []\n'
@@ -144,13 +146,36 @@ if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"is not a placeholder the progra
 policy "$OUTSIDE/data.txt" read "" "" localhost > "$WORK/network.yaml"
 run_policy --config "$WORK/network.yaml"
 if spec_has net.rules "localhost 8080" && spec_has net.rules "localhost 8080 udp"; then ok "a granted network entry writes a TCP and a UDP rule"; else bad "a granted network entry writes a TCP and a UDP rule" "localhost 8080 and its udp twin" "$(cat "$SPEC/net.rules")"; fi
+policy "$OUTSIDE/data.txt" read "" "" 127.0.0.2 0 > "$WORK/loopback-every-port.yaml"
+run_policy --config "$WORK/loopback-every-port.yaml"
+if [[ "$STATUS" == 0 ]] && spec_has net.rules "127.0.0.2 *" && spec_has net.rules "127.0.0.2 * udp"; then ok "a loopback address with port 0 becomes every port of it, over TCP and UDP"; else bad "a loopback address with port 0 becomes every port of it, over TCP and UDP" "status 0" "${STATUS}: $(cat "$SPEC/net.rules" 2>&1) ${ERR}"; fi
+for host in 10.0.0.1 2001:db8::1; do
+  policy "$OUTSIDE/data.txt" read "" "" "$host" 0 > "$WORK/far-every-port.yaml"
+  run_policy --config "$WORK/far-every-port.yaml"
+  if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"other than loopback; name the port"* && "$ERR" == *"far-every-port.yaml', line 14."* ]]; then ok "${host} with port 0 is refused at its line"; else bad "${host} with port 0 is refused at its line" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
+done
+
+echo
+echo "== an Ares policy means what the hand-written .cfg of the same meaning means =="
+CORE_E="$WORK/core-e"
+cp -R "$CORE_X" "$CORE_E"
+rm -f "$CORE_E/BaseOther.cfg"
+policy "$OUTSIDE/data.txt" "read overwrite" "" 5000 localhost > "$WORK/meaning.yaml"
+printf '[read]\n%s\n[write]\n%s\n[connect]\nallow localhost udp\nallow localhost:8080\nallow localhost:8080 udp\n[limits]\ntimeout=5.000\n' \
+  "$OUTSIDE/data.txt" "$OUTSIDE/data.txt" > "$WORK/meaning.cfg"
+ares_spec="$(fresh_spec)"
+bash "$CORE_E/phobos-policysystem.sh" --spec-dir "$ares_spec" --tail-flags-file "$WORK/tail.flags" --config "$WORK/meaning.yaml" 2>/dev/null
+cfg_spec="$(fresh_spec)"
+bash "$CORE_E/phobos-policysystem.sh" --spec-dir "$cfg_spec" --tail-flags-file "$WORK/tail.flags" --config "$WORK/meaning.cfg" 2>/dev/null
+difference="$(diff -r -x scratch "$ares_spec" "$cfg_spec" 2>&1)"
+check "the specification of the Ares policy equals that of the .cfg, the configuration's [connect] row written into the .cfg" "" "$difference"
 
 echo
 echo "== base selection =="
 printf '[read]\n%s\n' "$OUTSIDE" > "$WORK/plain.cfg"
 run_policy --config "$WORK/plain.cfg"
 if spec_has read.paths "$OTHER" && spec_has read.paths "$PROJ"; then ok "a run without an Ares policy still folds every Base*.cfg"; else bad "a run without an Ares policy still folds every Base*.cfg" "both bases" "$(cat "$SPEC/read.paths")"; fi
-if grep -q ' udp$' "$SPEC/net.rules"; then bad "a run without an Ares policy holds no UDP row, since no configuration was loaded" "none" "$(cat "$SPEC/net.rules")"; else ok "a run without an Ares policy holds no UDP row, since no configuration was loaded"; fi
+if [[ "$STATUS" == 0 && -f "$SPEC/net.rules" ]] && ! grep -q ' udp$' "$SPEC/net.rules"; then ok "a run without an Ares policy holds no UDP row, since no configuration was loaded"; else bad "a run without an Ares policy holds no UDP row, since no configuration was loaded" "status 0 and no udp row" "${STATUS}: $(cat "$SPEC/net.rules" 2>&1)"; fi
 policy allowed.txt read BROKEN_CONFIGURATION > "$WORK/broken.yaml"
 run_policy --tail-flags-file "$WORK/tail.flags" --config "$WORK/broken.yaml"
 if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"'BaseLanguage-missing.cfg' named in [base] does not exist"* ]]; then ok "a configuration naming a base that does not exist is refused, naming it"; else bad "a configuration naming a base that does not exist is refused, naming it" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
@@ -169,11 +194,7 @@ run_policy --tail-flags-file "$WORK/tail.flags" --config "$WORK/merge.yaml" --co
 first="$SPEC"
 run_policy --tail-flags-file "$WORK/tail.flags" --config "$WORK/merge.cfg" --config "$WORK/merge.yaml"
 second="$SPEC"
-same=1
-for file in read.paths write.paths execute.paths net.rules timeout.sec limits.conf; do
-  cmp -s "$first/$file" "$second/$file" || same=0
-done
-if (( same )); then ok "the specification is the same in either order"; else bad "the specification is the same in either order" "identical" "$(diff "$first/read.paths" "$second/read.paths")"; fi
+check "the specification is the same in either order" "" "$(diff -r -x scratch "$first" "$second" 2>&1)"
 if grep -qxF "$OUTSIDE/data.txt" "$first/read.paths" && grep -qxF "$OTHER/x" "$first/read.paths"; then ok "the paths of both are unioned"; else bad "the paths of both are unioned" "both" "$(cat "$first/read.paths")"; fi
 check "the largest timeout across files wins" "7" "$(cat "$first/timeout.sec")"
 policy "$OUTSIDE/data.txt" read "" 9000 > "$WORK/merge.yaml"
@@ -194,6 +215,21 @@ hierarchy="$(
 )"
 hierarchy_status=$?
 if (( hierarchy_status == PHB_EPOLICY )) && [[ "$hierarchy" == *"Policy unenforceable"* ]]; then ok "a strict-subset .cfg row beside an Ares policy is still refused by the hierarchy check"; else bad "a strict-subset .cfg row beside an Ares policy is still refused by the hierarchy check" "status ${PHB_EPOLICY}" "${hierarchy_status}: ${hierarchy}"; fi
+for yaml in "$PROJ/allowed.yaml" "$WORK/link.yaml"; do
+  run_policy --tail-flags-file "$WORK/tail.flags" --config "$yaml"
+  hierarchy="$(
+    export PHOBOS_SCRATCH="$WORK/scratch-hierarchy"
+    mkdir -p "$PHOBOS_SCRATCH"
+    # shellcheck source=../../core/phobos-tools-common/phobos-common.sh
+    source "${CORE}/phobos-tools-common/phobos-common.sh"
+    args=()
+    build_path_args args "$SPEC/read.paths" "$SPEC/execute.paths" "$SPEC/write.paths" "$SPEC/create.paths" \
+      "$SPEC/delete.paths" "$SPEC/ipc.paths" "$SPEC/symlink.paths" "$SPEC/refer.paths" 2>&1 >/dev/null
+    printf '%s' "${args[*]}" > /dev/null
+  )"
+  hierarchy_status=$?
+  if (( hierarchy_status == 0 )); then ok "the specification of ${yaml##*/} alone passes the hierarchy check"; else bad "the specification of ${yaml##*/} alone passes the hierarchy check" "status 0" "${hierarchy_status}: ${hierarchy}"; fi
+done
 
 echo
 echo "== the project root =="
@@ -215,10 +251,17 @@ STATUS=$?
 if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"this run has no project root"* ]]; then ok "with neither, a relative path is refused, also from inside the project with the policy there"; else bad "with neither, a relative path is refused, also from inside the project with the policy there" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
 run_policy --tail-flags-file "$WORK/no-chdir.flags" --config "$WORK/root.yaml"
 if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"no project root"* ]]; then ok 'with neither, ${PROJECT_ROOT} is refused'; else bad 'with neither, ${PROJECT_ROOT} is refused' "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
-for root in relative/root "$WORK/does-not-exist"; do
+run_policy --tail-flags-file "$WORK/other-tail.flags" --config "$WORK/root.yaml"
+if spec_has read.paths "$OTHER/x"; then ok '${PROJECT_ROOT} is the tail'"'"'s last --chdir when --project-root is not given'; else bad '${PROJECT_ROOT} is the tail'"'"'s last --chdir when --project-root is not given' "$OTHER/x" "$(cat "$SPEC/read.paths") $ERR"; fi
+for root in relative/root "$WORK/does-not-exist" "" "$PROJ/../other"; do
   run_policy --project-root "$root" --config "$WORK/relative.yaml"
-  if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"is not an absolute path to an existing directory"* ]]; then ok "--project-root ${root##*/} is refused"; else bad "--project-root ${root##*/} is refused" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
+  if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"is not an absolute path to an existing directory"* ]]; then ok "--project-root '${root}' is refused"; else bad "--project-root '${root}' is refused" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
 done
+mkdir -p "$WORK/spec-parent-empty-root"
+out="$(bash "$CORE_X/phobos.sh" --tail-flags-file "$WORK/tail.flags" --spec-parent "$WORK/spec-parent-empty-root" --project-root "" \
+  -nfr -nnr -ntr -nrr --config "$WORK/relative.yaml" -- /bin/true 2>&1)"
+status=$?
+if (( status == PHB_EPOLICY )) && [[ "$out" == *"--project-root '' is not an absolute path"* ]]; then ok "phobos.sh hands an empty --project-root on, where it is refused, rather than drop it"; else bad "phobos.sh hands an empty --project-root on, where it is refused, rather than drop it" "status ${PHB_EPOLICY}" "${status}: ${out}"; fi
 DEBUG_SPEC_PARENT="$WORK/spec-parent"
 mkdir -p "$DEBUG_SPEC_PARENT"
 out="$(bash "$CORE_X/phobos.sh" --debug --tail-flags-file "$WORK/tail.flags" --spec-parent "$DEBUG_SPEC_PARENT" --project-root "$OTHER" \
@@ -229,10 +272,10 @@ echo
 echo "== a misnamed file is refused by both readers =="
 policy allowed.txt read > "$WORK/yaml-in.cfg"
 run_policy --config "$WORK/yaml-in.cfg"
-if [[ "$STATUS" == "$PHB_EPOLICY" ]]; then ok "a .cfg holding YAML is refused"; else bad "a .cfg holding YAML is refused" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
+if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"appears before any [section] header"* ]]; then ok "a .cfg holding YAML is refused by the .cfg reader"; else bad "a .cfg holding YAML is refused by the .cfg reader" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
 printf '[read]\n%s\n' "$OUTSIDE" > "$WORK/cfg-in.yaml"
 run_policy --config "$WORK/cfg-in.yaml"
-if [[ "$STATUS" == "$PHB_EPOLICY" ]]; then ok "a .yaml holding a cfg is refused"; else bad "a .yaml holding a cfg is refused" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
+if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"is a flow collection"* ]]; then ok "a .yaml holding a cfg is refused by the YAML reader"; else bad "a .yaml holding a cfg is refused by the YAML reader" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
 cp "$WORK/outside.yaml" "$WORK/outside.yml"
 run_policy --config "$WORK/outside.yml"
 if [[ "$STATUS" == 0 ]] && spec_has read.paths "$OUTSIDE/data.txt"; then ok "a .yml name is read as an Ares policy too"; else bad "a .yml name is read as an Ares policy too" "status 0" "${STATUS}: ${ERR}"; fi

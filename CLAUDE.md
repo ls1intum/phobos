@@ -187,7 +187,7 @@ core/                      the sandbox itself
   phobos-tools-policysystem/
     phobos-policy-parse.sh one cfg in, the parsed state and the specification files out
     phobos-policy-yaml.sh  a strict subset of YAML in, flat records with line numbers out
-    phobos-language-configuration.sh  a programming language configuration in, its bases and placeholder values out
+    phobos-language-configuration.sh  a programming language configuration in, its bases, placeholder values and [connect] rows out
     phobos-policy-ares.sh  an Ares 2 security policy in, the same parsed state a cfg gives out
     config_doc.txt         the configuration format, documented
   phobos-tools-filesystem/
@@ -196,7 +196,7 @@ core/                      the sandbox itself
     phobos-haproxy.sh      the egress broker and inbound filter: turns [connect]/[accept] into an haproxy.cfg
     phobos-network-args.sh [connect] and [bind] to the TCP and UDP port rules Landlock enforces
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
-    language-configurations/  one file per Ares 2 programming language configuration: its bases and placeholders
+    language-configurations/  one file per Ares 2 programming language configuration: its bases, placeholders and [connect] rows
 docker/prune_phase/        one image per language, plus the orchestrator
 docker/run_phase/          the image an exercise actually runs in
 tests/                     the acceptance and probe suites

@@ -219,11 +219,12 @@ for target in "192.0.2.1 ${UDP_PORT}" "10.0.0.1 $((UDP_PORT + 1))"; do
   run_pm --config "$a_net" -- "$P" udp_send sendto "$address" "$port" "BAD-ares"
   refused_by_guard=0
   op_failed_with sendto $DENIED_ERRNOS && refused_by_guard=1
+  guarded_run="$(pm_describe)"
   run_pm --no-networksystem-restriction --config "$a_net" -- "$P" udp_send sendto "$address" "$port" "BAD-ares"
   if (( refused_by_guard )) && op_failed_with sendto ENETUNREACH; then
     ok "a datagram to ${address}:${port}, which no rule names, is refused by the sandbox, and without the network layer it meets the missing network"
   else
-    bad "a datagram to ${address}:${port} is refused by the sandbox" "$(pm_describe)"
+    bad "a datagram to ${address}:${port} is refused by the sandbox" "guarded: ${guarded_run}; network layer off: $(pm_describe)"
   fi
 done
 

@@ -122,8 +122,8 @@ check "a granted network entry becomes a TCP and a UDP rule" "www.example.com 80
 check "120000 ms becomes 120.000 s" "120.000" "$(field timeout "$result")"
 check "the configuration it names is recorded" "TEST_CONFIGURATION" "$(field configuration "$result")"
 summary="$( (ares_select_language_configuration "$HOME_DIR" "${WORK}/policy.yaml" && parse_ares_policy "${WORK}/policy.yaml" "$PROJ" "") 2>&1 >/dev/null)"
-for needle in "1 file system rows imported" "1 network entries imported" "a timeout of 120.000 s imported, which bounds the whole run" \
-  "1 command, 1 thread and 1 package entries" "test classes get no exemption from Phobos"; do
+for needle in "file system rows imported: 1" "network entries imported, each as a TCP and a UDP rule: 1" "a timeout of 120.000 s imported, which bounds the whole run" \
+  "command entries 1, thread entries 1, package entries 1" "test classes get no exemption from Phobos"; do
   if [[ "$summary" == *"$needle"* ]]; then ok "the summary line says: ${needle}"; else bad "the summary line says: ${needle}" "$needle" "$summary"; fi
 done
 
@@ -164,7 +164,7 @@ if [[ "$summary" == *"no timeout imported"* ]]; then ok "and says so"; else bad 
 
 echo "== the network mapping =="
 for case in "localhost|80|allow localhost:80" "localhost|0|allow localhost" "127.0.0.1|0|allow 127.0.0.1:*" "10.0.0.1|53|allow 10.0.0.1:53" \
-  "::1|443|allow [::1]:443" "::1|0|allow [::1]" "::ffff:127.0.0.1|8080|allow [::ffff:127.0.0.1]:8080" \
+  "::1|443|allow [::1]:443" "::1|0|allow [::1]" "::ffff:127.0.0.1|8080|allow [::ffff:127.0.0.1]:8080" "127.0.0.2|0|allow 127.0.0.2:*" \
   "example.org|443|allow example.org:443" "*|443|allow *:443"; do
   host="${case%%|*}"
   rest="${case#*|}"
@@ -173,7 +173,8 @@ for case in "localhost|80|allow localhost:80" "localhost|0|allow localhost" "127
   # shellcheck disable=SC2154
   check "ares_network_rule_line ${host} ${port}" "${rest#*|}" "$( (ares_network_rule_line "$host" "$port" && printf '%s' "$ares_rule") 2>&1)"
 done
-for case in "example.org|0|name the port" "*|0|name the port" "example.org.|443|drop the dot" "exa mple.org|443|neither" "-x.org|443|neither"; do
+for case in "example.org|0|name the port" "*|0|name the port" "10.0.0.1|0|name the port" "2001:db8::1|0|name the port" \
+  "::ffff:127.0.0.1|0|name the port" "example.org.|443|drop the dot" "exa mple.org|443|neither" "-x.org|443|neither"; do
   host="${case%%|*}"
   rest="${case#*|}"
   port="${rest%%|*}"
@@ -184,6 +185,20 @@ result="$(example_policy | sed 's/"www.example.com"/"localhost"/; s/onThePort: 8
 check "localhost with port 0 becomes a TCP and a UDP rule for every port" "localhost *,localhost * udp," "$(field net "$result")"
 result="$(example_policy | sed 's/openConnections: true/openConnections: false/; s/sendData: true/sendData: false/; s/receiveData: true/receiveData: false/' | parse_result)"
 check "an entry with all three flags false grants nothing" "" "$(field net "$result")"
+for flags in "true true false|openConnections sendData but not receiveData" "true false true|openConnections receiveData but not sendData" \
+  "false true true|sendData receiveData but not openConnections" "true false false|openConnections but not sendData receiveData" \
+  "false true false|sendData but not openConnections receiveData" "false false true|receiveData but not openConnections sendData"; do
+  read -r open send receive <<< "${flags%%|*}"
+  result="$(example_policy | sed "s/openConnections: true/openConnections: ${open}/; s/sendData: true/sendData: ${send}/; s/receiveData: true/receiveData: ${receive}/" | parse_result)"
+  if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"grants ${flags#*|}"* && "${result#*|}" == *"policy.yaml', line 18."* ]]; then
+    ok "a network entry with openConnections ${open}, sendData ${send}, receiveData ${receive} is refused at its line"
+  else
+    bad "a network entry with openConnections ${open}, sendData ${send}, receiveData ${receive} is refused at its line" "status ${PHB_EPOLICY}" "$result"
+  fi
+done
+star_summary="$( (example_policy | sed 's/"www.example.com"/"*"/; s/onThePort: 80/onThePort: 443/' > "${WORK}/star.yaml"
+  ares_select_language_configuration "$HOME_DIR" "${WORK}/star.yaml" && parse_ares_policy "${WORK}/star.yaml" "$PROJ" "") 2>&1 >/dev/null)"
+if [[ "$star_summary" == *"permits every host on port 443, over TCP and UDP"* ]]; then ok "an entry for every host is imported with a notice naming it"; else bad "an entry for every host is imported with a notice naming it" "a notice" "$star_summary"; fi
 
 echo "== refused =="
 for case in \
@@ -237,6 +252,58 @@ for case in \
   fi
 done
 
+for flag in overwriteAllFiles createAllFiles deleteAllFiles; do
+  result="$(example_policy | sed "s/\"allowed.txt\"/\"nothere.txt\"/; s/readAllFiles: true/readAllFiles: false/; s/${flag}: false/${flag}: true/" | parse_result)"
+  if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"does not exist"* && "${result#*|}" == *"policy.yaml', line 11."* ]]; then
+    ok "a missing path granted only ${flag} is refused, never created"
+  else
+    bad "a missing path granted only ${flag} is refused, never created" "status ${PHB_EPOLICY}" "$result"
+  fi
+done
+
+echo "== the shapes of the Ares 2 repository's example policies =="
+# The example policies of the Ares 2 repository (examples/ares-exercise-gradle and -maven, at the commit named above),
+# rewritten here: the path key after the five flags, "[ ]" for an empty list, comments between keys.
+ares_example_shape() {
+  cat <<POLICY
+thisPolicyFileCompliesToThePolicyVersion: 1
+regardingTheSupervisedCode:
+  theFollowingProgrammingLanguageConfigurationIsUsed: $1
+  theSupervisedCodeUsesTheFollowingPackage: "org.example"
+  theMainClassInsideThisPackageIs: "Penguin"
+  theFollowingClassesAreTestClasses:
+    - "org.example.PenguinTest"
+  theFollowingResourceAccessesArePermitted:
+    # one permitted file, on purpose
+    regardingFileSystemInteractions:
+      - readAllFiles: true
+        overwriteAllFiles: false
+        createAllFiles: false
+        executeAllFiles: false
+        deleteAllFiles: false
+        onThisPathAndAllPathsBelow: "allowed.txt"
+    regardingNetworkConnections: [ ]
+    regardingCommandExecutions: [ ]
+    regardingThreadCreations: [ ]
+    regardingPackageImports: [ ]
+    regardingTimeouts:
+      - timeout: 3000
+POLICY
+}
+result="$(ares_example_shape TEST_CONFIGURATION | parse_result)"
+check "the Gradle example's shape reads its one file" "${PROJ}/allowed.txt " "$(field read "$result")"
+check "and imports its 3000 ms as 3.000 s, which bounds the whole run" "3.000" "$(field timeout "$result")"
+result="$(ares_example_shape JAVA_USING_MAVEN_ARCHUNIT_AND_ASPECTJ | parse_result)"
+if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"has no file 'language-configurations/JAVA_USING_MAVEN_ARCHUNIT_AND_ASPECTJ.cfg'"* ]]; then
+  ok "the Maven example is refused for want of its programming language configuration"
+else
+  bad "the Maven example is refused for want of its programming language configuration" "status ${PHB_EPOLICY}" "$result"
+fi
+result="$(example_policy | sed '/^    regardingFileSystemInteractions:$/,/^    regardingNetworkConnections:$/{/^    regardingNetworkConnections:$/!d}' \
+  | sed 's/^    regardingNetworkConnections:$/    regardingFileSystemInteractions: []\n    regardingNetworkConnections: []/' \
+  | sed '/^      - onTheHost/,/^        receiveData/d; /^    regardingTimeouts:$/,$d' | { cat; printf '    regardingTimeouts: []\n'; } | parse_result)"
+check "a policy that maps to nothing but notices still parses" "|||" "$(field read "$result")|$(field net "$result")|$(field timeout "$result")|"
+
 echo "== accepted, though Phobos grants nothing for it =="
 result="$(policy_with '      - executeTheCommand: "ls"' '      - "${work.dir}/run"\n      - executeTheCommand: "ls"' | parse_result)"
 check 'a bare command, with a placeholder Phobos does not expand, is accepted' "120.000" "$(field timeout "$result")"
@@ -272,7 +339,8 @@ result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' '     
 check "a row whose ancestor is only lexical, through a symbolic link, is written" "${PROJ}/link/data.txt " "$(field read "$result")"
 mkdir -p "${WORK}/missing-parent-test"
 : > "${WORK}/missing-parent-test/f"
-printf '%s\n' "${WORK}/missing-parent-test/gone" > "${BASE}/read.paths"
+# Resolved without asking that it exists, this base row would name the directory that holds the imported file.
+printf '%s\n' "${WORK}/missing-parent-test/gone/.." > "${BASE}/read.paths"
 result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' "      - onThisPathAndAllPathsBelow: \"${WORK}/missing-parent-test/f\"" | parse_result "$PROJ" "$BASE")"
 check "a base path that does not exist covers nothing" "${WORK}/missing-parent-test/f " "$(field read "$result")"
 

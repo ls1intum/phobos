@@ -566,10 +566,10 @@ ares_map_file_entry() {
 }
 
 # Sets ares_rule to the [connect] line one network entry becomes, or refuses the entry: localhost,
-# an IPv4 or an IPv6 address with a port, or with port 0 every port, a host name or "*" with a port,
-# each as a .cfg line would write it, so that append_connect_rule judges it as it judges one. A host
-# name ending in a dot, a host name or "*" with port 0, and anything Ares's host pattern does not
-# admit are refused. Takes the host and the port. Assumes PARSE_LOCATION names the entry's line and
+# an IPv4 or an IPv6 address with a port, or for a loopback address with port 0 every port, a host
+# name or "*" with a port, each as a .cfg line would write it, so that append_connect_rule judges it
+# as it judges one. A host name ending in a dot, any host but loopback with port 0, and anything
+# Ares's host pattern does not admit are refused here, where the entry's line is known. Takes the host and the port. Assumes PARSE_LOCATION names the entry's line and
 # that it is called plainly, so that a refusal ends the run.
 ares_network_rule_line() {
   local host="$1"
@@ -578,10 +578,17 @@ ares_network_rule_line() {
   [[ "$port" != "0" ]] || every=1
   if [[ "$host" == "localhost" ]]; then
     if (( every )); then ares_rule="allow localhost"; else ares_rule="allow localhost:${port}"; fi
-  elif is_ipv4_literal "$host"; then
-    if (( every )); then ares_rule="allow ${host}:*"; else ares_rule="allow ${host}:${port}"; fi
-  elif is_ipv6_literal "$host"; then
-    if (( every )); then ares_rule="allow [${host}]"; else ares_rule="allow [${host}]:${port}"; fi
+  elif is_ipv4_literal "$host" || is_ipv6_literal "$host"; then
+    if (( every )) && ! is_loopback_host "$host"; then
+      refuse_cfg "onTheHost ${host@Q} with onThePort 0 would permit every port of a host other than loopback; name the port"
+    fi
+    if is_ipv6_literal "$host"; then
+      if (( every )); then ares_rule="allow [${host}]"; else ares_rule="allow [${host}]:${port}"; fi
+    elif (( every )); then
+      ares_rule="allow ${host}:*"
+    else
+      ares_rule="allow ${host}:${port}"
+    fi
   elif [[ "$host" == "*" ]]; then
     if (( every )); then
       refuse_cfg "onTheHost '*' with onThePort 0 would permit every host on every port; name the port"
@@ -699,7 +706,7 @@ ares_report_summary() {
   local commands="${ares_count["${ARES_ACCESSES}.regardingCommandExecutions"]}"
   local threads="${ares_count["${ARES_ACCESSES}.regardingThreadCreations"]}"
   local packages="${ares_count["${ARES_ACCESSES}.regardingPackageImports"]}"
-  _log "Ares 2 policy ${ares_file@Q} (${LANGUAGE_CONFIGURATION_NAME}): ${ares_rows} file system rows imported and ${ares_network_entries} network entries imported, each as a TCP and a UDP rule; ${ares_skipped} file system rows are already covered by the base policy, so Phobos adds nothing for them, and their narrower intent is enforced by Ares inside the JVM, not by Phobos; ${ares_timeout_text}; not enforced by Phobos: ${commands} command, ${threads} thread and ${packages} package entries, and the test-class exemption, since test classes get no exemption from Phobos."
+  _log "Ares 2 policy ${ares_file@Q} (${LANGUAGE_CONFIGURATION_NAME}): file system rows imported: ${ares_rows}; network entries imported, each as a TCP and a UDP rule: ${ares_network_entries}; file system rows already covered by the base policy: ${ares_skipped}, for which Phobos adds nothing, as their narrower intent is enforced by Ares inside the JVM, not by Phobos; ${ares_timeout_text}; not enforced by Phobos: command entries ${commands}, thread entries ${threads}, package entries ${packages}, and the test-class exemption, since test classes get no exemption from Phobos."
 }
 
 # Reads one Ares 2 policy as an exercise configuration. Its file system rows go into the

@@ -70,8 +70,8 @@ WHAT IT READS
   a --config file is an Ares 2 policy, the bases are instead exactly the ones the programming
   language configuration it names lists, "${HERE}/language-configurations/<NAME>.cfg", together
   with the [connect] rows of that configuration; every Ares 2 policy of a run names the same
-  configuration. A
-  name that matches Base*.cfg but is not a readable file ends the run with PHB-EPOLICY
+  configuration. A name that matches Base*.cfg, or that a configuration lists, but is not a
+  readable file ends the run with PHB-EPOLICY
   rather than being skipped, because skipping it would build a narrower policy and report it
   as a working one. With no Base*.cfg at all there is no sandbox to build, which is likewise
   refused.
@@ -132,13 +132,14 @@ usage() {
 SPEC_DIR=""
 tail_flags_file="${HERE}/TailPhobos.cfg"
 project_root_option=""
+project_root_given=0
 cfgs=()
 while (( "$#" )); do
   case "$1" in
     --spec-dir)        shift; [[ $# -gt 0 ]] || usage; SPEC_DIR="$1"; shift;;
     --tail-flags-file) shift; [[ $# -gt 0 ]] || usage; tail_flags_file="$1"; shift;;
     --config|-c)       shift; [[ $# -gt 0 ]] || usage; cfgs+=("$1"); shift;;
-    --project-root)    shift; [[ $# -gt 0 ]] || usage; project_root_option="$1"; shift;;
+    --project-root)    shift; [[ $# -gt 0 ]] || usage; project_root_option="$1"; project_root_given=1; shift;;
     --debug|-d)        enable_debug_log; shift;;
     --help|-h)         show_help;;
     *) usage;;
@@ -165,10 +166,13 @@ done
 # and otherwise the last --chdir of the tail flags, the directory the enforcer runs the command
 # in. Never the current directory of this program and never the policy file's directory. Both
 # sources are operator input fixed before the command exists. A relative --chdir is kept as it
-# is and refused by the import only where a path needs it.
-if [[ -n "$project_root_option" ]]; then
-  if [[ "$project_root_option" != /* || ! -d "$project_root_option" ]]; then
-    report "Policy invalid: --project-root ${project_root_option@Q} is not an absolute path to an existing directory. (PHB-EPOLICY)"
+# is and refused by the import only where a path needs it. A --project-root that was given
+# empty, as an unset variable in a grading script gives it, is refused rather than taken for
+# none, and so is one with a ".." segment, which would name the root differently for a relative
+# path than for ${PROJECT_ROOT}.
+if (( project_root_given )); then
+  if [[ "$project_root_option" != /* || ! -d "$project_root_option" || "/${project_root_option}/" == */../* ]]; then
+    report "Policy invalid: --project-root ${project_root_option@Q} is not an absolute path to an existing directory without a '..' segment. (PHB-EPOLICY)"
     exit "${PHB_EPOLICY}"
   fi
   project_root="$project_root_option"
@@ -202,7 +206,11 @@ if [[ -n "$ARES_SELECTED_CONFIGURATION" ]]; then
 fi
 for candidate in "${base_cfgs[@]}"; do
   [[ -f "$candidate" && -r "$candidate" ]] && continue
-  report "Policy invalid: ${candidate@Q} matches Base*.cfg but is not a readable file, so the base policy cannot be built. (PHB-EPOLICY)"
+  if [[ -n "$ARES_SELECTED_CONFIGURATION" ]]; then
+    report "Policy invalid: ${candidate@Q}, a base the programming language configuration ${ARES_SELECTED_CONFIGURATION@Q} lists, is not a readable file, so the base policy cannot be built. (PHB-EPOLICY)"
+  else
+    report "Policy invalid: ${candidate@Q} matches Base*.cfg but is not a readable file, so the base policy cannot be built. (PHB-EPOLICY)"
+  fi
   exit "${PHB_EPOLICY}"
 done
 if [[ ${#base_cfgs[@]} -eq 0 ]]; then

@@ -432,10 +432,20 @@ determine_language_placeholder() {
   PARSE_LOCATION="$caller_location"
 }
 
+# Whether a [connect] host names loopback and nothing else: localhost, ::1, or one IPv4 address in
+# 127.0.0.0/8 written as four numbers, never a range, which a prefix could widen past loopback,
+# and never a host name, which a resolver could make any address. Takes the host as
+# append_connect_rule wrote it. Needs no environment.
+is_exact_loopback_host() {
+  local host="$1"
+  [[ "$host" == "localhost" || "$host" == "::1" ]] && return 0
+  is_ipv4_literal "$host" && [[ "$host" == 127.* ]]
+}
+
 # Reads one [connect] line of a programming language configuration with append_connect_rule, so it
 # meets every refusal a policy cfg's [connect] line meets, and appends its row to
-# LANGUAGE_CONFIGURATION_CONNECT_FILE, unless it is not a loopback rule that names no port, which is
-# refused: a programming language configuration says which base a run uses and must not become a
+# LANGUAGE_CONFIGURATION_CONNECT_FILE, unless it is not a rule for one loopback host that names no
+# port, which is refused: a programming language configuration says which base a run uses and must not become a
 # second, less visible place for egress rules. A rule that reaches beyond loopback belongs in a base
 # policy, whose change says so. Takes the line. Assumes it runs inside load_language_configuration,
 # with PARSE_LOCATION naming the line, and that it is called plainly, so that a refusal ends the run.
@@ -447,7 +457,7 @@ read_language_connect_line() {
   row="$(new_scratch_file phobos-language-connect.XXXXXX)"
   append_connect_rule "$line" "$row"
   read -r host port _ < "$row"
-  if ! is_loopback_host "$host" || [[ "$port" != "*" ]]; then
+  if ! is_exact_loopback_host "$host" || [[ "$port" != "*" ]]; then
     rm -f "$row"
     refuse_cfg "${line@Q} in [connect] is not a loopback rule that names no port, which is all a programming language configuration may add; a rule that reaches further belongs in a base policy"
   fi

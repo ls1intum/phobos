@@ -255,6 +255,13 @@ yaml_text() {
 }
 accepted "a well-formed Ares 2 policy" "$(yaml_text "$ARES_POLICY")"
 refused "an Ares 2 policy that names nothing" "${WORK}/missing.yaml" "does not exist" "missing.yaml"
+if (( $(id -u) == 0 )); then
+  skip "an Ares 2 policy this user may not read" "running as root, which reads every file"
+else
+  SECRET_YAML="$(yaml_text "$ARES_POLICY")"
+  chmod 000 "$SECRET_YAML"
+  refused "an Ares 2 policy this user may not read" "$SECRET_YAML" "cannot be read"
+fi
 mkdir "${WORK}/dir.yaml"
 refused "an Ares 2 policy that is a directory" "${WORK}/dir.yaml" "is a directory"
 refused "an Ares 2 policy with a byte order mark" "$(yaml_text "\xef\xbb\xbf${ARES_POLICY}")" "byte order mark"
