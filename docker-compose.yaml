@@ -60,6 +60,18 @@ services:
     <<: *record
     network_mode: bridge
 
+  # Opt-in, for the Java exercises under var/tmp/testing-dir/java-egress whose prune.json declares
+  # hosts (A.6.5): the only service with a network, and it keeps or drops declared rules but never adds
+  # one. Compose's own network gives the container Docker's resolver at 127.0.0.11, which the egress
+  # broker resolves the declared names through. Its artefacts go to path_sets/egress, which the
+  # orchestrator does not merge; adopting a declared rule is a reviewed step of its own. Run it with
+  #   docker compose --profile egress run --rm prune_java_egress
+  prune_java_egress:
+    <<: *prune_layers
+    profiles: ["egress"]
+    network_mode: !reset null
+    command: ["--resolver", "127.0.0.11", "--output-dir", "/var/tmp/path_sets/egress", "java-egress"]
+
   orchestrate:
     build: docker/prune_phase/orchestrate
     volumes:
