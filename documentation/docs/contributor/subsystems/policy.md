@@ -33,6 +33,7 @@ usually makes writable.
 | --- | --- |
 | `phobos-policysystem.sh` | the program: base discovery, the merge, the checks, the write |
 | `phobos-policy-parse.sh` | one configuration in, the parsed state and the per-right files out |
+| `phobos-policy-yaml.sh` | a strict subset of YAML in, flat records with line numbers out, the first step towards reading an Ares 2 policy; sourced, and called by no layer yet |
 | `phobos-rights.sh` | a parsed policy to the `--rights=` arguments `phobos-landlock-filesystem-and-networksystem` takes |
 | `phobos-network-args.sh` | `[connect]` and `[bind]` to the Landlock port rules, and the refusals |
 | `phobos-spec-dir.sh` | the specification directory, its marker, and its lifetime |
@@ -41,7 +42,7 @@ usually makes writable.
 | `phobos-constants.sh` | the exit statuses and the other shared numbers |
 | `phobos-log.sh` | reporting, and the denial counter |
 | `phobos-signals.sh` | passing a caller's signals on to the command a layer waits for |
-| `phobos-common.sh` | the aggregate every caller sources, which sources the nine above |
+| `phobos-common.sh` | the aggregate every caller sources, which sources the ten above |
 
 `phobos-common.sh` has no include guard on purpose: sourcing it has to keep resetting
 `PHB_DEBUG_ENABLED`, so that the environment can never switch debugging on.
@@ -91,6 +92,17 @@ locale `[0-9]` matched Arabic-Indic digits, and an address written in them passe
 that the connect guard then read as a name. The parser further bounds a number by its digits
 before any arithmetic, because bash arithmetic wraps without a word. `PHB_LARGEST_LIMIT_DIGITS`
 is 18 and `PHB_LARGEST_TIMEOUT_SECOND_DIGITS` is 15.
+
+## The YAML subset
+
+`read_yaml_subset` in `phobos-policy-yaml.sh` reads one document of block mappings, block
+sequences, the empty flow collections and one-line scalars, in UTF-8 with line feeds and no tabs.
+It writes one record per node, `<line>\t<path>\t<type>\t<value>`, in document order. Anything
+two YAML readers could read differently ends the run with `PHB-EPOLICY`, the file and the line.
+Among those are an anchor, an alias, a tag, a block scalar, a second document, a duplicate key,
+and a boolean or number a reader could take for a string. The reader can therefore be wrong only by refusing.
+Nothing in a run calls it yet; `tests/unit/phobos-tools-policysystem/yaml_subset.sh` holds it to
+both directions.
 
 ## The merge
 

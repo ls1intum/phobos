@@ -113,6 +113,11 @@ The command inherits neither descriptor, so it can neither feed the counter nor 
 The wait for the counts is bounded, and a run whose counts do not arrive reports none; the exit
 status never changes either way.
 
+A terminal sends a Ctrl+C, a quit or a hangup to the whole run, the pass-through and the counter
+included. Both ignore it and end only when the command's standard error closes, so what the
+command writes while it handles the signal, a Python traceback among it, still reaches you and
+still counts.
+
 ## Further reading
 
 - [Filesystem subsystem](/contributor/subsystems/filesystem) — the same layer from the inside

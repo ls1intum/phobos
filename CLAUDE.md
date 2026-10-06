@@ -124,7 +124,7 @@ awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print 
 
 One of those is narrower than it looks: `bandit` runs over exactly two directories, not the
 whole tree, because everything else Python here is fixture. `hadolint` matches `Dockerfile*` at
-any depth, which reaches the four under `docker/`. CI runs
+any depth, which reaches the five under `docker/`. CI runs
 shellcheck and hadolint inside pinned container images, installs cppcheck with apt, and
 downloads `actionlint` and `editorconfig-checker` at a pinned version and checksum; the commands above assume the tools are installed locally and will
 differ in version, which is the usual reason a local run and CI disagree.
@@ -185,7 +185,7 @@ core/                      the sandbox itself
     phobos-haproxy.sh      the egress broker and inbound filter: turns [connect]/[accept] into an haproxy.cfg
     phobos-network-args.sh [connect] and [bind] to the TCP and UDP port rules Landlock enforces
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
-docker/prune_phase/        one image per language, plus the orchestrator
+docker/prune_phase/        one image per language, the layer prune image under layers/, plus the orchestrator
 docker/run_phase/          the image an exercise actually runs in
 tests/                     unit/ (C and shell units), integration/ (shell suites, the acceptance suites and
                            protection-matrix/), python/, and two probes

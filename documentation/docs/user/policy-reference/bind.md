@@ -127,8 +127,10 @@ no `udp` connect rule gains nothing.
 
 ## Notes
 
-**A datagram bind needs Landlock version 10**, the same as a datagram connect that names a port
-on its own.
+**A datagram bind on a port other than 0 needs Landlock version 10**, the same as a datagram
+connect rule that names a port. Below it the enforcer ends the run with exit status 125. A `udp`
+loopback rule with no port in `[connect]` lifts that for a connect rule only, never for a
+`[bind]` row.
 
 **A kernel too old to close bind leaves it open and says so.** Below Landlock version 4 for TCP
 and version 10 for UDP, the enforcer prints a warning on every run, and the container's network

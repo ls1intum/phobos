@@ -197,6 +197,11 @@ run whose every waiting layer is killed with `SIGKILL` from outside leaves the l
 later run refuses a name already mapped to different addresses, through `hosts_accepts`, rather
 than skipping it.
 
+**A server that speaks first waits on a port a name rule names.** `haproxy_allow_rules` tests
+the port before the TLS host name, so the broker decides a connection to any other port at once.
+On a name rule's port it cannot tell a TLS client that has not written yet from a server that
+speaks first, and that connection waits out the five-second inspection delay.
+
 **A host rule or an `[accept]` rule needs a networked container.** Both HAProxy instances need
 one, so the layer logs a notice and relies on the outer isolation instead of `--network none`.
 

@@ -144,7 +144,7 @@ A configuration the parser cannot read ends the run with `PHB-EPOLICY` before th
 starts. A rule that parses but cannot be enforced ends it later. `PHB-ERUNTIME` covers a network
 layer or an HAProxy that cannot start, for example with an `[accept]` source HAProxy rejects or an
 exact name with no resolver. Exit status 125 covers a rule the enforcer refuses, for example a
-`udp` rule below Landlock version 10.
+`udp` rule that names a port, on a kernel below Landlock version 10.
 
 The message says what is wrong. For a fault on one line it names the file and the line. It
 quotes what it found, so a control character or a byte that is not text shows as an escape

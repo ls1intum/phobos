@@ -64,8 +64,9 @@ process. Three things sit outside that:
   given, on the Transmission Control Protocol only.
 - **UDP bind on a kernel below Landlock version 10.** The guard still holds UDP connect and send
   by host and port, but the kernel cannot close UDP bind there, so the enforcer warns and the
-  bind stays open. A `udp` `[connect]` or `[bind]` port rule is refused on such a kernel, except a
-  `udp` port rule beside a `udp` loopback rule with no port, which the guard alone holds.
+  bind stays open. A `udp` `[connect]` or `[bind]` rule that names a port is refused on such a
+  kernel, with exit status 125. The exceptions are a `udp` `[connect]` rule beside a `udp`
+  loopback rule with no port, which the guard alone holds, and a `udp` `[bind]` row of port 0.
 
 A deployment that wants no network at all starts the container with `--network none`, under
 which only loopback exists. A deployment that needs `[accept]` gives that up and has to provide

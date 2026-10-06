@@ -126,7 +126,7 @@ execs the command.
 
 ## Signals, and who stays alive
 
-Four properties hold the chain together, and each is easy to break:
+Five properties hold the chain together, and each is easy to break:
 
 - **The layers that wait ignore `SIGTERM`.** GNU `timeout` signals the whole process group, and
   the escalation to `SIGKILL` only fires while the timeout's own child is still alive. The
@@ -148,6 +148,13 @@ Four properties hold the chain together, and each is easy to break:
   passed on.
 - **The filesystem layer's wait for the denial counts is bounded**, and stays below the
   escalation, so `timeout` never escalates while the layer is still waiting.
+- **The standard error pass-through and the denial counter ignore all four signals.** A
+  terminal's Ctrl+C, quit or hangup reaches the whole process group, these helpers included. The
+  filesystem layer makes them with `SIGTERM`, `SIGHUP`, `SIGINT` and `SIGQUIT` ignored and
+  restores its own dispositions straight afterwards. They end when the command's standard error
+  closes, so the output the command writes while it handles the signal reaches the terminal, and
+  the counts survive. A hangup, quit or interrupt that arrives while the layer makes them is
+  lost.
 - **A timeout is a timeout only where the status and the clock agree.** GNU `timeout` passes a
   command's own status through, and a command killed by the out-of-memory killer ends with the
   same 137 as the escalation.

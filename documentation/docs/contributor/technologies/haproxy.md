@@ -36,7 +36,7 @@ version 2 header naming the destination the command meant. The broker then decid
 | The rule names | What the broker does |
 | --- | --- |
 | an exact name | for a connection to the port the rule names, resolves the name itself, through the `phobosdns` resolver, sets the destination to that address, and rejects the connection where the name does not resolve |
-| an address or a range | accepts as soon as the destination matches, so a connection with no ClientHello does not wait out the inspection delay |
+| an address or a range | accepts as soon as the destination matches, on a port no name rule names; on a port a name rule names, a connection that sends nothing first waits out the five-second inspection delay |
 | `*` | accepts everything and forwards to the header's destination |
 
 The exact-name case is the strong one, and it is the reason the network layer refuses such a
@@ -57,6 +57,15 @@ matches both. The guard lets a connection through on any port some rule names. W
 pairing, a connection allowed on one port under an address rule, with an allowed name in its
 ClientHello, carries that port to the name's address. A loopback rule with no port opens that
 route on every port.
+
+Each pair tests the port before the name, and the order is load-bearing. HAProxy stops at the
+first term that is false, and reading the name of a connection that has sent nothing waits for
+its first bytes until the five-second inspection delay ends. With the port first, the broker
+decides a connection to any other port at once and hands it to the address rules. A server that
+speaks first, as SMTP, MySQL or SSH do, therefore gets its banner to the client without delay.
+On a port a name rule names, the broker cannot tell a TLS client that has not written yet from a
+server that speaks first. A connection there still waits out the delay before an address rule
+accepts it.
 
 ## Role two: the inbound filter
 

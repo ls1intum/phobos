@@ -111,6 +111,16 @@ timeout's escalation reaches the command rather than this layer. The command run
 that restores the default disposition and then execs, which is what makes it the process the
 escalation finds.
 
+The pass-through and the counter share the run's process group, and a terminal sends a Ctrl+C,
+a quit or a hangup to that whole group. The layer therefore sets `SIGTERM`, `SIGHUP`, `SIGINT`
+and `SIGQUIT` to ignored, makes the two helpers, which inherit that, and puts its own
+dispositions back straight afterwards with `restore_signal_traps`. The helpers end only when the
+last writer of the command's standard error closes it. Whatever the command writes while it
+handles the signal, a Python traceback among it, still passes through and still counts. The
+layer discards a hangup, quit or interrupt that arrives in the brief interval while it makes the
+helpers, and the run then starts as if nobody had sent it. The helpers do not set the
+dispositions for themselves, because that leaves them a gap once the command has started.
+
 ## Known gaps
 
 **A denial count is a text match.** The filesystem count matches `Permission denied`, `EACCES`

@@ -165,6 +165,33 @@ allow-list is only as tight as the reference workloads that produced it, and
 `tests/policy-redundancy-probe.sh` reports which entries grant Landlock nothing an ancestor
 already grants, which is worth reading while judging a fresh one.
 
+## Two pruners under construction
+
+Two further pruners are taking shape beside the Bubblewrap walk. Neither has an entry point
+yet, and nothing under `core/` reaches either of them.
+
+- **The layer pruner**, in `var/tmp/helpers/layer_prune/`, runs the reference workload through
+  the shipped `phobos.sh` chain under `strace`, an observer that needs no privilege, and grants
+  only what a recorded refusal proves. `strace_parse.py` turns the `strace -f` log into the
+  system calls made inside the command's Landlock domain. `attribute.py` assigns each refusal to
+  a layer and to the configuration sections that grant it. `control.py` replays each candidate
+  outside every Landlock domain, so a refusal Landlock did not cause never becomes a grant.
+- **The recording pruner**, in `var/tmp/helpers/layer_record/`, records what a reference
+  program touches during scripted interactive sessions. It grants everything while it records,
+  so it is for a reference program only and never for an untrusted one. So far it holds its own
+  refusals (`guard.py`), the listing of a container's starting state (`snapshot.py`) and
+  scripted terminal sessions (`pty_script.py`). Beside them sit the host names a session sent or
+  received (`names.py`) and the check that refuses a replay in a container that is not fresh
+  (`check.py`).
+
+The layer pruner has an image of its own, `docker/prune_phase/layers/Dockerfile`: the run-phase
+image plus `strace` and `python3`. Its only base, `BasePrune.cfg`, grants nothing, so every
+grant in a policy it prunes is one it had a refusal for. The `run-phase` job of `build.yml`
+builds it on top of the run-phase image the same job tested, and runs
+`tests/integration/layer_prune_observer.sh` inside it. That suite proves both directions:
+`strace` sees a Landlock refusal made inside the chain, a permitted read beside it works, and the
+parser and attribution turn the record into exactly that one denial.
+
 ## Further reading
 
 - [Bubblewrap](technologies/bubblewrap.md) — the mechanism the measurement uses

@@ -103,6 +103,10 @@ protocol header naming the destination the command meant, and the broker decides
   through the resolver you gave, and connects only to that address.
 - For an **address**, a range or `*`, the header's destination is used unchanged.
 
+The broker decides a connection to a port no name rule names at once. On a port a name rule
+names, it reads the TLS host name first. A server there that speaks first, as SMTP, MySQL or SSH
+do, therefore reaches its client only after the broker's five-second inspection delay.
+
 A name with a star in it, such as `*.example.org`, never reaches the broker. The layer refuses
 it with `PHB-EPOLICY` before it starts anything, because a wildcard cannot resolve to an
 address.
@@ -152,8 +156,9 @@ that the listener's port is not locked either.
 
 ## The Landlock port rules
 
-`[connect]` and `[bind]` produce `--connect-tcp`, `--bind-tcp` and `--connect-udp` and
-`--bind-udp`, which need a Landlock version 10 kernel and which the enforcer refuses below it. The layer applies them on a Landlock ruleset of its
+`[connect]` and `[bind]` produce `--connect-tcp`, `--bind-tcp`, `--connect-udp` and
+`--bind-udp`. The two `udp` flags need a Landlock version 10 kernel, and below it the enforcer
+refuses the run with exit status 125. The layer applies them on a Landlock ruleset of its
 own, created with `--no-filesystem`, which composes with the filesystem layer's ruleset by
 intersection. It is applied inside the guard's child lineage, after the supervisor has forked,
 so the supervisor that connects on the command's behalf stays unrestricted.

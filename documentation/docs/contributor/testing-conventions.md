@@ -31,6 +31,11 @@ non-zero on a failure.
 | Acceptance suites | `tests/integration/landlock-filesystem-and-networksystem-acceptance/` | the run-phase image, an ordinary container | the `run-phase` job of `build.yml`, on amd64 and arm64 |
 | Protection matrix | `tests/integration/protection-matrix/` | the run-phase image, an ordinary container | the `run-phase` job of `build.yml`, on amd64 and arm64 |
 
+One integration suite runs elsewhere. `layer_prune_observer.sh` needs the prune image that the
+`run-phase` job of `build.yml` builds on the run-phase image, so that job runs it, in an
+ordinary container. The Python suites cover the layer pruner's and the recording pruner's
+modules too, from a recorded `strace` log and captured packets under `tests/python/fixtures/`.
+
 Each shell suite is a CI step of its own, so one run names every suite that broke rather than
 the first alone. `tests/README.md` is the table of every suite, what it proves and what makes it
 skip. `harness_self_test.sh` runs first as a step of its own. A step named "Every suite is started
@@ -133,7 +138,12 @@ second.
 Two scripts under `tests/` report for themselves and never fail a run:
 
 - `runner-capability-probe.sh` answers what a machine can do, and is run by
-  `runner-capabilities.yml` on request.
+  `runner-capabilities.yml` on request. Each assert mode answers 0 for yes, 1 for no and 3 for
+  cannot tell. `--assert-landlock` and `--assert-bwrap` ask whether Landlock enforces and
+  whether Bubblewrap builds a sandbox. `--assert-kvm` asks each hosted runner image whether a
+  guest kernel boots under KVM. `--assert-ptrace` asks whether a tracer without privileges sees
+  a traced Landlock refusal inside an ordinary container, which the layer pruner's observer
+  relies on.
 - `policy-redundancy-probe.sh` names the entries of a policy that grant Landlock nothing an
   ancestor already grants. Those entries are not dead code, so it reports rather than failing.
   Run it where the policy is applied, since it resolves symbolic links.

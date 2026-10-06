@@ -180,10 +180,12 @@ carry the program's own prefix and none of the `PHB-` codes.
 [phobos-landlock-filesystem-and-networksystem] UDP network rules require Landlock version 10
 ```
 
-A `udp` rule is refused rather than left unenforced. Either run on a kernel that carries the
-version 10 rights or drop the rule. A `udp` rule beside a `udp` loopback rule with no port is the
-exception: the guard alone holds it, on any kernel. The same status and prefix carry every other refusal from
-that program, `--minimum-landlock-version` among them.
+A `udp` rule that names a port is refused rather than left unenforced. Either run on a kernel
+that carries the version 10 rights or drop the rule. A `udp` `[connect]` rule beside a `udp`
+loopback rule with no port is the exception: the guard alone holds it, on any kernel. A `udp`
+`[bind]` row of port 0 never stops a run either. Below version 10 the enforcer cannot close UDP
+bind, so it warns and leaves the bind open. The same status and prefix carry every other refusal
+from that program, `--minimum-landlock-version` among them.
 
 ## PHB-ERUNTIME: something Phobos needs is missing
 
@@ -323,6 +325,15 @@ command's own lookup succeeds without a query: to a loopback placeholder for a s
 the real addresses the name had at the start for a `udp` rule, which a name held by both kinds of
 rule gets instead of the placeholder. A name the policy does not mention
 gets no such entry.
+
+## A server's first bytes arrive five seconds late
+
+Where a `[connect]` rule names a host, the connect guard hands every allowed stream connection
+to the egress broker, loopback ones included. On a port a name rule names, the broker reads the
+Transport Layer Security (TLS) host name before it decides. A server that speaks first, as SMTP, MySQL or SSH do, gets
+nothing from its client there, so the broker waits out its five-second inspection delay before
+an address rule lets the connection through. A connection to any other port goes through at
+once. Serve the program on a port no name rule names.
 
 ## A `udp` rule that names a host refuses the run
 
