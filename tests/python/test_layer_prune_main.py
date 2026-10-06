@@ -133,3 +133,10 @@ def test_a_missing_key_is_named_and_a_hidden_directory_is_no_exercise(tmp_path, 
     assert "no exercise under" in capsys.readouterr().err
     assert main.main(["--testing-root", str(root), "--output-dir", str(output), "java"]) == 0
     assert not list(output.glob("java_.git*"))
+
+
+def test_an_output_directory_that_overlaps_the_working_directory_is_refused(tmp_path, pruned, capsys):
+    root = exercise_tree(tmp_path / "exercises", "alpha")
+    working = runner.Environment().testing_dir
+    assert main.main(["--testing-root", str(root), "--output-dir", working + "/out", "java"]) == main.EXIT_ABORTED
+    assert "output directory" in capsys.readouterr().err

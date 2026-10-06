@@ -6,13 +6,15 @@ canary, a write into a path the policy grants only [read], a TCP connect to 10.0
 of port 8080 (unless the policy names them), and must be stopped by each derived limit. A check that
 the probe passes aborts the exercise.
 
-A refusal counts only where it is the sandbox's: each check is first made without Phobos and with no
-limit, as the control replay of A.6.3 does for a denial, and must succeed there: a canary root cannot
+A refusal counts only where it is the sandbox's: each filesystem and limit check is first made without
+Phobos, as the control replay of A.6.3 does for a denial, and must succeed there: a canary root cannot
 read, a write a pseudo filesystem refuses anyway, a memory or file-size failure the container causes,
-or a process count its cgroup caps would otherwise pass as proof. The network checks cannot succeed in
-a container without a network, so there the control only must not be refused the same way. A check
-whose control fails is unproven, and aborts the exercise as well. The timeout check needs no control:
-status 14 is the timeout layer's own. The write check never touches /proc, /sys or /dev.
+or a process count its cgroup caps would otherwise pass as proof. A control inherits the pruner's own
+rlimits, so a limit above one of them leaves its check unproven. A check whose control fails is
+unproven, and aborts the exercise as well. The timeout check needs no control, since status 14 is the
+timeout layer's own, and neither do the network checks: EACCES on a connect or a bind comes from
+Landlock or the guard, and a control would really connect wherever the container has a network. The
+write check never touches /proc, /sys or /dev. A probe that did not start under Phobos is a defect.
 
 The probe runs under the final policy plus exactly two grants it needs to run at all and nothing the
 checks test: [read] and [execute] on the probe binary itself (it is static, so no library), and
@@ -75,9 +77,8 @@ class ContainmentCheck:
 
     `must_fail_with` holds the errno names, `OP` failures of the probe that count as refused, or
     `status:<n>` for a run that must end with status n; `expect` is an extra line the output must hold;
-    `controlled` says whether the check is first made without Phobos, and `control_succeeds` whether
-    that control must succeed or only must not be refused the same way; `leaves` names a file the
-    probe may create, removed after every run of it.
+    `controlled` says whether the check is first made without Phobos, where it must succeed; `leaves`
+    names a file the probe may create, removed after every run of it.
     """
 
     name: str
@@ -85,7 +86,6 @@ class ContainmentCheck:
     must_fail_with: frozenset[str]
     expect: str = ""
     controlled: bool = True
-    control_succeeds: bool = True
     leaves: str | None = None
 
 
@@ -212,10 +212,10 @@ def checks(policy: cfgfile.Policy) -> list[ContainmentCheck]:
     address, port = UNNAMED_DESTINATION
     if not names_connect(policy, address, port):
         found.append(ContainmentCheck(f"connect {address}:{port}", ("tcp", address, port), frozenset({"EACCES"}),
-                                      control_succeeds=False))
+                                      controlled=False))
     if not names_bind(policy, UNNAMED_PORT):
         found.append(ContainmentCheck(f"bind {UNNAMED_PORT}", ("bind", "127.0.0.1", UNNAMED_PORT, "tcp"),
-                                      frozenset({"EACCES"}), control_succeeds=False))
+                                      frozenset({"EACCES"}), controlled=False))
     return found + limit_checks(policy)
 
 
@@ -269,27 +269,30 @@ def evidence_of(output: str) -> list[str]:
     return [line for line in output.splitlines() if line.startswith(("OP ", "OPENED", "FORKED", "WROTE"))]
 
 
-def run_check(check: ContainmentCheck, cfg: pathlib.Path, environment: runner.Environment) -> dict:
-    """Runs one check, its control first, and returns its record; `refused` is None when the control was refused.
+def run_check(check: ContainmentCheck, cfg: pathlib.Path, environment: runner.Environment,
+              log_path: pathlib.Path) -> dict:
+    """Runs one check, its control first, and returns its record; `refused` is None when the control failed.
 
-    Raises PrunerDefect when Phobos stopped the probe's run before the probe started.
+    Raises PrunerDefect, with the probe's output appended to the log, when the probe did not start
+    under Phobos, Phobos's stop marker among what came before.
     """
     entry: dict = {"name": check.name, "arguments": list(check.probe_arguments)}
     if check.controlled:
         control = run_probe([PROBE, *check.probe_arguments], check)
         entry["control"] = {"status": control.status, "evidence": evidence_of(control.output)}
-        failed = not succeeded(control) if check.control_succeeds else refused(check, control.status, control.output)
-        if PROBE_START not in control.output or failed:
+        if not succeeded(control):
             return {**entry, "refused": None, "unproven": "without Phobos the probe did not run, or did not succeed"}
     argv = [os.path.join(environment.phobos_home, "phobos.sh"), "--config", str(cfg)]
     if environment.resolver:
         argv += ["--resolver", environment.resolver]
     sandboxed = run_probe([*argv, "--", PROBE, *check.probe_arguments], check)
     status = sandboxed.status
-    marker = verdict.phobos_stopped(status if status is not None else 0, sandboxed.output.split(PROBE_START, 1)[0])
-    if marker is not None:
-        raise runner.PrunerDefect(status if status is not None else -1, cfg,
-                                  f"Phobos stopped the containment check {check.name}: {marker}")
+    if PROBE_START not in sandboxed.output:
+        with open(log_path, "a", encoding="utf-8") as log:
+            log.write(f"== {check.name}: status {status}\n{sandboxed.output}\n")
+        marker = verdict.phobos_stopped(status if status is not None else 0, sandboxed.output)
+        raise runner.PrunerDefect(status if status is not None else -1, log_path,
+                                  f"the probe did not start under Phobos for {check.name}: {marker or 'no marker'}")
     return {**entry, "status": status, "refused": refused(check, status, sandboxed.output),
             "evidence": evidence_of(sandboxed.output)}
 
@@ -303,7 +306,7 @@ def run_checks(policy: cfgfile.Policy, environment: runner.Environment) -> list[
     cfg = pathlib.Path(environment.candidate_dir) / f"{log_path.stem}.cfg"
     try:
         runner.gate(cfgfile.render(probe_policy(policy)), cfg, environment, log_path)
-        results = [run_check(check, cfg, environment) for check in checks(policy)] + unchecked(policy)
+        results = [run_check(check, cfg, environment, log_path) for check in checks(policy)] + unchecked(policy)
     finally:
         cfg.unlink(missing_ok=True)
     for result in results:

@@ -113,7 +113,8 @@ class RunResult:
 
 @dataclasses.dataclass(frozen=True)
 class Environment:
-    """Where the runner finds Phobos and strace, where it runs, and how long a run may take."""
+    """Where the runner finds Phobos and strace, where it runs, how long a run may take, and what no
+    cleaning between runs may remove besides its own directories (`kept`, the artefacts' directory)."""
 
     phobos_home: str = PHOBOS_HOME
     strace: str = "strace"
@@ -123,6 +124,7 @@ class Environment:
     log_dir: str = "/var/tmp/layer-prune-logs"
     run_seconds: int = DEFAULT_RUN_SECONDS
     resolver: str | None = None
+    kept: tuple[str, ...] = ()
 
 
 RUN_NUMBERS = itertools.count(1)
@@ -219,6 +221,7 @@ def reap_leftovers(proc: str = "/proc") -> None:
         if not left:
             return
         time.sleep(REAP_INTERVAL_SECONDS)
+    raise PrunerDefect(-1, pathlib.Path(proc), f"processes a run left behind outlived SIGKILL for {REAP_SECONDS} s")
 
 
 def execute(argv: list[str], cwd: pathlib.Path, log_path: pathlib.Path, environment: Environment,

@@ -12,6 +12,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import pathlib
+import shutil
 from typing import Any
 
 from layer_prune import (
@@ -45,6 +46,12 @@ BYTES_PER_MEGABYTE = 1024 * 1024
 # The pseudo filesystems the index of what existed before the first run leaves out: what exists there
 # is the kernel's answer at the moment, never a run's leftover.
 UNINDEXED_ROOTS = ("/proc", "/sys")
+# What restore_pristine never removes although the index does not hold it: the device nodes the kernel
+# makes, and the canaries the containment checks read.
+NEVER_CLEANED = ("/dev", "/srv/phobos-prune-canary", "/root/phobos-prune-canary")
+# The environment variable the prune image sets: removing what runs leave behind is only safe in a
+# container that exists for the prune.
+PRUNE_CONTAINER_VARIABLE = "PHOBOS_PRUNE_CONTAINER"
 # The run shapes of the stages (A.6.4).
 OBSERVED_FILESYSTEM = runner.RunShape(observe=True, network=False, limits=False, sample=False)
 UNOBSERVED_FILESYSTEM = runner.RunShape(observe=False, network=False, limits=False, sample=False)
@@ -89,7 +96,10 @@ class Pruning:
         self.log.append({"stage": stage, **details})
 
     def run(self, policy: cfgfile.Policy, shape: runner.RunShape, stage: str) -> runner.RunResult:
-        """One layered run, recorded with its shape and outcome."""
+        """One layered run from the state the index records, recorded with its shape and outcome."""
+        removed = restore_pristine(self)
+        if removed:
+            self.note("restored", removed=removed[:WIDENING_EXAMPLES], count=len(removed))
         result = runner.run_layers(self.exercise, policy, shape, self.environment)
         self.note(stage, run=result.log_path.name, shape=dataclasses.asdict(shape), status=result.status,
                   verdict=dataclasses.asdict(result.verdict), seconds=round(result.wall_seconds, 3))
@@ -193,6 +203,52 @@ def pristine_index(environment: runner.Environment, root: pathlib.Path = pathlib
     excluded = tuple(os.path.realpath(path) for path in
                      (environment.testing_dir, environment.log_dir, environment.candidate_dir))
     return generalise.Snapshot.take(roots, excluded)
+
+
+def kept_from_cleaning(environment: runner.Environment) -> tuple[str, ...]:
+    """What restore_pristine leaves alone: the pruner's own directories, its output, and NEVER_CLEANED."""
+    own = (environment.testing_dir, environment.log_dir, environment.candidate_dir, *environment.kept)
+    return tuple(os.path.realpath(path) for path in own) + NEVER_CLEANED
+
+
+def removed_entry(path: str) -> None:
+    """Removes one entry a run left: a directory with what it holds, anything else (a link included) by itself."""
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.unlink(path)
+
+
+def restore_pristine(pruning: Pruning) -> list[str]:
+    """Removes every entry under the indexed roots that the index does not hold, so a run starts as grading does.
+
+    The unsandboxed baseline and the earlier layered runs leave files outside the working directory,
+    which runner.restore alone renews: a fixed-name directory under /tmp, a cache. A later run would
+    find it there, where a fresh grading container would have to create it, and its creation would
+    never be observed. Only entries the runs added are removed; a file they changed in place stays as
+    they left it. The baseline runs are not preceded by this, so a reference that depends on what an
+    earlier run of it left still shows as flaky. Runs only in the prune container (PRUNE_CONTAINER_VARIABLE).
+    """
+    index = pruning.pristine
+    kept = kept_from_cleaning(pruning.environment)
+    removed: list[str] = []
+    for root in index.scanned:
+        for current, subdirectories, files in os.walk(root):
+            for name in list(subdirectories):
+                full = os.path.join(current, name)
+                if generalise.within(full, kept) or full in index.existing:
+                    if generalise.within(full, kept):
+                        subdirectories.remove(name)
+                    continue
+                subdirectories.remove(name)
+                removed_entry(full)
+                removed.append(full)
+            for name in files:
+                full = os.path.join(current, name)
+                if full not in index.existing and not generalise.within(full, kept):
+                    removed_entry(full)
+                    removed.append(full)
+    return removed
 
 
 def snapshot_for(pruning: Pruning, policy: cfgfile.Policy) -> generalise.Snapshot:
@@ -564,6 +620,9 @@ def prune_exercise(exercise: runner.Exercise, budget: Budget, environment: runne
     its evidence. `pristine` is the index of what existed before the container's first run
     (pristine_index), taken here when the caller passes none.
     """
+    if os.environ.get(PRUNE_CONTAINER_VARIABLE) != "1":
+        raise runner.PrunerDefect(-1, pathlib.Path(os.devnull), "the pruner removes what its runs leave behind, so it "
+                                  f"runs only in the prune container, which sets {PRUNE_CONTAINER_VARIABLE}=1")
     containment.plant_canaries()
     if not sampler.become_subreaper():
         raise runner.PrunerDefect(-1, pathlib.Path(os.devnull), "the kernel refused to make the pruner a child subreaper")

@@ -165,12 +165,13 @@ def overlaps(path: pathlib.Path, other: pathlib.Path) -> bool:
 def main(argv: list[str]) -> int:
     """Prunes every exercise of the key; 0 when all succeeded, EXIT_ABORTED naming each that aborted."""
     options = arguments(argv)
-    environment = runner.Environment(resolver=options.resolver)
+    environment = runner.Environment(resolver=options.resolver, kept=(options.output_dir,))
     root = pathlib.Path(options.testing_root) / options.key
-    if overlaps(pathlib.Path(options.testing_root), pathlib.Path(environment.testing_dir)):
-        print(f"the testing root {options.testing_root} overlaps {environment.testing_dir}, which every run "
-              "replaces; refusing to prune from it", file=sys.stderr)
-        return EXIT_ABORTED
+    for name, given in (("testing root", options.testing_root), ("output directory", options.output_dir)):
+        if overlaps(pathlib.Path(given), pathlib.Path(environment.testing_dir)):
+            print(f"the {name} {given} overlaps {environment.testing_dir}, which every run replaces; refusing it",
+                  file=sys.stderr)
+            return EXIT_ABORTED
     if not root.is_dir():
         print(f"no exercise under {root}", file=sys.stderr)
         return EXIT_ABORTED

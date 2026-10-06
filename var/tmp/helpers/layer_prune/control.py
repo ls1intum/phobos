@@ -12,10 +12,11 @@ loopback port and closes it. Only a pruner killed between creating and removing 
 leaves it behind. Nothing follows a symbolic link: a link is resolved to its target first, which is
 what Landlock checks, and the target is then opened with O_NOFOLLOW.
 
-An object under /proc/<pid> belongs to a process of the run, which has exited by the time of the
-replay. It is replayed on the pruner's own equivalent instead (/proc/self, /proc/thread-self, and the
-descriptor directory rather than a descriptor the pruner does not hold): the pruner runs as the same
-uid, so procfs answers it as it answered the run's process.
+An object under /proc/<pid> of the refusing process itself belongs to a process that has exited by the
+time of the replay. It is replayed on the pruner's own equivalent instead (/proc/self,
+/proc/thread-self, and the descriptor directory rather than a descriptor the pruner does not hold): the
+pruner runs as the same uid, so procfs answers it as it answered the run's process. Another process's
+entry is replayed as it is, so a refusal that process's own rules made is not confirmed.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ from layer_prune.record import LAYER_FILESYSTEM, LAYER_NETWORK, Denial
 # never leak the descriptor.
 REPLAY_OPEN_FLAGS = os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
 # A path under one process's procfs directory: its thread, if it names one, and the rest of the path.
-PROCESS_PATH = re.compile(r"^/proc/(?:0|[1-9][0-9]*)(?P<task>/task/(?:0|[1-9][0-9]*))?(?P<rest>/.*)?$")
+PROCESS_PATH = re.compile(r"^/proc/(?P<pid>0|[1-9][0-9]*)(?P<task>/task/(?:0|[1-9][0-9]*))?(?P<rest>/.*)?$")
 # A descriptor entry, which names a descriptor of that process and none of the pruner's.
 DESCRIPTOR_ENTRY = re.compile(r"^/(?P<directory>fd|fdinfo)/[0-9]+$")
 
@@ -198,10 +199,11 @@ def same_filesystem(paths: tuple[str, ...]) -> bool:
     return len(devices) == 1
 
 
-def own_equivalent(path: str) -> str:
-    """The path a replay uses: the pruner's own procfs entry for one under /proc/<pid>, the path itself otherwise."""
+def own_equivalent(path: str, pid: int) -> str:
+    """The path a replay uses: the pruner's own procfs entry for one under the refusing process's /proc/<pid>,
+    the path itself otherwise."""
     match = PROCESS_PATH.match(path)
-    if match is None:
+    if match is None or int(match.group("pid")) != pid:
         return path
     rest = match.group("rest") or ""
     entry = DESCRIPTOR_ENTRY.match(rest)
@@ -210,9 +212,9 @@ def own_equivalent(path: str) -> str:
     return ("/proc/thread-self" if match.group("task") else "/proc/self") + rest
 
 
-def replay(path: str, section: str) -> bool:
-    """Whether one section's access to one object succeeds outside the sandbox."""
-    path = own_equivalent(path)
+def replay(path: str, section: str, pid: int = 0) -> bool:
+    """Whether one section's access to one object, refused to the process `pid`, succeeds outside the sandbox."""
+    path = own_equivalent(path, pid)
     if section == SECTION_READ:
         return replay_read(path)
     if section == SECTION_WRITE:
@@ -239,4 +241,4 @@ def landlock_caused(denial: Denial) -> bool:
         return False
     if denial.errno == "EXDEV" and SECTION_RESTRUCTURE in denial.sections and not same_filesystem(denial.objects):
         return False
-    return all(replay(path, section) for path in denial.objects for section in sorted(denial.sections))
+    return all(replay(path, section, denial.pid) for path in denial.objects for section in sorted(denial.sections))

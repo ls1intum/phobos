@@ -30,3 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN rm -f "${PHOBOS_HOME}"/Base*.cfg
 COPY docker/prune_phase/layers/BasePrune.cfg ${PHOBOS_HOME}/BasePrune.cfg
 COPY --from=probe /build/phobos-prune-probe /usr/local/libexec/phobos-prune-probe
+
+# The pruner removes what its runs leave behind outside the working directory, so it runs only where
+# it finds this, in a container that exists for the prune.
+ENV PHOBOS_PRUNE_CONTAINER=1

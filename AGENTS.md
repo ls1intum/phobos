@@ -116,8 +116,10 @@ as a dependency.
 - In the layer pruner, a grant needs an attributed denial: a refusal recorded inside the
   command's sandbox, by the layer under test, which the control replay confirms the sandbox
   caused. A run that fails without one is never turned into a grant.
-- The prune container runs without privileges and, unless the exercise declares a host, with `--network none`, like every suite
-  here; ptrace of one's own child needs neither.
+- The prune container runs without privileges, as every suite here does, and with `--network none`
+  unless the exercise declares a host; ptrace of one's own child needs neither. Between layered runs
+  the pruner removes whatever earlier runs added outside the working directory, so it refuses to run
+  anywhere but in that container.
 
 ## The compiled binaries
 

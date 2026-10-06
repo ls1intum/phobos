@@ -253,6 +253,7 @@ def test_unminimised_puts_back_every_grant_and_rule_the_minimisations_removed(tm
 def test_each_stage_runs_only_the_stages_up_to_it(tmp_path, monkeypatch, stage, ran):
     calls = []
     empty = cfgfile.Policy(fs={}, connect=(), bind=(), limits={})
+    monkeypatch.setenv(stages.PRUNE_CONTAINER_VARIABLE, "1")
     monkeypatch.setattr(stages.containment, "plant_canaries", lambda: None)
     monkeypatch.setattr(stages.sampler, "become_subreaper", lambda: True)
     monkeypatch.setattr(stages, "baseline", lambda pruning: PASSED)
@@ -267,6 +268,7 @@ def test_each_stage_runs_only_the_stages_up_to_it(tmp_path, monkeypatch, stage, 
 
 
 def test_a_kernel_that_refuses_the_subreaper_is_a_pruner_defect(tmp_path, monkeypatch):
+    monkeypatch.setenv(stages.PRUNE_CONTAINER_VARIABLE, "1")
     monkeypatch.setattr(stages.containment, "plant_canaries", lambda: None)
     monkeypatch.setattr(stages.sampler, "become_subreaper", lambda: False)
     with pytest.raises(runner.PrunerDefect, match="subreaper"):
@@ -277,3 +279,42 @@ def test_the_permissive_run_without_any_refusal_is_one_without_an_attributable_d
     feed(monkeypatch, result(FAILED))
     with pytest.raises(search.PruneAbort, match="without an attributable denial"):
         stages.permissive_run(pruning(tmp_path))
+
+
+def test_outside_the_prune_container_the_pruner_refuses_to_run(tmp_path, monkeypatch):
+    monkeypatch.delenv(stages.PRUNE_CONTAINER_VARIABLE, raising=False)
+    monkeypatch.setattr(stages.containment, "plant_canaries", lambda: pytest.fail("nothing may be planted"))
+    with pytest.raises(runner.PrunerDefect, match="only in the prune container"):
+        stages.prune_exercise(pruning(tmp_path).exercise, stages.Budget(), runner.Environment())
+
+
+def test_what_earlier_runs_left_is_removed_before_a_layered_run_and_what_was_there_or_is_kept_stays(tmp_path,
+                                                                                                     monkeypatch):
+    root = tmp_path / "root"
+    (root / "tmp").mkdir(parents=True)
+    (root / "srv" / "data").mkdir(parents=True)
+    (root / "srv" / "data" / "kept.txt").write_text("x")
+    (root / "out").mkdir()
+    environment = runner.Environment(testing_dir=str(root / "work"), log_dir=str(root / "logs"),
+                                     candidate_dir=str(root / "run"), kept=(str(root / "out"),))
+    found = pruning(tmp_path)
+    found.environment = environment
+    found.pristine = stages.pristine_index(environment, root)
+    (root / "tmp" / "hsperfdata_root").mkdir()
+    (root / "tmp" / "hsperfdata_root" / "123").write_text("x")
+    (root / "srv" / "data" / "cache.bin").write_text("x")
+    (root / "srv" / "link").symlink_to(root / "srv" / "data")
+    (root / "out" / "java_fixture.cfg").write_text("[read]\n/usr\n")
+    (root / "logs").mkdir()
+    (root / "logs" / "run-0001-layers.log").write_text("x")
+    feed(monkeypatch, result(PASSED))
+    found.run(cfgfile.Policy(fs={}, connect=(), bind=(), limits={}), stages.JOINT, "verification")
+    real = pathlib.Path(os.path.realpath(root))
+    assert not (real / "tmp" / "hsperfdata_root").exists()
+    assert not (real / "srv" / "data" / "cache.bin").exists()
+    assert not (real / "srv" / "link").is_symlink()
+    assert (real / "srv" / "data" / "kept.txt").exists()
+    assert (real / "out" / "java_fixture.cfg").exists()
+    assert (real / "logs" / "run-0001-layers.log").exists()
+    restored = next(entry for entry in found.log if entry["stage"] == "restored")
+    assert restored["count"] == 3
