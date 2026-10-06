@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 # Turning a parsed policy into the --rights= arguments phobos-landlock-filesystem-and-networksystem takes.
 #

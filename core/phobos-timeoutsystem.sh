@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 set -euo pipefail
 # This script's directory, found in bash alone so that PATH and CDPATH are cleaned before any
@@ -125,7 +125,7 @@ if (( ${#CONFIGS[@]} > 0 )); then
   shift
   build_owned_spec_from_configs "$HERE" "$SPEC_PARENT" "$TAIL_FLAGS_FILE_OPT" "${CONFIGS[@]}"
   set +e
-  run_forwarding_signals bash "${BASH_SOURCE[0]}" "${LAYER_FLAGS[@]}" "$BUILT_SPEC_DIR" -- "$@"
+  run_forwarding_signals /bin/bash "${BASH_SOURCE[0]}" "${LAYER_FLAGS[@]}" "$BUILT_SPEC_DIR" -- "$@"
   rc=$?
   set -e
   exit "$rc"

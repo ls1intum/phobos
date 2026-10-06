@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 # The directory a run's specification lives in, and its lifetime.
 #

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 # Turning [connect] and [bind] into the TCP port rules Landlock can enforce.
 #

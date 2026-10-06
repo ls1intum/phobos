@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 # Passing a caller's signals on to the command a layer waits for.
 #

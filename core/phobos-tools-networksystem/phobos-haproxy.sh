@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 # phobos-haproxy.sh -- turn the [connect] allow-list into an haproxy.cfg the egress broker enforces.
 #

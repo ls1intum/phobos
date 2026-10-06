@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 # One programming language configuration in, the base policies it names and, on first use, the
 # value of each of its placeholders out.

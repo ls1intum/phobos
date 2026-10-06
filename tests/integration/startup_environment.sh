@@ -13,10 +13,9 @@
 # And a run with a clean absolute PATH behaves as it did, the command seeing that PATH unchanged,
 # while the command of a run with a polluted PATH sees exactly the absolute entries.
 #
-# Every entry point is started through bash by its absolute path rather than as a program. The
-# #!/usr/bin/env bash line would otherwise find bash itself through the polluted PATH before the
-# entry point runs a line, which no script can prevent; SECURITY.md states that as an
-# integration requirement, and this suite measures what the scripts themselves do.
+# Most checks start an entry point through bash by its absolute path, so they measure what the
+# scripts themselves do. One section starts each as a program, as a grader does, and holds the
+# #! line to naming /bin/bash, which no PATH can redirect, rather than having env look bash up.
 #
 # No Landlock kernel and no compiler is needed: pass-through stand-ins take the place of the
 # enforcers, since what is measured here happens before any of them is started.
@@ -196,6 +195,41 @@ for polluted in "${POLLUTED[@]}"; do
 done
 
 echo
+echo "== started as a program, no entry point's #! line finds bash through PATH =="
+# A bash is planted in the current directory with the rest. An entry point started as a program
+# under a PATH that begins with "." runs it only if its #! line looks bash up through PATH.
+for entry in "${ENTRIES[@]}"; do
+  mapfile -d '' -t args < <(entry_args "$entry")
+  : > "$PLANTED_LOG"
+  OUT="$(cd "$SUB" && PATH=".:${CLEAN_PATH}" "${args[@]}" 2>&1)"
+  RC=$?
+  PLANTED="$(sort -u "$PLANTED_LOG" | tr '\n' ' ')"
+  if [[ "$RC" -eq 0 && -z "$PLANTED" ]]; then
+    ok "$entry started as a program under PATH='.:...' runs no planted bash or other tool"
+  else
+    bad "$entry started as a program under PATH='.:...' runs no planted bash or other tool" \
+      "exit 0, nothing planted ran" "exit ${RC}, planted: ${PLANTED}: ${OUT}"
+  fi
+done
+# Nor does a layer run on its own look bash up when it starts itself again over the
+# specification it built: a bash first in an absolute PATH entry is never the one that runs.
+mkdir -p "$WORK/only-bash"
+cp "$SUB/bash" "$WORK/only-bash/bash"
+for entry in "${ENTRIES[@]}"; do
+  mapfile -d '' -t args < <(entry_args "$entry")
+  : > "$PLANTED_LOG"
+  OUT="$(cd "$SUB" && PATH="$WORK/only-bash:${CLEAN_PATH}" "${args[@]}" 2>&1)"
+  RC=$?
+  PLANTED="$(sort -u "$PLANTED_LOG" | tr '\n' ' ')"
+  if [[ "$RC" -eq 0 && -z "$PLANTED" ]]; then
+    ok "$entry with another bash first in PATH never runs that bash"
+  else
+    bad "$entry with another bash first in PATH never runs that bash" \
+      "exit 0, the other bash never ran" "exit ${RC}, planted: ${PLANTED}: ${OUT}"
+  fi
+done
+
+echo
 echo "== a trailing empty entry is not the fallback for a program the absolute entries lack =="
 for entry in "${ENTRIES[@]}"; do
   mapfile -d '' -t args < <(entry_args "$entry")
@@ -204,6 +238,20 @@ for entry in "${ENTRIES[@]}"; do
     ok "$entry under PATH='<no dirname>:' never runs the planted dirname"
   else
     bad "$entry under PATH='<no dirname>:' never runs the planted dirname" "no planted dirname" "exit ${RC}, planted: ${PLANTED}: ${OUT}"
+  fi
+done
+
+echo
+echo "== an entry point finds its own files without dirname =="
+# Every entry point and the library they share find the files beside them in bash alone, so a
+# PATH that holds no dirname cannot leave them sourcing from a directory dirname failed to name.
+for entry in "${ENTRIES[@]}"; do
+  mapfile -d '' -t args < <(entry_args "$entry")
+  run_entry "$NO_DIRNAME" "${args[@]}"
+  if [[ "$RC" -eq 0 && -z "$PLANTED" && "$OUT" != *"No such file"* ]]; then
+    ok "$entry under a PATH without dirname starts and runs"
+  else
+    bad "$entry under a PATH without dirname starts and runs" "exit 0, no missing file" "exit ${RC}, planted: ${PLANTED}: ${OUT}"
   fi
 done
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 # One policy cfg in, the parsed state and the specification files out.
 #

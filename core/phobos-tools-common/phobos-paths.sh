@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 # The two canonical forms a path is compared in, and the tool both need.
 #
