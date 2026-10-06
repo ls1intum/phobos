@@ -74,6 +74,32 @@ you leave `--` out, the first word that is not an option becomes the command and
 after it becomes its arguments. An unknown option is refused rather than treated as the
 command, so a mistyped flag fails with a message instead of ending up in `argv`.
 
+## The environment the command sees
+
+The current directory of a run can be the sandboxed command's own tree. Before it runs any
+program, `phobos.sh`, like every layer started on its own, therefore cleans the environment it
+starts in:
+
+- It keeps only the absolute entries of `PATH`, dropping `.`, any other relative directory, an
+  empty entry and one beginning with `~`.
+- It unsets `CDPATH`.
+- It unsets `TMPDIR`, `HOSTALIASES` and `TZDIR` where they are not absolute, and keeps only the
+  absolute entries of `GCONV_PATH`, `LOCPATH` and `NLSPATH`.
+
+Each entry point says on standard error what it removed. The command gets the cleaned
+environment too, so a command that relied on `.` in `PATH` has to be named by its path, as
+`./gradlew` is above. A `PATH` with no absolute entry ends the run with `PHB-ERUNTIME`, because
+a lookup through an empty `PATH` searches the current directory. Where the environment had no `PATH` at
+all, the command still gets none. `phobos.sh --help` describes this under ENVIRONMENT.
+
+:::warning[Some variables act before the first line of Phobos]
+No script can clean what takes effect before it runs. Start `phobos.sh` with a `PATH` of
+absolute directories, or through an absolute interpreter (`/bin/bash ${PHOBOS_HOME}/phobos.sh`),
+and without `BASH_ENV`, `LD_LIBRARY_PATH`, `LD_PRELOAD` or `LD_AUDIT`. A minimal environment
+of absolute values meets all of these:
+`env -i PATH=/usr/local/bin:/usr/bin:/bin ${PHOBOS_HOME}/phobos.sh --config exercise.cfg -- ./gradlew test`.
+:::
+
 ## Which configurations apply, in which order
 
 | Order | What | Where it comes from |

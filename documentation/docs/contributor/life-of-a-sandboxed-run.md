@@ -33,6 +33,14 @@ flag travels with them. The filesystem layer is always in the chain: with `-nfr`
 
 ## Stage 1: the command line
 
+Every entry point, `phobos.sh` and each layer started on its own alike, first finds its own
+directory in bash alone and sources `phobos-tools-common/phobos-environment.sh`.
+`clean_startup_environment` then keeps only the absolute entries of `PATH`, `GCONV_PATH`,
+`LOCPATH` and `NLSPATH`, unsets `CDPATH`, and unsets `TMPDIR`, `HOSTALIASES` and `TZDIR` where
+they are not absolute. Nothing runs before that, no external program and no `cd`, because the
+current directory can be the command's own tree. A `PATH` with no absolute entry ends the run
+with `PHB-ERUNTIME`. Only then does the entry point source `phobos-common.sh`.
+
 `phobos.sh` parses its own options and stops at the first word that is not one, or at `--`.
 Everything from there is the command and its arguments. An unknown option is refused rather
 than treated as the command.

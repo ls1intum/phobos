@@ -33,6 +33,7 @@ usually makes writable.
 | --- | --- |
 | `phobos-policysystem.sh` | the program: base discovery, the merge, the checks, the write |
 | `phobos-policy-parse.sh` | one configuration in, the parsed state and the per-right files out |
+| `phobos-language-configuration.sh` | a programming language configuration in, the base policies it names and, on first use, the value of each of its placeholders out; sourced, and called by no layer yet |
 | `phobos-policy-yaml.sh` | a strict subset of YAML in, flat records with line numbers out, the first step towards reading an Ares 2 policy; sourced, and called by no layer yet |
 | `phobos-rights.sh` | a parsed policy to the `--rights=` arguments `phobos-landlock-filesystem-and-networksystem` takes |
 | `phobos-network-args.sh` | `[connect]` and `[bind]` to the Landlock port rules, and the refusals |
@@ -42,7 +43,8 @@ usually makes writable.
 | `phobos-constants.sh` | the exit statuses and the other shared numbers |
 | `phobos-log.sh` | reporting, and the denial counter |
 | `phobos-signals.sh` | passing a caller's signals on to the command a layer waits for |
-| `phobos-common.sh` | the aggregate every caller sources, which sources every file above but `phobos-policysystem.sh` |
+| `phobos-environment.sh` | the startup environment made safe: `PATH` and the other lookup variables keep only what is absolute, sourced by each entry point itself before anything else |
+| `phobos-common.sh` | the aggregate every caller sources, which sources every file above but `phobos-policysystem.sh` and `phobos-environment.sh` |
 
 `phobos-common.sh` has no include guard on purpose: sourcing it has to keep resetting
 `PHB_DEBUG_ENABLED`, so that the environment can never switch debugging on.
@@ -103,6 +105,19 @@ Among those are an anchor, an alias, a tag, a block scalar, a second document, a
 and a boolean or number a reader could take for a string. The reader can therefore be wrong only by refusing.
 Nothing in a run calls it yet; `tests/unit/phobos-tools-policysystem/yaml_subset.sh` holds it to
 both directions.
+
+## Programming language configurations
+
+A programming language configuration is data: one file per Ares 2 configuration name, such as
+`JAVA_USING_GRADLE_ARCHUNIT_AND_ASPECTJ.cfg`, in `core/config/language-configurations/`. The
+run-phase image copies that folder beside `phobos-policysystem.sh`, where the `Base*.cfg` glob
+does not reach it. A file holds two sections. `[base]` names the base policies a run under that
+configuration folds, and `[placeholders]` says how each placeholder of the language gets its
+value: `environment`, `command-ancestor`, `fixed` or `password-database home`.
+`phobos-language-configuration.sh` reads it, knows no language itself, and determines a
+placeholder only when it is first used, so a source a run never needs cannot refuse it.
+`tests/unit/phobos-tools-policysystem/no_language_in_code.sh` holds the code under `core/` to
+naming no language. Nothing in a run loads a configuration yet.
 
 ## The merge
 

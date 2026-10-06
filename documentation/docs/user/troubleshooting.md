@@ -218,6 +218,17 @@ host-name enforcement. (PHB-ERUNTIME)
 
 Give the run a resolver, or name the host's address or address range instead.
 
+### `PATH` names no absolute directory
+
+```
+PATH '.:bin' names no absolute directory, and an empty PATH is searched as the current
+directory; start Phobos with a PATH of absolute directories. (PHB-ERUNTIME)
+```
+
+Every entry point keeps only the absolute entries of `PATH` before it runs anything, and never
+adds one. Start Phobos with a `PATH` of absolute directories. A command that ran before only
+because `.` was on `PATH` is now named by its path, as in `./gradlew test`.
+
 ### `realpath` is the wrong one
 
 ```
