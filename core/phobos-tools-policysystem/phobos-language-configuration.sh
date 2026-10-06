@@ -28,6 +28,7 @@ LANGUAGE_CONFIGURATION_FOLDER="language-configurations"
 LANGUAGE_CONFIGURATION_NAME_PATTERN='^[ABCDEFGHIJKLMNOPQRSTUVWXYZ][ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_]*$'
 # A placeholder line, "<name> = <primitive> <arguments>", and the name it may give: letters,
 # digits, dots and underscores, starting with a letter.
+LANGUAGE_PLACEHOLDER_NAME_PATTERN='^[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz][ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._]*$'
 LANGUAGE_PLACEHOLDER_LINE_PATTERN='^([ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz][ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._]*)[[:space:]]*=[[:space:]]*(.*)$'
 # An environment variable's name.
 LANGUAGE_VARIABLE_NAME_PATTERN='^[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_][ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_]*$'
@@ -272,17 +273,31 @@ determine_fixed() {
   language_value="$3"
 }
 
+# Refuses a path written in a placeholder line, a fixed path or an environment fallback, that is not
+# absolute or holds a control character. Whether it is an existing directory is asked when the
+# placeholder is used. Takes the path and the primitive as written. Assumes PARSE_LOCATION names the
+# line and that it is called plainly, so that a refusal ends the run.
+refuse_malformed_written_path() {
+  local path="$1"
+  local written="$2"
+  if language_value_has_control_character "$path" || [[ "$path" != /* ]]; then
+    refuse_cfg "${path@Q} in ${written@Q} is not an absolute path"
+  fi
+}
+
 # Refuses a placeholder's primitive that is not one of the four, or that is given the wrong
 # arguments: their number, a variable name, a command name with a slash, a number of levels outside
-# 1 to 99, a field other than home. Asked when the configuration is read, so that a malformed line is
-# refused whether or not the placeholder is ever used; what the primitive would find is only asked
-# when the placeholder is used. Takes the line, the primitive as written and its words. Assumes
-# PARSE_LOCATION names the line and that it is called plainly, so that a refusal ends the run.
+# 1 to 99, a field other than home, a written path that is not absolute. Asked when the
+# configuration is read, so that a malformed line is refused whether or not the placeholder is ever
+# used; what the primitive would find is only asked when the placeholder is used. Takes the line,
+# the primitive as written and its words. Assumes PARSE_LOCATION names the line and that it is
+# called plainly, so that a refusal ends the run.
 refuse_malformed_placeholder_primitive() {
   local line="$1"
   local written="$2"
-  local primitive="${3:-}"
-  shift 3 || shift $#
+  shift 2
+  local primitive="${1:-}"
+  (( $# == 0 )) || shift
   case "$primitive" in
     environment)
       if (( $# < 1 || $# > 2 )); then
@@ -290,6 +305,9 @@ refuse_malformed_placeholder_primitive() {
       fi
       if [[ ! "$1" =~ $LANGUAGE_VARIABLE_NAME_PATTERN ]]; then
         refuse_cfg "${1@Q} in ${written@Q} is not a variable name"
+      fi
+      if (( $# == 2 )); then
+        refuse_malformed_written_path "$2" "$written"
       fi ;;
     command-ancestor)
       if (( $# != 2 )); then
@@ -304,7 +322,8 @@ refuse_malformed_placeholder_primitive() {
     fixed)
       if (( $# != 1 )); then
         refuse_cfg "'fixed' takes one absolute path, as in 'fixed /tmp', not ${written@Q}"
-      fi ;;
+      fi
+      refuse_malformed_written_path "$1" "$written" ;;
     password-database)
       if (( $# != 1 )) || [[ "$1" != "$LANGUAGE_PASSWORD_DATABASE_FIELD" ]]; then
         refuse_cfg "'password-database' takes the one field it reads, as in 'password-database ${LANGUAGE_PASSWORD_DATABASE_FIELD}', not ${written@Q}"
@@ -375,15 +394,19 @@ read_language_placeholder_line() {
 # placeholder never used never asks it. A value that cannot be determined, or is not an absolute
 # path to an existing directory, is refused naming the configuration file and the placeholder's
 # line; a placeholder the configuration does not name is refused where the caller's PARSE_LOCATION
-# points. Takes the placeholder's name. Assumes load_language_configuration has run, that it is
-# called plainly, never in a subshell, so that the value is kept and a refusal ends the run, and
-# leaves PARSE_LOCATION as the caller had it.
+# points, and so is a name that is not one. Takes the placeholder's name. Assumes
+# load_language_configuration has run, that it is called plainly, never in a subshell such as a
+# command substitution, where the value would not be kept and a refusal would end only the subshell,
+# and leaves PARSE_LOCATION as the caller had it.
 determine_language_placeholder() {
   local placeholder="$1"
   local caller_location="$PARSE_LOCATION"
   local written
   local language_value=""
   local -a words=()
+  if [[ ! "$placeholder" =~ $LANGUAGE_PLACEHOLDER_NAME_PATTERN ]]; then
+    refuse_cfg "${placeholder@Q} is not the name of a placeholder, which is letters, digits, dots and underscores, starting with a letter"
+  fi
   if [[ -v "LANGUAGE_CONFIGURATION_PLACEHOLDERS[$placeholder]" ]]; then
     LANGUAGE_PLACEHOLDER_VALUE="${LANGUAGE_CONFIGURATION_PLACEHOLDERS[$placeholder]}"
     return 0

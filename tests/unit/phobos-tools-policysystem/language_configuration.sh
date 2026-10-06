@@ -245,9 +245,9 @@ echo "== a placeholder is determined when it is used =="
 # variable is unset and there is no fallback. Loading it, and using only the other placeholder, must
 # work; using the first must be refused with the configuration's file and that placeholder's line.
 printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\nunused.dir = environment PHOBOS_TEST_UNSET\nused.dir = fixed %s\n' "${WORK}/srv" > "${CONFIGURATIONS}/LAZY_CONFIGURATION.cfg"
-if result="$( (PHOBOS_TEST_UNSET="" load_language_configuration LAZY_CONFIGURATION "$HOME_DIR" && determine_language_placeholder used.dir && printf '%s' "$LANGUAGE_PLACEHOLDER_VALUE") 2>&1)"; then status=0; else status=$?; fi
+if result="$( (unset PHOBOS_TEST_UNSET && load_language_configuration LAZY_CONFIGURATION "$HOME_DIR" && determine_language_placeholder used.dir && printf '%s' "$LANGUAGE_PLACEHOLDER_VALUE") 2>&1)"; then status=0; else status=$?; fi
 check "a placeholder whose source cannot be determined does not refuse a run that never uses it" "0|${WORK}/srv" "${status}|${result}"
-if result="$( (PHOBOS_TEST_UNSET="" load_language_configuration LAZY_CONFIGURATION "$HOME_DIR" && determine_language_placeholder unused.dir && echo "not reached") 2>&1)"; then status=0; else status=$?; fi
+if result="$( (unset PHOBOS_TEST_UNSET && load_language_configuration LAZY_CONFIGURATION "$HOME_DIR" && determine_language_placeholder unused.dir && echo "not reached") 2>&1)"; then status=0; else status=$?; fi
 if (( status == PHB_EPOLICY )) && [[ "$result" == *"\${unused.dir} cannot be determined"* && "$result" == *"LAZY_CONFIGURATION.cfg', line 4."* && "$result" != *"not reached"* ]]; then
   ok "the same placeholder is refused, with the configuration's file and its line, once it is used"
 else
@@ -261,6 +261,33 @@ if (( status == PHB_EPOLICY )) && [[ "$result" == *"\${other.dir} is not a place
 else
   bad "a placeholder the configuration does not name is refused where it was used" "status ${PHB_EPOLICY}" "${status}|${result}"
 fi
+for line in 'a = guess x' 'a = fixed srv' 'a = environment 1BAD' 'a = environment PHOBOS_TEST_UNSET rel/dir' \
+  'a = command-ancestor tool 0' 'a = command-ancestor ../bin/tool 2' 'a = password-database shell' 'a = fixed /tmp extra'; do
+  printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\n%s\nb = fixed /tmp\n' "$line" > "${CONFIGURATIONS}/STATIC_CONFIGURATION.cfg"
+  if result="$( (load_language_configuration STATIC_CONFIGURATION "$HOME_DIR" && echo "loaded") 2>&1)"; then status=0; else status=$?; fi
+  if (( status == PHB_EPOLICY )) && [[ "$result" == *"STATIC_CONFIGURATION.cfg', line 4."* && "$result" != *"loaded"* ]]; then
+    ok "a malformed placeholder line is refused when the configuration is loaded, used or not: ${line}"
+  else
+    bad "a malformed placeholder line is refused when the configuration is loaded, used or not: ${line}" "status ${PHB_EPOLICY}, line 4" "${status}|${result}"
+  fi
+done
+result="$( (PARSE_LOCATION="'policy.yaml', line 9" && load_language_configuration LAZY_CONFIGURATION "$HOME_DIR" \
+  && determine_language_placeholder used.dir && printf '%s' "$PARSE_LOCATION") 2>&1)"
+check "a placeholder determined for the first time leaves the caller's location as it was" "'policy.yaml', line 9" "$result"
+if result="$( (load_language_configuration LAZY_CONFIGURATION "$HOME_DIR" && determine_language_placeholder used.dir \
+  && load_language_configuration GOOD_CONFIGURATION "$HOME_DIR" && determine_language_placeholder used.dir) 2>&1)"; then status=0; else status=$?; fi
+if (( status == PHB_EPOLICY )) && [[ "$result" == *"\${used.dir} is not a placeholder the programming language configuration 'GOOD_CONFIGURATION' names"* ]]; then
+  ok "loading another configuration forgets the placeholders and values of the first"
+else
+  bad "loading another configuration forgets the placeholders and values of the first" "status ${PHB_EPOLICY}" "${status}|${result}"
+fi
+if result="$( (load_language_configuration LAZY_CONFIGURATION "$HOME_DIR" && determine_language_placeholder 'x}y') 2>&1)"; then status=0; else status=$?; fi
+if (( status == PHB_EPOLICY )) && [[ "$result" == *"is not the name of a placeholder"* ]]; then
+  ok "a placeholder name that is not a name is refused before it is looked up"
+else
+  bad "a placeholder name that is not a name is refused before it is looked up" "status ${PHB_EPOLICY}" "${status}|${result}"
+fi
+
 printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\nuser.home = password-database home\n' > "${CONFIGURATIONS}/COUNTED_CONFIGURATION.cfg"
 mkdir -p "${WORK}/countinggetent"
 cat > "${WORK}/countinggetent/getent" <<GETENT
@@ -288,8 +315,8 @@ for file in "${CORE}"/config/language-configurations/*.cfg; do
     cp "$file" "${WORK}/shipped/${name}/language-configurations/"
     printf '#!/bin/sh\nexit 0\n' > "${WORK}/shipped/${name}/jdk/bin/java"
     chmod +x "${WORK}/shipped/${name}/jdk/bin/java"
-    PATH="${WORK}/shipped/${name}/jdk/bin:${PATH}"
-    HOME="${WORK}/home" TMPDIR="" load_language_configuration "$name" "${WORK}/shipped/${name}" \
+    export PATH="${WORK}/shipped/${name}/jdk/bin:${PATH}" HOME="${WORK}/home" TMPDIR=""
+    load_language_configuration "$name" "${WORK}/shipped/${name}" \
       && determine_language_placeholder java.home && determine_language_placeholder java.io.tmpdir \
       && determine_language_placeholder user.home \
       && printf '%s ' "${LANGUAGE_CONFIGURATION_BASES[@]##*/}" "${#LANGUAGE_PLACEHOLDER_DEFINITIONS[@]}" "$LANGUAGE_PLACEHOLDER_VALUE") 2>&1)" || true
