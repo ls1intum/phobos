@@ -128,9 +128,11 @@ def test_reading_refuses_what_the_parser_refuses_in_its_own_way(text):
         cfgfile.read_policy(text)
 
 
-def test_reading_splits_only_at_lf_and_trims_only_what_bash_trims():
-    read_back = cfgfile.read_policy("[read]\n/srv/a\x85b\n /srv/c\t\n/srv/d\xa0\n")
-    assert set(read_back.fs) == {"/srv/a\x85b", "/srv/c", "/srv/d\xa0"}
+def test_reading_splits_only_at_lf_trims_only_what_bash_trims_and_never_splits_a_path_in_two():
+    assert set(cfgfile.read_policy("[read]\n /srv/c\t\n").fs) == {"/srv/c"}
+    for path in ("/srv/a\x85/etc", "/srv/a\u2028/etc", "/srv/d\xa0"):
+        with pytest.raises(ValueError):
+            cfgfile.read_policy(f"[read]\n{path}\n")
 
 
 def test_a_limit_named_twice_is_merged_as_the_parser_merges_it():
@@ -149,3 +151,10 @@ def test_a_limit_value_the_parser_refuses_is_refused(limits):
 def test_a_network_line_not_in_its_sections_shape_is_refused(connect, bind):
     with pytest.raises(ValueError):
         cfgfile.render(policy(connect=connect, bind=bind))
+
+
+@pytest.mark.parametrize("text", ["[read]\nusr\n", "[read]\n/usr/*\n", "[read]\n/usr/a\x00b\n",
+                                  "[limits]\ncpu=1234567890123456789\n", "[limits]\nmem_mb=8796093022208\n"])
+def test_reading_refuses_a_path_or_limit_the_parser_refuses(text):
+    with pytest.raises(ValueError):
+        cfgfile.read_policy(text)

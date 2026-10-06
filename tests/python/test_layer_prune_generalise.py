@@ -288,3 +288,15 @@ def test_a_snapshot_taken_from_disk_tells_files_the_run_created_from_files_that_
     assert not snapshot.existed(str(tmp_path / "build" / "new.txt"))
     assert snapshot.is_directory(str(tmp_path / "build"))
     assert generalise.nearest_existing(str(tmp_path / "build" / "new.txt"), snapshot) == str(tmp_path / "build")
+
+
+def test_a_value_only_one_run_added_beside_stable_ones_does_not_change():
+    grants, _ = generalise.per_run_grants([read("/proc/1/stat", run=1), read("/proc/1/stat", run=2),
+                                           read("/proc/50/stat", run=2)])
+    assert grants == {}
+
+
+def test_a_listed_directory_no_policy_line_can_carry_leaves_no_comment():
+    grants, notes = generalise.grants_and_notes([read("/etc/a#b")], snapshot_with(directories=("/etc/a#b",)), FINE)
+    assert grants == {}
+    assert notes.comments == {}

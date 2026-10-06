@@ -207,9 +207,11 @@ def per_run_key(denial: Denial, match: PerRunMatch) -> tuple[str, frozenset[str]
 
 
 def changing_values(denials: list[Denial], observations: list[tuple[int, str, PerRunMatch]]) -> set[tuple[int, int]]:
-    """The (position, value) pairs seen changing: a value in some observed run that another run of the same call lacks.
+    """The (position, value) pairs seen changing: a position changes when at least two observed runs of the
+    same call each hold a value no other run of it holds in every run, and then those values are per-run.
 
-    A value present in every run that made the call is stable, however many values there are.
+    A value present in every run that made the call is stable, however many values there are, and a
+    value that only one run added beside stable ones does not make its position change.
     """
     changing: set[tuple[int, int]] = set()
     for position in range(len(observations[0][2].values)):
@@ -219,6 +221,8 @@ def changing_values(denials: list[Denial], observations: list[tuple[int, str, Pe
         if len(by_run) < 2:
             continue
         stable = set.intersection(*by_run.values())
+        if sum(1 for values in by_run.values() if values - stable) < 2:
+            continue
         changing.update((position, value) for values in by_run.values() for value in values - stable)
     return changing
 
@@ -298,9 +302,6 @@ def read_class_target(path: str, snapshot: Snapshot, fine_roots: tuple[str, ...]
     if not snapshot.existed(path):
         return nearest_existing(path, snapshot)
     if snapshot.is_directory(path):
-        if within(path, fine_roots) and depth(path) >= MINIMUM_WIDENING_DEPTH:
-            notes.comments.setdefault(path, f"listed: [read] on the directory {path} makes every entry beneath it "
-                                            "readable; Phobos has no list-only right")
         return path if depth(path) >= MINIMUM_WIDENING_DEPTH else None
     if within(path, fine_roots):
         return path
@@ -321,6 +322,9 @@ def placed(path: str, section: str, snapshot: Snapshot, fine_roots: tuple[str, .
         notes.report(path, section, "no path that existed before the run, inside the scanned roots and deep enough")
         return None
     if writable(target):
+        if section in READ_CLASS and within(target, fine_roots) and snapshot.is_directory(target):
+            notes.comments.setdefault(target, f"listed: [read] on the directory {target} makes every entry beneath "
+                                              "it readable; Phobos has no list-only right")
         return target
     if section not in READ_CLASS or within(target, fine_roots):
         notes.report(path, section, "a name a policy line cannot carry, and the right may not be widened here")

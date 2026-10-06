@@ -9,8 +9,10 @@ Paths are compared as written, so the caller passes them through os.path.realpat
 the system can answer (whether a [read] path exists, a dangling link, the hierarchy after links are
 resolved) is left to the phobos-policysystem.sh gate and the run, which refuse it with PHB-EPOLICY.
 
-`read_policy` reads text exactly as phobos-policy-parse.sh does: lines end at LF only, a carriage
-return is refused, and only the whitespace bash's [[:space:]] names is trimmed.
+`read_policy` splits and trims lines exactly as phobos-policy-parse.sh does: lines end at LF only, a
+carriage return is refused, and only the whitespace bash's [[:space:]] names is trimmed. Beyond the
+parser, it refuses every path and limit render would refuse, so nothing it reads can be written back
+as a different policy.
 """
 
 from __future__ import annotations
@@ -48,9 +50,12 @@ FORBIDDEN_RULE_CHARACTERS = re.compile("[#\x00-\x1f\x7f\x85\u2028\u2029]")
 # The shapes a [connect] and a [bind] line must have: allow, a destination or a port, a transport.
 CONNECT_RULE = re.compile(r"allow [^\s]+(?: (?:tcp|udp))?")
 BIND_RULE = re.compile(r"allow (?P<port>0|[1-9][0-9]{0,4})(?: (?:tcp|udp))?")
-# The highest port, and the most digits a limit may have (PHB_LARGEST_LIMIT_DIGITS).
+# The highest port, the most digits a limit may have (PHB_LARGEST_LIMIT_DIGITS), and the largest
+# megabyte value the resource layer can apply (PHB_LARGEST_MEGABYTES).
 PORT_MAXIMUM = 65535
 LIMIT_DIGITS_MAXIMUM = 18
+LARGEST_MEGABYTES = 8796093022207
+MEGABYTE_LIMITS = ("mem_mb", "fsize_mb")
 # The whitespace bash's [[:space:]] trims around a line, and the digits its [[:digit:]] accepts.
 PARSER_WHITESPACE = " \t\n\v\f\r"
 DIGITS = re.compile(r"[0-9]+")
@@ -124,6 +129,8 @@ def check_limits(limits: dict[str, int]) -> None:
             raise ValueError(f"unknown limit {key!r}")
         if type(value) is not int or value < 0 or len(str(value)) > LIMIT_DIGITS_MAXIMUM:
             raise ValueError(f"limit {key}={value!r} is not a whole number from 0")
+        if key in MEGABYTE_LIMITS and value > LARGEST_MEGABYTES:
+            raise ValueError(f"limit {key}={value} is more megabytes than the resource layer can apply")
 
 
 def check_hierarchy(fs: dict[str, frozenset[str]]) -> None:
@@ -177,9 +184,10 @@ def render(policy: Policy) -> str:
 def read_policy(text: str) -> Policy:
     """Reads configuration text back into a Policy, the inverse of render; comments are dropped.
 
-    Lines are read as phobos-policy-parse.sh reads them: everything from a `#` is a comment, and
-    leading and trailing whitespace is stripped. A line outside any section, an unknown section and a
-    malformed limit raise ValueError. [accept] rules are not part of a Policy and are refused.
+    Lines are read as phobos-policy-parse.sh reads them: everything from a `#` is a comment, and the
+    whitespace bash's [[:space:]] names is trimmed. A line outside any section, an unknown section, a
+    filesystem line check_path refuses and a malformed limit raise ValueError. [accept] rules are not
+    part of a Policy and are refused.
     """
     if "\r" in text:
         raise ValueError("a carriage return would become part of a value; the parser refuses it")
@@ -199,6 +207,7 @@ def read_policy(text: str) -> Policy:
                 raise ValueError(f"unknown section [{section}]")
             continue
         if section in FILESYSTEM_SECTIONS:
+            check_path(line)
             fs.setdefault(line, set()).add(section)
         elif section == "connect":
             connect.append(line)
@@ -211,6 +220,7 @@ def read_policy(text: str) -> Policy:
             limits[key] = merged_limit(limits.get(key), int(value))
         else:
             raise ValueError(f"{line!r} appears before any section")
+    check_limits(limits)
     return Policy(fs={path: frozenset(sections) for path, sections in fs.items()},
                   connect=tuple(connect), bind=tuple(bind), limits=limits)
 
