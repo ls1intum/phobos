@@ -2,7 +2,7 @@
 # shellcheck shell=bash
 # The shared library every layer and every suite sources, by this name. It defines nothing
 # itself: it sets the shell options the helpers assume, reads the constants, and then reads
-# the eight files below, one concern each. Splitting it changed no caller for that reason,
+# the nine files below, one concern each. Splitting it changed no caller for that reason,
 # and it has no include guard on purpose, because sourcing it has to keep resetting
 # PHB_DEBUG_ENABLED so that the environment can never switch debugging on.
 set -euo pipefail
@@ -25,6 +25,8 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/phobos-spec-dir.sh"
 source "$(dirname -- "${BASH_SOURCE[0]}")/phobos-signals.sh"
 # shellcheck source=../phobos-tools-policysystem/phobos-policy-parse.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/../phobos-tools-policysystem/phobos-policy-parse.sh"
+# shellcheck source=../phobos-tools-policysystem/phobos-policy-yaml.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/../phobos-tools-policysystem/phobos-policy-yaml.sh"
 # shellcheck source=../phobos-tools-filesystem/phobos-rights.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/../phobos-tools-filesystem/phobos-rights.sh"
 # shellcheck source=../phobos-tools-networksystem/phobos-network-args.sh
