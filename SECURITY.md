@@ -108,13 +108,14 @@ language configuration determines from the environment, the `PATH` and the passw
 of the process that runs `phobos.sh`. All of them are fixed before the command is started; a
 grading setup that hands `phobos.sh` an environment the submission influenced breaks this.
 
-A path a policy names is resolved through its symbolic links when the specification is built,
-and by then the submission is usually in place. A relative path in an Ares 2 policy names a
-place inside the project root, which usually holds the submission's checkout, so a symbolic
-link the submission commits at any component of that path makes the grant land where the link
+A path a policy names is resolved through its symbolic links when the filesystem layer
+applies it, just before the command starts, and by then the submission is in place. A relative
+path in an Ares 2 policy names a place inside the project root, which usually holds the
+submission's checkout. A symbolic link the submission places at any component of a path that is
+only read or executed, or at any component but the last of a path that may be changed (the
+enforcer refuses a changeable path that is itself a link), makes the grant land where the link
 points. The same holds for a path in an exercise configuration that lies in the submission's
-tree. Grant such a path only where no component of it is the submission's to choose, or build
-the specification before the submission is copied in.
+tree. Grant such a path only where no component of it is the submission's to choose.
 
 ## The environment Phobos is started in
 

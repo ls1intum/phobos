@@ -445,9 +445,9 @@ is_exact_loopback_host() {
 # Reads one [connect] line of a programming language configuration with append_connect_rule, so it
 # meets every refusal a policy cfg's [connect] line meets, and appends its row to
 # LANGUAGE_CONFIGURATION_CONNECT_FILE, unless it is not a rule for one loopback host that names no
-# port, which is refused: a programming language configuration says which base a run uses and must not become a
-# second, less visible place for egress rules. A rule that reaches beyond loopback belongs in a base
-# policy, whose change says so. Takes the line. Assumes it runs inside load_language_configuration,
+# port, which is refused: a programming language configuration says which base a run uses and
+# must not become a second, less visible place for egress rules. A rule that reaches beyond
+# loopback belongs in a base policy, whose change says so. Takes the line. Assumes it runs inside load_language_configuration,
 # with PARSE_LOCATION naming the line, and that it is called plainly, so that a refusal ends the run.
 read_language_connect_line() {
   local line="$1"

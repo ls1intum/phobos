@@ -569,8 +569,9 @@ ares_map_file_entry() {
 # an IPv4 or an IPv6 address with a port, or for a loopback address with port 0 every port, a host
 # name or "*" with a port, each as a .cfg line would write it, so that append_connect_rule judges it
 # as it judges one. A host name ending in a dot, any host but loopback with port 0, and anything
-# Ares's host pattern does not admit are refused here, where the entry's line is known. Takes the host and the port. Assumes PARSE_LOCATION names the entry's line and
-# that it is called plainly, so that a refusal ends the run.
+# Ares's host pattern does not admit are refused here, where the entry's line is known. Takes the
+# host and the port. Assumes PARSE_LOCATION names the entry's line and that it is called plainly,
+# so that a refusal ends the run.
 ares_network_rule_line() {
   local host="$1"
   local port="$2"

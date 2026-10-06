@@ -165,10 +165,18 @@ printf '[read]\n%s\n[write]\n%s\n[connect]\nallow localhost udp\nallow localhost
   "$OUTSIDE/data.txt" "$OUTSIDE/data.txt" > "$WORK/meaning.cfg"
 ares_spec="$(fresh_spec)"
 bash "$CORE_E/phobos-policysystem.sh" --spec-dir "$ares_spec" --tail-flags-file "$WORK/tail.flags" --config "$WORK/meaning.yaml" 2>/dev/null
+ares_status=$?
 cfg_spec="$(fresh_spec)"
 bash "$CORE_E/phobos-policysystem.sh" --spec-dir "$cfg_spec" --tail-flags-file "$WORK/tail.flags" --config "$WORK/meaning.cfg" 2>/dev/null
+cfg_status=$?
 difference="$(diff -r -x scratch "$ares_spec" "$cfg_spec" 2>&1)"
-check "the specification of the Ares policy equals that of the .cfg, the configuration's [connect] row written into the .cfg" "" "$difference"
+if (( ares_status == 0 && cfg_status == 0 )) && grep -qxF "$OUTSIDE/data.txt" "$ares_spec/read.paths" \
+  && grep -qxF "localhost 8080 udp" "$ares_spec/net.rules" && [[ -z "$difference" ]]; then
+  ok "the specification of the Ares policy equals that of the .cfg, the configuration's [connect] row written into the .cfg"
+else
+  bad "the specification of the Ares policy equals that of the .cfg, the configuration's [connect] row written into the .cfg" \
+    "both built, holding the grant, and no difference" "statuses ${ares_status} and ${cfg_status}: ${difference}"
+fi
 
 echo
 echo "== base selection =="
@@ -215,8 +223,11 @@ hierarchy="$(
 )"
 hierarchy_status=$?
 if (( hierarchy_status == PHB_EPOLICY )) && [[ "$hierarchy" == *"Policy unenforceable"* ]]; then ok "a strict-subset .cfg row beside an Ares policy is still refused by the hierarchy check"; else bad "a strict-subset .cfg row beside an Ares policy is still refused by the hierarchy check" "status ${PHB_EPOLICY}" "${hierarchy_status}: ${hierarchy}"; fi
-for yaml in "$PROJ/allowed.yaml" "$WORK/link.yaml"; do
+for case in "$PROJ/allowed.yaml|$PROJ" "$WORK/link.yaml|$PROJ/link/data.txt"; do
+  yaml="${case%|*}"
   run_policy --tail-flags-file "$WORK/tail.flags" --config "$yaml"
+  built="$STATUS"
+  spec_has read.paths "${case#*|}" || built="no read row ${case#*|}"
   hierarchy="$(
     export PHOBOS_SCRATCH="$WORK/scratch-hierarchy"
     mkdir -p "$PHOBOS_SCRATCH"
@@ -228,7 +239,7 @@ for yaml in "$PROJ/allowed.yaml" "$WORK/link.yaml"; do
     printf '%s' "${args[*]}" > /dev/null
   )"
   hierarchy_status=$?
-  if (( hierarchy_status == 0 )); then ok "the specification of ${yaml##*/} alone passes the hierarchy check"; else bad "the specification of ${yaml##*/} alone passes the hierarchy check" "status 0" "${hierarchy_status}: ${hierarchy}"; fi
+  if [[ "$built" == 0 ]] && (( hierarchy_status == 0 )); then ok "the specification of ${yaml##*/} alone is built and passes the hierarchy check"; else bad "the specification of ${yaml##*/} alone is built and passes the hierarchy check" "status 0 twice" "${built}, ${hierarchy_status}: ${hierarchy}"; fi
 done
 
 echo

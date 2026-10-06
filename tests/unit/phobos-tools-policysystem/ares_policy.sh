@@ -302,7 +302,7 @@ fi
 result="$(example_policy | sed '/^    regardingFileSystemInteractions:$/,/^    regardingNetworkConnections:$/{/^    regardingNetworkConnections:$/!d}' \
   | sed 's/^    regardingNetworkConnections:$/    regardingFileSystemInteractions: []\n    regardingNetworkConnections: []/' \
   | sed '/^      - onTheHost/,/^        receiveData/d; /^    regardingTimeouts:$/,$d' | { cat; printf '    regardingTimeouts: []\n'; } | parse_result)"
-check "a policy that maps to nothing but notices still parses" "|||" "$(field read "$result")|$(field net "$result")|$(field timeout "$result")|"
+check "a policy that maps to nothing but notices still parses, and grants nothing" "TEST_CONFIGURATION|||" "$(field configuration "$result")|$(field read "$result")|$(field net "$result")|$(field timeout "$result")"
 
 echo "== accepted, though Phobos grants nothing for it =="
 result="$(policy_with '      - executeTheCommand: "ls"' '      - "${work.dir}/run"\n      - executeTheCommand: "ls"' | parse_result)"
