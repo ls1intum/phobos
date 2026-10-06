@@ -173,10 +173,14 @@ def test_verify_runs_each_exercise_under_the_merged_pair_and_leaves_the_prune_ar
     (output / "java_alpha.cfg").write_text("kept")
     status = main.main(["--verify", str(merged), "--testing-root", str(root), "--output-dir", str(output), "java"])
     assert status == main.EXIT_ABORTED
-    assert seen == [("alpha", ["BaseLanguage-java.cfg", "java_alpha.cfg"]), ("beta", ["BaseLanguage-java.cfg"])]
+    assert seen == [("alpha", ["BaseLanguage-java.cfg", "java_alpha.cfg"])]
     assert (output / "java_alpha.cfg").read_text() == "kept"
-    assert json.loads((output / "verify" / "java_alpha.json").read_text())["verified"] is True
-    assert json.loads((output / "verify" / "java_beta.json").read_text())["verified"] is False
+    alpha = json.loads((output / "verify" / "java_alpha.json").read_text())
+    beta = json.loads((output / "verify" / "java_beta.json").read_text())
+    assert alpha["verified"] is True
+    assert alpha["provenance"] == ORIGIN
+    assert beta["verified"] is False
+    assert "java_beta.cfg" in beta["aborted"]
 
 
 def test_verify_without_a_merged_base_fails_every_exercise(tmp_path, pruned, monkeypatch):
@@ -186,4 +190,27 @@ def test_verify_without_a_merged_base_fails_every_exercise(tmp_path, pruned, mon
     status = main.main(["--verify", str(tmp_path / "empty"), "--testing-root", str(root), "--output-dir", str(output),
                         "java"])
     assert status == main.EXIT_ABORTED
-    assert "there is no" in json.loads((output / "verify" / "java_alpha.json").read_text())["aborted"]
+    assert "lacks" in json.loads((output / "verify" / "java_alpha.json").read_text())["aborted"]
+
+
+def test_a_prune_clears_earlier_verifications_and_a_verification_its_own_key_s_earlier_ones(tmp_path, pruned,
+                                                                                            monkeypatch):
+    root = exercise_tree(tmp_path / "exercises", "alpha")
+    output = tmp_path / "out"
+    (output / "verify").mkdir(parents=True)
+    (output / "verify" / "java_gone.json").write_text('{"verified": true}')
+    (output / "verify" / "python_kept.json").write_text("{}")
+    main.main(["--testing-root", str(root), "--output-dir", str(output), "java"])
+    assert not (output / "verify" / "java_gone.json").exists()
+    (output / "verify" / "java_gone.json").write_text('{"verified": true}')
+    monkeypatch.setattr(stages, "verify_merged", lambda *arguments: [])
+    main.main(["--verify", str(tmp_path / "merged"), "--testing-root", str(root), "--output-dir", str(output), "java"])
+    assert not (output / "verify" / "java_gone.json").exists()
+    assert (output / "verify" / "python_kept.json").exists()
+
+
+def test_verify_takes_no_stage(tmp_path, pruned, capsys):
+    root = exercise_tree(tmp_path / "exercises", "alpha")
+    assert main.main(["--verify", str(tmp_path), "--stage", "network", "--testing-root", str(root), "--output-dir",
+                      str(tmp_path / "out"), "java"]) == main.EXIT_ABORTED
+    assert "no --stage" in capsys.readouterr().err

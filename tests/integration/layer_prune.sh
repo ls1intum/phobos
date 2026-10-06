@@ -11,8 +11,11 @@
 #              build did without, a sibling of a granted prefix, a write into what was only read,
 #              10.0.0.1:80 and port 8080, and each derived limit ends a run that exceeds it;
 #   merged     the orchestrator merges the artefacts into BaseLanguage-java.cfg and the exercise's
-#              own file, and the fixture passes under that pair (main.py --verify), as grading applies it;
-#              a hand-edited .cfg its record does not vouch for stops the merge;
+#              own file, and the fixture passes under that pair (main.py --verify), as grading applies it,
+#              while a base without the needed file's grant fails it; a hand-edited .cfg its record does
+#              not vouch for stops the merge. The verification runs in the container the prune ran in,
+#              whose index holds what the prune's last run left, which Compose's fresh verify_java
+#              container would not;
 #   wrong reasons  a flaky reference, NO-SOURCE, a needed setsid, a needed external host and a
 #              failure no refused call explains each abort the exercise and write no policy.
 #
@@ -211,6 +214,17 @@ check_merged_and_verified() {
     ok "the fixture passes under the merged base and its own file, every layer on"
   else
     bad "the fixture passes under the merged base and its own file, every layer on" "$(tail -3 <<<"${out}")"
+  fi
+  local narrowed="${WORK}/core-narrowed"
+  cp -r "${core}" "${narrowed}"
+  sed -i '\|^/srv/prune-fixture/needed|d' "${narrowed}/BaseLanguage-java.cfg"
+  out="$(python3 "${HELPERS}/layer_prune/main.py" --verify "${narrowed}" --output-dir "${WORK}/verify-narrowed" java 2>&1)"
+  local narrowed_status=$?
+  if [[ ${narrowed_status} -ne 0 && "${out}" == *"java/fixture: aborted"* ]] \
+      && grep -q '"verified": false' "${WORK}/verify-narrowed/verify/java_fixture.json"; then
+    ok "a merged base without the needed file's grant fails the verification"
+  else
+    bad "a merged base without the needed file's grant fails the verification" "status ${narrowed_status}: $(tail -3 <<<"${out}")"
   fi
   local tampered="${WORK}/tampered"
   cp -r "${OUTPUT}" "${tampered}"

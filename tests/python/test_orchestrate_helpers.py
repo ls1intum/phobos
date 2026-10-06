@@ -265,3 +265,11 @@ def test_the_runtime_tail_carries_the_chdir_and_nothing_else(tmp_path):
 def test_the_language_list_is_required():
     with pytest.raises(SystemExit):
         orchestrate.parse_arguments([])
+
+
+def test_a_path_one_exercise_read_and_another_wrote_keeps_what_the_orchestrator_always_wrote(tmp_path):
+    union_file = tmp_path / "python_union.paths"
+    union_file.write_text("r /x\nw /x\nr /x/lib\n")
+    policy = orchestrate.path_set_policy(orchestrate._read_union(union_file))
+    assert policy.fs == {"/x": frozenset({"read", "write", "create", "delete"}),
+                         "/x/lib": frozenset({"read", "execute"})}

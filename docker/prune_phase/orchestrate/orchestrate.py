@@ -15,11 +15,14 @@ files are read and written with `layer_prune/cfgfile.py`, found through --helper
 
 ### Outputs (all in /var/tmp/opt/core/config)
 * **BasePhobos.cfg**            - **UNION** of every language's base →
-  used when the runtime cannot tell which language is running.
+  used when the runtime cannot tell which language is running. It is left out, with a
+  warning, when the union would let execute where one language writes and another executes
+  (see execute_conflicts), since it is an alternative no language needs.
 * **BaseLanguage-<lang>.cfg**   - the union of every exercise of that language: its
   filesystem sections, raised wherever a nested entry would hold fewer rights than an
   ancestor (Landlock grants those rights there anyway), and its [connect] and [bind] rules.
-  Never a [limits] section: a limit belongs to one exercise.
+  Never a [limits] section: a limit belongs to one exercise. The merge is refused when the
+  union would let [execute] sit beside a write-class right no exercise had beside it.
 * **exercises/<lang>_<exercise>.cfg** - what one layer-pruned exercise needs beyond its
   language's base, plus its [limits]: an entry the base already grants along its ancestors
   is dropped. It is passed with --config on top of the base.
@@ -42,6 +45,9 @@ inspected.
 Ship exactly one Base*.cfg beside phobos-policysystem.sh: it applies every Base*.cfg it
 finds there, so a BasePhobos.cfg left next to a BaseLanguage-java.cfg gives a Java
 run the paths of every other language as well.
+
+Compose runs this with --skip-prune: the layer pruner prunes Java in its own container. Without
+--skip-prune every requested language, Java included, is pruned here with Bubblewrap.
 """
 
 from __future__ import annotations
@@ -314,6 +320,8 @@ def cfg_record_disagreement(lang: str, exercise: str, cfg_file: Path, record_fil
         return f'{record_file.name} is not readable as JSON: {exc}'
     if not isinstance(record, dict) or record.get('schema_version') != LAYER_RECORD_SCHEMA:
         return f'{record_file.name} is not a layer pruner record of schema version {LAYER_RECORD_SCHEMA}'
+    if record.get('stage') != 'all':
+        return f'{record_file.name} records a prune stopped after its {record.get("stage")} stage, not one to ship'
     if record.get('key') != lang or f'{lang}_{record.get("exercise")}' != exercise:
         return f'{record_file.name} records {record.get("key")}/{record.get("exercise")}, not {exercise}'
     if record.get('cfg_sha256') != hashlib.sha256(cfg_file.read_bytes()).hexdigest():
@@ -412,23 +420,34 @@ def union_policy(policies: Sequence[Policy]) -> Policy:
     """The union of several policies, without limits: what a base built from them must grant.
 
     Every path holds every section any of them granted it, raised as `raised` says; the network
-    rules are every rule any of them names, sorted; a comment, the reason a grant is wider than
-    what was observed, is kept from the first policy that has one for that path.
+    rules are every rule any of them names, sorted. The comments of the exercises' .cfg files, the
+    reasons a grant is wider than observed, are not carried over: they stay in those files and
+    their records.
     """
     from layer_prune import cfgfile
     fs: dict[str, frozenset[str]] = {}
-    comments: dict[str, str] = {}
     for policy in policies:
         for path, sections in policy.fs.items():
             fs[path] = fs.get(path, frozenset()) | sections
-        for path, text in policy.comments.items():
-            comments.setdefault(path, text)
-    fs = raised(fs)
-    return cfgfile.Policy(fs=fs,
+    return cfgfile.Policy(fs=raised(fs),
                           connect=tuple(sorted({rule for policy in policies for rule in policy.connect})),
                           bind=tuple(sorted({rule for policy in policies for rule in policy.bind})),
-                          limits={},
-                          comments={path: text for path, text in comments.items() if path in fs})
+                          limits={})
+
+
+def execute_conflicts(parts: Sequence[Policy], union: Policy) -> list[str]:
+    """The paths the union lets execute beside a write-class right that no part granting execute there had.
+
+    Markus's decision on #185: [execute] never sits on a directory that overlaps a write-class right
+    (on itself, an ancestor or an entry beneath it). Each part already holds to it, but a union can
+    bring one part's write beside another's execute, and the orchestrator cannot tell a file from a
+    directory, so it names every such path rather than guess.
+    """
+    from layer_prune import generalise
+    return [path for path, sections in sorted(union.fs.items())
+            if 'execute' in sections and generalise.overlaps_write(path, union.fs)
+            and not any('execute' in part.fs.get(path, frozenset()) and generalise.overlaps_write(path, part.fs)
+                        for part in parts)]
 
 
 def common_policy(policies: Sequence[Policy]) -> Policy:
@@ -569,8 +588,14 @@ def cross_language_policies(lang_data: dict[str, LanguagePolicy], layout: Layout
                                connect=tuple(sorted(set.intersection(*(set(base.connect) for base in bases)))),
                                bind=tuple(sorted(set.intersection(*(set(base.bind) for base in bases)))),
                                limits={})
-    return {layout.core_dir / 'BasePhobos.cfg': union,
-            layout.debug_dir / 'BasePhobosIntersect.cfg': intersect}
+    policies = {layout.debug_dir / 'BasePhobosIntersect.cfg': intersect}
+    conflicts = execute_conflicts(bases, union)
+    if conflicts:
+        print(f'{YELLOW}[warn]{RESET} BasePhobos.cfg is not written: across the languages it would let execute '
+              f'beside a write on {", ".join(conflicts)}. Ship a BaseLanguage-<lang>.cfg instead.')
+    else:
+        policies[layout.core_dir / 'BasePhobos.cfg'] = union
+    return policies
 
 
 def language_policies(lang_data: dict[str, LanguagePolicy], layout: Layout) -> dict[Path, Policy]:
@@ -617,6 +642,7 @@ def write_policies(policies: dict[Path, Policy], langs: Iterable[str], layout: L
     """
     from layer_prune import cfgfile
     texts = {destination: cfgfile.render(policy) for destination, policy in policies.items()}
+    (layout.core_dir / 'BasePhobos.cfg').unlink(missing_ok=True)
     exercises_dir = layout.core_dir / 'exercises'
     exercises_dir.mkdir(exist_ok=True)
     for lang in langs:
@@ -672,6 +698,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if missing_languages:
         print(f'{RED}[error]{RESET} no usable pruning result for:', ', '.join(missing_languages))
         print('        Refusing to merge a policy that is missing a language that was asked for.')
+        return 1
+
+    conflicts = {lang: execute_conflicts(list(language.exercises.values()), language.base)
+                 for lang, language in lang_data.items() if language.exercises}
+    if any(conflicts.values()):
+        print(f'{RED}[error]{RESET} the union of the exercises would let execute beside a write no exercise had:')
+        for lang, paths in conflicts.items():
+            for path in paths:
+                print(f'        {lang}: {path}')
+        print('        Refusing to merge a base that would make a writable tree executable.')
         return 1
 
     policies = {**cross_language_policies(lang_data, layout), **language_policies(lang_data, layout),

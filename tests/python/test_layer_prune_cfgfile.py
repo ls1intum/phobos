@@ -158,3 +158,11 @@ def test_a_network_line_not_in_its_sections_shape_is_refused(connect, bind):
 def test_reading_refuses_a_path_or_limit_the_parser_refuses(text):
     with pytest.raises(ValueError):
         cfgfile.read_policy(text)
+
+
+def test_the_permissive_network_is_loopback_port_zero_and_the_declared_hosts():
+    opened = cfgfile.with_permissive_network(cfgfile.Policy(fs={"/usr": frozenset({"read"})}, connect=("allow x:1",),
+                                                            bind=("allow 9",), limits={}), ("api.example.org:443",))
+    assert opened.connect == (*cfgfile.PERMISSIVE_CONNECT, "allow api.example.org:443")
+    assert opened.bind == cfgfile.PERMISSIVE_BIND
+    assert opened.fs == {"/usr": frozenset({"read"})}

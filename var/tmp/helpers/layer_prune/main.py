@@ -172,20 +172,22 @@ def overlaps(path: pathlib.Path, other: pathlib.Path) -> bool:
 
 
 def verify_one(directory: pathlib.Path, key: str, environment: runner.Environment, merged: pathlib.Path,
-               output: pathlib.Path, pristine: generalise.Snapshot) -> str | None:
+               output: pathlib.Path, pristine: generalise.Snapshot, origin: dict[str, str | int]) -> str | None:
     """Verifies one exercise under the merged configuration and writes its record; the reason it failed, or None.
 
-    The broad except writes any failure, a defect of the pruner included, as the exercise's result.
+    Both files must be there: the orchestrator writes one per exercise it merged, so an exercise
+    without one was not merged, and grading would never apply the base to it alone. The broad except
+    writes any failure, a defect of the pruner included, as the exercise's result.
     """
-    base = merged / f"BaseLanguage-{key}.cfg"
-    remainder = merged / "exercises" / f"{key}_{directory.name}.cfg"
-    configs = tuple(path for path in (base, remainder) if path.is_file())
+    configs = (merged / f"BaseLanguage-{key}.cfg", merged / "exercises" / f"{key}_{directory.name}.cfg")
     entry: dict = {"schema_version": SCHEMA_VERSION, "key": key, "exercise": directory.name,
-                   "configs": [str(config) for config in configs]}
+                   "configs": [str(config) for config in configs], "provenance": origin}
     reason = None
     try:
-        if base not in configs:
-            raise runner.ExerciseRefused(f"there is no {base}")
+        missing = [str(config) for config in configs if not config.is_file()]
+        if missing:
+            raise search.PruneAbort(f"the merged configuration lacks {', '.join(missing)}: was it merged before "
+                                    "this exercise was pruned?")
         entry["log"] = stages.jsonable(stages.verify_merged(runner.read_exercise(directory), configs, environment,
                                                             pristine))
     except Exception as failure:  # noqa: BLE001
@@ -201,6 +203,9 @@ def verify_one(directory: pathlib.Path, key: str, environment: runner.Environmen
 def main(argv: list[str]) -> int:
     """Prunes, or with --verify verifies, every exercise of the key; 0 when all succeeded, EXIT_ABORTED otherwise."""
     options = arguments(argv)
+    if options.verify is not None and options.stage != "all":
+        print("--verify checks the merged configuration of a whole prune; it takes no --stage", file=sys.stderr)
+        return EXIT_ABORTED
     if os.environ.get(stages.PRUNE_CONTAINER_VARIABLE) != "1":
         print(f"the pruner removes what its runs leave behind, so it runs only in the prune container, which sets "
               f"{stages.PRUNE_CONTAINER_VARIABLE}=1", file=sys.stderr)
@@ -219,6 +224,9 @@ def main(argv: list[str]) -> int:
     output.mkdir(parents=True, exist_ok=True)
     if options.verify is None:
         remove_stale(output, options.key)
+    else:
+        for stale in (output / VERIFY_DIRECTORY).glob(f"{options.key}_*.json"):
+            stale.unlink()
     exercises = sorted(path for path in root.iterdir() if path.is_dir() and not path.name.startswith("."))
     origin = provenance(environment)
     pristine = stages.pristine_index(environment)
@@ -228,7 +236,8 @@ def main(argv: list[str]) -> int:
             reason = prune_one(directory, options.key, options.stage, environment, output, origin, pristine)
             done = "pruned"
         else:
-            reason = verify_one(directory, options.key, environment, pathlib.Path(options.verify), output, pristine)
+            reason = verify_one(directory, options.key, environment, pathlib.Path(options.verify), output, pristine,
+                                origin)
             done = "verified"
         print(f"{options.key}/{directory.name}: {done if reason is None else 'aborted: ' + reason}", flush=True)
         if reason is not None:

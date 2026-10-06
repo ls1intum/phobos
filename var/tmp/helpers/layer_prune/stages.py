@@ -147,7 +147,28 @@ def baseline(pruning: Pruning) -> verdict.Verdict:
             raise search.PruneAbort("flaky reference", {"first": dataclasses.asdict(reference),
                                                         "later": dataclasses.asdict(found)})
         reference = found
+    if pruning.exercise.declared_hosts and any(outcome != verdict.PASSED for _, outcome in reference.tests):
+        diagnose_declared_reference(pruning)
     return reference
+
+
+def diagnose_declared_reference(pruning: Pruning) -> None:
+    """Says why the reference of an exercise that declares hosts fails tests under the layers; always raises PruneAbort.
+
+    Such a reference runs under the layers with its declared hosts as its only external rules, so a
+    host it needs but did not declare makes it fail its own tests, consistently, and the baseline
+    would take that failure as the outcome to reproduce. One observed run names the undeclared
+    destination ("needs external network", A.6.5); without one, the reference is not one to prune from.
+    """
+    policy = cfgfile.permissive_policy(pathlib.Path("/"), pruning.exercise.declared_hosts)
+    result = pruning.run(policy, OBSERVED_NETWORK, "reference diagnosis")
+    external = network.network_rules(denials_of(pruning, result), frozenset(),
+                                     pruning.exercise.declared_hosts).refused_external
+    if external:
+        raise search.PruneAbort("needs external network: undeclared " + ", ".join(external),
+                                {"refused_external": list(external)})
+    raise search.PruneAbort("the reference fails its own tests under the layers with only its declared hosts",
+                            {"verdict": dataclasses.asdict(result.verdict)})
 
 
 def permissive_run(pruning: Pruning) -> None:
@@ -336,14 +357,15 @@ def filesystem_run(pruning: Pruning, policy: cfgfile.Policy, observe: bool, stag
     """One run of the filesystem stage: the network layer off, so only the filesystem can refuse.
 
     An exercise that declares hosts can reach them only through the network layer, which maps each
-    name and starts the egress broker, so its filesystem runs keep that layer on with every rule the
-    permissive run held (the loopback, port 0 and the declared hosts): the network still refuses
-    nothing a policy may grant, and the stage's grants still come from filesystem refusals only.
+    name and starts the egress broker, so its filesystem runs keep that layer on with exactly the
+    network rules of the permissive run (cfgfile.with_permissive_network); the stage's grants still
+    come from filesystem refusals only. This errs permissive in one way: a file the build touches only
+    while a declared host answers is granted, and prune_exercise minimises the filesystem once more
+    under the final rules when the network stage drops a declared host.
     """
     if not pruning.exercise.declared_hosts:
         return pruning.run(policy, OBSERVED_FILESYSTEM if observe else UNOBSERVED_FILESYSTEM, stage)
-    connect = cfgfile.PERMISSIVE_CONNECT + network.seed_rules(pruning.exercise.declared_hosts)
-    open_network = dataclasses.replace(policy, connect=connect, bind=cfgfile.PERMISSIVE_BIND)
+    open_network = cfgfile.with_permissive_network(policy, pruning.exercise.declared_hosts)
     return pruning.run(open_network, OBSERVED_NETWORK if observe else UNOBSERVED_NETWORK, stage)
 
 
@@ -367,13 +389,21 @@ def grow_filesystem(pruning: Pruning, seed: cfgfile.Policy) -> cfgfile.Policy:
     return search.grow(observed, seed, pruning.reference, pruning.budget.grow_rounds, derive, unobserved)
 
 
-def minimise_policy_fs(pruning: Pruning, policy: cfgfile.Policy, stage: str) -> cfgfile.Policy:
-    """Removes every (path, section) grant two unobserved filesystem runs show is not needed (A.6.4, decision 10)."""
+def minimise_policy_fs(pruning: Pruning, policy: cfgfile.Policy, stage: str,
+                       final_network: bool = False) -> cfgfile.Policy:
+    """Removes every (path, section) grant two unobserved runs show is not needed (A.6.4, decision 10).
+
+    The runs are filesystem runs (filesystem_run), or with `final_network` runs under the policy's own
+    [connect] and [bind] rules with the network layer on.
+    """
     pairs = sorted((path, section) for path, sections in policy.fs.items() for section in sections)
 
     def passes(kept: list[tuple[str, str]]) -> bool:
         """One unobserved run with only the kept grants."""
-        return pruning.matches(filesystem_run(pruning, normalised(pruning, with_pairs(policy, kept)), False, stage))
+        candidate = normalised(pruning, with_pairs(policy, kept))
+        if final_network:
+            return pruning.matches(pruning.run(candidate, UNOBSERVED_NETWORK, stage))
+        return pruning.matches(filesystem_run(pruning, candidate, False, stage))
 
     result = search.minimise(pairs, passes)
     final = normalised(pruning, with_pairs(policy, result.kept))
@@ -633,7 +663,11 @@ def verify_merged(exercise: runner.Exercise, configs: tuple[pathlib.Path, ...], 
     as what that base lacks, so the pair, not the policy the exercise was pruned with, is what grading
     applies. A baseline as the prune's, then verification_runs runs with every layer on, each from
     the state the index records; any run that does not match the reference raises PruneAbort.
+    The base is passed with --config, so its [read] and [execute] paths must exist as an exercise
+    configuration's must, which a base beside phobos-policysystem.sh need not: this errs restrictive.
     """
+    if not sampler.become_subreaper():
+        raise runner.PrunerDefect(-1, pathlib.Path(os.devnull), "the kernel refused to make the pruner a child subreaper")
     pruning = Pruning(exercise=exercise, budget=Budget(), environment=environment, pristine=pristine)
     try:
         pruning.reference = baseline(pruning)
@@ -674,6 +708,8 @@ def prune_exercise(exercise: runner.Exercise, budget: Budget, environment: runne
         policy = prune_filesystem(pruning, cfgfile.Policy(fs={}, connect=(), bind=(), limits={}))
         if stage != "filesystem":
             policy = prune_network(pruning, policy)
+            if set(network.seed_rules(exercise.declared_hosts)) - set(policy.connect):
+                policy = minimise_policy_fs(pruning, policy, "filesystem after network", final_network=True)
         if stage in ("limits", "all"):
             policy = prune_limits(pruning, policy)
         if stage == "all":

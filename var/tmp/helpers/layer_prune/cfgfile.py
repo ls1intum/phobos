@@ -290,5 +290,10 @@ def permissive_policy(root: pathlib.Path, declared_hosts: tuple[str, ...] = ()) 
     fs: dict[str, frozenset[str]] = {"/": frozenset({"read", "execute"}), "/dev/null": frozenset({"read", "write"})}
     for path in [*writable_top_level(root), TESTING_DIR]:
         fs[path] = frozenset(WRITE_SECTIONS)
-    return Policy(fs=fs, connect=PERMISSIVE_CONNECT + network.seed_rules(declared_hosts),
-                  bind=PERMISSIVE_BIND, limits={})
+    return with_permissive_network(Policy(fs=fs, connect=(), bind=(), limits={}), declared_hosts)
+
+
+def with_permissive_network(policy: Policy, declared_hosts: tuple[str, ...]) -> Policy:
+    """The policy with the permissive run's network rules: loopback, port 0, and one rule per declared host."""
+    return dataclasses.replace(policy, connect=PERMISSIVE_CONNECT + network.seed_rules(declared_hosts),
+                               bind=PERMISSIVE_BIND)

@@ -7,9 +7,14 @@
 # answers every name with 127.0.0.1, where a TLS server stands in for the external host, so the
 # whole path runs in a container with no network:
 #   permitted  the needed host keeps its rule, and the build reaches it under the derived policy;
-#   forbidden  the host the build never asked is dropped from the policy, which the record says; under
-#              the derived policy a request to it gets no answer, and neither does one that aims at the
-#              kept host's address while naming the dropped host in its TLS ClientHello.
+#   forbidden  the host the build never asked is dropped from the policy, which the record says. Under
+#              the derived policy, with the dropped host made resolvable for the check: on the kept
+#              rule's port the connect reaches only the egress broker, which closes it without an
+#              answer because the ClientHello names the dropped host; on any other port the guard
+#              refuses it with EACCES; and a request aiming at the kept host's address while naming the
+#              dropped host gets no answer either;
+#   wrong reason  a build that also needs a host nobody declared aborts with "needs external network:
+#              undeclared" and writes no policy, although the declared host it needs is there.
 #
 # Runs inside the prune image with the repository mounted at /repo, read-only, in an ordinary
 # container: --network none, cgroup limits, and no --privileged, no --cap-add, no --security-opt.
@@ -27,6 +32,11 @@ KEY=java-egress
 DNS_PORT=39470
 DNS_SECONDS=3600
 SERVER_PORT=8443
+STARTUP_SECONDS=20
+# A port no rule names, for the guard's refusal of the dropped host.
+OTHER_PORT=9443
+# An address the dropped host is made to resolve to for the forbidden check (TEST-NET-1, RFC 5737).
+UNROUTED_ADDRESS=192.0.2.1
 WORK="$(mktemp -d /var/tmp/layer-prune-egress.XXXXXX)" || { echo "cannot create a working directory" >&2; exit 1; }
 OUTPUT="${WORK}/out"
 CFG="${OUTPUT}/${KEY}_fixture.cfg"
@@ -59,7 +69,16 @@ set_up() {
   openssl s_server -quiet -www -accept "127.0.0.1:${SERVER_PORT}" -cert "${WORK}/cert.pem" -key "${WORK}/key.pem" \
     > "${WORK}/server.log" 2>&1 &
   server_pid=$!
-  sleep 1
+  wait_until_up
+}
+
+# Waits, at most STARTUP_SECONDS, until the resolver has said it is up and the server accepts a connection.
+wait_until_up() {
+  local waited=0
+  until grep -q STUB-UP "${WORK}/dns.log" 2>/dev/null && (exec 3<>"/dev/tcp/127.0.0.1/${SERVER_PORT}") 2>/dev/null; do
+    (( waited++ < STARTUP_SECONDS * 10 )) || return 1
+    sleep 0.1
+  done
 }
 
 # Prints what the fixture's request to the host $1, naming $2 (by default $1) in its TLS ClientHello,
@@ -67,9 +86,10 @@ set_up() {
 asked_under_policy() {
   local host="$1"
   local named="${2:-$1}"
+  local port="${3:-${SERVER_PORT}}"
   "${PHOBOS_HOME}/phobos.sh" --config "${CFG}" --resolver "127.0.0.1:${DNS_PORT}" -- /bin/bash -c \
-    "printf 'GET / HTTP/1.0\r\n\r\n' | openssl s_client -quiet -connect ${host}:${SERVER_PORT} -servername ${named}" \
-    2>/dev/null
+    "printf 'GET / HTTP/1.0\r\n\r\n' | openssl s_client -quiet -connect ${host}:${port} -servername ${named}" \
+    2>&1
 }
 
 if ! set_up; then
@@ -104,10 +124,23 @@ PY
   else
     bad "under the derived policy the build's request reaches the declared host" "$(asked_under_policy api.example.org | tail -2)"
   fi
-  if [[ "$(asked_under_policy unused.example.org)" == *"200 ok"* ]]; then
-    bad "under the derived policy the dropped host gets no answer" "it answered"
+  cp /etc/hosts "${WORK}/hosts.before"
+  printf '%s unused.example.org\n' "${UNROUTED_ADDRESS}" >> /etc/hosts
+  dropped_answer="$(asked_under_policy unused.example.org)"
+  other_port_answer="$(asked_under_policy unused.example.org unused.example.org "${OTHER_PORT}")"
+  cat "${WORK}/hosts.before" > /etc/hosts
+  if [[ "${dropped_answer}" == *"200 ok"* ]]; then
+    bad "on the kept rule's port the egress broker closes a connect to the dropped host unanswered" "it answered"
+  elif [[ "${dropped_answer}" == *"unexpected eof"* ]]; then
+    ok "on the kept rule's port the egress broker closes a connect to the dropped host unanswered"
   else
-    ok "under the derived policy the dropped host gets no answer"
+    bad "on the kept rule's port the egress broker closes a connect to the dropped host unanswered" \
+      "$(tail -3 <<<"${dropped_answer}")"
+  fi
+  if [[ "${other_port_answer}" == *"errno=13"* || "${other_port_answer}" == *"Permission denied"* ]]; then
+    ok "on any other port the guard refuses a connect to the dropped host with EACCES"
+  else
+    bad "on any other port the guard refuses a connect to the dropped host with EACCES" "$(tail -3 <<<"${other_port_answer}")"
   fi
   if [[ "$(asked_under_policy api.example.org unused.example.org)" == *"200 ok"* ]]; then
     bad "naming the dropped host while aiming at the kept host's address gets no answer either" "it answered"
@@ -116,6 +149,17 @@ PY
   fi
 else
   bad "the pruner wrote ${KEY}_fixture.cfg" "$(tail -5 "${WORK}/prune.log")"
+fi
+
+undeclared="$(FIXTURE_DECLARED=1 FIXTURE_NEEDS_NET=1 python3 "${HELPERS}/layer_prune/main.py" \
+  --resolver "127.0.0.1:${DNS_PORT}" --output-dir "${WORK}/undeclared" "${KEY}" 2>&1)"
+status=$?
+if [[ "${status}" -ne 0 && "${undeclared}" == *"aborted: needs external network: undeclared 10.0.0.1:80"* \
+      && ! -e "${WORK}/undeclared/${KEY}_fixture.cfg" ]]; then
+  ok "a build that also needs an undeclared host aborts with \"needs external network: undeclared\" and writes no policy"
+else
+  bad "a build that also needs an undeclared host aborts with \"needs external network: undeclared\" and writes no policy" \
+    "status ${status}: $(tail -3 <<<"${undeclared}")"
 fi
 
 finish

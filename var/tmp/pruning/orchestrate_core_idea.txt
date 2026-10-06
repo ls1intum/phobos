@@ -32,4 +32,4 @@
     then runs every Java exercise under that base and its exercise file and writes
     path_sets/verify/. Copying the result into core/config is a reviewed step of its own.
 
-No network between the containers and no docker cp: the shared bind mount is the only channel.
+No docker cp and nothing over a network: the shared bind mount is the only channel between them.
