@@ -95,6 +95,48 @@ instructor and must never be writable by the code being graded; a submission tha
 its own exercise configuration could grant itself any access, and that is an integration
 requirement Phobos relies on rather than a boundary it enforces.
 
+## The environment Phobos is started in
+
+A grader may start Phobos with the submission's tree as the current directory, so anything
+Phobos looks up relative to that directory before the sandbox exists is the submission's to
+choose. Every entry point, `phobos.sh` and each layer started on its own alike, therefore
+begins with `clean_startup_environment` (`core/phobos-tools-common/phobos-environment.sh`),
+before it runs any program or `cd`:
+
+- **PATH keeps only its absolute entries.** `.`, every other relative directory, an empty entry
+  (a leading or trailing colon, or two in a row) and an entry beginning with `~`, which bash
+  expands but `execvp` takes as a directory in the current one, are removed. Absolute entries
+  are kept as written, whether or not they exist, since they name the same place from every
+  directory, and none is ever added: a PATH with no absolute entry is refused with
+  `PHB-ERUNTIME`, because an empty PATH is searched as the current directory. The command is
+  given the cleaned PATH too, so a command that relied on `.` must be named by its path, as in
+  `./gradlew test`. Inside the sandbox a relative entry could reach nothing Landlock denies, but
+  one PATH for the whole run means no helper of Phobos can meet the original by mistake.
+- **CDPATH is unset**, so the `cd` an entry point makes to find its own directory goes where its
+  argument says, and the command does not inherit it.
+- **TMPDIR is unset when it is not absolute**, so the network layer's scratch files, made with
+  `mktemp -t`, are not created beneath the current directory. An absolute TMPDIR is kept.
+
+Each entry point says on stderr what it removed. Some of the same class happens before a
+script's first line, so no script can undo it, and these are integration requirements on the
+grader:
+
+- **Start Phobos with a PATH of absolute directories, or through an absolute interpreter**
+  (`/bin/bash /var/tmp/opt/core/phobos.sh ...`). Each entry point begins with
+  `#!/usr/bin/env bash`, and `env` finds `bash` through the caller's PATH, so a relative entry
+  ahead of bash's own directory runs a `bash` from the current directory instead of Phobos.
+  Every layer Phobos starts afterwards is found through the cleaned PATH.
+- **Start Phobos without `BASH_ENV`.** Bash sources the file it names before the first line of
+  every non-interactive script, Phobos's own among them, and resolves a relative name against
+  the current directory. `ENV` is read only by interactive shells and does not reach Phobos.
+- **Start Phobos without `LD_LIBRARY_PATH`, `LD_PRELOAD` and `LD_AUDIT`.** The dynamic loader
+  reads them when every program starts, the bash running `phobos.sh` included, and searches a
+  relative or empty `LD_LIBRARY_PATH` entry in the current directory. Removing them inside the
+  script would come after that bash had already loaded its libraries, so it is not done.
+
+`env -i PATH=/usr/local/bin:/usr/bin:/bin /var/tmp/opt/core/phobos.sh --config exercise.cfg -- ./gradlew test`
+meets all three, adding back only what the command needs.
+
 ## Inbound filtering assumes a networked container, and is defence in depth, not a boundary
 
 An `[accept]` rule fronts a student's TCP listener with an inbound HAProxy that admits only the
