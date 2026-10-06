@@ -11,7 +11,7 @@
  *                   [--connect-udp PORT] [--bind-udp PORT]
  *                   [--close-bind] [--ephemeral-bind-tcp] [--ephemeral-bind-udp]
  *                   [--chdir DIRECTORY] [--minimum-landlock-version NUMBER]
- *                   [--verbose] -- COMMAND [ARGUMENTS...]
+ *                   [--mark-reported-domain] [--verbose] -- COMMAND [ARGUMENTS...]
  *
  * LETTERS is any combination of r (read), w (write), x (execute), m (create
  * regular files and directories), p (create sockets and named pipes), l (create
@@ -43,7 +43,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/syscall.h>
 #include <unistd.h>
+
+#include <linux/filter.h>
+#include <linux/seccomp.h>
 
 /* ------------------------------------------------ stage: add the path rules */
 
@@ -117,6 +121,24 @@ static void enter_working_directory(const struct options *options) {
     }
 }
 
+/* ------------------------------------------------- stage: mark the reported domain */
+
+/* Installs a filter that allows every call and has no listener, so a supervisor that reports
+ * denials can tell the tasks of this Landlock domain from the layers' helpers beside them by their
+ * filter count: seccomp filters are inherited by every fork and exec and cannot be removed, so
+ * exactly the tasks started from here carry it. It changes no outcome, because ALLOW is the weakest
+ * action and every other filter still decides. no_new_privs, which an unprivileged process needs
+ * to install a filter, was set by apply_restriction. */
+static void install_report_marker(void) {
+    struct sock_filter allow_all[] = {
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    };
+    struct sock_fprog program = {.len = 1, .filter = allow_all};
+    if (syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, &program) != 0) {
+        exit_with_system_error("seccomp marker");
+    }
+}
+
 /* ---------------------------------------------------- stage: run the command */
 
 [[noreturn]] static void exec_command(const struct options *options) {
@@ -178,5 +200,8 @@ int main(int argument_count, char *arguments[]) {
     add_ephemeral_bind_rules(ruleset_descriptor, &options, handled_network);
     enter_working_directory(&options);
     apply_restriction(ruleset_descriptor);
+    if (options.mark_reported_domain) {
+        install_report_marker();
+    }
     exec_command(&options);
 }

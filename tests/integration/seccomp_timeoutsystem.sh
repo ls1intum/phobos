@@ -2,8 +2,12 @@
 # phobos-seccomp-timeoutsystem refuses setsid and setpgid, so a command the timeout layer bounds cannot
 # start a new session or process group and step out of the group GNU timeout kills.
 #
-# Two directions. Directly: setsid and setpgid are refused with EACCES under the lock and are
-# not refused without it, and an ordinary command still runs. End to end: with the network
+# Two directions. Directly: setsid and setpgid are refused under the lock and are not refused
+# without it, and an ordinary command still runs. On its own the lock refuses them with ENOSYS,
+# since its refusal is a user notification no listener of its own answers (a supervisor further
+# down the chain answers it with EACCES and reports it). Its signature, setpgid to the negative
+# group -20555, is answered with ENOTRECOVERABLE under the lock and with the kernel's own EINVAL
+# without it, which is how a supervisor recognises the lock above it. End to end: with the network
 # restriction off, so the connect guard's own refusal of these calls is absent, a timed run whose
 # command tries to detach a child with setsid still has that child killed with the group, because
 # the timeout layer applies the lock itself. And a timed run refuses to start when the lock binary
@@ -49,13 +53,14 @@ if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$LOCK" "${CORE}/phobos
   finish
 fi
 
-# A probe that makes one of the two calls and prints the errno it got, or 0 for success, so the
-# suite can tell a seccomp refusal (EACCES) from an ordinary one and from success.
+# A probe that makes one of the calls and prints the errno it got, or 0 for success, so the
+# suite can tell a seccomp refusal (ENOSYS, EACCES) from an ordinary one and from success.
 cat > "$WORK/probe.c" <<'C'
 #define _GNU_SOURCE
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 int main(int argument_count, char *arguments[]) {
     if (argument_count < 2) {
@@ -64,6 +69,8 @@ int main(int argument_count, char *arguments[]) {
     long result = 0;
     if (strcmp(arguments[1], "setsid") == 0) {
         result = setsid();
+    } else if (strcmp(arguments[1], "signature") == 0) {
+        result = syscall(SYS_setpgid, 0, -20555);
     } else {
         result = setpgid(0, 0);
     }
@@ -84,13 +91,15 @@ if ! "$LOCK" -- /bin/true 2>"$WORK/lock.log"; then
 fi
 
 echo "== the lock refuses setsid and setpgid, and lets an ordinary call through =="
-check "setsid is refused with EACCES under the lock" "13" "$("$LOCK" -- "$WORK/probe" setsid)"
-check "setpgid is refused with EACCES under the lock" "13" "$("$LOCK" -- "$WORK/probe" setpgid)"
-if [[ "$("$WORK/probe" setsid)" != "13" ]]; then
-  ok "setsid is not refused with EACCES without the lock"
+check "setsid is refused with ENOSYS under the lock alone" "38" "$("$LOCK" -- "$WORK/probe" setsid)"
+check "setpgid is refused with ENOSYS under the lock alone" "38" "$("$LOCK" -- "$WORK/probe" setpgid)"
+if [[ "$("$WORK/probe" setsid)" != "38" ]]; then
+  ok "setsid is not refused with ENOSYS without the lock"
 else
-  bad "setsid is not refused with EACCES without the lock" "an errno other than 13" "13"
+  bad "setsid is not refused with ENOSYS without the lock" "an errno other than 38" "38"
 fi
+check "the signature is answered with ENOTRECOVERABLE under the lock" "131" "$("$LOCK" -- "$WORK/probe" signature)"
+check "and with the kernel's own EINVAL without it" "22" "$("$WORK/probe" signature)"
 if "$LOCK" -- /bin/echo ran >/dev/null 2>&1; then
   ok "an ordinary command still runs under the lock"
 else
@@ -106,7 +115,7 @@ cp -R "$CORE" "$CORE_X"
 chmod +x "$CORE_X"/*.sh
 # The copy carries the enforcer source folders; drop them so a compiled binary placed at the same
 # name below is a flat file beside the scripts, as the run-phase image ships it, not a directory.
-rm -rf "$CORE_X/phobos-landlock-filesystem-and-networksystem" "$CORE_X/phobos-seccomp-networksystem" "$CORE_X/phobos-seccomp-timeoutsystem"
+rm -rf "$CORE_X/phobos-landlock-filesystem-and-networksystem" "$CORE_X/phobos-seccomp-networksystem" "$CORE_X/phobos-seccomp-timeoutsystem" "$CORE_X/phobos-seccomp-filesystem"
 cp "$LOCK" "$CORE_X/phobos-seccomp-timeoutsystem"
 printf '[read]\n/usr\n[limits]\ntimeout=3\n' > "$CORE_X/BaseTest.cfg"
 printf '%s\n' '#!/usr/bin/env bash' \

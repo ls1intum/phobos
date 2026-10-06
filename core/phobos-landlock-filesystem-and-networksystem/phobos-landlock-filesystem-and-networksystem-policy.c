@@ -143,6 +143,8 @@ static bool remember_switch(struct options *options, const char *argument) {
         options->ephemeral_bind_tcp = true;
     } else if (strcmp(argument, "--ephemeral-bind-udp") == 0) {
         options->ephemeral_bind_udp = true;
+    } else if (strcmp(argument, "--mark-reported-domain") == 0) {
+        options->mark_reported_domain = true;
     } else {
         return false;
     }

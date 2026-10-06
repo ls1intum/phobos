@@ -374,6 +374,15 @@ jobs:
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/resources-edge.sh
 
+      # Every blocked action is reported once and every result is the one Landlock alone gives,
+      # and the group lock's refusals are reported while they stay refused in every state.
+      - name: The reporter reports each blocked action and changes no outcome
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+            phobos-run-phase:ci \
+            bash /tests/integration/protection-matrix/reporting.sh
+
   # Mutation testing installs clang and mull into a container and then runs the suite
   # once per mutant. It runs on every change like the other jobs, and a run that does
   # not reach a score fails it, so a toolchain that stops compiling the sources is

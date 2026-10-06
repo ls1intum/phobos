@@ -1,8 +1,8 @@
 services:
   phobos-runner:
     build:
-      # The Dockerfile copies flat names that live in two directories of this
-      # repository, so the context has to be assembled first. Compose cannot
+      # The Dockerfile copies files and folders that live in several directories
+      # of this repository, so the context has to be assembled first. Compose cannot
       # express that, and pointing it at the repository root, as this file used
       # to, gives a context with no Dockerfile and no file the COPY lines match.
       #
