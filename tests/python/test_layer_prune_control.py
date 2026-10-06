@@ -209,3 +209,24 @@ def test_a_refused_connect_without_a_destination_is_never_landlock_caused():
 def test_the_fixed_limit_and_other_layers_are_never_landlock_caused():
     for layer in (record.LAYER_FIXED, record.LAYER_LIMIT, record.LAYER_OTHER):
         assert control.landlock_caused(denial(("/dev/null",), frozenset(), layer=layer)) is False
+
+
+@pytest.mark.parametrize(("path", "replayed"), [
+    ("/proc/412/status", "/proc/self/status"),
+    ("/proc/412", "/proc/self"),
+    ("/proc/412/task/413/stat", "/proc/thread-self/stat"),
+    ("/proc/412/fd/7", "/proc/self/fd"),
+    ("/proc/412/fdinfo/7", "/proc/self/fdinfo"),
+    ("/proc/sys/kernel/pid_max", "/proc/sys/kernel/pid_max"),
+    ("/proc/0412/status", "/proc/0412/status"),
+    ("/etc/hosts", "/etc/hosts"),
+])
+def test_a_process_entry_is_replayed_on_the_pruner_s_own(path, replayed):
+    assert control.own_equivalent(path) == replayed
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self"), reason="needs procfs")
+def test_a_refused_read_of_an_exited_process_s_status_is_landlock_caused():
+    exited = max(int(entry) for entry in os.listdir("/proc") if entry.isdigit()) + 100000
+    assert not os.path.exists(f"/proc/{exited}")
+    assert control.landlock_caused(read_denial(f"/proc/{exited}/status")) is True

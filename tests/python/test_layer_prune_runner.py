@@ -179,7 +179,7 @@ def test_an_exercise_without_an_executable_build_script_or_with_a_malformed_host
         runner.read_exercise(bare)
     script(bare / "build_script.sh", "exit 0\n")
     (bare / "prune.json").write_text('{"declared_hosts": ["*.example.org:443"]}')
-    with pytest.raises(ValueError):
+    with pytest.raises(runner.ExerciseRefused, match="declares a host"):
         runner.read_exercise(bare)
 
 
@@ -202,3 +202,46 @@ def test_a_run_past_the_hard_limit_is_killed_with_its_group_and_reads_as_a_timeo
     result = runner.run_direct(exercise(tmp_path, "sleep 30 &\nsleep 30\n"), quick)
     assert result.status == runner.HARD_LIMIT_STATUS
     assert result.verdict.exit_class == "timeout"
+
+
+@pytest.mark.parametrize("settings", ["{not json", "[]", '{"heap_pinned": "false"}', '{"report_globs": "x.xml"}',
+                                      '{"report_globs": ["/abs/*.xml"]}', '{"declared_hosts": [1]}', '{"unknown": 1}'])
+def test_a_prune_json_that_is_not_the_contract_refuses_the_exercise(tmp_path, settings):
+    directory = tmp_path / "exercise"
+    directory.mkdir()
+    script(directory / "build_script.sh", "exit 0\n")
+    (directory / "prune.json").write_text(settings)
+    with pytest.raises(runner.ExerciseRefused):
+        runner.read_exercise(directory)
+
+
+def test_a_status_phobos_could_not_read_is_a_pruner_defect_although_it_comes_after_the_command(tmp_path, environment,
+                                                                                               monkeypatch):
+    monkeypatch.setenv("FAKE_RUN", "1")
+    monkeypatch.setenv("FAKE_STATUS", "16")
+    with pytest.raises(runner.PrunerDefect, match="PHB-ESTATUS"):
+        runner.run_layers(exercise(tmp_path, "echo 'cannot read the exit status. (PHB-ESTATUS)' >&2\n"), empty_policy(),
+                          SHAPE_PLAIN, environment)
+
+
+def test_a_candidate_is_created_afresh_and_never_through_what_is_already_there(tmp_path):
+    target = tmp_path / "run" / "candidate.cfg"
+    runner.write_candidate("[read]\n/usr\n", target, tmp_path / "log")
+    assert target.read_text() == "[read]\n/usr\n"
+    with pytest.raises(runner.PrunerDefect, match="afresh"):
+        runner.write_candidate("[read]\n/\n", target, tmp_path / "log")
+    assert target.read_text() == "[read]\n/usr\n"
+
+
+def test_runs_leave_no_candidate_behind_so_a_later_pruner_can_reuse_the_names(tmp_path, environment):
+    runner.run_layers(exercise(tmp_path), empty_policy(), SHAPE_PLAIN, environment)
+    assert list(pathlib.Path(environment.candidate_dir).iterdir()) == []
+
+
+@pytest.mark.skipif(not pathlib.Path("/proc/self/task").is_dir(), reason="needs procfs")
+def test_a_process_a_run_leaves_behind_is_killed_and_reaped(tmp_path, environment):
+    assert runner.sampler.become_subreaper()
+    marker = tmp_path / "leftover.pid"
+    runner.run_direct(exercise(tmp_path, f"sleep 300 &\necho $! > {marker}\n"), environment)
+    pid = int(marker.read_text())
+    assert not pathlib.Path(f"/proc/{pid}").exists()

@@ -3,9 +3,11 @@
 Every interval the sampler walks the descendants of the run's first process and records, for each,
 what the six limits bound per process: the peak address space (VmPeak, what `ulimit -v` bounds), the
 CPU time (what `ulimit -t` bounds), the highest open descriptor (what `ulimit -n` bounds), and the
-number of tasks of the whole tree (what `ulimit -u` bounds, threads included). The pruner makes
-itself a child subreaper first, so a daemon the build leaves behind is reparented to it and stays a
-descendant that is sampled.
+number of tasks of the whole tree, threads included. `ulimit -u` bounds every task of the uid instead;
+in the prune container the run's tree is all the uid runs besides the pruner, and the tree also counts
+Phobos's own helper processes, so the count errs high, towards a looser limit, never a tighter one.
+The pruner makes itself a child subreaper first, so a daemon the build leaves behind is reparented to
+it and stays a descendant that is sampled.
 """
 
 from __future__ import annotations

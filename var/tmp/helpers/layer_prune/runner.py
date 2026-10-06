@@ -9,6 +9,7 @@ exercise is copied afresh into the working directory before every run, so no run
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import itertools
 import json
@@ -24,17 +25,27 @@ import uuid
 from layer_prune import cfgfile, limits, network, sampler, strace_parse, verdict
 
 # Where the run-phase image keeps Phobos, the working directory grading uses, and where the
-# candidate configurations are written: under /run, which no policy the pruner writes makes writable.
+# candidate configurations are written. A pruned policy may grant writing under /run, so every
+# candidate is created under a fresh name, exclusively, and only after the previous run's processes
+# are gone (reap_leftovers), so nothing a run left there can stand in for it.
 PHOBOS_HOME = "/var/tmp/opt/core"
 TESTING_DIR = "/var/tmp/testing-dir"
 CANDIDATE_DIR = "/run/layer-prune"
 SPEC_PARENT = "/var/tmp"
 # The status a run gets when the pruner's own hard limit ended it, read as a timeout by the verdict.
 HARD_LIMIT_STATUS = verdict.TIMEOUT_STATUS
+# The status and the marker Phobos ends a run with when it could not read the command's exit status.
+ESTATUS_STATUS = 16
+ESTATUS_MARKER = "(PHB-ESTATUS)"
 # The names an exercise's build script may have, in the order they are looked for.
 BUILD_SCRIPT_NAMES = ("build_script.sh", "build_script")
 # How long a run may take at most, in seconds, whatever its policy says (Budget.run_seconds).
 DEFAULT_RUN_SECONDS = 1800
+# How long reap_leftovers waits for the processes it killed to be reaped, and how often it looks.
+REAP_SECONDS = 10
+REAP_INTERVAL_SECONDS = 0.05
+# The keys prune.json may hold, with the type each value must have (A.6.8).
+SETTING_TYPES = {"report_globs": list, "declared_hosts": list, "heap_pinned": bool}
 
 
 class PrunerDefect(Exception):
@@ -67,6 +78,15 @@ class Exercise:
     report_globs: tuple[str, ...]
     declared_hosts: tuple[str, ...]
     heap_pinned: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class Execution:
+    """What executing one run's command gave: its status, how long it took, and its samples where taken."""
+
+    status: int
+    seconds: float
+    samples: list[dict] | None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -108,6 +128,28 @@ class Environment:
 RUN_NUMBERS = itertools.count(1)
 
 
+def read_settings(directory: pathlib.Path) -> dict:
+    """The exercise's prune.json, or an empty one; ExerciseRefused when it is not a JSON object of the known
+    keys, each of its type, with only strings in its lists and only relative report globs."""
+    path = directory / "prune.json"
+    if not path.is_file():
+        return {}
+    try:
+        settings = json.loads(path.read_text())
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ExerciseRefused(f"{path} is not readable as JSON: {error}") from error
+    if not isinstance(settings, dict):
+        raise ExerciseRefused(f"{path} does not hold a JSON object")
+    for key, value in settings.items():
+        if key not in SETTING_TYPES or not isinstance(value, SETTING_TYPES[key]):
+            raise ExerciseRefused(f"{path} holds {key!r} with a value prune.json does not take")
+        if isinstance(value, list) and not all(isinstance(item, str) and item for item in value):
+            raise ExerciseRefused(f"{path} holds {key!r} with an entry that is not a non-empty string")
+    if any(pattern.startswith("/") for pattern in settings.get("report_globs", ())):
+        raise ExerciseRefused(f"{path} holds an absolute report glob")
+    return settings
+
+
 def read_exercise(directory: pathlib.Path) -> Exercise:
     """Reads an exercise directory and its optional prune.json, refusing one that breaks A.6.8.
 
@@ -117,12 +159,13 @@ def read_exercise(directory: pathlib.Path) -> Exercise:
     script = next((name for name in BUILD_SCRIPT_NAMES if (directory / name).is_file()), None)
     if script is None or not os.access(directory / script, os.X_OK):
         raise ExerciseRefused(f"{directory} has no executable build_script or build_script.sh")
-    settings = {}
-    if (directory / "prune.json").is_file():
-        settings = json.loads((directory / "prune.json").read_text())
+    settings = read_settings(directory)
     globs = tuple(settings.get("report_globs", verdict.DEFAULT_REPORT_GLOBS))
     declared = tuple(settings.get("declared_hosts", ()))
-    network.seed_rules(declared)
+    try:
+        network.seed_rules(declared)
+    except ValueError as error:
+        raise ExerciseRefused(f"{directory}/prune.json declares a host no rule can carry: {error}") from error
     stale = [path for pattern in globs for path in directory.glob(pattern)]
     if stale:
         raise ExerciseRefused(f"{directory} already holds a report its globs match: {stale[0]}")
@@ -156,11 +199,34 @@ def started_command(build_script: str, sentinel: str) -> list[str]:
             sentinel]
 
 
-def execute(argv: list[str], cwd: pathlib.Path, log_path: pathlib.Path, environment: Environment,
-            shape_sample: bool) -> tuple[int, float, list[dict] | None]:
-    """Runs argv in its own process group with output to the log, within the hard limit; status, seconds, samples.
+def reap_leftovers(proc: str = "/proc") -> None:
+    """Kills every process left below the pruner and reaps it, so that no run outlives its turn.
 
-    A run that outlives environment.run_seconds is killed with its whole group and given HARD_LIMIT_STATUS.
+    The pruner is the child subreaper (sampler.become_subreaper), so whatever a run left behind, a
+    daemon, a server, or a command that escaped its group with setsid, is its descendant. Left alive,
+    it would be sampled in a later run, could serve a later run under a narrower policy, and would
+    race the next restore; left a zombie, it would hold a pid and count as a task.
+    """
+    deadline = time.monotonic() + REAP_SECONDS
+    while time.monotonic() < deadline:
+        left = [pid for pid in sampler.descendants(pathlib.Path(proc), os.getpid()) if pid != os.getpid()]
+        for pid in left:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(pid, signal.SIGKILL)
+        with contextlib.suppress(ChildProcessError):
+            while os.waitpid(-1, os.WNOHANG)[0] > 0:
+                pass
+        if not left:
+            return
+        time.sleep(REAP_INTERVAL_SECONDS)
+
+
+def execute(argv: list[str], cwd: pathlib.Path, log_path: pathlib.Path, environment: Environment,
+            shape_sample: bool) -> Execution:
+    """Runs argv in its own process group with output to the log, within the hard limit.
+
+    A run that outlives environment.run_seconds is killed with its whole group and given
+    HARD_LIMIT_STATUS; either way every process it left behind is then killed and reaped.
     """
     started = time.monotonic()
     with open(log_path, "wb") as log:
@@ -172,13 +238,15 @@ def execute(argv: list[str], cwd: pathlib.Path, log_path: pathlib.Path, environm
         try:
             status = process.wait(timeout=environment.run_seconds)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
             process.wait()
             status = HARD_LIMIT_STATUS
         samples = watcher.stop() if watcher is not None else None
+        reap_leftovers()
     if status < 0:
         status = verdict.SIGNAL_STATUS_BASE - status
-    return status, time.monotonic() - started, samples
+    return Execution(status=status, seconds=time.monotonic() - started, samples=samples)
 
 
 def reports(exercise: Exercise, workdir: pathlib.Path) -> list[pathlib.Path]:
@@ -186,10 +254,22 @@ def reports(exercise: Exercise, workdir: pathlib.Path) -> list[pathlib.Path]:
     return sorted({path for pattern in exercise.report_globs for path in workdir.glob(pattern)})
 
 
+def write_candidate(text: str, cfg: pathlib.Path, log_path: pathlib.Path) -> None:
+    """Creates the candidate under its fresh name, exclusively and without following a link; PrunerDefect if it cannot."""
+    cfg.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if cfg.parent.is_symlink():
+        raise PrunerDefect(-1, log_path, f"the candidate directory {cfg.parent} is a symbolic link")
+    try:
+        descriptor = os.open(cfg, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError as error:
+        raise PrunerDefect(-1, log_path, f"the candidate {cfg} cannot be created afresh: {error}") from error
+    with os.fdopen(descriptor, "w") as candidate:
+        candidate.write(text)
+
+
 def gate(text: str, cfg: pathlib.Path, environment: Environment, log_path: pathlib.Path) -> None:
     """Writes the candidate and has phobos-policysystem.sh build a specification from it; raises PrunerDefect if it refuses."""
-    cfg.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    cfg.write_text(text)
+    write_candidate(text, cfg, log_path)
     spec = tempfile.mkdtemp(prefix="layer-prune-gate.", dir=environment.spec_parent)
     try:
         argv = [os.path.join(environment.phobos_home, "phobos-policysystem.sh"), "--spec-dir", spec, "--config", str(cfg)]
@@ -229,37 +309,47 @@ def run_layers(exercise: Exercise, policy: cfgfile.Policy, shape: RunShape,
                environment: Environment = Environment()) -> RunResult:  # noqa: B008
     """One run through phobos.sh under the candidate policy, in the given shape (A.6.4).
 
-    Raises PrunerDefect when render or the gate refuses the candidate, or when the run ends with a
-    Phobos stop status and Phobos's marker came before the command started.
+    Raises PrunerDefect when render or the gate refuses the candidate, when the run ends with a Phobos
+    stop status and Phobos's marker came before the command started, or when it ends with the status
+    reporter's PHB-ESTATUS, which Phobos prints after the command ended.
     """
-    log_path, trace_path = log_paths(environment, "layers")
+    files = log_paths(environment, "layers")
+    log_path = files[0]
+    trace_path = files[1]
     text = render_candidate(policy, shape, log_path)
     cfg = pathlib.Path(environment.candidate_dir) / f"{log_path.stem}.cfg"
-    gate(text, cfg, environment, log_path)
-    workdir = restore(exercise, environment)
-    sentinel = f"phobos-layer-prune: the command starts {uuid.uuid4().hex}"
-    argv = phobos_argv(cfg, shape, exercise, environment, sentinel, trace_path)
-    status, seconds, samples = execute(argv, workdir, log_path, environment, shape.sample)
+    try:
+        gate(text, cfg, environment, log_path)
+        workdir = restore(exercise, environment)
+        sentinel = f"phobos-layer-prune: the command starts {uuid.uuid4().hex}"
+        argv = phobos_argv(cfg, shape, exercise, environment, sentinel, trace_path)
+        executed = execute(argv, workdir, log_path, environment, shape.sample)
+    finally:
+        cfg.unlink(missing_ok=True)
+    status = executed.status
     log_text = log_path.read_text(errors="replace")
     marker = verdict.phobos_stopped(status, log_text.split(sentinel, 1)[0])
     if marker is not None:
         raise PrunerDefect(status, log_path, f"Phobos stopped the run before the command started: {marker}")
+    if status == ESTATUS_STATUS and ESTATUS_MARKER in log_text:
+        raise PrunerDefect(status, log_path, "Phobos could not read the command's exit status (PHB-ESTATUS)")
     trace = None
     if shape.observe:
         with open(trace_path, encoding="utf-8", errors="surrogateescape") as lines:
             trace = strace_parse.parse_trace(lines)
     return RunResult(verdict=verdict.read_verdict(status, log_text, reports(exercise, workdir)), status=status,
-                     trace=trace, samples=samples, wall_seconds=seconds, log_path=log_path)
+                     trace=trace, samples=executed.samples, wall_seconds=executed.seconds, log_path=log_path)
 
 
 def run_direct(exercise: Exercise, environment: Environment = Environment()) -> RunResult:  # noqa: B008
     """One run of the build script without Phobos, in the same working directory: the baseline."""
-    log_path, _ = log_paths(environment, "direct")
+    log_path = log_paths(environment, "direct")[0]
     workdir = restore(exercise, environment)
-    status, seconds, _ = execute(["/bin/bash", f"./{exercise.build_script}"], workdir, log_path, environment, False)
+    executed = execute(["/bin/bash", f"./{exercise.build_script}"], workdir, log_path, environment, False)
     log_text = log_path.read_text(errors="replace")
-    return RunResult(verdict=verdict.read_verdict(status, log_text, reports(exercise, workdir)), status=status,
-                     trace=None, samples=None, wall_seconds=seconds, log_path=log_path)
+    return RunResult(verdict=verdict.read_verdict(executed.status, log_text, reports(exercise, workdir)),
+                     status=executed.status, trace=None, samples=None, wall_seconds=executed.seconds,
+                     log_path=log_path)
 
 
 def run_reference(exercise: Exercise, environment: Environment = Environment()) -> RunResult:  # noqa: B008

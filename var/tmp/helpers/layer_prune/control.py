@@ -11,12 +11,18 @@ driver sees an open), a creation makes one temporary file and removes it again, 
 loopback port and closes it. Only a pruner killed between creating and removing that temporary file
 leaves it behind. Nothing follows a symbolic link: a link is resolved to its target first, which is
 what Landlock checks, and the target is then opened with O_NOFOLLOW.
+
+An object under /proc/<pid> belongs to a process of the run, which has exited by the time of the
+replay. It is replayed on the pruner's own equivalent instead (/proc/self, /proc/thread-self, and the
+descriptor directory rather than a descriptor the pruner does not hold): the pruner runs as the same
+uid, so procfs answers it as it answered the run's process.
 """
 
 from __future__ import annotations
 
 import errno
 import os
+import re
 import socket
 import stat
 import tempfile
@@ -34,6 +40,10 @@ from layer_prune.record import LAYER_FILESYSTEM, LAYER_NETWORK, Denial
 # The flags every replayed open carries: never block on a FIFO, never follow a final symbolic link,
 # never leak the descriptor.
 REPLAY_OPEN_FLAGS = os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
+# A path under one process's procfs directory: its thread, if it names one, and the rest of the path.
+PROCESS_PATH = re.compile(r"^/proc/(?:0|[1-9][0-9]*)(?P<task>/task/(?:0|[1-9][0-9]*))?(?P<rest>/.*)?$")
+# A descriptor entry, which names a descriptor of that process and none of the pruner's.
+DESCRIPTOR_ENTRY = re.compile(r"^/(?P<directory>fd|fdinfo)/[0-9]+$")
 
 
 def is_special(mode: int) -> bool:
@@ -188,8 +198,21 @@ def same_filesystem(paths: tuple[str, ...]) -> bool:
     return len(devices) == 1
 
 
+def own_equivalent(path: str) -> str:
+    """The path a replay uses: the pruner's own procfs entry for one under /proc/<pid>, the path itself otherwise."""
+    match = PROCESS_PATH.match(path)
+    if match is None:
+        return path
+    rest = match.group("rest") or ""
+    entry = DESCRIPTOR_ENTRY.match(rest)
+    if entry is not None:
+        rest = "/" + entry.group("directory")
+    return ("/proc/thread-self" if match.group("task") else "/proc/self") + rest
+
+
 def replay(path: str, section: str) -> bool:
     """Whether one section's access to one object succeeds outside the sandbox."""
+    path = own_equivalent(path)
     if section == SECTION_READ:
         return replay_read(path)
     if section == SECTION_WRITE:

@@ -92,9 +92,14 @@ def with_grants(policy: cfgfile.Policy, grants: dict[str, frozenset[str]]) -> cf
 
 
 def already_granted(policy: cfgfile.Policy, grants: dict[str, frozenset[str]]) -> dict[str, frozenset[str]]:
-    """The grants the policy already holds: a refusal that asks for one again survived its own grant."""
-    return {path: sections & policy.fs[path] for path, sections in grants.items()
-            if path in policy.fs and sections & policy.fs[path]}
+    """The grants that add nothing to the policy: a refusal that asks for one survived its own grant.
+
+    A grant adds nothing when the policy already holds every right it names on its path, through an
+    entry on the path itself or on an ancestor, since Landlock unions the rights along a path. A grant
+    that overlaps the policy but adds a right (write beside a read already held) is not one.
+    """
+    return {path: sections for path, sections in grants.items()
+            if cfgfile.rights_of(sections) <= cfgfile.covered_rights(path, policy)}
 
 
 def grow(run: Callable[[cfgfile.Policy], Any], seed: cfgfile.Policy, reference: verdict.Verdict, rounds: int,
@@ -105,9 +110,10 @@ def grow(run: Callable[[cfgfile.Policy], Any], seed: cfgfile.Policy, reference: 
     `run` makes one observed run and returns a result with a `verdict`; `derive` turns a result into the
     grants its attributed, Landlock-caused denials ask for. A run that matches the reference ends the
     loop, and the denials it still had are left ungranted. A failing run that asks for nothing is made
-    once more with `rerun` (unobserved), and the loop goes on only when that rerun matches; otherwise it
-    aborts. A run that asks again for a grant the policy already holds aborts: the grant did not take
-    effect, so the refusal was not caused by the missing right. An exhausted budget aborts too.
+    once more with `rerun` (unobserved): when that rerun matches, the failure was the observer's, and the
+    policy is returned as it stands, since grading runs unobserved; otherwise it aborts. A run that asks
+    for a grant adding nothing to the policy aborts: the policy already held that right, so the refusal
+    was not caused by its absence. An exhausted budget aborts too.
     """
     policy = seed
     for _ in range(rounds):
@@ -121,7 +127,7 @@ def grow(run: Callable[[cfgfile.Policy], Any], seed: cfgfile.Policy, reference: 
                                                                               in survived.items()}})
         if not grants:
             if rerun is not None and verdict.same_outcome(rerun(policy).verdict, reference):
-                continue
+                return policy
             raise PruneAbort("failed without an attributable denial", {"verdict": dataclasses.asdict(result.verdict)})
         policy = with_grants(policy, grants)
     raise PruneAbort("did not converge within the grow budget", {"rounds": rounds})

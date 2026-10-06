@@ -97,8 +97,8 @@ def test_grow_aborts_on_a_failure_without_a_denial():
                     derive=asks_of)
 
 
-def test_grow_goes_on_when_the_unobserved_rerun_matches_and_aborts_when_it_does_not():
-    calls = iter([FakeRun(FAILING, {}), FakeRun(FAILING, {"/a": frozenset({"read"})}), FakeRun(PASSING, {})])
+def test_grow_returns_the_policy_when_the_unobserved_rerun_matches_and_aborts_when_it_does_not():
+    calls = iter([FakeRun(FAILING, {"/a": frozenset({"read"})}), FakeRun(FAILING, {})])
     policy = search.grow(run=lambda policy: next(calls), seed=empty_policy(), reference=PASSING, rounds=5,
                          derive=asks_of, rerun=lambda policy: FakeRun(PASSING, {}))
     assert policy.fs == {"/a": frozenset({"read"})}
@@ -123,3 +123,18 @@ def test_grow_stops_when_the_verdict_matches_and_leaves_harmless_denials_ungrant
 def test_grow_aborts_when_the_budget_runs_out():
     with pytest.raises(search.PruneAbort, match="did not converge"):
         search.grow(run=needs("/a", "/b", "/c"), seed=empty_policy(), reference=PASSING, rounds=2, derive=asks_of)
+
+
+def test_a_grant_that_adds_a_right_beside_one_already_held_is_not_a_survivor():
+    calls = iter([FakeRun(FAILING, {"/d": frozenset({"read"})}), FakeRun(FAILING, {"/d": frozenset({"read", "write"})}),
+                  FakeRun(PASSING, {})])
+    policy = search.grow(run=lambda policy: next(calls), seed=empty_policy(), reference=PASSING, rounds=5,
+                         derive=asks_of)
+    assert policy.fs == {"/d": frozenset({"read", "write"})}
+
+
+def test_a_refusal_that_survives_under_an_ancestor_grant_aborts_at_once():
+    seed = dataclasses.replace(empty_policy(), fs={"/d": frozenset({"read"})})
+    with pytest.raises(search.PruneAbort, match="survived its own grant"):
+        search.grow(run=lambda policy: FakeRun(FAILING, {"/d/f": frozenset({"read"})}), seed=seed,
+                    reference=PASSING, rounds=5, derive=asks_of)

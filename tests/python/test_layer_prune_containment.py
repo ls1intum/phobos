@@ -10,7 +10,7 @@ import pytest
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "var" / "tmp" / "helpers"))
 
-from layer_prune import cfgfile, containment, search
+from layer_prune import cfgfile, containment, runner, search
 
 
 def policy(fs: dict[str, set[str]] | None = None, connect: tuple[str, ...] = (), bind: tuple[str, ...] = (),
@@ -84,15 +84,22 @@ def test_a_limit_check_is_refused_by_its_status_or_its_line():
     assert not containment.refused(nofile, 0, "OPENED 257 of 257 errno=0\n")
 
 
+def environment_in(tmp_path: pathlib.Path, monkeypatch) -> runner.Environment:
+    """An environment under tmp_path whose gate accepts every candidate."""
+    monkeypatch.setattr(runner, "gate", lambda text, cfg, environment, log_path: runner.write_candidate(text, cfg, log_path))
+    return runner.Environment(candidate_dir=str(tmp_path / "run"), log_dir=str(tmp_path / "logs"))
+
+
 def test_a_check_the_probe_passes_aborts_the_exercise(tmp_path, monkeypatch):
-    monkeypatch.setattr(containment, "run_check", lambda check, cfg, phobos: {"name": check.name, "refused": False})
+    monkeypatch.setattr(containment, "run_check", lambda check, cfg, environment: {"name": check.name, "refused": False})
     with pytest.raises(search.PruneAbort, match="containment check passed"):
-        containment.run_checks(policy({"/srv": {"read"}}), candidate_dir=str(tmp_path))
+        containment.run_checks(policy({"/srv": {"read"}}), environment_in(tmp_path, monkeypatch))
 
 
 def test_a_limit_no_check_can_exceed_is_recorded_unchecked_and_never_aborts(tmp_path, monkeypatch):
-    monkeypatch.setattr(containment, "run_check", lambda check, cfg, phobos: {"name": check.name, "refused": True})
-    results = containment.run_checks(policy(limits={"timeout": 600, "nofile": 100000}), candidate_dir=str(tmp_path))
+    monkeypatch.setattr(containment, "run_check", lambda check, cfg, environment: {"name": check.name, "refused": True})
+    results = containment.run_checks(policy(limits={"timeout": 600, "nofile": 100000}),
+                                     environment_in(tmp_path, monkeypatch))
     unchecked = {result["name"]: result["unchecked"] for result in results if "unchecked" in result}
     assert set(unchecked) >= {"timeout", "nofile"}
 
@@ -104,3 +111,103 @@ def test_nproc_is_unchecked_as_root_and_checked_otherwise(monkeypatch):
     monkeypatch.setattr(containment.os, "geteuid", lambda: 1000)
     assert "nproc" in names(containment.checks(policy(limits={"nproc": 64})))
     assert containment.unchecked(policy(limits={"nproc": 64})) == []
+
+
+def test_a_check_whose_control_is_refused_too_is_unproven_and_aborts(tmp_path, monkeypatch):
+    def probe(argv, check):
+        refused_everywhere = "START\nOP open ret=-1 errno=EACCES\n"
+        return containment.ProbeRun(status=0, output=refused_everywhere)
+    monkeypatch.setattr(containment, "run_probe", probe)
+    canary = containment.checks(policy())[0]
+    assert containment.run_check(canary, tmp_path / "x.cfg", runner.Environment())["refused"] is None
+    monkeypatch.setattr(containment, "checks", lambda final: [canary])
+    with pytest.raises(search.PruneAbort, match="unproven"):
+        containment.run_checks(policy(), environment_in(tmp_path, monkeypatch))
+
+
+def test_a_check_counts_as_refused_only_under_phobos_after_its_control_succeeded(tmp_path, monkeypatch):
+    def probe(argv, check):
+        sandboxed = argv[0].endswith("phobos.sh")
+        line = "OP open ret=-1 errno=EACCES" if sandboxed else "OP open ret=3 errno=0"
+        return containment.ProbeRun(status=0, output=f"START\n{line}\n")
+    monkeypatch.setattr(containment, "run_probe", probe)
+    entry = containment.run_check(containment.checks(policy())[0], tmp_path / "x.cfg", runner.Environment())
+    assert entry["refused"] is True
+    assert entry["control"]["evidence"] == ["OP open ret=3 errno=0"]
+
+
+def test_a_probe_that_did_not_start_without_phobos_is_unproven(tmp_path, monkeypatch):
+    monkeypatch.setattr(containment, "run_probe", lambda argv, check: containment.ProbeRun(status=127, output=""))
+    entry = containment.run_check(containment.checks(policy())[0], tmp_path / "x.cfg", runner.Environment())
+    assert entry["refused"] is None
+
+
+def test_a_phobos_stop_before_the_probe_started_is_a_pruner_defect(tmp_path, monkeypatch):
+    def probe(argv, check):
+        if argv[0].endswith("phobos.sh"):
+            return containment.ProbeRun(status=11, output="Policy invalid. (PHB-EPOLICY)\n")
+        return containment.ProbeRun(status=0, output="START\nOP open ret=3 errno=0\n")
+    monkeypatch.setattr(containment, "run_probe", probe)
+    with pytest.raises(runner.PrunerDefect, match="PHB-EPOLICY"):
+        containment.run_check(containment.checks(policy())[0], tmp_path / "x.cfg", runner.Environment())
+
+
+def test_the_write_check_never_truncates_and_a_new_name_is_removed_afterwards(tmp_path):
+    existing = tmp_path / "data.txt"
+    existing.write_text("keep\n")
+    on_file = containment.write_check(str(existing))
+    assert on_file.probe_arguments == ("open", str(existing), "w")
+    assert on_file.leaves is None
+    in_directory = containment.write_check(str(tmp_path / containment.WRITE_CHECK_FILE))
+    assert in_directory.probe_arguments[2] == "excl"
+    assert in_directory.leaves == str(tmp_path / containment.WRITE_CHECK_FILE)
+
+
+def test_a_rule_names_the_tcp_check_only_for_tcp_or_both_transports():
+    assert containment.names_connect(policy(connect=("allow 10.0.0.1",)), "10.0.0.1", "80")
+    assert containment.names_connect(policy(connect=("allow 10.0.0.1:* tcp",)), "10.0.0.1", "80")
+    assert not containment.names_connect(policy(connect=("allow 10.0.0.1:80 udp",)), "10.0.0.1", "80")
+    assert not containment.names_connect(policy(connect=("allow 10.0.0.2:80",)), "10.0.0.1", "80")
+    assert containment.names_bind(policy(bind=("allow 8080",)), "8080")
+    assert not containment.names_bind(policy(bind=("allow 8080 udp",)), "8080")
+
+
+def test_a_cpu_limit_the_timeout_reaches_first_and_a_file_size_without_a_directory_are_unchecked():
+    found = {entry["name"]: entry["unchecked"] for entry in containment.unchecked(policy(limits={"cpu": 60, "timeout": 30,
+                                                                                                "fsize_mb": 16}))}
+    assert found["cpu"].startswith("the timeout ends")
+    assert found["fsize_mb"].startswith("the policy grants no directory")
+
+
+def test_the_probe_policy_is_normalised_so_render_accepts_it():
+    final = policy({"/usr/local/libexec": {"read", "execute", "write"}})
+    cfgfile.render(containment.probe_policy(final))
+
+
+def test_the_write_check_never_reaches_a_pseudo_filesystem(tmp_path):
+    readable = tmp_path / "data"
+    readable.mkdir()
+    found = containment.checks(policy({"/proc": {"read"}, "/sys": {"read"}, "/dev/null": {"read"},
+                                       str(readable): {"read"}}))
+    writes = [check for check in found if check.name.startswith("write into")]
+    assert [check.probe_arguments[1] for check in writes] == [str(readable / containment.WRITE_CHECK_FILE)]
+
+
+def test_a_control_that_fails_for_another_reason_leaves_a_file_check_unproven(tmp_path, monkeypatch):
+    def probe(argv, check):
+        if argv[0].endswith("phobos.sh"):
+            return containment.ProbeRun(status=0, output="START\nOP open ret=-1 errno=EACCES\n")
+        return containment.ProbeRun(status=0, output="START\nOP open ret=-1 errno=ENOENT\n")
+    monkeypatch.setattr(containment, "run_probe", probe)
+    entry = containment.run_check(containment.checks(policy())[0], tmp_path / "x.cfg", runner.Environment())
+    assert entry["refused"] is None
+
+
+def test_a_network_check_needs_only_a_control_not_refused_the_same_way(tmp_path, monkeypatch):
+    def probe(argv, check):
+        if argv[0].endswith("phobos.sh"):
+            return containment.ProbeRun(status=0, output="START\nOP connect ret=-1 errno=EACCES\n")
+        return containment.ProbeRun(status=0, output="START\nOP connect ret=-1 errno=ENETUNREACH\n")
+    monkeypatch.setattr(containment, "run_probe", probe)
+    connect = next(check for check in containment.checks(policy()) if check.name.startswith("connect"))
+    assert containment.run_check(connect, tmp_path / "x.cfg", runner.Environment())["refused"] is True

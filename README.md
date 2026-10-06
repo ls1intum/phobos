@@ -59,7 +59,7 @@ core/                      the sandbox itself
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
     language-configurations/  one file per Ares 2 programming language configuration: its bases, placeholders and [connect] rows
 docker/prune_phase/        one image per language, plus the orchestrator
-  layers/                  the layer pruner's image: the run-phase image plus strace and a base that grants nothing
+  layers/                  the layer pruner's image: the run-phase image, python3, strace, the probe, an empty base
 docker/run_phase/          the image an exercise actually runs in
 tests/                     the acceptance and probe suites; tests/README.md maps each one to its CI step
 var/tmp/                   prune inputs, helpers and example outputs
@@ -121,7 +121,7 @@ Pruning and grading do not deny in the same way. While pruning, a hidden directo
 
 ### The layer pruner
 
-The layer pruner replaces that difference with the grading layers themselves. It runs the reference exercise through the shipped `phobos.sh`, starting from a policy that grants nothing, records under `strace` (ptrace, no privilege) every call the layers refuse, and grants exactly what each recorded refusal proves: a file it read, a directory it created in, a loopback server it talked to. It then removes every grant two runs show was not needed, measures the limits with margins, verifies the result with every layer on, and proves the forbidden direction with canary files, an unnamed host and port, and a probe that exceeds each limit. A run that fails without a refusal it can attribute is never turned into a grant; the exercise is aborted instead.
+The layer pruner replaces that difference with the grading layers themselves. It runs the reference exercise through the shipped `phobos.sh`, starting from a policy that grants nothing, records under `strace` (ptrace, no privilege) every call the layers refuse, and grants exactly what each recorded refusal proves: a file it read, a directory it created in, a loopback server it talked to. It then removes every grant two runs show was not needed, measures the limits with margins, verifies the result with every layer on, and proves the forbidden direction with canary files, an unnamed host and port, and a probe that exceeds each limit it can reach (the record lists any limit it could not, and why). Each of those checks is first made without Phobos, so that only the sandbox's refusal counts. A run that fails without a refusal it can attribute is never turned into a grant; the exercise is aborted instead.
 
 Build the prune image on a run-phase image and prune every exercise under one key, in an ordinary container:
 

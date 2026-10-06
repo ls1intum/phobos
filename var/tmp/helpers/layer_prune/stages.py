@@ -33,10 +33,8 @@ from layer_prune import (
 # a denial back to its stage.
 BASELINE_RUNS = 3
 ROUTING_ROUNDS = 2
-# How often a limit may be doubled after a run ended at it, and how many verification attempts the
-# limits stage makes (A.6.5).
+# How often each limit may be doubled after a run ended at it (A.6.5).
 LIMIT_RAISES = 3
-LIMIT_ATTEMPTS = 3
 # The calls by which a fixed refusal of a UNIX-domain destination shows, which nearly every run has.
 UNIX_SENDS = frozenset({"connect", "sendto", "sendmsg", "sendmmsg"})
 # How many observed objects a widening lists, and the most entries beneath a directory it counts.
@@ -44,6 +42,9 @@ WIDENING_EXAMPLES = 10
 WIDENING_COUNT_LIMIT = 100000
 # Bytes per megabyte, for the largest file a run wrote.
 BYTES_PER_MEGABYTE = 1024 * 1024
+# The pseudo filesystems the index of what existed before the first run leaves out: what exists there
+# is the kernel's answer at the moment, never a run's leftover.
+UNINDEXED_ROOTS = ("/proc", "/sys")
 # The run shapes of the stages (A.6.4).
 OBSERVED_FILESYSTEM = runner.RunShape(observe=True, network=False, limits=False, sample=False)
 UNOBSERVED_FILESYSTEM = runner.RunShape(observe=False, network=False, limits=False, sample=False)
@@ -80,6 +81,8 @@ class Pruning:
     removed_pairs: set[tuple[str, str]] = dataclasses.field(default_factory=set)
     removed_rules: set[tuple[str, str]] = dataclasses.field(default_factory=set)
     comments: dict[str, str] = dataclasses.field(default_factory=dict)
+    pristine: generalise.Snapshot = dataclasses.field(
+        default_factory=lambda: generalise.Snapshot(existing=frozenset(), directories=frozenset(), scanned=()))
 
     def note(self, stage: str, **details: Any) -> None:
         """Appends one entry to the record."""
@@ -143,8 +146,10 @@ def permissive_run(pruning: Pruning) -> None:
     A difference is named by its likeliest cause, in this order: a fixed rule of the layers other
     than a refused UNIX-domain connect (a setsid the timeout's group lock refuses, a raw socket); then
     a refused external destination, since the run grants no external host but the declared ones
-    ("needs external network", A.6.5); then any other refusal. A refused UNIX-domain connect comes
-    last because nearly every run makes one (an nscd lookup) and does without it.
+    ("needs external network", A.6.5). Any other failure is one without an attributable denial: the run
+    held everything a policy may grant, so no refusal it still met is one a grant could undo. A refused
+    UNIX-domain connect comes after the external destination because nearly every run makes one (an
+    nscd lookup) and does without it.
     """
     policy = cfgfile.permissive_policy(pathlib.Path("/"), pruning.exercise.declared_hosts)
     result = pruning.run(policy, OBSERVED_NETWORK, "permissive")
@@ -159,7 +164,9 @@ def permissive_run(pruning: Pruning) -> None:
     if external:
         raise search.PruneAbort("needs external network: undeclared " + ", ".join(external),
                                 {"refused_external": list(external)})
-    raise search.PruneAbort("incompatible with a fixed rule of the layers", {"refusals": refusals})
+    raise search.PruneAbort("the permissive layered run failed without an attributable denial",
+                            {"run": result.log_path.name,
+                             "denials": jsonable([dataclasses.asdict(denial) for denial in denials])})
 
 
 def jsonable(value: Any) -> Any:
@@ -173,8 +180,27 @@ def jsonable(value: Any) -> Any:
     return value
 
 
+def pristine_index(environment: runner.Environment, root: pathlib.Path = pathlib.Path("/")) -> generalise.Snapshot:
+    """Everything that exists before the first run, outside the pseudo filesystems and the pruner's own directories.
+
+    The runs leave files behind outside the working directory, which alone is restored between them,
+    and the unsandboxed baseline does so without any restriction. Taken once, before the baseline, the
+    index is what grading's fresh container holds; a later snapshot answers from it rather than from
+    the filesystem as the earlier runs left it. `root` stands for `/`, so a test can pass a tree.
+    """
+    roots = [str(entry) for entry in sorted(root.iterdir())
+             if entry.is_dir() and not entry.is_symlink() and "/" + entry.name not in UNINDEXED_ROOTS]
+    excluded = tuple(os.path.realpath(path) for path in
+                     (environment.testing_dir, environment.log_dir, environment.candidate_dir))
+    return generalise.Snapshot.take(roots, excluded)
+
+
 def snapshot_for(pruning: Pruning, policy: cfgfile.Policy) -> generalise.Snapshot:
-    """What exists before a run: the pristine exercise at the working directory, and every write-granted directory."""
+    """What existed before the runs: the pristine exercise at the working directory, and the index of the rest.
+
+    Only the working directory and the write-granted directories are climbed from (A.6.5); every other
+    path is answered from the index taken before the first run.
+    """
     existing: set[str] = set()
     directories: set[str] = set()
     workdir = pruning.exercise.workdir
@@ -185,11 +211,10 @@ def snapshot_for(pruning: Pruning, policy: cfgfile.Policy) -> generalise.Snapsho
         existing.update(os.path.join(mapped, name) for name in files + subdirectories)
         directories.update(os.path.join(mapped, name) for name in subdirectories)
     roots = sorted(path for path, sections in policy.fs.items() if sections & set(cfgfile.WRITE_SECTIONS)
-                   and os.path.isdir(path) and not within_testing_dir(path))
-    taken = generalise.Snapshot.take(roots)
-    return generalise.Snapshot(existing=frozenset(existing) | taken.existing,
-                               directories=frozenset(directories) | taken.directories,
-                               scanned=(runner.TESTING_DIR, *roots))
+                   and pruning.pristine.is_directory(path) and not within_testing_dir(path))
+    return generalise.Snapshot(existing=frozenset(existing) | pruning.pristine.existing,
+                               directories=frozenset(directories) | pruning.pristine.directories,
+                               scanned=(runner.TESTING_DIR, *roots), indexed=pruning.pristine.scanned)
 
 
 def within_testing_dir(path: str) -> bool:
@@ -197,25 +222,35 @@ def within_testing_dir(path: str) -> bool:
     return path == runner.TESTING_DIR or cfgfile.is_beneath(path, runner.TESTING_DIR)
 
 
-def filesystem_grants(pruning: Pruning, current: list[record.Denial],
-                      snapshot: generalise.Snapshot) -> dict[str, frozenset[str]]:
-    """The grants one run's Landlock-caused filesystem denials ask for, per-run names judged against every run so far."""
+def filesystem_grants(pruning: Pruning, current: list[record.Denial], snapshot: generalise.Snapshot,
+                      held: dict[str, frozenset[str]]) -> dict[str, frozenset[str]]:
+    """The grants one run's Landlock-caused filesystem denials ask for, per-run names judged against every run so far.
+
+    `held` is the policy the run held, whose write-class rights the narrowing of [execute] counts too.
+    """
     confirmed = [denial for denial in current if denial.layer == record.LAYER_FILESYSTEM and control.landlock_caused(denial)]
     combined = pruning.history + confirmed
     taken = generalise.classify_per_run(combined)
     offset = len(pruning.history)
     grants: dict[str, set[str]] = {}
     remaining = []
+    per_run_reported = []
     for position, denial in enumerate(confirmed):
         kept = []
         for path in denial.objects:
             if (offset + position, path) in taken:
-                grants.setdefault(taken[(offset + position, path)][0], set()).update(denial.sections)
+                readable = denial.sections & generalise.READ_CLASS
+                if readable:
+                    grants.setdefault(taken[(offset + position, path)][0], set()).update(readable)
+                per_run_reported.extend({"path": path, "section": section,
+                                         "reason": "a write-class right on a per-run name is never widened"}
+                                        for section in sorted(denial.sections - generalise.READ_CLASS))
             else:
                 kept.append(path)
         if kept:
             remaining.append(dataclasses.replace(denial, objects=tuple(kept)))
-    found, notes = generalise.grants_and_notes(remaining, snapshot, generalise.DEFAULT_FINE_ROOTS)
+    found, notes = generalise.grants_and_notes(remaining, snapshot, generalise.DEFAULT_FINE_ROOTS, held)
+    notes.reported.extend(per_run_reported)
     for path, sections in found.items():
         grants.setdefault(path, set()).update(sections)
     pruning.comments.update(notes.comments)
@@ -226,27 +261,37 @@ def filesystem_grants(pruning: Pruning, current: list[record.Denial],
     return {path: frozenset(sections) for path, sections in grants.items()}
 
 
-def normalised(policy: cfgfile.Policy) -> cfgfile.Policy:
-    """The policy with every nested strict subset raised, so render accepts it."""
-    return dataclasses.replace(policy, fs=generalise.normalise_hierarchy(policy.fs))
+def normalised(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
+    """The policy as it is run: [execute] narrowed, and every nested strict subset raised so render accepts it.
+
+    A write-class right one round grants can land beside an [execute] an earlier round put on a
+    directory, so generalise.narrow_execute is applied to the whole policy, with every file the runs
+    so far were refused executing, and the comments it writes are kept for the record.
+    """
+    notes = generalise.Notes()
+    executed = sorted({path for denial in pruning.history if "execute" in denial.sections for path in denial.objects})
+    narrowed = generalise.narrow_execute(generalise.normalise_hierarchy(policy.fs), executed,
+                                         snapshot_for(pruning, policy), notes)
+    pruning.comments.update(notes.comments)
+    return dataclasses.replace(policy, fs=generalise.normalise_hierarchy(narrowed))
 
 
 def grow_filesystem(pruning: Pruning, seed: cfgfile.Policy) -> cfgfile.Policy:
     """Stage 1's grow loop from a seed policy (A.6.4)."""
-    snapshots: list[generalise.Snapshot] = []
+    snapshots: list[tuple[generalise.Snapshot, cfgfile.Policy]] = []
 
     def observed(policy: cfgfile.Policy) -> runner.RunResult:
         """One observed filesystem run, with the snapshot taken before it."""
-        snapshots.append(snapshot_for(pruning, policy))
-        return pruning.run(normalised(policy), OBSERVED_FILESYSTEM, "filesystem")
+        snapshots.append((snapshot_for(pruning, policy), policy))
+        return pruning.run(normalised(pruning, policy), OBSERVED_FILESYSTEM, "filesystem")
 
     def derive(result: runner.RunResult) -> dict[str, frozenset[str]]:
         """The grants of one run's denials, generalised against the snapshot taken before it."""
-        return filesystem_grants(pruning, denials_of(pruning, result), snapshots[-1])
+        return filesystem_grants(pruning, denials_of(pruning, result), snapshots[-1][0], snapshots[-1][1].fs)
 
     def unobserved(policy: cfgfile.Policy) -> runner.RunResult:
         """The same run without the observer."""
-        return pruning.run(normalised(policy), UNOBSERVED_FILESYSTEM, "filesystem rerun")
+        return pruning.run(normalised(pruning, policy), UNOBSERVED_FILESYSTEM, "filesystem rerun")
 
     return search.grow(observed, seed, pruning.reference, pruning.budget.grow_rounds, derive, unobserved)
 
@@ -257,13 +302,15 @@ def minimise_policy_fs(pruning: Pruning, policy: cfgfile.Policy, shape: runner.R
 
     def passes(kept: list[tuple[str, str]]) -> bool:
         """One unobserved run with only the kept grants."""
-        return pruning.matches(pruning.run(normalised(with_pairs(policy, kept)), shape, stage))
+        return pruning.matches(pruning.run(normalised(pruning, with_pairs(policy, kept)), shape, stage))
 
     result = search.minimise(pairs, passes)
-    pruning.removed_pairs.update(set(pairs) - set(result.kept))
+    final = normalised(pruning, with_pairs(policy, result.kept))
+    removed = set(pairs) - {(path, section) for path, sections in final.fs.items() for section in sections}
+    pruning.removed_pairs.update(removed)
     pruning.note(f"{stage} minimisation", before=len(pairs), kept=len(result.kept), trials=result.trials,
-                 runs=result.runs, removed=jsonable(sorted(set(pairs) - set(result.kept))))
-    return normalised(with_pairs(policy, result.kept))
+                 runs=result.runs, removed=jsonable(sorted(removed)))
+    return final
 
 
 def with_pairs(policy: cfgfile.Policy, pairs: list[tuple[str, str]]) -> cfgfile.Policy:
@@ -279,10 +326,9 @@ def prune_filesystem(pruning: Pruning, seed: cfgfile.Policy) -> cfgfile.Policy:
     grown = grow_filesystem(pruning, seed)
     compacted = generalise.compact(grown.fs, generalise.DEFAULT_COMPACTION_THRESHOLD, generalise.DEFAULT_FINE_ROOTS)
     pruning.note("compaction", before=sorted(grown.fs), after=sorted(compacted))
-    minimised = minimise_policy_fs(pruning, normalised(dataclasses.replace(grown, fs=compacted)),
+    minimised = minimise_policy_fs(pruning, normalised(pruning, dataclasses.replace(grown, fs=compacted)),
                                    UNOBSERVED_FILESYSTEM, "filesystem")
-    _, comments = generalise.per_run_grants(pruning.history)
-    comments = {**pruning.comments, **comments}
+    comments = {**pruning.comments, **generalise.per_run_grants(pruning.history)[1]}
     pruning.note("widenings", grants=widenings(pruning, minimised))
     return dataclasses.replace(minimised, comments={path: text for path, text in comments.items() if path in minimised.fs})
 
@@ -323,14 +369,19 @@ def network_decision(pruning: Pruning, result: runner.RunResult) -> network.Netw
     return decision
 
 
-def prune_network(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
+def prune_network(pruning: Pruning, policy: cfgfile.Policy, seed_connect: tuple[str, ...] = (),
+                  seed_bind: tuple[str, ...] = ()) -> cfgfile.Policy:
     """Stage 2: grow [connect] and [bind] from denials with the filesystem fixed, then minimise every rule (A.6.4).
 
+    The grow starts from the declared hosts' rules plus the seeds the joint verification routes back.
     A refused external destination is never granted. It ends the stage as "needs external network"
     only when the round has nothing else to grant, so an attempt the build does without, beside a
-    loopback rule it does need, is recorded and left refused rather than aborting the exercise.
+    loopback rule it does need, is recorded and left refused rather than aborting the exercise. A
+    failure with nothing to grant is made once more unobserved, as in the filesystem stage, and the
+    rules stand when that run matches.
     """
-    current = dataclasses.replace(policy, connect=network.seed_rules(pruning.exercise.declared_hosts), bind=())
+    seeded = network.seed_rules(pruning.exercise.declared_hosts) + seed_connect
+    current = dataclasses.replace(policy, connect=tuple(dict.fromkeys(seeded)), bind=tuple(dict.fromkeys(seed_bind)))
     for _ in range(pruning.budget.network_rounds):
         result = pruning.run(current, OBSERVED_NETWORK, "network")
         if pruning.matches(result):
@@ -342,6 +393,8 @@ def prune_network(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
             if decision.refused_external:
                 raise search.PruneAbort("needs external network: undeclared " + ", ".join(decision.refused_external),
                                         {"decision": jsonable(dataclasses.asdict(decision))})
+            if pruning.matches(pruning.run(current, UNOBSERVED_NETWORK, "network rerun")):
+                break
             raise search.PruneAbort("network stage failed without an attributable denial", {"run": result.log_path.name})
         current = dataclasses.replace(current, connect=connect, bind=bind)
     else:
@@ -406,17 +459,27 @@ def limit_denials(pruning: Pruning, result: runner.RunResult) -> list[record.Den
     return [denial for denial in denials_of(pruning, result) if denial.layer == record.LAYER_LIMIT]
 
 
-def prune_limits(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
-    """Stage 3: measure with the limits off, put the margins on, raise a limit only on its own signature (A.6.5)."""
-    samples = [pruning.run(policy, SAMPLED, "limits measurement") for _ in range(BASELINE_RUNS)]
-    if not all(pruning.matches(result) for result in samples):
+def measured_run(pruning: Pruning, policy: cfgfile.Policy) -> limits.Measurement:
+    """One sampled run with every limit off, measured at once, before the next run restores the working directory."""
+    result = pruning.run(policy, SAMPLED, "limits measurement")
+    if not pruning.matches(result):
         raise search.PruneAbort("a run with every limit off did not match the reference")
-    measurements = [measure(result, policy) for result in samples]
+    if not result.samples:
+        raise runner.PrunerDefect(result.status, result.log_path, "a sampled run yielded no sample of its processes")
+    return measure(result, policy)
+
+
+def prune_limits(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
+    """Stage 3: measure with the limits off, put the margins on, raise a limit only on its own signature (A.6.5).
+
+    Every raised value is verified; a limit that would need more than LIMIT_RAISES doublings aborts.
+    """
+    measurements = [measured_run(pruning, policy) for _ in range(BASELINE_RUNS)]
     derived = limits.margins(measurements, limits.Margins(), pruning.exercise.heap_pinned)
     pruning.note("limits", measurements=[dataclasses.asdict(item) for item in measurements], derived=dict(derived),
                  mem_mb="derived" if pruning.exercise.heap_pinned else "left to the default: the heap is not pinned")
     raises: dict[str, int] = {}
-    for _ in range(LIMIT_ATTEMPTS):
+    while True:
         current = dataclasses.replace(policy, limits=dict(derived))
         runs = [pruning.run(current, LIMITED, "limits verification") for _ in range(pruning.budget.verification_runs)]
         failed = next((result for result in runs if not pruning.matches(result)), None)
@@ -429,10 +492,9 @@ def prune_limits(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
             raise search.PruneAbort("failed under limits without a limit signature", {"status": failed.status})
         raises[signature] = raises.get(signature, 0) + 1
         if raises[signature] > LIMIT_RAISES:
-            break
+            raise search.PruneAbort("limits did not settle", {"limits": derived, "raises": raises})
         derived[signature] *= 2
         pruning.note("limit raised", limit=signature, value=derived[signature])
-    raise search.PruneAbort("limits did not settle", {"limits": derived})
 
 
 def joint_runs(pruning: Pruning, policy: cfgfile.Policy) -> bool:
@@ -447,48 +509,66 @@ def unminimised(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
     connect = tuple(dict.fromkeys(policy.connect + tuple(rule for kind, rule in sorted(pruning.removed_rules)
                                                          if kind == "connect")))
     bind = tuple(dict.fromkeys(policy.bind + tuple(rule for kind, rule in sorted(pruning.removed_rules) if kind == "bind")))
-    return normalised(dataclasses.replace(restored, connect=connect, bind=bind))
+    return normalised(pruning, dataclasses.replace(restored, connect=connect, bind=bind))
 
 
 def verify(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
     """Stage 4: the joint verification, exactly as grading runs, with the routing of A.6.4.
 
     When it fails, the grants the minimisations removed are restored first ("minimisation unstable");
-    otherwise one observed run is diagnosed and a filesystem or network denial sent back to its stage,
-    at most ROUTING_ROUNDS times; anything else aborts.
+    otherwise one observed run is diagnosed. Only a confirmed denial that its stage turns into a grant
+    or a rule the policy does not hold yet sends the policy back to that stage, seeded with it, at most
+    ROUTING_ROUNDS times; a failure with no such denial aborts.
     """
     current = policy
-    for _ in range(ROUTING_ROUNDS + 1):
+    for routed in range(ROUTING_ROUNDS + 1):
         if joint_runs(pruning, current):
             return current
         widened = unminimised(pruning, current)
         if widened != current and joint_runs(pruning, widened):
             pruning.note("minimisation unstable", restored=True)
             return widened
+        if routed == ROUTING_ROUNDS:
+            break
         diagnosis = pruning.run(current, OBSERVED_JOINT, "verification diagnosis")
-        layers = {denial.layer for denial in denials_of(pruning, diagnosis)}
-        if record.LAYER_FILESYSTEM in layers:
-            limits_kept = current.limits
-            current = dataclasses.replace(prune_filesystem(pruning, current), connect=current.connect,
-                                          bind=current.bind, limits=limits_kept)
-        elif record.LAYER_NETWORK in layers:
-            current = dataclasses.replace(prune_network(pruning, current), limits=current.limits)
+        found = denials_of(pruning, diagnosis)
+        grants = filesystem_grants(pruning, found, snapshot_for(pruning, current), current.fs)
+        survived = search.already_granted(current, grants)
+        new_grants = {path: sections for path, sections in grants.items() if path not in survived}
+        decision = network.network_rules([denial for denial in found if denial.layer == record.LAYER_NETWORK
+                                          and control.landlock_caused(denial)],
+                                         network.bound_ports(diagnosis.trace), pruning.exercise.declared_hosts)
+        new_connect = tuple(rule for rule in decision.connect if rule not in current.connect)
+        new_bind = tuple(rule for rule in decision.bind if rule not in current.bind)
+        pruning.note("verification routing", grants=jsonable(new_grants), connect=list(new_connect),
+                     bind=list(new_bind))
+        if new_grants:
+            seed = search.with_grants(current, new_grants)
+            current = dataclasses.replace(prune_filesystem(pruning, seed), connect=current.connect,
+                                          bind=current.bind, limits=current.limits)
+        elif new_connect or new_bind:
+            current = dataclasses.replace(prune_network(pruning, current, current.connect + new_connect,
+                                                        current.bind + new_bind), limits=current.limits)
         else:
-            raise search.PruneAbort("the joint verification failed without a denial a stage owns", {"layers": sorted(layers)})
+            raise search.PruneAbort("the joint verification failed without a denial a stage owns",
+                                    {"layers": sorted({denial.layer for denial in found})})
     raise search.PruneAbort("the joint verification did not settle")
 
 
 def prune_exercise(exercise: runner.Exercise, budget: Budget, environment: runner.Environment,
-                   stage: str = "all") -> tuple[cfgfile.Policy, list[dict]]:
+                   stage: str = "all", pristine: generalise.Snapshot | None = None) -> tuple[cfgfile.Policy, list[dict]]:
     """The pipeline for one exercise up to `stage` (filesystem, network, limits or all); the policy and the record.
 
     Only "all" runs the joint verification and the containment checks; an earlier stage's policy is a
     step of the pipeline, for tests and diagnosis, not one to ship. PruneAbort carries the record in
-    its evidence.
+    its evidence. `pristine` is the index of what existed before the container's first run
+    (pristine_index), taken here when the caller passes none.
     """
-    pruning = Pruning(exercise=exercise, budget=budget, environment=environment)
     containment.plant_canaries()
-    sampler.become_subreaper()
+    if not sampler.become_subreaper():
+        raise runner.PrunerDefect(-1, pathlib.Path(os.devnull), "the kernel refused to make the pruner a child subreaper")
+    index = pristine if pristine is not None else pristine_index(environment)
+    pruning = Pruning(exercise=exercise, budget=budget, environment=environment, pristine=index)
     try:
         pruning.reference = baseline(pruning)
         permissive_run(pruning)
@@ -499,8 +579,7 @@ def prune_exercise(exercise: runner.Exercise, budget: Budget, environment: runne
             policy = prune_limits(pruning, policy)
         if stage == "all":
             policy = verify(pruning, policy)
-            pruning.note("containment", checks=containment.run_checks(
-                policy, os.path.join(environment.phobos_home, "phobos.sh"), environment.candidate_dir))
+            pruning.note("containment", checks=containment.run_checks(policy, environment))
     except search.PruneAbort as abort:
         abort.evidence["record"] = pruning.log
         raise

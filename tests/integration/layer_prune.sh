@@ -5,12 +5,13 @@
 # whole pipeline (baseline, permissive run, filesystem, network, limits, joint verification,
 # containment checks) on tests/integration/layer-prune-fixture and checks the result the way
 # grading would meet it:
-#   permitted  the fixture's build passes under phobos.sh with the derived policy and every layer on;
+#   permitted  the fixture's build passes under phobos.sh with the derived policy and every layer on,
+#              and its read of /proc/self/status is granted as a per-run name, with its comment;
 #   forbidden  under the same policy the probe is refused the unneeded file, the optional file the
 #              build did without, a sibling of a granted prefix, a write into what was only read,
 #              10.0.0.1:80 and port 8080, and each derived limit ends a run that exceeds it;
-#   wrong reasons  a flaky reference, NO-SOURCE, a needed setsid and a needed external host each
-#              abort the exercise and write no policy.
+#   wrong reasons  a flaky reference, NO-SOURCE, a needed setsid, a needed external host and a
+#              failure no refused call explains each abort the exercise and write no policy.
 #
 # Runs inside the prune image with the repository mounted at /repo, read-only, in an ordinary
 # container: --network none, cgroup limits, and no --privileged, no --cap-add, no --security-opt.
@@ -71,10 +72,15 @@ check_permitted() {
   cp -r "${EXERCISES}/java/fixture" /var/tmp/testing-dir
   (cd /var/tmp/testing-dir && "${PHOBOS_HOME}/phobos.sh" --config "${CFG}" -- /bin/bash ./build_script.sh) >"${WORK}/build.log" 2>&1
   local report=/var/tmp/testing-dir/build/test-results/test/TEST-fixture.xml
-  if [[ -f "${report}" ]] && ! grep -q '<failure' "${report}" && [[ "$(grep -c '<testcase' "${report}")" -eq 5 ]]; then
+  if [[ -f "${report}" ]] && ! grep -q '<failure' "${report}" && [[ "$(grep -c '<testcase' "${report}")" -eq 6 ]]; then
     ok "the fixture's build passes every test under the derived policy with every layer on"
   else
     bad "the fixture's build passes every test under the derived policy with every layer on" "$(tail -5 "${WORK}/build.log")"
+  fi
+  if sed -n '/^\[read\]/,/^$/p' "${CFG}" | grep -qx '/proc' && grep -q '^# .*<pid>' "${CFG}"; then
+    ok "the read of /proc/self/status is granted as a per-run name on /proc, with the comment saying so"
+  else
+    bad "the read of /proc/self/status is granted as a per-run name on /proc, with the comment saying so" "$(cat "${CFG}")"
   fi
   if grep -qx 'allow 127.0.0.1:\*' "${CFG}" && grep -qx 'allow 0' "${CFG}"; then
     ok "the derived policy carries the loopback wildcard and port 0 the fixture's server needs"
@@ -107,11 +113,11 @@ check_forbidden() {
   else
     bad "the needed file is still readable" "$(probe_under_policy read /srv/prune-fixture/needed/data.txt)"
   fi
-  if grep -q '^/srv/prune-fixture/needed' <(sed -n '/^\[write\]/,/^$/p' "${CFG}"); then
-    bad "the needed file's directory is not writable" "$(cat "${CFG}")"
-  else
-    ok "the needed file's directory is not writable"
-  fi
+  local written
+  written="$(sed -n '/^\[\(write\|create\|create-ipc\|create-symlink\|delete\|restructure\)\]/,/^$/p' "${CFG}" \
+    | grep '^/' | sort -u | tr '\n' ' ')"
+  check "the write-class sections name only the working directory and /dev/null" \
+    "/dev/null /var/tmp/testing-dir " "${written}"
 }
 
 # Every derived limit is below its default, and the record shows every containment check refused.
@@ -162,7 +168,7 @@ import sys
 
 sys.path.insert(0, "/var/tmp/helpers")
 
-from layer_prune import cfgfile, containment, search
+from layer_prune import cfgfile, containment, runner, search
 
 derived = cfgfile.read_policy(open(sys.argv[1]).read())
 widened = dataclasses.replace(derived, fs={**derived.fs, "/srv": frozenset({"read"})})
@@ -170,7 +176,7 @@ canary = [check for check in containment.checks(widened) if check.name == "canar
 original = containment.checks
 containment.checks = lambda policy: canary
 try:
-    containment.run_checks(widened)
+    containment.run_checks(widened, runner.Environment())
     print("no abort")
 except search.PruneAbort as abort:
     print(abort.reason)
@@ -188,7 +194,8 @@ check_wrong_reasons() {
   local reason
   local key
   for variant in "FIXTURE_FLAKY:flaky reference" "FIXTURE_NO_SOURCE:ran no tests" \
-                 "FIXTURE_SETSID:incompatible with a fixed rule" "FIXTURE_NEEDS_NET:needs external network"; do
+                 "FIXTURE_SETSID:incompatible with a fixed rule" "FIXTURE_NEEDS_NET:needs external network" \
+                 "FIXTURE_UNATTRIBUTABLE:without an attributable denial"; do
     key="java-${variant%%:*}"
     reason="${variant#*:}"
     rm -rf /var/tmp/layer-prune-counter "${EXERCISES:?}/${key}"

@@ -1,15 +1,17 @@
 #!/bin/bash
 # The layer pruner's fixture exercise: a build whose tests pass only when the accesses it needs work.
 #
-# It reads a file it needs, tries an optional one and does without it, writes build output, creates
-# a temporary file with a name of its own each run, starts a loopback server on a port the kernel
-# chooses and talks to it, tries an external destination and does without it, and writes a JUnit
-# report whose test cases record each of those. The variants below make it fail for a wrong reason,
-# so the suite can show the pruner aborts instead of granting:
-#   FIXTURE_FLAKY=1      readsNeeded fails on every second run (a counter outside the exercise)
-#   FIXTURE_NO_SOURCE=1  prints Gradle's NO-SOURCE line and writes no report
-#   FIXTURE_SETSID=1     needs setsid, which the timeout's group lock refuses
-#   FIXTURE_NEEDS_NET=1  a test passes only when the external attempt is not refused by the sandbox
+# It reads a file it needs, tries an optional one and does without it, reads its own /proc/self/status
+# (a per-run name), writes build output, creates a temporary file with a name of its own each run,
+# starts a loopback server on a port the kernel chooses and talks to it, tries an external destination
+# and does without it, and writes a JUnit report whose test cases record each of those. The variants
+# below make it fail for a wrong reason, so the suite can show the pruner aborts instead of granting:
+#   FIXTURE_FLAKY=1           readsNeeded fails on every second run (a counter outside the exercise)
+#   FIXTURE_NO_SOURCE=1       prints Gradle's NO-SOURCE line and writes no report
+#   FIXTURE_SETSID=1          needs setsid, which the timeout's group lock refuses
+#   FIXTURE_NEEDS_NET=1       a test passes only when the external attempt is not refused by the sandbox
+#   FIXTURE_UNATTRIBUTABLE=1  writesOutput fails once no_new_privs is set, which every layered run sets
+#                             and no refused call shows; the external attempt is left out
 set -u
 
 NEEDED=/srv/prune-fixture/needed/data.txt
@@ -43,9 +45,15 @@ fi
 
 cat "$OPTIONAL" >/dev/null 2>&1
 
+status_status=1
+grep -q '^Pid:' /proc/self/status && status_status=0
+
 write_status=1
 mkdir -p build/tmp && printf 'out\n' > build/out.txt && [[ "$(cat build/out.txt)" == "out" ]] && write_status=0
 printf 'scratch\n' > "build/tmp/${RANDOM}${RANDOM}.tmp" || write_status=1
+if [[ "${FIXTURE_UNATTRIBUTABLE:-0}" == 1 ]]; then
+  python3 -S -c 'import ctypes, sys; sys.exit(ctypes.CDLL(None).prctl(39, 0, 0, 0, 0))' || write_status=1
+fi
 
 server_status=1
 coproc SERVER { exec python3 -S -c 'import socket
@@ -68,7 +76,10 @@ if [[ -n "${SERVER_PID:-}" ]]; then
   wait "$SERVER_PID" 2>/dev/null
 fi
 
-external="$( { exec 4<>/dev/tcp/10.0.0.1/80; } 2>&1 )"
+external=""
+if [[ "${FIXTURE_UNATTRIBUTABLE:-0}" != 1 ]]; then
+  external="$( { exec 4<>/dev/tcp/10.0.0.1/80; } 2>&1 )"
+fi
 external_status=0
 if [[ "${FIXTURE_NEEDS_NET:-0}" == 1 && "$external" == *"Permission denied"* ]]; then
   external_status=1
@@ -83,6 +94,7 @@ mkdir -p "$REPORT_DIRECTORY"
 {
   printf '<?xml version="1.0" encoding="UTF-8"?>\n<testsuite name="Fixture">\n'
   testcase readsNeeded "$read_status"
+  testcase readsItsOwnStatus "$status_status"
   testcase writesOutput "$write_status"
   testcase talksToItsServer "$server_status"
   testcase reachesTheNetworkWhenItMust "$external_status"
