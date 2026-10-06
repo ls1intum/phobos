@@ -68,7 +68,10 @@ environment, offline, and grading itself only applies a fixed configuration.
 The filesystem layer is enforced by Landlock, an unprivileged Linux kernel sandbox, applied
 by `phobos-landlock-filesystem-and-networksystem` (the C program under `core/`). The run phase needs no privileges, no
 capabilities and no container flags. The discovery phase still uses Bubblewrap to hide
-directories while it measures; the sandbox an exercise runs in does not.
+directories while it measures; the sandbox an exercise runs in does not. The layer pruner
+(`var/tmp/helpers/layer_prune/`, run in `docker/prune_phase/layers/`) measures under the
+grading layers themselves instead, observing their refusals with `strace`; README.md,
+"The layer pruner", says how to run it.
 
 ## Build and development commands
 
@@ -198,9 +201,11 @@ core/                      the sandbox itself
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
     language-configurations/  one file per Ares 2 programming language configuration: its bases, placeholders and [connect] rows
 docker/prune_phase/        one image per language, plus the orchestrator
+  layers/                  the layer pruner's image: the run-phase image, strace, the probe, an empty base
 docker/run_phase/          the image an exercise actually runs in
 tests/                     the acceptance and probe suites
 var/tmp/                   prune inputs, helpers and example outputs
+  helpers/layer_prune/     the layer pruner: observe, attribute, grow, minimise, limits, verify, write
 ```
 
 ## Coding conventions
