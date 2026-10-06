@@ -62,6 +62,16 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/unit/phobos-seccomp-networksystem/seccomp_networksystem_run.sh --coverage
 
+      # The denial reporter's sources are held to the same line gate as the guard, and its
+      # quoting to bash's own over a corpus of names.
+      - name: Run the denial reporter unit tests
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/phobos-seccomp-filesystem/seccomp_filesystem_run.sh
+
+      - name: Every line of the denial reporter ran
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/phobos-seccomp-filesystem/seccomp_filesystem_run.sh --coverage
+
       # No coverage step, deliberately. The suite interposes open and close, which is
       # also how the gcov runtime writes its .gcda files, so an instrumented run has
       # gcov's own diagnostics landing on stderr. That breaks the test asserting that a
