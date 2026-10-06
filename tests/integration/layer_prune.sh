@@ -220,7 +220,7 @@ check_merged_and_verified() {
   sed -i '\|^/srv/prune-fixture/needed|d' "${narrowed}/BaseLanguage-java.cfg"
   out="$(python3 "${HELPERS}/layer_prune/main.py" --verify "${narrowed}" --output-dir "${WORK}/verify-narrowed" java 2>&1)"
   local narrowed_status=$?
-  if [[ ${narrowed_status} -ne 0 && "${out}" == *"java/fixture: aborted"* ]] \
+  if [[ ${narrowed_status} -ne 0 && "${out}" == *"java/fixture: aborted: a run under the merged base"*"did not match"* ]] \
       && grep -q '"verified": false' "${WORK}/verify-narrowed/verify/java_fixture.json"; then
     ok "a merged base without the needed file's grant fails the verification"
   else

@@ -159,6 +159,8 @@ def diagnose_declared_reference(pruning: Pruning) -> None:
     host it needs but did not declare makes it fail its own tests, consistently, and the baseline
     would take that failure as the outcome to reproduce. One observed run names the undeclared
     destination ("needs external network", A.6.5); without one, the reference is not one to prune from.
+    This errs restrictive: a reference that declares hosts and fails a test by design is not pruned,
+    while one without declared hosts may fail as long as it fails the same way every time.
     """
     policy = cfgfile.permissive_policy(pathlib.Path("/"), pruning.exercise.declared_hosts)
     result = pruning.run(policy, OBSERVED_NETWORK, "reference diagnosis")
@@ -618,7 +620,9 @@ def verify(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
     When it fails, the grants the minimisations removed are restored first ("minimisation unstable");
     otherwise one observed run is diagnosed. Only a confirmed denial that its stage turns into a grant
     or a rule the policy does not hold yet sends the policy back to that stage, seeded with it, at most
-    ROUTING_ROUNDS times; a failure with no such denial aborts.
+    ROUTING_ROUNDS times; a failure with no such denial aborts. For an exercise that declares hosts a
+    filesystem routing grows with the declared hosts reachable and is not minimised again under the
+    final rules, which errs permissive in the way filesystem_run states.
     """
     current = policy
     for routed in range(ROUTING_ROUNDS + 1):

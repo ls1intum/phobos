@@ -405,3 +405,18 @@ def test_a_declared_host_reference_that_fails_its_tests_names_the_undeclared_des
 def test_a_reference_without_declared_hosts_may_fail_tests_as_long_as_it_does_so_every_time(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "run_reference", lambda exercise, environment: sampled(FAILED, None))
     assert stages.baseline(pruning(tmp_path)) == FAILED
+
+
+def test_when_every_declared_host_is_kept_the_filesystem_is_not_minimised_again(tmp_path, monkeypatch):
+    found = declared_pruning(tmp_path)
+    kept = cfgfile.Policy(fs={}, connect=("allow api.example.org:443",), bind=(), limits={})
+    monkeypatch.setenv(stages.PRUNE_CONTAINER_VARIABLE, "1")
+    monkeypatch.setattr(stages.containment, "plant_canaries", lambda: None)
+    monkeypatch.setattr(stages.sampler, "become_subreaper", lambda: True)
+    monkeypatch.setattr(stages, "baseline", lambda pruning: PASSED)
+    monkeypatch.setattr(stages, "permissive_run", lambda pruning: None)
+    monkeypatch.setattr(stages, "prune_filesystem", lambda pruning, policy: policy)
+    monkeypatch.setattr(stages, "prune_network", lambda pruning, policy: kept)
+    monkeypatch.setattr(stages, "minimise_policy_fs", lambda *arguments, **keywords: pytest.fail("not again"))
+    index = stages.generalise.Snapshot(existing=frozenset(), directories=frozenset(), scanned=())
+    assert stages.prune_exercise(found.exercise, stages.Budget(), runner.Environment(), "network", index)[0] == kept
