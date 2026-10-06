@@ -14,6 +14,10 @@
  * hold the quoting to bash's own over a corpus of names.
  */
 #define _GNU_SOURCE
+/* The runner builds with this defined; the lint job compiles this file on its own, without it. */
+#ifndef PHOBOS_REPORTER_UNIT_TEST
+#define PHOBOS_REPORTER_UNIT_TEST
+#endif
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
