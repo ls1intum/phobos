@@ -1,8 +1,35 @@
 #define _GNU_SOURCE
 #include "phobos-seccomp-networksystem-destination.h"
 
+#include <arpa/inet.h>
 #include <netinet/in.h>
+#include <stdio.h>
+#include <string.h>
 #include <sys/uio.h>
+
+/* Writes the destination's address with inet_ntop into address_text, which holds
+ * INET6_ADDRSTRLEN bytes. Answers false for a family other than IPv4 and IPv6, for a destination
+ * without an address and where inet_ntop refuses. */
+static bool format_address(const struct destination *where, char *address_text) {
+    bool inet = where->family == AF_INET || where->family == AF_INET6;
+    return inet && where->address != nullptr
+        && inet_ntop(where->family, where->address, address_text, INET6_ADDRSTRLEN) != nullptr;
+}
+
+size_t format_endpoint(const struct destination *where, char *text, size_t size) {
+    if (size == 0) {
+        return 0;
+    }
+    char address_text[INET6_ADDRSTRLEN];
+    if (!format_address(where, address_text)) {
+        snprintf(text, size, "family %d", where->family);
+    } else if (where->family == AF_INET6) {
+        snprintf(text, size, "[%s]:%u", address_text, (unsigned)where->port);
+    } else {
+        snprintf(text, size, "%s:%u", address_text, (unsigned)where->port);
+    }
+    return strlen(text);
+}
 
 struct destination read_destination(const struct sockaddr_storage *storage) {
     struct destination where = { .family = storage->ss_family, .address = nullptr, .port = 0 };

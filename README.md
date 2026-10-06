@@ -153,7 +153,7 @@ ${PHOBOS_HOME}/phobos.sh --no-timeoutsystem-restriction --config exercise.cfg --
 
 Every script here, `phobos.sh` and each layer alike, prints its own manual with `--help` (`-h`), which names every flag it takes, what it reads and which exit statuses it can end with.
 
-`--debug` (`-d`) makes every layer say on stderr what it does and what it runs, and has `phobos-landlock-filesystem-and-networksystem` and the connect guard report verbosely too; stdout stays the command's own. It prints the whole effective policy, so it is meant for diagnosing a run, not for grading logs. It can only be switched on by the flag, never through the environment.
+`--debug` (`-d`) makes every layer say on stderr what it does and what it runs, and has `phobos-landlock-filesystem-and-networksystem` and the connect guard report verbosely too; the guard then names each refused destination by address and port, for example `refusing connect to a destination the allow-list does not name: [2001:db8::1]:443`. stdout stays the command's own. It prints the whole effective policy, so it is meant for diagnosing a run, not for grading logs. It can only be switched on by the flag, never through the environment.
 
 ## Configuration format
 
