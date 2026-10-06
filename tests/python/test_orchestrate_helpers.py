@@ -22,6 +22,7 @@ import pytest
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 ORCHESTRATOR_DIRECTORY = REPO_ROOT / "docker" / "prune_phase" / "orchestrate"
 sys.path.insert(0, str(ORCHESTRATOR_DIRECTORY))
+sys.path.insert(0, str(REPO_ROOT / "var" / "tmp" / "helpers"))
 
 import orchestrate
 
@@ -206,13 +207,23 @@ def test_an_earlier_run_is_forgotten_for_the_named_languages_only(tmp_path):
     assert tmp_path.joinpath("python_one.paths").exists()
 
 
+def path_set_language(r: set[str], w: set[str]) -> orchestrate.LanguagePolicy:
+    """A language as the Bubblewrap pruner leaves it: one union of read-only and writable paths."""
+    return orchestrate.LanguagePolicy(base=orchestrate.path_set_policy({"r": r, "w": w}), exercises={}, common=None)
+
+
+def written_policies(policies: dict, langs: list[str], layout) -> None:
+    """Writes the policies the way main does."""
+    orchestrate.write_policies(policies, langs, layout)
+
+
 def test_the_cross_language_policy_is_the_union_and_its_intersection(tmp_path):
     layout = orchestrate.make_layout(arguments_for(tmp_path))
     lang_data = {
-        "java": {"r": {"/shared", "/java-only"}, "w": {"/work"}},
-        "python": {"r": {"/shared", "/python-only"}, "w": set()},
+        "java": path_set_language({"/shared", "/java-only"}, {"/work"}),
+        "python": path_set_language({"/shared", "/python-only"}, set()),
     }
-    orchestrate.write_cross_language_policy(lang_data, layout)
+    written_policies(orchestrate.cross_language_policies(lang_data, layout), ["java", "python"], layout)
     union = (layout.core_dir / "BasePhobos.cfg").read_text()
     assert "/java-only" in union
     assert "/python-only" in union
@@ -224,10 +235,10 @@ def test_the_cross_language_policy_is_the_union_and_its_intersection(tmp_path):
 def test_a_language_policy_is_applied_and_its_comparisons_are_not(tmp_path):
     layout = orchestrate.make_layout(arguments_for(tmp_path))
     lang_data = {
-        "java": {"r": {"/shared", "/java-only"}, "w": set()},
-        "python": {"r": {"/shared"}, "w": set()},
+        "java": path_set_language({"/shared", "/java-only"}, set()),
+        "python": path_set_language({"/shared"}, set()),
     }
-    orchestrate.write_language_policies(lang_data, layout)
+    written_policies(orchestrate.language_policies(lang_data, layout), ["java", "python"], layout)
     assert (layout.core_dir / "BaseLanguage-java.cfg").exists()
     only = (layout.debug_dir / "BaseJavaOnly.cfg").read_text()
     assert "/java-only" in only
@@ -235,12 +246,14 @@ def test_a_language_policy_is_applied_and_its_comparisons_are_not(tmp_path):
 
 
 def test_a_writable_path_grants_read_write_create_and_delete(tmp_path):
+    layout = orchestrate.make_layout(arguments_for(tmp_path))
     destination = tmp_path / "Base.cfg"
-    orchestrate._write_cfg({"/readable"}, {"/writable"}, destination)
+    written_policies({destination: path_set_language({"/readable"}, {"/writable"}).base}, [], layout)
     written = destination.read_text()
     for section in ("[read]", "[execute]", "[write]", "[create]", "[delete]", "[connect]"):
         assert section in written
     assert written.index("[write]") < written.index("[connect]")
+    assert "/writable" not in written.split("[execute]")[1].split("[write]")[0]
 
 
 def test_the_runtime_tail_carries_the_chdir_and_nothing_else(tmp_path):

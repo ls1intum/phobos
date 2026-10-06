@@ -1,33 +1,43 @@
 #!/usr/bin/env python3
 """
 orchestrate.py - prune, merge & build the Base*.cfg policy files that
-`core/phobos-policysystem.sh` applies at run time. Only the discovery (pruning) phase
-uses Bubblewrap; the run phase is enforced by Landlock, not Bubblewrap.
+`core/phobos-policysystem.sh` applies at run time.
 
-It consumes the per-exercise artefacts (.paths and .json) that
-`run_minimal_fs_all.sh` and `emit_artifacts.py` write, and holds each .paths to the
-.json written beside it in the same run before it merges anything.
+A language reaches it from one of two producers, and the orchestrator merges both:
+* the layer pruner (`var/tmp/helpers/layer_prune/main.py`, Java), which writes a complete
+  `<lang>_<exercise>.cfg` and its record `<lang>_<exercise>.json` per exercise, the record
+  carrying the SHA-256 of the .cfg it describes;
+* the Bubblewrap pruner (`run_minimal_fs_all.sh` and `emit_artifacts.py`, Python until it
+  moves to the layer pruner), which writes `<lang>_<exercise>.paths` and its .json.
+Each artefact is held to the record written beside it in the same run before anything is
+merged, and a language holding artefacts of both producers is refused. The configuration
+files are read and written with `layer_prune/cfgfile.py`, found through --helpers-dir.
 
 ### Outputs (all in /var/tmp/opt/core/config)
-* **BasePhobos.cfg**            - **UNION** of bindings from *all* languages →
+* **BasePhobos.cfg**            - **UNION** of every language's base →
   used when the runtime cannot tell which language is running.
-* **BaseLanguage-<lang>.cfg**   - full binding set for that language (duplicates ok).
+* **BaseLanguage-<lang>.cfg**   - the union of every exercise of that language: its
+  filesystem sections, raised wherever a nested entry would hold fewer rights than an
+  ancestor (Landlock grants those rights there anyway), and its [connect] and [bind] rules.
+  Never a [limits] section: a limit belongs to one exercise.
+* **exercises/<lang>_<exercise>.cfg** - what one layer-pruned exercise needs beyond its
+  language's base, plus its [limits]: an entry the base already grants along its ancestors
+  is dropped. It is passed with --config on top of the base.
 * **TailPhobos.cfg**            - the runtime chdir, the only tail option the
   phobos-landlock-filesystem-and-networksystem runtime accepts. (The pruning run's Bubblewrap mount and
   namespace flags and its per-exercise `--chdir` are dropped; the runtime chdir
   is injected via the `--runtime-chdir` CLI argument.)
 
 ### For reading, in the debug/ subdirectory
-These are never applied. They are the two comparisons that say something
+These are never applied. They are the comparisons that say something
 BaseLanguage-<lang>.cfg does not, so that a policy can be judged rather than only
 inspected.
 * **BasePhobosIntersect.cfg**   - what every language needed.
 * **Base<Lang>Only.cfg**        - what no other language needed, which is where a
   policy grows when one language's prune goes wrong.
-* **Base<Lang>Common.cfg**      - what every exercise of that language needed with the
-  same right, from the intersection make_lang_sets.py writes. A path two exercises
-  needed with different rights is absent from it: the intersection is taken over whole
-  "mode path" lines.
+* **Base<Lang>Common.cfg**      - what every exercise of that language needed: for the
+  layer pruner, the sections every exercise granted a path, raised as the base is; for the
+  Bubblewrap pruner, the intersection make_lang_sets.py writes over whole "mode path" lines.
 
 Ship exactly one Base*.cfg beside phobos-policysystem.sh: it applies every Base*.cfg it
 finds there, so a BasePhobos.cfg left next to a BaseLanguage-java.cfg gives a Java
@@ -37,6 +47,7 @@ run the paths of every other language as well.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shlex
@@ -47,7 +58,10 @@ import time
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
+
+if TYPE_CHECKING:
+    from layer_prune.cfgfile import Policy
 
 # The terminal escape sequences the progress output is coloured with.
 RED = '\033[31m'
@@ -58,6 +72,15 @@ BOLD = '\033[1m'
 RESET = '\033[0m'
 # A line of a *_union.paths file: its mode and its path.
 UNION_LINE_FIELDS = 2
+# The schema version of the layer pruner's record, the one that carries the SHA-256 of its .cfg.
+LAYER_RECORD_SCHEMA = 2
+# The name ending of the record the layer pruner writes for an exercise it aborted.
+ABORTED_SUFFIX = '.aborted.json'
+# The sections a Bubblewrap path set's read-only and writable lines grant.
+READ_ONLY_SECTIONS = frozenset({'read', 'execute'})
+WRITABLE_SECTIONS = frozenset({'read', 'write', 'create', 'delete'})
+# The loopback every policy built from a Bubblewrap path set names, as it always has.
+BUBBLEWRAP_CONNECT = ('allow 127.0.0.1:*', 'allow [::1]', 'allow localhost')
 # How many languages are pruned at once when the machine cannot say how many CPUs it has.
 DEFAULT_JOBS = 4
 
@@ -190,6 +213,17 @@ def gen_lang_sets(lang: str, layout: Layout) -> None:
 
 # ────────────────────────────────────────── utilities
 
+def use_policy_helpers(helpers_dir: Path) -> None:
+    """Puts the helpers directory on the import path, so that layer_prune's cfgfile can be imported.
+
+    The configuration files are read and written by the module the layer pruner writes them with,
+    so the two cannot come to disagree about the format. It is imported where it is used, after
+    main has run this, because the directory is an option of this program.
+    """
+    if str(helpers_dir) not in sys.path:
+        sys.path.insert(0, str(helpers_dir))
+
+
 def _read_union(path: Path) -> dict[str, set[str]]:
     """Return {'r': readonly_set, 'w': write_set} from a *_union.paths file.
 
@@ -215,6 +249,18 @@ def _read_union(path: Path) -> dict[str, set[str]]:
     return {'r': readonly, 'w': write}
 
 
+def exercise_stems(lang: str, path_dir: Path, suffix: str) -> set[str]:
+    """The names, without *suffix*, of this language's per-exercise artefacts ending in it.
+
+    The union and intersection make_lang_sets.py writes, and the record of an exercise the layer
+    pruner aborted, share the name shape and are not exercise artefacts.
+    """
+    return {
+        path.name.removesuffix(suffix) for path in path_dir.glob(f'{lang}_*{suffix}')
+        if not path.name.endswith(('_union.paths', '_intersection.paths', ABORTED_SUFFIX))
+    }
+
+
 def artefact_disagreements(lang: str, path_dir: Path) -> list[str]:
     """Name every per-exercise artefact pair of this language that does not agree.
 
@@ -229,11 +275,8 @@ def artefact_disagreements(lang: str, path_dir: Path) -> list[str]:
     merge. That is the safe direction, and the name is the thing to change.
     """
     problems: list[str] = []
-    records = {path.stem for path in path_dir.glob(f'{lang}_*.json')}
-    path_sets = {
-        path.stem for path in path_dir.glob(f'{lang}_*.paths')
-        if not path.name.endswith(('_union.paths', '_intersection.paths'))
-    }
+    records = exercise_stems(lang, path_dir, '.json')
+    path_sets = exercise_stems(lang, path_dir, '.paths')
     problems += [f'{orphan}.json has no {orphan}.paths beside it'
                  for orphan in sorted(records - path_sets)]
     for exercise in sorted(path_sets):
@@ -256,52 +299,195 @@ def artefact_disagreements(lang: str, path_dir: Path) -> list[str]:
     return problems
 
 
-def collect_language_data(langs: Iterable[str], path_dir: Path) -> dict[str, dict[str, set[str]]]:
-    """Read the union of every requested language that has a usable one.
+def cfg_record_disagreement(lang: str, exercise: str, cfg_file: Path, record_file: Path) -> str | None:
+    """Why the layer pruner's record does not describe the .cfg beside it, or None when it does.
 
-    A union naming nothing is not a language that needs nothing, it is a language whose pruning
-    produced a file and no content: an unreadable log, or an emitter that wrote an empty
-    artefact. Every real exercise contributes the base bindings, so an empty union is a failure
-    wearing a success's file, and it is left out like a missing one.
+    main.py writes the record with the SHA-256 of the .cfg it has just written. A .cfg edited,
+    truncated or left from another run afterwards is a different policy from the one the record
+    vouches for, and nothing else would tell the two apart.
     """
-    data: dict[str, dict[str, set[str]]] = {}
-    for lang in langs:
-        union_file = path_dir / f'{lang}_union.paths'
-        if not union_file.exists():
-            print(f'{YELLOW}[warn]{RESET} missing {union_file.name}')
-            continue
-        union = _read_union(union_file)
-        if not union['r'] and not union['w']:
-            print(f'{YELLOW}[warn]{RESET} {union_file.name} names no path at all')
-            continue
-        data[lang] = union
-    return data
+    if not record_file.exists():
+        return f'{cfg_file.name} has no {record_file.name} beside it'
+    try:
+        record = json.loads(record_file.read_text())
+    except json.JSONDecodeError as exc:
+        return f'{record_file.name} is not readable as JSON: {exc}'
+    if not isinstance(record, dict) or record.get('schema_version') != LAYER_RECORD_SCHEMA:
+        return f'{record_file.name} is not a layer pruner record of schema version {LAYER_RECORD_SCHEMA}'
+    if record.get('key') != lang or f'{lang}_{record.get("exercise")}' != exercise:
+        return f'{record_file.name} records {record.get("key")}/{record.get("exercise")}, not {exercise}'
+    if record.get('cfg_sha256') != hashlib.sha256(cfg_file.read_bytes()).hexdigest():
+        return f'{cfg_file.name} is not the file {record_file.name} records: its SHA-256 differs'
+    return None
 
 
-# ────────────────────────────────────────── writing one policy
+def cfg_artefact_disagreements(lang: str, path_dir: Path) -> list[str]:
+    """Name every layer-pruner artefact of this language that its record does not vouch for."""
+    configurations = exercise_stems(lang, path_dir, '.cfg')
+    records = exercise_stems(lang, path_dir, '.json')
+    problems = [f'{orphan}.json has no {orphan}.cfg beside it' for orphan in sorted(records - configurations)]
+    for exercise in sorted(configurations):
+        problem = cfg_record_disagreement(lang, exercise, path_dir / f'{exercise}.cfg',
+                                          path_dir / f'{exercise}.json')
+        if problem is not None:
+            problems.append(problem)
+    return problems
 
 
-def _write_cfg(read_set: set[str], write_set: set[str], dest: Path) -> None:
-    """Write one policy cfg with a section per right.
+def aborted_exercises(lang: str, path_dir: Path) -> list[str]:
+    """Name every exercise of this language the layer pruner aborted, with the reason it recorded."""
+    problems: list[str] = []
+    for record_file in sorted(path_dir.glob(f'{lang}_*{ABORTED_SUFFIX}')):
+        try:
+            reason = json.loads(record_file.read_text()).get('aborted', 'no reason recorded')
+        except (json.JSONDecodeError, AttributeError):
+            reason = 'its record is not readable'
+        problems.append(f'{record_file.name.removesuffix(ABORTED_SUFFIX)} was aborted: {reason}')
+    return problems
+
+
+def produced_by_layer_pruner(lang: str, path_dir: Path) -> bool:
+    """Whether this language's artefacts are the layer pruner's .cfg files rather than path sets."""
+    return bool(exercise_stems(lang, path_dir, '.cfg'))
+
+
+def language_artefact_problems(lang: str, path_dir: Path) -> list[str]:
+    """Every reason this language's artefacts cannot be merged as they stand.
+
+    An aborted exercise is missing from the language, so its base would be narrower than its
+    exercises need. Artefacts of both producers at once mean one of them is left from an earlier
+    run, and nothing here can tell which.
+    """
+    problems = aborted_exercises(lang, path_dir)
+    if produced_by_layer_pruner(lang, path_dir) and exercise_stems(lang, path_dir, '.paths'):
+        return [*problems, f'{lang} has both .cfg and .paths artefacts; remove the producer not in use']
+    if produced_by_layer_pruner(lang, path_dir):
+        return problems + cfg_artefact_disagreements(lang, path_dir)
+    return problems + artefact_disagreements(lang, path_dir)
+
+
+# ────────────────────────────────────────── policies
+
+
+class LanguagePolicy(NamedTuple):
+    """What one language's artefacts amount to.
+
+    *base* is the policy BaseLanguage-<lang>.cfg is written from, *exercises* the layer-pruned
+    exercises by name (empty for a Bubblewrap language, which has no per-exercise policy), and
+    *common* what every exercise needed, or None where nothing says.
+    """
+
+    base: Policy
+    exercises: dict[str, Policy]
+    common: Policy | None
+
+
+def path_set_policy(union: dict[str, set[str]]) -> Policy:
+    """The policy a Bubblewrap path set grants, as the orchestrator has always written it.
 
     A path pruning found read-only (an ro-bind) grants read and execute; a writable one grants
     read, write, create and delete, since write implies read. An empty [connect] denies every
-    outbound connection, so a generated base names the loopback the grading tools need (the
-    Gradle daemon and the JVM talk over it) explicitly; external egress stays a deliberate
-    per-exercise [connect] plus a no-network container.
+    outbound connection, so the policy names the loopback the grading tools need (the Gradle
+    daemon and the JVM talk over it) explicitly; external egress stays a deliberate per-exercise
+    [connect] plus a no-network container.
     """
-    lines: list[str] = []
-    read_all = sorted(read_set | write_set)
-    if read_all:
-        lines += ['[read]', *read_all, '']
-    if read_set:
-        lines += ['[execute]', *sorted(read_set), '']
-    if write_set:
-        writable = sorted(write_set)
-        for section in ('write', 'create', 'delete'):
-            lines += [f'[{section}]', *writable, '']
-    lines += ['[connect]', 'allow 127.0.0.1:*', 'allow [::1]', 'allow localhost', '']
-    dest.write_text('\n'.join(lines))
+    from layer_prune import cfgfile
+    fs = dict.fromkeys(union['r'], READ_ONLY_SECTIONS)
+    fs |= dict.fromkeys(union['w'], WRITABLE_SECTIONS)
+    return cfgfile.Policy(fs=fs, connect=BUBBLEWRAP_CONNECT, bind=(), limits={})
+
+
+def raised(fs: dict[str, frozenset[str]]) -> dict[str, frozenset[str]]:
+    """The entries, each nested one raised to its ancestor's sections where it would hold fewer rights.
+
+    phobos-filesystem.sh refuses a nested entry whose rights are a strict subset of an ancestor's,
+    and Landlock grants the ancestor's rights beneath it anyway, so raising it changes nothing that
+    is enforced and keeps a merged file from being refused.
+    """
+    from layer_prune import generalise
+    return generalise.normalise_hierarchy(fs)
+
+
+def union_policy(policies: Sequence[Policy]) -> Policy:
+    """The union of several policies, without limits: what a base built from them must grant.
+
+    Every path holds every section any of them granted it, raised as `raised` says; the network
+    rules are every rule any of them names, sorted; a comment, the reason a grant is wider than
+    what was observed, is kept from the first policy that has one for that path.
+    """
+    from layer_prune import cfgfile
+    fs: dict[str, frozenset[str]] = {}
+    comments: dict[str, str] = {}
+    for policy in policies:
+        for path, sections in policy.fs.items():
+            fs[path] = fs.get(path, frozenset()) | sections
+        for path, text in policy.comments.items():
+            comments.setdefault(path, text)
+    fs = raised(fs)
+    return cfgfile.Policy(fs=fs,
+                          connect=tuple(sorted({rule for policy in policies for rule in policy.connect})),
+                          bind=tuple(sorted({rule for policy in policies for rule in policy.bind})),
+                          limits={},
+                          comments={path: text for path, text in comments.items() if path in fs})
+
+
+def common_policy(policies: Sequence[Policy]) -> Policy:
+    """What every one of several policies grants: each path all of them name, with the sections all grant it."""
+    from layer_prune import cfgfile
+    shared = set.intersection(*(set(policy.fs) for policy in policies))
+    fs = {path: frozenset.intersection(*(policy.fs[path] for policy in policies)) for path in shared}
+    return cfgfile.Policy(fs=raised({path: sections for path, sections in fs.items() if sections}),
+                          connect=tuple(sorted(set.intersection(*(set(policy.connect) for policy in policies)))),
+                          bind=tuple(sorted(set.intersection(*(set(policy.bind) for policy in policies)))),
+                          limits={})
+
+
+def read_layer_pruned_language(lang: str, path_dir: Path) -> LanguagePolicy:
+    """The policy of a language the layer pruner produced, from its per-exercise .cfg files.
+
+    Raises ValueError when a .cfg is not one cfgfile reads exactly as the run-time parser does.
+    """
+    from layer_prune import cfgfile
+    exercises = {
+        stem.removeprefix(f'{lang}_'): cfgfile.read_policy((path_dir / f'{stem}.cfg').read_text())
+        for stem in sorted(exercise_stems(lang, path_dir, '.cfg'))
+    }
+    return LanguagePolicy(base=union_policy(list(exercises.values())), exercises=exercises,
+                          common=common_policy(list(exercises.values())))
+
+
+def read_path_set_language(lang: str, path_dir: Path) -> LanguagePolicy | None:
+    """The policy of a language the Bubblewrap pruner produced, or None when its union is missing."""
+    union_file = path_dir / f'{lang}_union.paths'
+    if not union_file.exists():
+        print(f'{YELLOW}[warn]{RESET} missing {union_file.name}')
+        return None
+    common_file = path_dir / f'{lang}_intersection.paths'
+    common = path_set_policy(_read_union(common_file)) if common_file.exists() else None
+    return LanguagePolicy(base=path_set_policy(_read_union(union_file)), exercises={}, common=common)
+
+
+def collect_language_data(langs: Iterable[str], path_dir: Path) -> dict[str, LanguagePolicy]:
+    """Read the policy of every requested language that has a usable one.
+
+    A policy naming no path is not a language that needs nothing, it is a language whose pruning
+    produced a file and no content: an unreadable log, or an emitter that wrote an empty
+    artefact. Every real exercise needs at least the files its build runs, so an empty policy is
+    a failure wearing a success's file, and it is left out like a missing one.
+    """
+    data: dict[str, LanguagePolicy] = {}
+    for lang in langs:
+        if produced_by_layer_pruner(lang, path_dir):
+            language = read_layer_pruned_language(lang, path_dir)
+        else:
+            language = read_path_set_language(lang, path_dir)
+        if language is None:
+            continue
+        if not language.base.fs:
+            print(f'{YELLOW}[warn]{RESET} the policy pruned for {lang} names no path at all')
+            continue
+        data[lang] = language
+    return data
 
 
 # ────────────────────────────────────────── tail handling
@@ -367,57 +553,77 @@ def forget_earlier_artefacts(langs: Iterable[str], path_dir: Path) -> None:
             stale.unlink()
 
 
-def write_cross_language_policy(lang_data: dict[str, dict[str, set[str]]],
-                                layout: Layout) -> None:
-    """Writes BasePhobos.cfg, the union across every language, and its intersection.
+def cross_language_policies(lang_data: dict[str, LanguagePolicy], layout: Layout) -> dict[Path, Policy]:
+    """BasePhobos.cfg, the union across every language, and its intersection, by the file each goes to.
 
     The union is for an image that cannot tell which language is running, so it is an
     alternative to the per-language files rather than a part of them, and packaging picks
-    one. The intersection is never applied; it is there to be read.
+    one. The intersection is never applied; it is there to be read: every path every language
+    names, with the sections the union grants it.
     """
-    read_union: set[str] = set()
-    write_union: set[str] = set()
-    for info in lang_data.values():
-        write_union |= info['w']
-    for info in lang_data.values():
-        read_union |= (info['r'] - write_union)
-    _write_cfg(read_union, write_union, layout.core_dir / 'BasePhobos.cfg')
-
-    every_path = [(info['r'] | info['w']) for info in lang_data.values()]
-    shared = set.intersection(*every_path)
-    read_shared: set[str] = set()
-    write_shared: set[str] = set()
-    for path in shared:
-        if any(path in info['w'] for info in lang_data.values()):
-            write_shared.add(path)
-        else:
-            read_shared.add(path)
-    _write_cfg(read_shared, write_shared, layout.debug_dir / 'BasePhobosIntersect.cfg')
+    from layer_prune import cfgfile
+    bases = [language.base for language in lang_data.values()]
+    union = union_policy(bases)
+    shared = set.intersection(*(set(base.fs) for base in bases))
+    intersect = cfgfile.Policy(fs={path: union.fs[path] for path in shared},
+                               connect=tuple(sorted(set.intersection(*(set(base.connect) for base in bases)))),
+                               bind=tuple(sorted(set.intersection(*(set(base.bind) for base in bases)))),
+                               limits={})
+    return {layout.core_dir / 'BasePhobos.cfg': union,
+            layout.debug_dir / 'BasePhobosIntersect.cfg': intersect}
 
 
-def write_language_policies(lang_data: dict[str, dict[str, set[str]]],
-                            layout: Layout) -> None:
-    """Writes each language's policy, plus the two comparisons that say what it does not.
+def language_policies(lang_data: dict[str, LanguagePolicy], layout: Layout) -> dict[Path, Policy]:
+    """Each language's policy, plus the two comparisons that say what it does not, by file.
 
     Base<Lang>Only names what no other language needed, which is where a policy grows when
     one language's prune goes wrong; Base<Lang>Common names what every exercise of that
-    language needed, read from the intersection make_lang_sets already writes. Neither is
-    ever applied.
+    language needed. Neither is ever applied.
     """
-    for lang, info in lang_data.items():
-        _write_cfg(info['r'], info['w'], layout.core_dir / f'BaseLanguage-{lang}.cfg')
+    from layer_prune import cfgfile
+    policies: dict[Path, Policy] = {}
+    for lang, language in lang_data.items():
+        policies[layout.core_dir / f'BaseLanguage-{lang}.cfg'] = language.base
         capitalised = lang.capitalize()
         other_paths: set[str] = set()
-        for other_lang, other_info in lang_data.items():
+        other_rules: set[str] = set()
+        for other_lang, other in lang_data.items():
             if other_lang != lang:
-                other_paths |= other_info['r'] | other_info['w']
-        _write_cfg(info['r'] - other_paths, info['w'] - other_paths,
-                   layout.debug_dir / f'Base{capitalised}Only.cfg')
-        common_file = layout.path_dir / f'{lang}_intersection.paths'
-        if common_file.exists():
-            common = _read_union(common_file)
-            _write_cfg(common['r'], common['w'],
-                       layout.debug_dir / f'Base{capitalised}Common.cfg')
+                other_paths |= set(other.base.fs)
+                other_rules |= set(other.base.connect) | set(other.base.bind)
+        policies[layout.debug_dir / f'Base{capitalised}Only.cfg'] = cfgfile.Policy(
+            fs={path: sections for path, sections in language.base.fs.items() if path not in other_paths},
+            connect=tuple(rule for rule in language.base.connect if rule not in other_rules),
+            bind=tuple(rule for rule in language.base.bind if rule not in other_rules),
+            limits={})
+        if language.common is not None:
+            policies[layout.debug_dir / f'Base{capitalised}Common.cfg'] = language.common
+    return policies
+
+
+def exercise_policies(lang_data: dict[str, LanguagePolicy], layout: Layout) -> dict[Path, Policy]:
+    """exercises/<lang>_<exercise>.cfg for every layer-pruned exercise: what its base lacks, and its limits."""
+    from layer_prune import cfgfile
+    return {layout.core_dir / 'exercises' / f'{lang}_{name}.cfg': cfgfile.remainder(policy, language.base)
+            for lang, language in lang_data.items() for name, policy in language.exercises.items()}
+
+
+def write_policies(policies: dict[Path, Policy], langs: Iterable[str], layout: Layout) -> None:
+    """Renders every policy, and only once all of them render, writes them.
+
+    An earlier run's exercises/ files of these languages are removed first, so an exercise that
+    is gone leaves no configuration behind that would still be applied to it. Raises ValueError,
+    having written nothing, when any policy cannot be written as a file the parser reads as it.
+    """
+    from layer_prune import cfgfile
+    texts = {destination: cfgfile.render(policy) for destination, policy in policies.items()}
+    exercises_dir = layout.core_dir / 'exercises'
+    exercises_dir.mkdir(exist_ok=True)
+    for lang in langs:
+        for stale in exercises_dir.glob(f'{lang}_*.cfg'):
+            stale.unlink()
+    for destination, text in texts.items():
+        destination.write_text(text)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -430,6 +636,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     arguments = parse_arguments(argv)
     layout = make_layout(arguments)
+    use_policy_helpers(Path(arguments.helpers_dir))
     langs = requested_languages(arguments.langs)
     print(f'\n{BOLD}Orchestrating for:{RESET}', ', '.join(langs), '\n')
 
@@ -443,7 +650,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     artefact_problems: list[str] = []
     for lang in langs:
-        artefact_problems += artefact_disagreements(lang, layout.path_dir)
+        artefact_problems += language_artefact_problems(lang, layout.path_dir)
     if artefact_problems:
         print(f'{RED}[error]{RESET} the per-exercise artefacts do not agree with their records:')
         for problem in artefact_problems:
@@ -452,8 +659,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     for lang in langs:
-        gen_lang_sets(lang, layout)
-    lang_data = collect_language_data(langs, layout.path_dir)
+        if not produced_by_layer_pruner(lang, layout.path_dir):
+            gen_lang_sets(lang, layout)
+    try:
+        lang_data = collect_language_data(langs, layout.path_dir)
+    except ValueError as refusal:
+        print(f'{RED}[error]{RESET} a pruned configuration cannot be read: {refusal}')
+        print('        Refusing to merge a policy the run-time parser would read differently.')
+        return 1
 
     missing_languages = sorted(set(langs) - set(lang_data))
     if missing_languages:
@@ -461,8 +674,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print('        Refusing to merge a policy that is missing a language that was asked for.')
         return 1
 
-    write_cross_language_policy(lang_data, layout)
-    write_language_policies(lang_data, layout)
+    policies = {**cross_language_policies(lang_data, layout), **language_policies(lang_data, layout),
+                **exercise_policies(lang_data, layout)}
+    try:
+        write_policies(policies, langs, layout)
+    except ValueError as refusal:
+        print(f'{RED}[error]{RESET} a merged policy cannot be written: {refusal}')
+        print('        Refusing to write any of them.')
+        return 1
     build_runtime_tail(arguments.runtime_chdir, layout.core_dir)
 
     print(f'\n{BOLD}Done.{RESET}')
