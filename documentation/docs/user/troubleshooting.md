@@ -18,13 +18,13 @@ goes to standard error, so whatever reads the run can take one stream and a pers
 
 | Status | Prefix | Meaning |
 | --- | --- | --- |
-| `2` | none | a script was called the wrong way |
+| `2` | no `PHB-` code | a script was called the wrong way |
 | `11` | `PHB-EPOLICY` | the policy is invalid, or cannot be enforced as written |
 | `14` | `PHB-ETIMEOUT` | the run passed its timeout and was stopped |
 | `15` | `PHB-ERUNTIME` | something Phobos needs is missing or cannot be started |
-| `125` | none | `phobos-landlock-filesystem-and-networksystem`, the connect guard or the group lock refused to set the sandbox up |
-| `127` | none | the command itself could not be executed |
-| anything else | none | the command's own status. Phobos did not stop the run. |
+| `125` | no `PHB-` code | `phobos-landlock-filesystem-and-networksystem`, the connect guard or the group lock refused to set the sandbox up |
+| `127` | no `PHB-` code | the command itself could not be executed |
+| anything else | no `PHB-` code | the command's own status. Phobos did not stop the run. |
 
 A signal sent to `phobos.sh` (`SIGTERM`, `SIGHUP`, `SIGINT` or `SIGQUIT`) is passed on to the
 command, and `phobos.sh` then ends with 128 plus the signal's number once the layers have cleaned
@@ -226,8 +226,8 @@ directory; start Phobos with a PATH of absolute directories. (PHB-ERUNTIME)
 ```
 
 Every entry point keeps only the absolute entries of `PATH` before it runs anything, and never
-adds one. Start Phobos with a `PATH` of absolute directories. A command that ran before only
-because `.` was on `PATH` is now named by its path, as in `./gradlew test`.
+adds one. Start Phobos with a `PATH` of absolute directories. Name a command that ran before
+only because `.` was on `PATH` by its path, as in `./gradlew test`.
 
 ### `realpath` is the wrong one
 

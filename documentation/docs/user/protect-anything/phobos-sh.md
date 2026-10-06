@@ -86,7 +86,8 @@ starts in:
 - It unsets `TMPDIR`, `HOSTALIASES` and `TZDIR` where they are not absolute, and keeps only the
   absolute entries of `GCONV_PATH`, `LOCPATH` and `NLSPATH`.
 
-Each entry point says on standard error what it removed. The command gets the cleaned
+Each entry point says on standard error what it removed, apart from `CDPATH` and a `PATH` bash
+invented because the environment had none. The command gets the cleaned
 environment too, so a command that relied on `.` in `PATH` has to be named by its path, as
 `./gradlew` is above. A `PATH` with no absolute entry ends the run with `PHB-ERUNTIME`, because
 a lookup through an empty `PATH` searches the current directory. Where the environment had no `PATH` at
@@ -97,7 +98,8 @@ No script can clean what takes effect before it runs. Start `phobos.sh` with a `
 absolute directories, or through an absolute interpreter (`/bin/bash ${PHOBOS_HOME}/phobos.sh`),
 and without `BASH_ENV`, `LD_LIBRARY_PATH`, `LD_PRELOAD` or `LD_AUDIT`. A minimal environment
 of absolute values meets all of these:
-`env -i PATH=/usr/local/bin:/usr/bin:/bin ${PHOBOS_HOME}/phobos.sh --config exercise.cfg -- ./gradlew test`.
+`env -i PATH=/usr/local/bin:/usr/bin:/bin ${PHOBOS_HOME}/phobos.sh --config exercise.cfg -- ./gradlew test`,
+adding back only what the command needs, such as `HOME` or `JAVA_HOME`.
 :::
 
 ## Which configurations apply, in which order

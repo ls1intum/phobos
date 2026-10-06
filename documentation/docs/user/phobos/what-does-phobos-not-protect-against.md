@@ -44,9 +44,9 @@ policy that would put it inside one is refused.
 ## What acts before the first line of Phobos
 
 Every entry point removes the relative entries of `PATH` and of the C library's search
-variables before it runs anything, so nothing it starts comes from the current directory. Three
-things take effect before a script's first line, and no script can undo them. Keeping them out
-is the grader's job:
+variables before it runs anything, so no program it looks up is found in the current
+directory. Three things take effect before a script's first line, and no script can undo them.
+Keeping them out is the grader's job:
 
 - **The `bash` of the `#!` line.** Each entry point begins with `#!/usr/bin/env bash`, and `env`
   finds `bash` through the caller's `PATH`. Start Phobos with a `PATH` of absolute directories,
@@ -54,7 +54,8 @@ is the grader's job:
 - **`BASH_ENV`.** Bash sources the file it names before the first line of every non-interactive
   script, and resolves a relative name against the current directory.
 - **`LD_LIBRARY_PATH`, `LD_PRELOAD` and `LD_AUDIT`.** The dynamic loader reads them when every
-  program starts, the `bash` running `phobos.sh` included.
+  program starts, the `bash` running `phobos.sh` included. That same `bash` can already have read
+  a relative `LOCPATH` or `GCONV_PATH` before Phobos cleans them for everything after it.
 
 SECURITY.md states these as integration requirements, with a minimal `env -i` invocation that
 meets them.
