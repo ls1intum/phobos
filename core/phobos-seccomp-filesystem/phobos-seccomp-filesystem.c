@@ -125,9 +125,21 @@ static void say_verbose(const struct supervisor_options *options, const char *li
     }
 }
 
-/* Says once why filesystem denials are not reported in this run. */
-static void say_reporting_off(const char *reason) {
-    fprintf(stderr, "Phobos: filesystem denial reporting is off for this run, because %s.\n", reason);
+/* Says once what goes unreported in this run, and why: the filesystem denials when the observation
+ * traps were wanted, the group lock's refusals when the refusal traps were, or both. A run that
+ * would only have reported the group lock's refusals loses nothing of the filesystem's, so the
+ * notice does not say it does. */
+static void say_reporting_off(bool file_traps, bool refusal_traps, const char *reason) {
+    if (file_traps && refusal_traps) {
+        fprintf(stderr, "Phobos: filesystem denials and the group lock's refusals are not reported in "
+                        "this run, because %s.\n", reason);
+    } else if (refusal_traps) {
+        fprintf(stderr, "Phobos: the group lock's refusals are not reported in this run, because %s.\n",
+                reason);
+    } else {
+        fprintf(stderr, "Phobos: filesystem denial reporting is off for this run, because %s.\n",
+                reason);
+    }
 }
 
 /* Whether the observation traps may be installed: Landlock will be applied, the kernel has it, and
@@ -137,12 +149,12 @@ static bool file_traps_wanted(const struct supervisor_options *options, int land
         return false;
     }
     if (landlock_version < 1) {
-        say_reporting_off("this kernel has no Landlock");
+        say_reporting_off(true, false, "this kernel has no Landlock");
         return false;
     }
     if (!continue_supported()) {
-        say_reporting_off("this kernel cannot continue a supervised call, or another supervisor "
-                          "already holds the run's listener");
+        say_reporting_off(true, false, "this kernel cannot continue a supervised call, or another "
+                                       "supervisor already holds the run's listener");
         return false;
     }
     return true;
@@ -179,7 +191,8 @@ static bool refusal_traps_wanted(const struct supervisor_options *options) {
         listener = install_report_filter(file_traps, refusal_traps);
     }
     if (listener < 0) {
-        say_reporting_off(errno == EBUSY ? "another supervisor already holds the run's listener"
+        say_reporting_off(file_traps, refusal_traps,
+                          errno == EBUSY ? "another supervisor already holds the run's listener"
                                          : "its seccomp filter could not be installed");
         close(socket_descriptor);
         exec_command(command);
@@ -321,11 +334,12 @@ int main(int argument_count, char *arguments[]) {
     size_t request_size = 0;
     int pair[2];
     if (!allocate_notification_buffers(&request, &request_size, &response)) {
-        say_reporting_off("there is no memory to answer notifications");
+        say_reporting_off(file_traps, refusal_traps, "there is no memory to answer notifications");
         exec_command(options.command);
     }
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) {
-        say_reporting_off("no socket pair could be made to hand its listener over");
+        say_reporting_off(file_traps, refusal_traps,
+                          "no socket pair could be made to hand its listener over");
         exec_command(options.command);
     }
     sigset_t forwarded;

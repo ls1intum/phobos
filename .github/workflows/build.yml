@@ -1,6 +1,6 @@
 # Builds the images this repository can build, and tests the one it ships.
 #
-# The run-phase image is the artefact: it is where both C products are compiled, in a
+# The run-phase image is the artefact: it is where the four C products are compiled, in a
 # stage of their own, and it is what an exercise actually runs in. It is built here so
 # that the acceptance suites run against it on every change rather than by hand.
 #
@@ -130,7 +130,7 @@ jobs:
   # Built and tested once per architecture on a native runner, never under emulation:
   # Landlock and the seccomp user-notification the acceptance suites rest on are absent or
   # unreliable under QEMU, so an emulated arm64 run would test nothing. Each leg builds the
-  # image for its own architecture, compiling the library and both C products from source
+  # image for its own architecture, compiling the four C products from source
   # there, and runs the whole acceptance suite against that exact image, so both
   # architectures are proven before the image is published by hand (see AGENTS.md).
   run-phase:

@@ -3447,12 +3447,16 @@ static void test_supervisor_with_nothing_to_watch(void) {
     script->fake_landlock_version = 0;
     check("a kernel without Landlock is said once",
           supervisor_ended_with(watch) == EXIT_CODE_STAND_IN && script->filters_installed == 0
-              && strstr(captured_text, "because this kernel has no Landlock") != NULL);
+              && strstr(captured_text, "Phobos: filesystem denial reporting is off for this run, "
+                                       "because this kernel has no Landlock")
+                     != NULL);
     script_supervisor();
     script->fake_continue = 0;
     check("so is a kernel that cannot continue a supervised call",
           supervisor_ended_with(watch) == EXIT_CODE_STAND_IN && script->filters_installed == 0
-              && strstr(captured_text, "cannot continue a supervised call") != NULL);
+              && strstr(captured_text, "Phobos: filesystem denial reporting is off for this run, "
+                                       "because this kernel cannot continue a supervised call")
+                     != NULL);
     const char *lock_above[] = {"phobos-seccomp-filesystem", "--landlock-bin", "/bin/true",
                                 "--no-landlock", "--group-lock-above", "--", "/bin/true", NULL};
     script_supervisor();
@@ -3507,7 +3511,49 @@ static void test_supervisor_child(void) {
     script->listener_error = EBUSY;
     check("a listener held above it is said once, and the command runs unsupervised",
           supervisor_ended_with(watch) == EXIT_CODE_STAND_IN && script->executions == 1
-              && strstr(captured_text, "another supervisor already holds the run's listener")
+              && strstr(captured_text, "Phobos: filesystem denial reporting is off for this run, "
+                                       "because another supervisor already holds the run's "
+                                       "listener")
+                     != NULL
+              && strstr(captured_text, "group lock") == NULL);
+    const char *lock_only[] = {"phobos-seccomp-filesystem", "--landlock-bin", "/bin/true",
+                               "--no-landlock", "--group-lock-above", "--", "/bin/true", NULL};
+    script_supervisor();
+    script->forks[0] = 0;
+    script->fake_group_lock = 1;
+    script->listener_result = -1;
+    script->listener_error = EBUSY;
+    check("when only the group lock's refusals were to be reported, the notice names only them",
+          supervisor_ended_with(lock_only) == EXIT_CODE_STAND_IN
+              && strstr(captured_text, "Phobos: the group lock's refusals are not reported in this "
+                                       "run, because another supervisor already holds")
+                     != NULL
+              && strstr(captured_text, "filesystem denial") == NULL);
+    script_supervisor();
+    script->forks[0] = 0;
+    script->fake_group_lock = 1;
+    script->fake_landlock_version = 0;
+    script->listener_result = -1;
+    script->listener_error = EBUSY;
+    check("without Landlock and with no filter, each notice names only its own subject",
+          supervisor_ended_with(both) == EXIT_CODE_STAND_IN
+              && count_occurrences(captured_text, "Phobos: filesystem denial reporting is off for "
+                                                  "this run, because this kernel has no Landlock")
+                     == 1
+              && count_occurrences(captured_text, "Phobos: the group lock's refusals are not "
+                                                  "reported in this run, because another "
+                                                  "supervisor")
+                     == 1
+              && strstr(captured_text, "filesystem denials and") == NULL);
+    script_supervisor();
+    script->forks[0] = 0;
+    script->fake_group_lock = 1;
+    script->listener_result = -1;
+    script->listener_error = EBUSY;
+    check("and when both were to be reported, it names both",
+          supervisor_ended_with(both) == EXIT_CODE_STAND_IN
+              && strstr(captured_text, "Phobos: filesystem denials and the group lock's refusals "
+                                       "are not reported in this run, because another supervisor")
                      != NULL);
     script_supervisor();
     script->forks[0] = 0;
@@ -3589,6 +3635,17 @@ static void test_supervisor_parent(void) {
           supervisor_ended_with(watch) == EXIT_CODE_STAND_IN && script->fork_next == 0
               && script->filters_installed == 0
               && strstr(captured_text, "no memory to answer notifications") != NULL);
+    const char *refusals_only[] = {"phobos-seccomp-filesystem", "--landlock-bin", "/bin/true",
+                                   "--no-landlock", "--group-lock-above", "--", "/bin/true", NULL};
+    script_supervisor();
+    script->fake_group_lock = 1;
+    script->calloc_fails = true;
+    check("which, when only the group lock's refusals were to be reported, names only them",
+          supervisor_ended_with(refusals_only) == EXIT_CODE_STAND_IN
+              && strstr(captured_text, "the group lock's refusals are not reported in this run, "
+                                       "because there is no memory")
+                     != NULL
+              && strstr(captured_text, "filesystem denial") == NULL);
     script_supervisor();
     script->socketpair_fails = true;
     check("so is a socket pair that cannot be made",

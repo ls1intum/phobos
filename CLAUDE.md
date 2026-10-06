@@ -42,7 +42,11 @@ enforces the `[connect]` allow-list by host and port from outside the process; a
 rule that names a host is enforced by the egress broker (an HAProxy that checks the TLS host
 name), which the network layer starts automatically for such a rule; an exact-name rule is
 refused when no resolver is given. A timeout and resource limits bound the run, and the
-container around it supplies `--network none` and the cgroup caps.
+container around it supplies `--network none` and the cgroup caps. With the network layer
+off, a report-only supervisor prints a `Phobos Security Error` line on stderr for each
+distinct action it can attribute with certainty to Landlock or the timeout's group lock,
+staying silent wherever it is in doubt. It never lets a refused call succeed nor a permitted
+one fail.
 
 The two phases do not deny in the same way. While pruning, a hidden directory is an empty,
 writable tmpfs; while grading, a path the policy does not name is refused with EACCES. A tool
@@ -56,7 +60,7 @@ environment, offline, and grading itself only applies a fixed configuration.
 ## Tech Stack
 
 - POSIX shell for the wrapper and the layers, which is the bulk of the repository
-- C for `phobos-landlock-filesystem-and-networksystem`, the connect guard and the timeout's group lock, all compiled inside the run-phase image
+- C for `phobos-landlock-filesystem-and-networksystem`, the connect guard, the timeout's group lock and the report-only supervisor `phobos-seccomp-filesystem`, all four compiled inside the run-phase image
 - Python for the prune orchestrator and the artefact helpers
 - Docker for both phases, one image per language environment
 - Java for exactly one file, `.github/scripts/CheckPullRequestTemplate.java`
@@ -169,6 +173,7 @@ core/                      the sandbox itself
   phobos-landlock-filesystem-and-networksystem/  its *.c/.h: the C program that applies the Landlock policy, then exec's
   phobos-seccomp-networksystem/  its *.c/.h: the connect guard, supervises connect() and enforces [connect] by host and port
   phobos-seccomp-timeoutsystem/  its *.c: the group lock, a seccomp filter refusing setsid and setpgid, then exec's
+  phobos-seccomp-filesystem/     its *.c/.h: the report-only supervisor, reports what Landlock and the group lock block when the network layer is off
   phobos-tools-common/     sourced by every layer through phobos-common.sh, which sources the rest here and the three per-subsystem helpers
     phobos-environment.sh  sourced first by every entry point: PATH and the other lookup variables made safe before anything is looked up
     phobos-common.sh       the shared entry the layers source; it sources the others

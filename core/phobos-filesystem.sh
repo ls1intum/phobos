@@ -73,13 +73,16 @@ WHAT IT READS FROM THE SPECIFICATION DIRECTORY
   default. Creating device nodes is never granted.
 
 WHAT IT REPORTS
-  Unless --no-own-reporter is given, the reporter prints one line on stderr for each distinct
-  action Landlock refuses the command, such as "Phobos Security Error: the program tried to
-  illegally read the File '/etc/shadow' but was blocked by Phobos.", at most 100 per run,
-  and, with --group-lock-above, one for each distinct call the group lock refuses outright.
-  While it runs, every call returns what it would return without it; should it die, the
-  calls it watches fail with ENOSYS, so nothing is granted. When the reporter is missing, or the kernel cannot
-  support it, the layer says so once and the run is enforced all the same.
+  Unless --no-own-reporter is given, the reporter prints a line on stderr for each distinct
+  action it can attribute with certainty to Landlock, such as "Phobos Security Error: the
+  program tried to illegally read the File '/etc/shadow' but was blocked by Phobos.", at
+  most 100 per run, and, with --group-lock-above, one for each distinct call the group lock
+  refuses outright. Every doubt ends in silence, so a run without such a line may still have
+  been refused something. While it runs, no refused call succeeds and no permitted one
+  fails, the group lock's refusals failing with EACCES rather than ENOSYS; should it die, the
+  calls it watches fail with ENOSYS, so nothing is granted. When the reporter is missing, or
+  the kernel cannot support it, a notice names what goes unreported and why, and the run is
+  enforced all the same.
 
   When the command's stderr carried lines that look like a refusal, the layer prints
   "Sandbox denials: network=N, filesystem=N. (PHB-EDENY)" after the command has ended. That
