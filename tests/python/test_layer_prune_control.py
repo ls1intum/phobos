@@ -1,0 +1,151 @@
+"""Checks the control replay: whether a refused access also fails outside every Landlock domain.
+
+A replay that fails outside the sandbox means the refusal was not Landlock's (a mode, an owner, a
+mount), so granting would not help and the denial must never become a grant. Every case is built in
+a temporary directory, so nothing outside it is opened, created or changed.
+"""
+
+from __future__ import annotations
+
+import os
+import pathlib
+import sys
+
+import pytest
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "var" / "tmp" / "helpers"))
+
+from layer_prune import (
+    attribute,
+    control,
+    record,
+)
+
+
+def denial(objects: tuple[str, ...], sections: frozenset[str], layer: str = record.LAYER_FILESYSTEM,
+           errno: str = "EACCES") -> record.Denial:
+    """A denial of the given objects and sections, as attribute.denials would build it."""
+    return record.Denial(pid=1, layer=layer, operation="openat", objects=objects, sections=sections,
+                         address=None, port=None, transport=None, errno=errno)
+
+
+def read_denial(path: str) -> record.Denial:
+    """A refused read of one path."""
+    return denial((path,), frozenset({attribute.SECTION_READ}))
+
+
+def running_as_root() -> bool:
+    """Whether DAC cannot refuse anything here, because the tests run as root."""
+    return os.geteuid() == 0
+
+
+def test_a_file_the_uid_cannot_read_is_not_landlock_caused(tmp_path):
+    secret = tmp_path / "secret"
+    secret.write_text("x")
+    secret.chmod(0)
+    if running_as_root():
+        pytest.skip("root reads a mode-000 file, so DAC cannot refuse here")
+    assert control.landlock_caused(read_denial(str(secret))) is False
+
+
+def test_a_readable_file_refused_in_the_sandbox_is_landlock_caused(tmp_path):
+    readable = tmp_path / "readable"
+    readable.write_text("x")
+    assert control.landlock_caused(read_denial(str(readable))) is True
+
+
+def test_a_readable_directory_is_landlock_caused(tmp_path):
+    assert control.landlock_caused(read_denial(str(tmp_path))) is True
+
+
+def test_a_symbolic_link_is_replayed_on_its_target_and_never_followed_by_the_replay(tmp_path):
+    target = tmp_path / "target"
+    target.write_text("x")
+    link = tmp_path / "link"
+    link.symlink_to(target)
+    assert control.landlock_caused(read_denial(str(link))) is True
+
+
+def test_a_path_that_no_longer_exists_cannot_be_confirmed(tmp_path):
+    assert control.landlock_caused(read_denial(str(tmp_path / "gone"))) is False
+
+
+def test_a_writable_file_is_landlock_caused_and_is_not_truncated(tmp_path):
+    output = tmp_path / "out"
+    output.write_text("keep")
+    assert control.landlock_caused(denial((str(output),), frozenset({attribute.SECTION_WRITE}))) is True
+    assert output.read_text() == "keep"
+
+
+def test_a_read_only_file_refused_for_writing_is_not_landlock_caused(tmp_path):
+    output = tmp_path / "out"
+    output.write_text("keep")
+    output.chmod(0o444)
+    if running_as_root():
+        pytest.skip("root writes a read-only file, so DAC cannot refuse here")
+    assert control.landlock_caused(denial((str(output),), frozenset({attribute.SECTION_WRITE}))) is False
+
+
+def test_a_writable_device_is_checked_without_being_opened():
+    assert control.landlock_caused(denial(("/dev/null",), frozenset({attribute.SECTION_WRITE}))) is True
+
+
+def test_a_writable_directory_allows_a_creation_and_is_left_as_it_was(tmp_path):
+    assert control.landlock_caused(denial((str(tmp_path),), frozenset({attribute.SECTION_CREATE}))) is True
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_creation_in_a_directory_the_run_created_is_replayed_in_its_nearest_existing_ancestor(tmp_path):
+    missing = tmp_path / "build" / "classes"
+    assert control.landlock_caused(denial((str(missing),), frozenset({attribute.SECTION_CREATE}))) is True
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_read_only_directory_refuses_a_creation(tmp_path):
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o555)
+    if running_as_root():
+        pytest.skip("root creates in a read-only directory, so DAC cannot refuse here")
+    try:
+        assert control.landlock_caused(denial((str(locked),), frozenset({attribute.SECTION_CREATE}))) is False
+    finally:
+        locked.chmod(0o755)
+
+
+def test_an_executable_is_landlock_caused_and_a_plain_file_is_not(tmp_path):
+    tool = tmp_path / "tool"
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    plain = tmp_path / "plain"
+    plain.write_text("x")
+    plain.chmod(0o644)
+    sections = frozenset({attribute.SECTION_EXECUTE, attribute.SECTION_READ})
+    assert control.landlock_caused(denial((str(tool),), sections)) is True
+    assert control.landlock_caused(denial((str(plain),), sections)) is False
+
+
+def test_a_rename_between_two_parents_on_one_filesystem_is_landlock_caused(tmp_path):
+    first = tmp_path / "a"
+    second = tmp_path / "b"
+    first.mkdir()
+    second.mkdir()
+    refer = denial((str(first), str(second)), frozenset({attribute.SECTION_RESTRUCTURE}), errno="EXDEV")
+    assert control.landlock_caused(refer) is True
+
+
+def test_a_rename_between_two_filesystems_is_the_filesystems_own_exdev(tmp_path):
+    if os.stat(tmp_path).st_dev == os.stat("/dev").st_dev:
+        pytest.skip("the temporary directory and /dev share a device here")
+    refer = denial((str(tmp_path), "/dev"), frozenset({attribute.SECTION_RESTRUCTURE}), errno="EXDEV")
+    assert control.landlock_caused(refer) is False
+
+
+def test_a_network_refusal_needs_no_replay_and_the_other_layers_are_never_landlock_caused():
+    network = record.Denial(pid=1, layer=record.LAYER_NETWORK, operation="connect", objects=(),
+                            sections=frozenset({attribute.SECTION_CONNECT}), address="10.0.0.1", port=80,
+                            transport="tcp", errno="EACCES")
+    assert control.landlock_caused(network) is True
+    for layer in (record.LAYER_FIXED, record.LAYER_LIMIT, record.LAYER_OTHER):
+        assert control.landlock_caused(denial(("/dev/null",), frozenset(), layer=layer)) is False
