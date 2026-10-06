@@ -105,7 +105,7 @@ The reader accepts exactly this, and refuses everything else with a message that
 
 - One document. An optional `---` on the first significant line; a second `---` or any `...` is refused.
 - Text with LF endings. A carriage return, a byte order mark, a NUL byte or a tab character anywhere is refused (tabs are not valid YAML indentation, and refusing them everywhere keeps the record format, which is tab-separated, unambiguous).
-- The whole file must be valid UTF-8 (decision Q15). The reader checks it before the first line with `iconv -f UTF-8 -t UTF-8`, run in the C locale, and refuses the file, naming the first line that fails, when it holds an invalid or overlong sequence, an encoded surrogate, or a code point above U+10FFFF. Inside values and keys, control characters are refused: C0 (U+0000 to U+001F), DEL (U+007F) and C1 (U+0080 to U+009F), and the bidirectional formatting characters U+202A to U+202E and U+2066 to U+2069, which make a path read differently on a terminal from what it is. Every other code point is allowed, so a path with a non-ASCII name works; keys stay ASCII, since every key of the schema is. A comment may hold any valid UTF-8 except NUL, CR and tab. Messages quote such a value with `${value@Q}`, which shows it as it is in a UTF-8 locale and escapes it in the C locale.
+- The whole file must be valid UTF-8 (decision Q15). The reader checks every line before it reads any as YAML, against the well-formed byte sequences of RFC 3629 matched in the C locale, and refuses the file, naming the first line that fails, when it holds an invalid or overlong sequence, an encoded surrogate, or a code point above U+10FFFF. `iconv -f UTF-8 -t UTF-8` is not enough for this: measured in the test image, glibc's decoder accepts U+110000 (`f4 90 80 80`) and the old five-byte forms. Inside values and keys, control characters are refused: C0 (U+0000 to U+001F), DEL (U+007F) and C1 (U+0080 to U+009F), and the bidirectional formatting characters U+202A to U+202E and U+2066 to U+2069, which make a path read differently on a terminal from what it is. Every other code point is allowed, so a path with a non-ASCII name works; keys stay ASCII, since every key of the schema is. A comment may hold any valid UTF-8 except NUL, CR, tab and a byte order mark, which is refused anywhere in the file, not only at its start. Boolean-like words are lower-cased in the C locale, so that a Turkish locale's dotless i cannot turn `.INF` into a word the check misses. Messages quote such a value with `${value@Q}`, which shows it as it is in a UTF-8 locale and escapes it in the C locale.
 - Comments: a `#` at the start of a line after spaces, or a `#` preceded by a space outside quotes.
 - Block mappings, `key: value` or `key:` followed by a more indented block. A key is `[A-Za-z][A-Za-z0-9]*`; every key in the Ares schema has that shape, so a quoted key or any other key is refused as unknown.
 - Block sequences, `- value` and `- key: value` (a mapping item whose further keys are indented to the column after `- `), indented under their key or at the key's own column (both are valid YAML and both appear in practice).
@@ -538,7 +538,7 @@ check "a sequence of mappings and an empty flow sequence" "$expected" "$actual"
 actual="$(printf 'l:\n- k: v\n  n: 0\ne: []\n' | records_of)"
 check "a sequence at its key's own column reads the same" "$expected" "$actual"
 
-expected=$'1\t.\tmap\t\n1\t.s\tstr\tit'"'"'s\n2\t.t\tstr\ta\\b"c'
+expected=$'1\t.\tmap\t\n1\t.s\tstr\tit'"'"$'s\n2\t.t\tstr\ta\\b"c'
 actual="$(printf "s: 'it''s'\nt: \"a\\\\\\\\b\\\\\"c\"\n" | records_of)"
 check "both quote styles and their escapes" "$expected" "$actual"
 
@@ -551,7 +551,7 @@ for case in \
   '"a": 1|key' 'a: 1\r|carriage return' 'a: >\n  x|block scalar' 'a: {b: 1}|flow' 'a: -l|indicator' \
   'a: ::1|indicator' 'a: "\xc3\x28"|UTF-8' 'a: "x\xc2\x85y"|control' 'a: "x\xe2\x80\xaey"|bidirectional' 'a: 8e1|ambiguous' 'a: +80|ambiguous' \
   'a: 0o120|ambiguous' 'a: 80.0|ambiguous' 'a: on|true or false' 'a: n|true or false'; do
-  text="${case%%|*}"
+  text="${case%|*}"
   needle="${case##*|}"
   result="$(printf '%b\n' "$text" | records_of)"
   if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"${needle}"* && "${result#*|}" == *"line "* ]]; then
@@ -561,7 +561,7 @@ for case in \
   fi
 done
 for bytes in 'a:\t1\n' '\xef\xbb\xbfa: 1\n' 'a: 1\x00\n'; do
-  result="$(printf "$bytes" | records_of)"
+  result="$(printf '%b' "$bytes" | records_of)"
   if [[ "${result%%|*}" == "${PHB_EPOLICY}" ]]; then ok "refused: ${bytes}"; else bad "refused: ${bytes}" "status ${PHB_EPOLICY}" "${result}"; fi
 done
 
@@ -586,29 +586,34 @@ Expected: FAIL, `read_yaml_subset: command not found` in every case.
 The reader is three functions plus helpers, each with its own comment block above it (AGENTS.md):
 
 ```bash
-# Prints the YAML type of one plain scalar, "bool", "null", "int" or "str", and refuses one that
-# YAML readers resolve differently (a boolean-like word other than true and false, or a spelling a
-# YAML 1.1 reader takes for a number). Takes the scalar. Assumes PARSE_LOCATION names its line and
-# that it is called plainly, so that a refusal ends the run.
+# Sets yaml_value_type to the type of one plain scalar, "bool", "null", "int" or "str", and
+# refuses one that YAML readers resolve differently (a boolean-like word other than true and
+# false, or a spelling a YAML 1.1 reader takes for a number). Takes the scalar. Assumes it runs
+# inside read_yaml_subset, with PARSE_LOCATION naming the line, and that it is called plainly, so
+# that a refusal ends the run.
 yaml_plain_type() {
   local text="$1"
+  local yaml_lower=""
   case "$text" in
-    true|false) printf 'bool'; return 0 ;;
-    ""|"~"|null|Null|NULL) printf 'null'; return 0 ;;
+    true|false) yaml_value_type="bool"; return 0 ;;
+    ""|"~"|null|Null|NULL) yaml_value_type="null"; return 0 ;;
   esac
-  if [[ "${text,,}" =~ ^(true|false|yes|no|on|off|y|n)$ ]]; then
+  yaml_ascii_lower "$text"
+  if [[ "$yaml_lower" =~ $YAML_BOOLEAN_LIKE_PATTERN ]]; then
     refuse_cfg "${text@Q} is read as a boolean by some YAML readers and as a string by others; write true or false, or quote it"
   fi
-  if [[ "$text" =~ ^(0|[123456789][[:digit:]]*)$ ]]; then
-    printf 'int'
+  if [[ "$text" =~ $YAML_PLAIN_INT_PATTERN ]]; then
+    yaml_value_type="int"
     return 0
   fi
-  if [[ "$text" =~ ^[-+.]?[[:digit:]] || "${text,,}" =~ ^[-+]?\.(inf|nan)$ ]]; then
+  if [[ "$text" =~ $YAML_NUMBER_LIKE_PATTERN || "$yaml_lower" =~ $YAML_SPECIAL_FLOAT_PATTERN ]]; then
     refuse_cfg "${text@Q} is ambiguous: YAML readers disagree on whether it is a number. Write a plain whole number without sign or leading zero, or quote it"
   fi
-  printf 'str'
+  yaml_value_type="str"
 }
 ```
+
+The type is set in a variable of `read_yaml_subset`, not printed: a helper called in a command substitution runs in a subshell, where `refuse_cfg` would end only the subshell. Every helper of the reader therefore hands its result back through a local of `read_yaml_subset`, by dynamic scope. The patterns are constants written with listed characters (`[0123456789]`, the ASCII letters), not `[[:digit:]]` or `[A-Z]`, which a UTF-8 locale can widen.
 
 `read_yaml_subset` reads the file line by line with `while IFS= read -r line || [[ -n "$line" ]]`, after `refuse_binary_cfg "$file"`; it keeps a stack of `(indent, path, kind, next_index)` frames in parallel arrays (`frame_indent`, `frame_path`, `frame_kind`, `frame_next`, one array per line of declaration), strips comments with a quote-aware scan (`yaml_strip_comment`), splits `key: value` and `- ...` (`yaml_split_line`), unquotes scalars (`yaml_unquote`, which refuses an escape other than `\\` and `\"` and an unterminated quote), pops frames whose indent is not smaller than the current line's, refuses an indent that matches no open frame, records a duplicate key by keeping one associative array per mapping path (`seen_key["<path>/<key>"]=<line>`), and appends one record per node. Every refusal sets `PARSE_LOCATION="${file@Q}, line ${number}"` first, and the function clears `PARSE_LOCATION` before it returns, as `parse_cfg_policy` does.
 
