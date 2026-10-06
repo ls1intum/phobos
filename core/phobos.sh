@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 set -euo pipefail
 # This script's directory, found in bash alone so that PATH and CDPATH are cleaned before any
@@ -115,8 +115,8 @@ ENVIRONMENT
   CDPATH, and drops what is not absolute from TMPDIR, GCONV_PATH, LOCPATH, NLSPATH, HOSTALIASES
   and TZDIR, so nothing is looked up in the current directory before the sandbox exists. The
   command is given the cleaned environment too, so name it by its path (./gradlew). A PATH with
-  no absolute entry is refused (PHB-ERUNTIME). Start phobos.sh
-  with a PATH of absolute directories and without BASH_ENV, LD_LIBRARY_PATH, LD_PRELOAD or
+  no absolute entry is refused (PHB-ERUNTIME). Every script's #! line names /bin/bash, so bash
+  itself is never looked up. Start phobos.sh without BASH_ENV, LD_LIBRARY_PATH, LD_PRELOAD or
   LD_AUDIT, which take effect before its first line; SECURITY.md says why.
 
 WHAT IT REPORTS

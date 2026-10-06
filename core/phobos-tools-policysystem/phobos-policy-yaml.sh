@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 # A strict subset of YAML in, flat records with line numbers out.
 #

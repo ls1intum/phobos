@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 #
 # phobos-policysystem.sh -- turn the base and exercise configuration into a run's specification.

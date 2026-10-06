@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 set -euo pipefail
 # This script's directory, found in bash alone so that PATH and CDPATH are cleaned before any

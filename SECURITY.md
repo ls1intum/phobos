@@ -126,15 +126,17 @@ before it runs any program or `cd`:
   resolve them against the current directory. Absolute values are kept.
 
 Each entry point says on stderr what it removed from these, CDPATH and an invented PATH aside.
+
+The interpreter is not looked up either. Every script under `core/` begins with `#!/bin/bash`, so
+an entry point started as a program runs the system's bash whatever the caller's PATH holds, and
+so does every layer it starts afterwards by its absolute path. With `#!/usr/bin/env bash`, `env`
+would find `bash` through the caller's PATH before the script ran a line, and a relative entry
+ahead of bash's own directory would run a `bash` from the current directory instead of Phobos.
+The run-phase image, and every image built on it, has bash at `/bin/bash`.
+
 Some of the same class happens before a script's first line, so no script can undo it, and these
 are integration requirements on the grader:
 
-- **Start Phobos with a PATH of absolute directories, or through an absolute interpreter**
-  (`/bin/bash /var/tmp/opt/core/phobos.sh ...`). Each entry point begins with
-  `#!/usr/bin/env bash`, and `env` finds `bash` through the caller's PATH, so a relative entry
-  ahead of bash's own directory runs a `bash` from the current directory instead of Phobos.
-  The layers Phobos starts afterwards are named by their absolute paths, and the `bash` of
-  their own `#!` lines is found through the cleaned PATH.
 - **Start Phobos without `BASH_ENV`.** Bash sources the file it names before the first line of
   every non-interactive script, Phobos's own among them, and resolves a relative name against
   the current directory. `ENV` is read only by interactive shells and does not reach Phobos.
@@ -146,7 +148,7 @@ are integration requirements on the grader:
   character-set modules through a relative `LOCPATH` or `GCONV_PATH` before they are cleaned for
   everything after it.
 
-The simplest way to meet all of these is a minimal environment of absolute values:
+The simplest way to meet both is a minimal environment of absolute values:
 `env -i PATH=/usr/local/bin:/usr/bin:/bin /var/tmp/opt/core/phobos.sh --config exercise.cfg -- ./gradlew test`,
 adding back only what the command needs.
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 # The numbers the Phobos shell scripts share, each named once. phobos-common.sh sources this
 # file, and the test suites source it on its own, so it sets no shell option and only assigns

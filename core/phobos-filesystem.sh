@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 set -euo pipefail
 # This script's directory, found in bash alone so that PATH and CDPATH are cleaned before any
@@ -293,10 +293,10 @@ debug_log filesystem "run" "${reporter_prefix[@]}" "${limit_prefix[@]}" "${LANDL
 # whole group: at their default action they died with the command, which then lost everything it
 # wrote while it handled the signal, its traceback among it, and the counts went with them. They
 # end when the last writer of the command's stderr has closed it, which is the only ending they
-# need. This shell's own dispositions are put back straight afterwards, so a hangup, quit or
-# interrupt that arrives in the brief interval while the pass-through is made is discarded, and
-# the run starts as if it had not been sent; SIGTERM is ignored outside run_forwarding_signals
-# anyway. Setting the dispositions inside the pass-through instead would leave it a gap after the
+# need. This shell's own dispositions are put back straight afterwards, so this layer discards a
+# hangup, quit or interrupt that reaches it in the brief interval while the pass-through is made;
+# whatever else the signal reaches acts on it as it otherwise would, GNU timeout above this layer
+# among them when a timeout is set. SIGTERM is ignored outside run_forwarding_signals anyway. Setting the dispositions inside the pass-through instead would leave it a gap after the
 # command has started, which is the failure this exists to remove.
 exec {denial_counts}<> <(:)
 saved_term="$(trap -p TERM)"
