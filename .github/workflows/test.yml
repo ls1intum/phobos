@@ -144,6 +144,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/unit/phobos-tools-policysystem/yaml_subset.sh
 
+      # A programming language configuration is the one place a language enters Phobos: the loader
+      # takes its two sections and three primitives and refuses everything else with file and line,
+      # and no code under core/ outside core/config/ names a language configuration or its placeholders.
+      - name: The programming language configurations
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/phobos-tools-policysystem/language_configuration.sh
+
+      - name: No programming language in the code
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/phobos-tools-policysystem/no_language_in_code.sh
+
       - name: The connect guard enforces the allow-list by host and port
         if: ${{ !cancelled() }}
         run: bash tests/integration/seccomp_networksystem.sh
