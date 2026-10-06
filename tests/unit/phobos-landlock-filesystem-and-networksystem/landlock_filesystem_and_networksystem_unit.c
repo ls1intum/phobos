@@ -1519,8 +1519,9 @@ static constexpr size_t MODEL_ERROR_LENGTH = 512;
 static constexpr size_t MODEL_PATH_LENGTH = 256;
 static constexpr size_t MODEL_ROOT_LENGTH = 64;
 
-/* The mode the model cases create their directories with. */
+/* The modes the model cases create their directories and files with, readable by this user only. */
 static constexpr mode_t MODEL_DIRECTORY_MODE = 0700;
+static constexpr mode_t MODEL_FILE_MODE = 0600;
 
 /* The temporary tree the model cases anchor their rules on, so they depend on no path of the
  * machine they run on: a directory granted read and execute, one granted read and write, one
@@ -1536,13 +1537,13 @@ struct model_tree {
     char link[MODEL_PATH_LENGTH];
 };
 
+/* Creates an empty regular file with an explicit mode. mknod rather than open, because the suite
+ * wraps open and close. */
 static void make_model_file(const char *path) {
-    FILE *file = fopen(path, "w");
-    if (file == NULL) {
+    if (mknod(path, S_IFREG | MODEL_FILE_MODE, 0) != 0) {
         perror(path);
         exit(1);
     }
-    fclose(file);
 }
 
 static void make_model_tree(struct model_tree *tree) {

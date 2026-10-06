@@ -264,8 +264,8 @@ static void test_the_cap_holds(void) {
     reset_report_for_tests();
     capture_stderr_begin();
     char path[64];
-    for (int index = 0; index < 150; index++) {
-        snprintf(path, sizeof(path), "/denied/%d", index);
+    for (int number = 0; number < 150; number++) {
+        snprintf(path, sizeof(path), "/denied/%d", number);
         report_blocked(REPORT_LAYER_FILESYSTEM, "read", "File", path, true, NULL);
     }
     report_blocked(REPORT_LAYER_FILESYSTEM, "read", "File", "/denied/120", true, NULL);
@@ -294,8 +294,8 @@ static void test_a_full_table_still_counts(void) {
     reset_report_for_tests();
     capture_stderr_begin();
     char path[64];
-    for (size_t index = 0; index < REPORT_KEYS_MAXIMUM + 10; index++) {
-        snprintf(path, sizeof(path), "/denied/%zu", index);
+    for (size_t number = 0; number < REPORT_KEYS_MAXIMUM + 10; number++) {
+        snprintf(path, sizeof(path), "/denied/%zu", number);
         report_blocked(REPORT_LAYER_FILESYSTEM, "read", "File", path, true, NULL);
     }
     report_blocked(REPORT_LAYER_FILESYSTEM, "read", "File", "/denied/4100", true, NULL);
