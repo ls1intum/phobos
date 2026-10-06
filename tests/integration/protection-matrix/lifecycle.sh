@@ -123,6 +123,41 @@ for index in 1 2 3 4 5; do
 done
 sleep 0.3
 if [[ "$burst_failed" == 0 && "$(spec_dirs)" == 0 && "$(helpers_alive)" == 0 ]]; then ok "five runs at once in one specification parent all complete and leave nothing behind"; else bad "five concurrent runs complete and leave nothing behind" "failed=${burst_failed}, $(spec_dirs) directories, $(helpers_alive) helpers"; fi
+# The temporary files a run builds its rules from are out of reach of the command of a concurrent run. The shipped
+# policies grant /tmp, so a command that may read /tmp lists it over and over while runs with [connect] and [bind]
+# rules, whose network layer builds its port lists in temporary files, start beside it. A marker put in /tmp while
+# it lists is the control: a lister that never sees it proves nothing.
+c_tmpread="$(cfg tmpread <<EOF2
+[read]
+/tmp
+EOF2
+)"
+c_ports="$(cfg portfiles <<EOF2
+[connect]
+allow 127.0.0.1:9 tcp
+[bind]
+allow 39620
+EOF2
+)"
+rm -f /tmp/pm-visible-marker /tmp/pm-stop-lister
+bg_pm "$PM/out/tmplister.out" "$PM/out/tmplister.err" --config "$c_tmpread" -- /bin/sh -c 'while [ ! -e /tmp/pm-stop-lister ]; do ls -A /tmp; done | sort -u'
+lister="$BG_PID"
+pids+=("$lister")
+for index in 1 2 3 4 5 6; do
+  run_pm --config "$c_ports" -- "$P" cwd
+  if (( index == 3 )); then touch /tmp/pm-visible-marker; fi
+done
+sleep 0.5
+touch /tmp/pm-stop-lister
+wait "$lister"
+rm -f /tmp/pm-visible-marker /tmp/pm-stop-lister
+if ! grep -qx 'pm-visible-marker' "$PM/out/tmplister.out"; then
+  skip "a concurrent command sees none of a run's temporary files in /tmp" "the lister never saw the marker put in /tmp, so it proves nothing: $(head -c 300 "$PM/out/tmplister.err")"
+elif grep -q '^phobos-' "$PM/out/tmplister.out"; then
+  bad "a concurrent command sees none of a run's temporary files in /tmp" "it saw: $(grep '^phobos-' "$PM/out/tmplister.out" | head -5 | tr '\n' ' ')"
+else
+  ok "a concurrent command sees none of a run's temporary files in /tmp, while it does see a file put there"
+fi
 
 echo
 echo "== the hosts file is as it was =="

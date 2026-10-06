@@ -9,17 +9,28 @@
 # this file, so SC2034 would fire on all of them by design.
 # shellcheck disable=SC2034
 
-# Makes one temporary file for a layer's own use and prints it. Under the scratch directory
-# when the caller set PHOBOS_SCRATCH, so it is removed with the specification directory even
-# when the run ends at a refusal, which exits without reaching the rm that follows the use;
-# otherwise a plain temporary file. Takes a name template ending in XXXXXX.
+# Ends the shell with PHB_ERUNTIME when PHOBOS_SCRATCH names no directory. There is deliberately
+# no fallback to TMPDIR: that is /tmp, which the shipped policies make writable to the graded
+# command, so a command of a concurrent run could see, and as the same user rewrite, a file this
+# run still reads its rules from. Assumes the script that called it set PHOBOS_SCRATCH to the
+# scratch subdirectory of the specification directory it owns, never taking it from the
+# environment.
+refuse_missing_scratch() {
+  if [[ -z "${PHOBOS_SCRATCH:-}" || ! -d "$PHOBOS_SCRATCH" ]]; then
+    report "No scratch directory beneath a specification directory was set (PHOBOS_SCRATCH '${PHOBOS_SCRATCH:-}'); refusing to make a temporary file anywhere else, such as a /tmp the command may write. (PHB-ERUNTIME)"
+    exit "${PHB_ERUNTIME}"
+  fi
+}
+
+# Makes one temporary file for a layer's own use under PHOBOS_SCRATCH and prints it, so that it
+# is out of the command's reach and is removed with the specification directory even when the
+# run ends at a refusal, which exits without reaching the rm that follows the use. Takes a name
+# template ending in XXXXXX. Refuses through refuse_missing_scratch when no scratch directory
+# was set.
 new_scratch_file() {
   local template="$1"
-  if [[ -n "${PHOBOS_SCRATCH:-}" ]]; then
-    mktemp -p "$PHOBOS_SCRATCH" "$template"
-  else
-    mktemp -t "$template"
-  fi
+  refuse_missing_scratch
+  mktemp -p "$PHOBOS_SCRATCH" "$template"
 }
 
 # --------------------------------------------------------------------------

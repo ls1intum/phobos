@@ -16,6 +16,10 @@ source "${CORE}/phobos-tools-common/phobos-constants.sh"
 WORK="$(mktemp -d)"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
+# The scratch directory the port-rule builders make their files in, which the network layer
+# sets beneath its specification directory; the helpers refuse to run without one.
+export PHOBOS_SCRATCH="$WORK/scratch"
+mkdir -p "$PHOBOS_SCRATCH"
 
 # Runs build_network_args over a rules body in a subshell, so a policy refusal (which exits)
 # is captured rather than ending this suite. Prints "<exit>|<args>|<log>".

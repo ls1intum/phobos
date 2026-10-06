@@ -118,8 +118,8 @@ before it runs any program or `cd`:
 - **CDPATH is unset**, so the `cd` an entry point makes to find its own directory goes where its
   argument says, and the command does not inherit it.
 - **TMPDIR and the C library's own path variables keep only what is absolute.** `TMPDIR` is unset when it
-  is not absolute, so the network layer's scratch files, made with `mktemp -t`, are not created
-  beneath the current directory. The relative entries of `GCONV_PATH` (where the C library loads
+  is not absolute, so no program Phobos or the command starts makes its temporary files beneath
+  the current directory. The relative entries of `GCONV_PATH` (where the C library loads
   character-set modules from, as code), `LOCPATH` and `NLSPATH` are removed, and `HOSTALIASES`
   and `TZDIR` are unset when they are not absolute, since every program Phobos starts would
   resolve them against the current directory. Absolute values are kept.
@@ -148,6 +148,17 @@ are integration requirements on the grader:
 The simplest way to meet all of these is a minimal environment of absolute values:
 `env -i PATH=/usr/local/bin:/usr/bin:/bin /var/tmp/opt/core/phobos.sh --config exercise.cfg -- ./gradlew test`,
 adding back only what the command needs.
+
+## A run's own files are out of the command's reach
+
+Every temporary file Phobos makes for a run, the port lists the network layer builds its Landlock
+rules from among them, lives in the scratch subdirectory of the run's specification directory,
+which `phobos.sh` refuses to place beneath a write path. Each layer that makes such files sets
+that directory itself, rather than taking `PHOBOS_SCRATCH` or `TMPDIR` from its environment, and
+a helper called without one refuses with `PHB-ERUNTIME` rather than fall back to `TMPDIR`. Before
+this, the network layer made its port lists in `/tmp`, which the shipped policies make writable:
+they were removed before its own command started, but the command of a concurrent run in the
+same container could see them appear while they were being read.
 
 ## Inbound filtering assumes a networked container, and is defence in depth, not a boundary
 

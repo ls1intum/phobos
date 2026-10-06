@@ -177,15 +177,12 @@ parse_network_target() {
   fi
 }
 
-# Makes the directory one parse_cfg_policy call writes its files into, and prints it. Under
-# phobos.sh's scratch directory when it set one, so this scratch is removed with the
-# specification directory rather than left in /tmp; otherwise a plain temporary directory.
+# Makes the directory one parse_cfg_policy call writes its files into, under PHOBOS_SCRATCH, and
+# prints it, so this scratch is out of the command's reach and is removed with the specification
+# directory. Refuses through refuse_missing_scratch when no scratch directory was set.
 new_parse_directory() {
-  if [[ -n "${PHOBOS_SCRATCH:-}" ]]; then
-    mktemp -d -p "$PHOBOS_SCRATCH" phobos-cfg.XXXXXX
-  else
-    mktemp -d -t phobos-cfg.XXXXXX
-  fi
+  refuse_missing_scratch
+  mktemp -d -p "$PHOBOS_SCRATCH" phobos-cfg.XXXXXX
 }
 
 # Resets the timeout and the resource limits parse_cfg_policy reads, so each is read from the

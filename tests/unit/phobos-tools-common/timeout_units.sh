@@ -16,6 +16,10 @@ source "${CORE}/phobos-tools-common/phobos-constants.sh"
 
 WORK="$(mktemp -d)"
 export TMPDIR="$WORK"
+# The scratch directory parse_cfg_policy makes its files in, which a layer sets beneath its
+# specification directory; the helpers refuse to run without one.
+export PHOBOS_SCRATCH="$WORK/scratch"
+mkdir -p "$PHOBOS_SCRATCH"
 
 cleanup() {
   rm -rf "$WORK"
