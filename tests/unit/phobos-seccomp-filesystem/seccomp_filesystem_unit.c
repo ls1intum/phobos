@@ -746,6 +746,7 @@ struct process_script {
     pid_t read_value;
     ssize_t write_result;
     int wait_status;
+    bool wait_fails;
     int reaped_status;
     bool reap_faked;
     int fake_landlock_version;
@@ -771,6 +772,7 @@ static struct process_script *script = NULL;
  * stands in for ends. */
 static constexpr int RETURNED_STATUS = 99;
 static constexpr int PROBE_FAILED_STATUS = 3;
+static constexpr int SIGNATURE_SEEN_STATUS = 42;
 static constexpr int EXIT_CODE_STAND_IN = EXEC_STAND_IN_STATUS;
 
 static bool scripted(void) {
@@ -972,6 +974,10 @@ pid_t __real_waitpid(pid_t pid, int *status, int options);
 pid_t __wrap_waitpid(pid_t pid, int *status, int options) {
     if (!scripted() || pid != FAKE_CHILD_PID) {
         return __real_waitpid(pid, status, options);
+    }
+    if (script->wait_fails) {
+        errno = ECHILD;
+        return -1;
     }
     *status = script->wait_status;
     return pid;
@@ -1461,6 +1467,10 @@ static void build_tree(void) {
     tree_link("rw/link_to_none", in_tree("none/secret"));
     tree_link("rw/dangling", in_tree("none/missing"));
     tree_link("rolink", in_tree("ro"));
+    if (mkfifo(in_tree("none/fifo"), TREE_FILE_MODE) != 0) {
+        perror("mkfifo");
+        exit(2);
+    }
     tree_link("ro/alink", in_tree("none/secret"));
     char *arguments[] = {"enforcer",
                          "--rights=rx",    (char *)in_tree("ro"),
@@ -1578,6 +1588,9 @@ static void test_judging_opens(void) {
     check("a refused read of a directory names the directory",
           strcmp(judged_open(in_tree("none/dir"), O_RDONLY | O_DIRECTORY),
                  line_for("read", "Directory", in_tree("none/dir"))) == 0);
+    check("a refused read of a named pipe reads a File, as READ_FILE words it",
+          strcmp(judged_open(in_tree("none/fifo"), O_RDONLY | O_NONBLOCK),
+                 line_for("read", "File", in_tree("none/fifo"))) == 0);
     check("a refused create names the new file",
           strcmp(judged_open(in_tree("ro/new"), O_WRONLY | O_CREAT),
                  line_for("create", "File", in_tree("ro/new"))) == 0);
@@ -2690,6 +2703,24 @@ static void test_the_filter(void) {
     check("with the refusal traps alone it traps exactly setsid, setpgid and foreign ABIs",
           filter_traps_exactly(false, true));
     check("with both it traps exactly the union", filter_traps_exactly(true, true));
+    struct sock_filter both[REPORT_FILTER_MAXIMUM];
+    size_t both_length = build_report_filter(both, true, true);
+    bool every_other_trap_refused = true;
+    bool no_observation_refused = true;
+    const unsigned int arches[] = {REPORT_NATIVE_AUDIT_ARCH, AUDIT_ARCH_I386};
+    for (size_t arch = 0; arch < sizeof(arches) / sizeof(arches[0]); arch++) {
+        for (int number = 0; number <= HIGHEST_NUMBER_TRIED; number++) {
+            struct seccomp_data data = foreign_call(arches[arch], number);
+            bool observed = arches[arch] == REPORT_NATIVE_AUDIT_ARCH && in_report_set(number);
+            if (run_filter(both, both_length, &data) == SECCOMP_RET_USER_NOTIF && !observed) {
+                every_other_trap_refused = every_other_trap_refused && is_filter_refusal(&data);
+            }
+            no_observation_refused = no_observation_refused && !(observed && is_filter_refusal(&data));
+        }
+    }
+    check("every call the filter traps beyond the observation traps is one the refusal handler takes",
+          every_other_trap_refused);
+    check("and no observation trap is one it takes", no_observation_refused);
     struct sock_filter program[REPORT_FILTER_MAXIMUM];
     check("the traps are not written into too small a room",
           append_report_traps(program, REPORT_TRAPPED_CALL_COUNT) == 0);
@@ -2846,7 +2877,7 @@ static void test_the_group_lock_probe(void) {
     reset_script();
     script_forks(FAKE_CHILD_PID, 0, 0);
     script->fork_count = 1;
-    script->wait_status = 0;
+    script->wait_status = SIGNATURE_SEEN_STATUS << 8;
     check("a probe that saw the signature finds the lock", __real_group_lock_present());
     reset_script();
     script_forks(FAKE_CHILD_PID, 0, 0);
@@ -2859,6 +2890,12 @@ static void test_the_group_lock_probe(void) {
     script->wait_status = SIGKILL;
     check("nor one that was killed", !__real_group_lock_present());
     reset_script();
+    script_forks(FAKE_CHILD_PID, 0, 0);
+    script->fork_count = 1;
+    script->wait_fails = true;
+    check("nor one whose status could not be read, which is never taken for a sighting",
+          !__real_group_lock_present());
+    reset_script();
     script_forks(-1, 0, 0);
     script->fork_count = 1;
     check("nor a fork that fails", !__real_group_lock_present());
@@ -2867,7 +2904,7 @@ static void test_the_group_lock_probe(void) {
     script->fork_count = 1;
     script->setpgid_error = ENOTRECOVERABLE;
     check("the probe child reports ENOTRECOVERABLE as the signature",
-          ended_with(probe_group_lock_in_child) == 0);
+          ended_with(probe_group_lock_in_child) == SIGNATURE_SEEN_STATUS);
     reset_script();
     script_forks(0, 0, 0);
     script->fork_count = 1;
@@ -3092,17 +3129,20 @@ static void test_supervisor_parent(void) {
           supervisor_ended_with(watch) == 9 && script->responses_sent == 0);
     script_supervisor();
     script->calloc_fails = true;
-    script->reaped_status = 4 << 8;
-    check("no memory for notifications is said, and the child's status kept",
-          supervisor_ended_with(watch) == 4
+    check("no memory for notifications is said before anything is forked, and the command runs "
+          "unsupervised",
+          supervisor_ended_with(watch) == EXIT_CODE_STAND_IN && script->fork_next == 0
+              && script->filters_installed == 0
               && strstr(captured_text, "no memory to answer notifications") != NULL);
     script_supervisor();
     script->socketpair_fails = true;
-    check("a socket pair that fails ends the run with PHB-ERUNTIME",
-          supervisor_ended_with(watch) == EXIT_CODE_RUNTIME);
+    check("so is a socket pair that cannot be made",
+          supervisor_ended_with(watch) == EXIT_CODE_STAND_IN && script->fork_next == 0
+              && strstr(captured_text, "no socket pair could be made") != NULL);
     script_supervisor();
     script->forks[0] = -1;
-    check("so does a fork that fails", supervisor_ended_with(watch) == EXIT_CODE_RUNTIME);
+    check("a fork that fails ends the run with PHB-ERUNTIME",
+          supervisor_ended_with(watch) == EXIT_CODE_RUNTIME);
     script->active = false;
 }
 

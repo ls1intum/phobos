@@ -79,7 +79,8 @@ static constexpr int EXIT_CODE_COMMAND_NOT_EXECUTABLE = 127;
  * (phobos-seccomp-timeoutsystem-signature.h): setpgid to that negative group is answered with
  * ENOTRECOVERABLE, which is how a supervisor recognises this filter above it. The kernel refuses
  * that call with EINVAL anyway, so it changes only the errno of a call that fails either way. Only
- * the low word of the argument is compared, because the kernel reads a process group as 32 bits.
+ * the low word of the argument is compared, because the kernel reads a process group as 32 bits;
+ * offsetof(args[1]) is that low word on both targets this file builds for, which are little-endian.
  * The block sits last, right before the final ALLOW, because loading the argument clobbers the
  * accumulator; its jump distances are local to it. */
 static int install_pgroup_lock_filter(void) {

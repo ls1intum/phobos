@@ -102,8 +102,9 @@ static bool continue_one_notification(int listener) {
     return continued;
 }
 
-/* How the signature probe ends: 0 when the group lock answered, 1 otherwise. */
-static constexpr int SIGNATURE_SEEN = 0;
+/* How the signature probe ends: a status nothing else ends it with when the group lock answered,
+ * and 1 otherwise. Not 0, so that a status that was never read can never pass for a sighting. */
+static constexpr int SIGNATURE_SEEN = 42;
 static constexpr int SIGNATURE_NOT_SEEN = 1;
 
 bool group_lock_present(void) {
@@ -116,9 +117,11 @@ bool group_lock_present(void) {
         _exit(result < 0 && errno == ENOTRECOVERABLE ? SIGNATURE_SEEN : SIGNATURE_NOT_SEEN);
     }
     int status = 0;
-    while (waitpid(probe, &status, 0) < 0 && errno == EINTR) {
-    }
-    return WIFEXITED(status) && WEXITSTATUS(status) == SIGNATURE_SEEN;
+    pid_t reaped = -1;
+    do {
+        reaped = waitpid(probe, &status, 0);
+    } while (reaped < 0 && errno == EINTR);
+    return reaped == probe && WIFEXITED(status) && WEXITSTATUS(status) == SIGNATURE_SEEN;
 }
 
 bool continue_supported(void) {

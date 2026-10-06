@@ -141,7 +141,8 @@ static bool file_traps_wanted(const struct supervisor_options *options, int land
         return false;
     }
     if (!continue_supported()) {
-        say_reporting_off("this kernel cannot continue a supervised call");
+        say_reporting_off("this kernel cannot continue a supervised call, or another supervisor "
+                          "already holds the run's listener");
         return false;
     }
     return true;
@@ -269,37 +270,34 @@ static void ask_for_synchronous_wake_up(int listener) {
 }
 
 /* The parent: receives the listener, answers notifications until the child has ended, hands what
- * is left to a drainer, and ends with the child's status. */
-static int supervise_child(pid_t child, int socket_descriptor, const sigset_t *forwarded) {
+ * is left to a drainer, and ends with the child's status. When the supervision ended with nothing
+ * left to answer, or because poll failed, the listener is closed before the child is reaped, so a
+ * child still waiting in a trapped call is released with ENOSYS rather than waited for for ever.
+ * Without a process descriptor (pidfd_open refused) it answers until no task is left, as the
+ * connect guard does. */
+static int supervise_child(pid_t child, int socket_descriptor, const sigset_t *forwarded,
+                           struct seccomp_notif *request, size_t request_size,
+                           struct seccomp_notif_resp *response) {
     int status = 0;
     int listener = receive_descriptor(socket_descriptor);
     close(socket_descriptor);
-    struct seccomp_notif *request = NULL;
-    struct seccomp_notif_resp *response = NULL;
-    size_t request_size = 0;
-    if (listener < 0) {
-        reap_command(child, forwarded, &status);
-        return exit_code_from_status(status);
-    }
-    if (!allocate_notification_buffers(&request, &request_size, &response)) {
-        fprintf(stderr, "[phobos-seccomp-filesystem] no memory to answer notifications\n");
-        close(listener);
-        reap_command(child, forwarded, &status);
-        return exit_code_from_status(status);
-    }
-    ask_for_synchronous_wake_up(listener);
-    int child_descriptor = (int)syscall(SYS_pidfd_open, child, 0);
-    bool nothing_left = supervise(listener, child_descriptor, request, request_size, response);
-    if (child_descriptor >= 0) {
-        close(child_descriptor);
+    if (listener >= 0) {
+        ask_for_synchronous_wake_up(listener);
+        int child_descriptor = (int)syscall(SYS_pidfd_open, child, 0);
+        bool nothing_left = supervise(listener, child_descriptor, request, request_size, response);
+        if (child_descriptor >= 0) {
+            close(child_descriptor);
+        }
+        if (nothing_left) {
+            close(listener);
+            listener = -1;
+        }
     }
     reap_command(child, forwarded, &status);
-    if (!nothing_left) {
+    if (listener >= 0) {
         start_drainer(listener, forwarded, request, request_size, response);
+        close(listener);
     }
-    close(listener);
-    free(request);
-    free(response);
     return exit_code_from_status(status);
 }
 
@@ -318,10 +316,17 @@ int main(int argument_count, char *arguments[]) {
                                         : "not answering the group lock's refusals");
     reporter_configure(options.landlock_bin, landlock_version);
 
+    struct seccomp_notif *request = NULL;
+    struct seccomp_notif_resp *response = NULL;
+    size_t request_size = 0;
     int pair[2];
+    if (!allocate_notification_buffers(&request, &request_size, &response)) {
+        say_reporting_off("there is no memory to answer notifications");
+        exec_command(options.command);
+    }
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) {
-        fprintf(stderr, "[phobos-seccomp-filesystem] socketpair: %s\n", strerror(errno));
-        return EXIT_CODE_RUNTIME;
+        say_reporting_off("no socket pair could be made to hand its listener over");
+        exec_command(options.command);
     }
     sigset_t forwarded;
     sigset_t before_fork;
@@ -339,5 +344,8 @@ int main(int argument_count, char *arguments[]) {
     forward_signals_to(child);
     sigprocmask(SIG_SETMASK, &before_fork, NULL);
     close(pair[1]);
-    return supervise_child(child, pair[0], &forwarded);
+    int code = supervise_child(child, pair[0], &forwarded, request, request_size, response);
+    free(request);
+    free(response);
+    return code;
 }

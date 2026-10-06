@@ -70,9 +70,10 @@ WHAT IT REPORTS
   Unless --no-own-reporter is given, the reporter prints one line on stderr for each distinct
   action Landlock refuses the command, such as "Phobos Security Error: the program tried to
   illegally read the File '/etc/shadow' but was blocked by Phobos.", at most 100 per run,
-  and, with --group-lock-above, one for each call the group lock refuses outright. It never
-  changes what a call returns. When the reporter is missing, or the kernel cannot support it,
-  the layer says so once and the run is enforced all the same.
+  and, with --group-lock-above, one for each distinct call the group lock refuses outright.
+  While it runs, every call returns what it would return without it; should it die, the
+  calls it watches fail with ENOSYS, so nothing is granted. When the reporter is missing, or the kernel cannot
+  support it, the layer says so once and the run is enforced all the same.
 
   When the command's stderr carried lines that look like a refusal, the layer prints
   "Sandbox denials: network=N, filesystem=N. (PHB-EDENY)" after the command has ended. That

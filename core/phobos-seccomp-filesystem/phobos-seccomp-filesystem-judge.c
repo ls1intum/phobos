@@ -182,8 +182,9 @@ static const char *noun_for(mode_t mode) {
     }
 }
 
-/* The noun a line gives an object it deletes, moves or links: the vocabulary has only the
- * Directory and the File there, one per right (REMOVE_DIR, REMOVE_FILE). */
+/* The noun a line gives an object it reads, deletes, moves or links: the vocabulary has only the
+ * Directory and the File there, one per right (READ_DIR and READ_FILE, REMOVE_DIR and
+ * REMOVE_FILE), so a device or a named pipe that is read is a File. */
 static const char *whole_object_noun_for(mode_t mode) {
     return S_ISDIR(mode) ? "Directory" : "File";
 }
@@ -269,7 +270,7 @@ static void judge_open_existing(const char *absolute, const struct stat *status,
     if (refused(model, granted, write_rights)) {
         report_path("write", "File", shown, absolute);
     } else if (reads && refused(model, granted, read_right)) {
-        report_path("read", noun_for(status->st_mode), shown, absolute);
+        report_path("read", whole_object_noun_for(status->st_mode), shown, absolute);
     }
 }
 

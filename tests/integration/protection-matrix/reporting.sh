@@ -58,8 +58,10 @@ int main(int argument_count, char *arguments[]) {
         int refused = try_open(arguments[2]);
         long session = syscall(SYS_setsid);
         int session_error = session < 0 ? errno : 0;
-        printf("TICK %d granted=%s refused=%s setsid=%s\n", round, name_of(granted), name_of(refused),
-               name_of(session_error));
+        long group = syscall(SYS_setpgid, 0, 0);
+        int group_error = group < 0 ? errno : 0;
+        printf("TICK %d granted=%s refused=%s setsid=%s setpgid=%s\n", round, name_of(granted),
+               name_of(refused), name_of(session_error), name_of(group_error));
         fflush(stdout);
         struct timespec second = {.tv_sec = 1, .tv_nsec = 0};
         nanosleep(&second, NULL);
@@ -395,6 +397,12 @@ if op_ok setsid && [[ "$(grep -c "^${PREFIX}" "$PM_ERR")" == 0 ]]; then
 else
   bad "a standalone filesystem layer never traps setsid" "$(pm_describe)"
 fi
+run_layer --group-lock-above --config "$c_rw" -- "$P" setsid
+if op_ok setsid && [[ "$(grep -c "^${PREFIX}" "$PM_ERR")" == 0 ]] && grep -q "its signature was not found" "$PM_ERR"; then
+  ok "told the group lock is above when it is not, the reporter finds no signature, says so and refuses nothing"
+else
+  bad "told the group lock is above when it is not, the reporter finds no signature, says so and refuses nothing" "$(pm_describe)"
+fi
 
 echo
 echo "== a supervisor that is gone: every trapped call fails with ENOSYS, and none succeeds =="
@@ -407,8 +415,10 @@ if [[ "$supervisor" =~ ^[1-9][0-9]*$ ]]; then
   wait "$BG_PID" 2>/dev/null
   before="$(grep -m1 '^TICK 0 ' "$PM/out/tick.out")"
   after="$(grep '^TICK 5 ' "$PM/out/tick.out")"
-  check "before the kill: granted, refused and refused" "TICK 0 granted=OK refused=EACCES setsid=EACCES" "$before"
-  check "after it: every trapped call fails with ENOSYS" "TICK 5 granted=ENOSYS refused=ENOSYS setsid=ENOSYS" "$after"
+  check "before the kill: granted, and refused three times" "TICK 0 granted=OK refused=EACCES setsid=EACCES setpgid=EACCES" "$before"
+  check "after it: every trapped call fails with ENOSYS" "TICK 5 granted=ENOSYS refused=ENOSYS setsid=ENOSYS setpgid=ENOSYS" "$after"
+  check "and in no round did the refused read, setsid or setpgid succeed" "0" \
+    "$(grep -cE '^TICK [0-9]+ .*(refused=OK|setsid=OK|setpgid=OK)' "$PM/out/tick.out")"
 else
   bad "the supervisor can be found to kill" "no process runs ${REPORTER}"
   reap "$BG_PID"
