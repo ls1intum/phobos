@@ -311,6 +311,13 @@ if (( enable_network ));   then chain+=( "${HERE}/phobos-networksystem.sh"   "${
 fs_flags=( "${dbg[@]}" --landlock-bin "$landlock_bin" )
 if (( enable_resources )); then fs_flags+=( --resources-layer "${HERE}/phobos-resourcesystem.sh" ); fi
 if (( ! enable_filesystem )); then fs_flags+=( --no-landlock ); fi
+# Only one seccomp listener may exist per filter tree, so with the network layer on its connect
+# guard is the run's one supervisor and the filesystem layer starts no reporter of its own. The
+# group lock is above the filesystem layer exactly when the timeout layer applies it, which it
+# does when it is in the chain and a timeout is set; this is the trusted half of what lets the
+# reporter answer the lock's refusals, its signature being the other.
+if (( enable_network )); then fs_flags+=( --no-own-reporter ); fi
+if (( enable_timeout )) && [[ -s "${SPEC_DIR}/timeout.sec" ]]; then fs_flags+=( --group-lock-above ); fi
 chain+=( "${HERE}/phobos-filesystem.sh" "${fs_flags[@]}" "$SPEC_DIR" -- )
 debug_log phobos "run the layer chain" "${chain[@]}" "${cmd[@]}"
 exec "${chain[@]}" "${cmd[@]}"
