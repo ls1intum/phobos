@@ -117,7 +117,7 @@ before it runs any program or `cd`:
   before.
 - **CDPATH is unset**, so the `cd` an entry point makes to find its own directory goes where its
   argument says, and the command does not inherit it.
-- **The C library's own path variables keep only what is absolute.** `TMPDIR` is unset when it
+- **TMPDIR and the C library's own path variables keep only what is absolute.** `TMPDIR` is unset when it
   is not absolute, so the network layer's scratch files, made with `mktemp -t`, are not created
   beneath the current directory. The relative entries of `GCONV_PATH` (where the C library loads
   character-set modules from, as code), `LOCPATH` and `NLSPATH` are removed, and `HOSTALIASES`
@@ -141,8 +141,9 @@ are integration requirements on the grader:
   reads them when every program starts, the bash running `phobos.sh` included, and searches a
   relative or empty `LD_LIBRARY_PATH` entry in the current directory. Removing them inside the
   script would come after that bash had already loaded its libraries, so it is not done. For
-  the same reason the bash running `phobos.sh` may already have read locale data through a
-  relative `LOCPATH` before it is cleaned for everything after it.
+  the same reason the bash running `phobos.sh` may already have read locale data or loaded
+  character-set modules through a relative `LOCPATH` or `GCONV_PATH` before they are cleaned for
+  everything after it.
 
 The simplest way to meet all of these is a minimal environment of absolute values:
 `env -i PATH=/usr/local/bin:/usr/bin:/bin /var/tmp/opt/core/phobos.sh --config exercise.cfg -- ./gradlew test`,

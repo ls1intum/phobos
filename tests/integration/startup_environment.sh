@@ -3,8 +3,9 @@
 # no PATH entry that is relative or empty, which means the current directory, is ever used to
 # find a program, CDPATH never redirects the entry point's own cd, a relative TMPDIR never puts a
 # layer's scratch files in the current directory, the C library's own path variables keep only
-# what is absolute, and a PATH with no absolute entry at all is refused rather than searched. The current directory is the submission's tree when a grader
-# starts Phobos there, and every program found through it would run before any sandbox exists.
+# what is absolute, and a PATH with no absolute entry at all is refused rather than searched.
+# The current directory is the submission's tree when a grader starts Phobos there, and every
+# program found through it would run before any sandbox exists.
 #
 # Both directions. A tool of every name the absolute PATH holds is planted in the current
 # directory, in a relative directory and in a directory spelled with a tilde, each one a stub
