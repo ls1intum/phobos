@@ -21,10 +21,6 @@ bool configure_broker(const char *endpoint);
  * may always listen. */
 void configure_ephemeral_listen(bool allowed);
 
-/* Receive the one descriptor the child sends. Returns it, or -1 on any failure,
- * including the child exiting before it sent one (an end of file here). */
-int receive_descriptor(int socket_descriptor);
-
 /* Complete one trapped connect: tell the kernel the answer for this notification.
  * A negative error is returned to the command as connect()'s errno; error 0 with
  * value 0 is a success. A send that finds the command already gone is not a failure
@@ -56,10 +52,6 @@ void service_one(int notify_descriptor, struct seccomp_notif *request,
  * gone, which the kernel signals as a hangup once every process the filter covers
  * has exited. */
 void supervise(int notify_descriptor);
-
-/* The child's wait status, turned into an exit code the way a shell would: the
- * command's own code, or 128 plus the signal that ended it. */
-int exit_code_from_status(int status);
 
 #ifdef PHOBOS_CONNECT_GUARD_UNIT_TEST
 /* Forgets any configured broker, so each test case starts with the guard connecting to the

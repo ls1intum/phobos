@@ -14,6 +14,12 @@
  * The two filters stack; where both speak the kernel takes the stricter action, and denying the
  * same call twice denies it once.
  *
+ * The refusal is a user notification to a listener this filter does not have, so the kernel
+ * refuses the call on its own with ENOSYS. A supervisor further down the chain (the report-only
+ * supervisor of the filesystem layer) traps the same calls with a listener of its own, wins the
+ * tie as the newer filter, answers them with EACCES and reports them. Used on its own, the timeout
+ * layer therefore refuses them with ENOSYS and reports nothing.
+ *
  * It needs no privileges: with no_new_privs set, an ordinary process may install a seccomp
  * filter. It fails closed: if no_new_privs or the filter cannot be set, the command is refused
  * rather than run outside the group lock.
@@ -23,6 +29,8 @@
  */
 
 #define _GNU_SOURCE
+
+#include "phobos-seccomp-timeoutsystem-signature.h"
 
 #include <errno.h>
 #include <stddef.h>
@@ -53,15 +61,27 @@
 static constexpr int EXIT_CODE_SETUP_ERROR = 125;
 static constexpr int EXIT_CODE_COMMAND_NOT_EXECUTABLE = 127;
 
-/* The one refusal this filter returns: EACCES, as an ordinary denied call would. */
-#define PGROUP_REFUSE BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA))
+/* The one answer this filter gives a call it refuses: a user notification. This filter has no
+ * listener, so the kernel itself refuses such a call with ENOSYS; when a newer filter traps the
+ * same call with a listener (the connect guard or the report-only supervisor), that filter wins
+ * the tie, its supervisor answers EACCES as this filter did before, and the refusal is reported.
+ * In no state does the call run. */
+#define PGROUP_REFUSE BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF)
 
 /* One syscall refused outright: a comparison that skips the refusal when the number does not
  * match, so the refusal must be exactly one instruction and the jump distances stay 0 and 1. */
 #define PGROUP_DENY_SYSCALL(number) \
     BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (number), 0, 1), PGROUP_REFUSE
 
-/* Installs the filter: refuse every non-native ABI, refuse setsid and setpgid, allow the rest. */
+/* Installs the filter: refuse every non-native ABI, refuse setsid and setpgid, allow the rest.
+ *
+ * Before setpgid is refused, its second argument is compared with the group lock's signature
+ * (phobos-seccomp-timeoutsystem-signature.h): setpgid to that negative group is answered with
+ * ENOTRECOVERABLE, which is how a supervisor recognises this filter above it. The kernel refuses
+ * that call with EINVAL anyway, so it changes only the errno of a call that fails either way. Only
+ * the low word of the argument is compared, because the kernel reads a process group as 32 bits.
+ * The block sits last, right before the final ALLOW, because loading the argument clobbers the
+ * accumulator; its jump distances are local to it. */
 static int install_pgroup_lock_filter(void) {
     struct sock_filter instructions[] = {
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
@@ -73,7 +93,11 @@ static int install_pgroup_lock_filter(void) {
         PGROUP_REFUSE,
 #endif
         PGROUP_DENY_SYSCALL(__NR_setsid),
-        PGROUP_DENY_SYSCALL(__NR_setpgid),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_setpgid, 0, 4),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[1])),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (__u32)PHB_GROUP_LOCK_SIGNATURE_PGID, 0, 1),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (ENOTRECOVERABLE & SECCOMP_RET_DATA)),
+        PGROUP_REFUSE,
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
     };
     struct sock_fprog program = {

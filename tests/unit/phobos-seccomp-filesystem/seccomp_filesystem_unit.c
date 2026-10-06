@@ -49,6 +49,16 @@
 #include <linux/openat2.h>
 #include <linux/seccomp.h>
 
+/* The file holding main is included with main renamed, so its stages can be driven one by one;
+ * the modules beside it are linked. */
+#define main sut_main
+#include "../../../core/phobos-seccomp-filesystem/phobos-seccomp-filesystem.c"
+#undef main
+
+#include <poll.h>
+#include <sys/mman.h>
+#include <sys/wait.h>
+
 #include "../../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-model.h"
 #include "../../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-ruleset.h"
 #include "../../../core/phobos-seccomp-filesystem/phobos-seccomp-filesystem-access.h"
@@ -683,12 +693,332 @@ ssize_t __wrap_readlink(const char *path, char *buffer, size_t size) {
     return __real_readlink(path, buffer, size);
 }
 
-/* Whether the notification is still pending, and every answer sent on the listener. */
+/* Whether the notification is still pending. */
 static bool fake_notification_valid = true;
-static unsigned int responses_sent = 0;
-static struct seccomp_notif_resp last_response;
-static bool every_response_continued = true;
 
+/* ----------------------------------------------------------- the process fakes */
+
+/* Everything the supervisor's process-level calls are scripted with, and everything they recorded.
+ * It lives in shared memory because a case that ends in exit runs in a forked child of the suite
+ * while the parent judges it. While script is NULL, or not active, every wrapped call is real. */
+static constexpr size_t SCRIPT_LENGTH = 8;
+static constexpr size_t CAPTURED_FILTER_MAXIMUM = 160;
+static constexpr int FAKE_SOCKET_FIRST_END = 900;
+static constexpr int FAKE_SOCKET_SECOND_END = 901;
+static constexpr int FAKE_LISTENER = 902;
+static constexpr int FAKE_CHILD_DESCRIPTOR = 903;
+static constexpr pid_t FAKE_CHILD_PID = 4242;
+static constexpr int EXEC_STAND_IN_STATUS = 200;
+
+struct poll_step {
+    int result;
+    int error;
+    short listener_events;
+    short child_events;
+};
+
+struct process_script {
+    bool active;
+    pid_t forks[SCRIPT_LENGTH];
+    size_t fork_count;
+    size_t fork_next;
+    bool socketpair_fails;
+    bool prctl_fails;
+    long listener_result;
+    int listener_error;
+    bool notif_sizes_fail;
+    bool notif_sizes_small;
+    long pidfd_result;
+    long setpgid_result;
+    int setpgid_error;
+    int receive_result;
+    bool send_result;
+    bool set_flags_fails;
+    bool send_fails;
+    bool calloc_fails;
+    struct poll_step polls[SCRIPT_LENGTH];
+    size_t poll_count;
+    size_t poll_next;
+    struct seccomp_data notifications[SCRIPT_LENGTH];
+    size_t notification_count;
+    size_t notification_next;
+    ssize_t read_result;
+    pid_t read_value;
+    ssize_t write_result;
+    int wait_status;
+    int reaped_status;
+    bool reap_faked;
+    int fake_landlock_version;
+    bool landlock_version_faked;
+    int fake_continue;
+    int fake_group_lock;
+    unsigned int responses_sent;
+    struct seccomp_notif_resp last_response;
+    bool every_response_continued;
+    unsigned int filters_installed;
+    unsigned int installed_flags;
+    unsigned short installed_length;
+    struct sock_filter installed[CAPTURED_FILTER_MAXIMUM];
+    char executed[PATH_MAX];
+    unsigned int executions;
+    unsigned int drainers_started;
+};
+
+static struct process_script *script = NULL;
+
+/* How a child of the suite ends when the code under test returned instead of exiting, how the
+ * continue probe ends when it fails (PROBE_FAILED in -handoff.c), and how a command the fake execvp
+ * stands in for ends. */
+static constexpr int RETURNED_STATUS = 99;
+static constexpr int PROBE_FAILED_STATUS = 3;
+static constexpr int EXIT_CODE_STAND_IN = EXEC_STAND_IN_STATUS;
+
+static bool scripted(void) {
+    return script != NULL && script->active;
+}
+
+/* A fresh script: one supervisor that forks a child, whose listener arrives and is answered. */
+static void reset_script(void) {
+    memset(script, 0, sizeof(*script));
+    script->active = true;
+    script->listener_result = FAKE_LISTENER;
+    script->receive_result = FAKE_LISTENER;
+    script->send_result = true;
+    script->pidfd_result = FAKE_CHILD_DESCRIPTOR;
+    script->setpgid_result = -1;
+    script->setpgid_error = EINVAL;
+    script->read_result = sizeof(pid_t);
+    script->write_result = sizeof(pid_t);
+    script->every_response_continued = true;
+    script->fake_continue = -1;
+    script->fake_group_lock = -1;
+}
+
+static void script_forks(pid_t first, pid_t second, pid_t third) {
+    script->forks[0] = first;
+    script->forks[1] = second;
+    script->forks[2] = third;
+    script->fork_count = 3;
+}
+
+static void script_poll(int result, short listener_events, short child_events) {
+    struct poll_step *step = &script->polls[script->poll_count++];
+    step->result = result;
+    step->error = result < 0 ? EBADF : 0;
+    step->listener_events = listener_events;
+    step->child_events = child_events;
+}
+
+static void script_notification(struct seccomp_data data) {
+    script->notifications[script->notification_count++] = data;
+}
+
+extern void __gcov_dump(void) __attribute__((weak));
+void __real__exit(int status) __attribute__((noreturn));
+void __wrap__exit(int status) __attribute__((noreturn));
+void __wrap__exit(int status) {
+    if (__gcov_dump != NULL) {
+        __gcov_dump();
+    }
+    __real__exit(status);
+}
+
+void *__real_calloc(size_t count, size_t size);
+void *__wrap_calloc(size_t count, size_t size) {
+    if (scripted() && script->calloc_fails) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    return __real_calloc(count, size);
+}
+
+pid_t __real_fork(void);
+pid_t __wrap_fork(void) {
+    if (!scripted() || script->fork_next >= script->fork_count) {
+        return __real_fork();
+    }
+    pid_t result = script->forks[script->fork_next++];
+    if (result < 0) {
+        errno = EAGAIN;
+    }
+    return result;
+}
+
+int __real_socketpair(int domain, int type, int protocol, int pair[2]);
+int __wrap_socketpair(int domain, int type, int protocol, int pair[2]) {
+    if (!scripted()) {
+        return __real_socketpair(domain, type, protocol, pair);
+    }
+    if (script->socketpair_fails) {
+        errno = EMFILE;
+        return -1;
+    }
+    pair[0] = FAKE_SOCKET_FIRST_END;
+    pair[1] = FAKE_SOCKET_SECOND_END;
+    return 0;
+}
+
+int __real_prctl(int option, unsigned long second, unsigned long third, unsigned long fourth,
+                 unsigned long fifth);
+int __wrap_prctl(int option, unsigned long second, unsigned long third, unsigned long fourth,
+                 unsigned long fifth) {
+    if (!scripted()) {
+        return __real_prctl(option, second, third, fourth, fifth);
+    }
+    if (script->prctl_fails) {
+        errno = EPERM;
+        return -1;
+    }
+    return 0;
+}
+
+long __real_syscall(long number, ...);
+long __wrap_syscall(long number, ...) {
+    va_list arguments;
+    va_start(arguments, number);
+    unsigned long first = va_arg(arguments, unsigned long);
+    unsigned long second = va_arg(arguments, unsigned long);
+    unsigned long third = va_arg(arguments, unsigned long);
+    va_end(arguments);
+    if (!scripted()) {
+        return __real_syscall(number, first, second, third);
+    }
+    if (number == SYS_seccomp && first == SECCOMP_SET_MODE_FILTER) {
+        const struct sock_fprog *program = (const struct sock_fprog *)(uintptr_t)third;
+        script->filters_installed++;
+        script->installed_flags = (unsigned int)second;
+        script->installed_length = program->len;
+        memcpy(script->installed, program->filter,
+               program->len * sizeof(struct sock_filter) <= sizeof(script->installed)
+                   ? program->len * sizeof(struct sock_filter)
+                   : sizeof(script->installed));
+        errno = script->listener_error;
+        return script->listener_result;
+    }
+    if (number == SYS_seccomp && first == SECCOMP_GET_NOTIF_SIZES) {
+        struct seccomp_notif_sizes *sizes = (struct seccomp_notif_sizes *)(uintptr_t)third;
+        if (script->notif_sizes_fail) {
+            errno = EINVAL;
+            return -1;
+        }
+        sizes->seccomp_notif = script->notif_sizes_small ? 1 : sizeof(struct seccomp_notif) + 16;
+        sizes->seccomp_notif_resp =
+            script->notif_sizes_small ? 1 : sizeof(struct seccomp_notif_resp) + 16;
+        return 0;
+    }
+    if (number == SYS_pidfd_open) {
+        errno = ENOSYS;
+        return script->pidfd_result;
+    }
+    if (number == SYS_setpgid) {
+        errno = script->setpgid_error;
+        return script->setpgid_result;
+    }
+    return __real_syscall(number, first, second, third);
+}
+
+bool __real_send_descriptor(int socket_descriptor, int descriptor_to_send);
+bool __wrap_send_descriptor(int socket_descriptor, int descriptor_to_send) {
+    if (!scripted()) {
+        return __real_send_descriptor(socket_descriptor, descriptor_to_send);
+    }
+    errno = script->send_result ? 0 : EPIPE;
+    return script->send_result;
+}
+
+int __real_receive_descriptor(int socket_descriptor);
+int __wrap_receive_descriptor(int socket_descriptor) {
+    return scripted() ? script->receive_result : __real_receive_descriptor(socket_descriptor);
+}
+
+int __real_poll(struct pollfd *watch, nfds_t count, int timeout);
+int __wrap_poll(struct pollfd *watch, nfds_t count, int timeout) {
+    if (!scripted()) {
+        return __real_poll(watch, count, timeout);
+    }
+    if (script->poll_next >= script->poll_count) {
+        errno = EBADF;
+        return -1;
+    }
+    struct poll_step *step = &script->polls[script->poll_next++];
+    watch[0].revents = step->listener_events;
+    if (count > 1) {
+        watch[1].revents = step->child_events;
+    }
+    errno = step->error;
+    return step->result;
+}
+
+ssize_t __real_read(int descriptor, void *buffer, size_t size);
+ssize_t __wrap_read(int descriptor, void *buffer, size_t size) {
+    if (!scripted() || descriptor != FAKE_SOCKET_FIRST_END) {
+        return __real_read(descriptor, buffer, size);
+    }
+    if (script->read_result == (ssize_t)sizeof(pid_t)) {
+        memcpy(buffer, &script->read_value, sizeof(pid_t));
+    }
+    return script->read_result;
+}
+
+ssize_t __real_write(int descriptor, const void *buffer, size_t size);
+ssize_t __wrap_write(int descriptor, const void *buffer, size_t size) {
+    if (!scripted() || descriptor != FAKE_SOCKET_SECOND_END) {
+        return __real_write(descriptor, buffer, size);
+    }
+    return script->write_result;
+}
+
+pid_t __real_waitpid(pid_t pid, int *status, int options);
+pid_t __wrap_waitpid(pid_t pid, int *status, int options) {
+    if (!scripted() || pid != FAKE_CHILD_PID) {
+        return __real_waitpid(pid, status, options);
+    }
+    *status = script->wait_status;
+    return pid;
+}
+
+void __real_reap_command(pid_t child, const sigset_t *forwarded, int *status);
+void __wrap_reap_command(pid_t child, const sigset_t *forwarded, int *status) {
+    if (!scripted() || !script->reap_faked) {
+        __real_reap_command(child, forwarded, status);
+        return;
+    }
+    *status = script->reaped_status;
+}
+
+int __real_execvp(const char *file, char *const arguments[]);
+int __wrap_execvp(const char *file, char *const arguments[]) {
+    if (!scripted()) {
+        return __real_execvp(file, arguments);
+    }
+    snprintf(script->executed, sizeof(script->executed), "%s", file);
+    script->executions++;
+    if (strcmp(file, "/no/such/program") == 0) {
+        errno = ENOENT;
+        return -1;
+    }
+    _exit(EXEC_STAND_IN_STATUS);
+}
+
+int __real_query_landlock_version(void);
+int __wrap_query_landlock_version(void) {
+    return scripted() && script->landlock_version_faked ? script->fake_landlock_version
+                                                       : __real_query_landlock_version();
+}
+
+bool __real_continue_supported(void);
+bool __wrap_continue_supported(void) {
+    return scripted() && script->fake_continue >= 0 ? script->fake_continue == 1
+                                                    : __real_continue_supported();
+}
+
+bool __real_group_lock_present(void);
+bool __wrap_group_lock_present(void) {
+    return scripted() && script->fake_group_lock >= 0 ? script->fake_group_lock == 1
+                                                      : __real_group_lock_present();
+}
+
+/* Records every answer sent on the listener, and plays the notifications and flags a script holds. */
 int __real_ioctl(int descriptor, unsigned long request, ...);
 int __wrap_ioctl(int descriptor, unsigned long request, ...) {
     va_list arguments;
@@ -702,12 +1032,35 @@ int __wrap_ioctl(int descriptor, unsigned long request, ...) {
         errno = ENOENT;
         return -1;
     }
-    if (request == SECCOMP_IOCTL_NOTIF_SEND) {
-        memcpy(&last_response, argument, sizeof(last_response));
-        responses_sent++;
-        every_response_continued = every_response_continued
-                                   && last_response.flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE
-                                   && last_response.error == 0 && last_response.val == 0;
+    if (request == SECCOMP_IOCTL_NOTIF_SEND && script != NULL) {
+        memcpy(&script->last_response, argument, sizeof(script->last_response));
+        script->responses_sent++;
+        script->every_response_continued =
+            script->every_response_continued
+            && script->last_response.flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE
+            && script->last_response.error == 0 && script->last_response.val == 0;
+        if (scripted() && script->send_fails) {
+            errno = EINVAL;
+            return -1;
+        }
+        return 0;
+    }
+    if (request == SECCOMP_IOCTL_NOTIF_RECV && scripted()) {
+        if (script->notification_next >= script->notification_count) {
+            errno = ENOENT;
+            return -1;
+        }
+        struct seccomp_notif *notification = argument;
+        notification->id = FAKE_NOTIFICATION_ID + script->notification_next;
+        notification->pid = FAKE_PID;
+        notification->data = script->notifications[script->notification_next++];
+        return 0;
+    }
+    if (request == SECCOMP_IOCTL_NOTIF_SET_FLAGS && scripted()) {
+        if (script->set_flags_fails) {
+            errno = EINVAL;
+            return -1;
+        }
         return 0;
     }
     return __real_ioctl(descriptor, request, argument);
@@ -870,9 +1223,8 @@ static void reset_fakes(void) {
     fake_euid_set = false;
     fake_realpath_fails = false;
     fake_file_count = 0;
-    responses_sent = 0;
-    memset(&last_response, 0, sizeof(last_response));
-    every_response_continued = true;
+    memset(script, 0, sizeof(*script));
+    script->every_response_continued = true;
     reset_judge_for_tests();
 }
 
@@ -1978,8 +2330,8 @@ static void test_arming_and_membership(void) {
                                       0)),
                  line_for("read", "File", in_tree("none/secret"))) == 0);
     check("and its call is continued, with error and value 0",
-          last_response.flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE && last_response.error == 0
-              && last_response.val == 0 && last_response.id == FAKE_NOTIFICATION_ID);
+          script->last_response.flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE && script->last_response.error == 0
+              && script->last_response.val == 0 && script->last_response.id == FAKE_NOTIFICATION_ID);
     fake_filters(ARMED_FILTERS);
     fake_string(NAME_ADDRESS, in_tree("none/dir"));
     check("a task beside the domain, with the count recorded at arming, is not judged",
@@ -1995,9 +2347,9 @@ static void test_arming_and_membership(void) {
           silent(arm_with(copied, ARMED_FILTERS)) && reporter_filesystem_rule_count() == 1);
     check("a call the reporter does not decode is continued all the same",
           silent(serviced(native_call(__NR_getpid, 0, 0, 0, 0, 0)))
-              && last_response.flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+              && script->last_response.flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
     check("every answer of the run was CONTINUE with error and value 0",
-          responses_sent > 0 && every_response_continued);
+          script->responses_sent > 0 && script->every_response_continued);
 }
 
 static void test_arming_in_order(void) {
@@ -2147,6 +2499,629 @@ static void test_reporter_handles(void) {
     check("a foreign ABI is not, whatever its number", !reporter_handles(&request));
 }
 
+/* --------------------------------------------------------------------- the refusals */
+
+/* The numbers every class case iterates over, and the response a refusal must be. */
+static constexpr int HIGHEST_NUMBER_TRIED = 500;
+
+static bool refused_exactly(const struct seccomp_notif_resp *response, uint64_t id) {
+    return response->id == id && response->val == 0 && response->error == -EACCES
+           && response->flags == 0;
+}
+
+static struct seccomp_data foreign_call(unsigned int arch, int number) {
+    struct seccomp_data data = native_call(number, 0, 0, 0, 0, 0);
+    data.arch = arch;
+    return data;
+}
+
+static void test_the_refusal_class(void) {
+    printf("\nThe calls a Phobos filter refuses outright\n");
+    const int refused[] = {__NR_setsid, __NR_setpgid, __NR_io_uring_setup, __NR_io_uring_enter,
+                           __NR_io_uring_register};
+    bool only_those = true;
+    for (int number = 0; number <= HIGHEST_NUMBER_TRIED; number++) {
+        bool expected = false;
+        for (size_t index = 0; index < sizeof(refused) / sizeof(refused[0]); index++) {
+            expected = expected || number == refused[index];
+        }
+        struct seccomp_data data = native_call(number, 0, 0, 0, 0, 0);
+        only_those = only_those && is_filter_refusal(&data) == expected;
+    }
+    check("of the native numbers, exactly setsid, setpgid and the three io_uring calls",
+          only_those);
+    struct seccomp_data connect_call = native_call(__NR_connect, 0, 0, 0, 0, 0);
+    check("connect is not one of them", !is_filter_refusal(&connect_call));
+    bool every_foreign = true;
+    for (int number = 0; number <= HIGHEST_NUMBER_TRIED; number++) {
+        struct seccomp_data data = foreign_call(AUDIT_ARCH_I386, number);
+        every_foreign = every_foreign && is_filter_refusal(&data);
+    }
+    check("every i386 number is one, decided before the number is read", every_foreign);
+    struct seccomp_data foreign_connect = foreign_call(AUDIT_ARCH_I386, __NR_connect);
+    check("a foreign number equal to the native connect is one", is_filter_refusal(&foreign_connect));
+#ifdef __X32_SYSCALL_BIT
+    struct seccomp_data x32 = native_call((int)(__X32_SYSCALL_BIT | __NR_openat), 0, 0, 0, 0, 0);
+    check("an x32 number is one", is_filter_refusal(&x32));
+#endif
+}
+
+/* Answers one refusal and answers what it printed. */
+static const char *refusal_answered(struct seccomp_data data, enum report_layer layer) {
+    struct seccomp_notif request = notification_of(data);
+    struct seccomp_notif_resp response;
+    capture_stderr_begin();
+    answer_filter_refusal(FAKE_NOTIFY_DESCRIPTOR, &request, &response, layer);
+    return capture_stderr_end();
+}
+
+static void test_answering_refusals(void) {
+    printf("\nA refusal is answered with EACCES and never continued\n");
+    reset_fakes();
+    reset_report_for_tests();
+    bool every_one_refused = true;
+    const int refused[] = {__NR_setsid, __NR_setpgid, __NR_io_uring_setup, __NR_io_uring_enter,
+                           __NR_io_uring_register};
+    for (size_t index = 0; index < sizeof(refused) / sizeof(refused[0]); index++) {
+        refusal_answered(native_call(refused[index], 0, 0, 0, 0, 0), REPORT_LAYER_TIMEOUT);
+        every_one_refused = every_one_refused
+                            && refused_exactly(&script->last_response, FAKE_NOTIFICATION_ID);
+    }
+    for (int number = 0; number <= HIGHEST_NUMBER_TRIED; number++) {
+        refusal_answered(foreign_call(AUDIT_ARCH_I386, number), REPORT_LAYER_TIMEOUT);
+        every_one_refused = every_one_refused
+                            && refused_exactly(&script->last_response, FAKE_NOTIFICATION_ID);
+    }
+#ifdef __X32_SYSCALL_BIT
+    for (int number = 0; number <= HIGHEST_NUMBER_TRIED; number++) {
+        refusal_answered(native_call((int)(__X32_SYSCALL_BIT | (unsigned int)number), 0, 0, 0, 0,
+                                     0),
+                         REPORT_LAYER_TIMEOUT);
+        every_one_refused = every_one_refused
+                            && refused_exactly(&script->last_response, FAKE_NOTIFICATION_ID);
+    }
+#endif
+    check("every call of the class, on both ABIs, gets error -EACCES, value 0 and flags 0",
+          every_one_refused && script->responses_sent > 0);
+    check("and not one of them was continued", script->last_response.flags == 0);
+    reset_report_for_tests();
+    check("setsid leaves the Session",
+          strcmp(refusal_answered(native_call(__NR_setsid, 0, 0, 0, 0, 0), REPORT_LAYER_TIMEOUT),
+                 "Phobos Security Error: the program tried to illegally leave the Session but was "
+                 "blocked by Phobos.\n")
+              == 0);
+    check("setpgid leaves the Process Group",
+          strcmp(refusal_answered(native_call(__NR_setpgid, 0, 0, 0, 0, 0), REPORT_LAYER_TIMEOUT),
+                 "Phobos Security Error: the program tried to illegally leave the Process Group but "
+                 "was blocked by Phobos.\n")
+              == 0);
+    check("io_uring is a Kernel Interface",
+          strcmp(refusal_answered(native_call(__NR_io_uring_setup, 0, 0, 0, 0, 0),
+                                  REPORT_LAYER_NETWORK),
+                 "Phobos Security Error: the program tried to illegally use the Kernel Interface "
+                 "io_uring but was blocked by Phobos.\n")
+              == 0);
+    check("an i386 call names its ABI and its number",
+          strcmp(refusal_answered(foreign_call(AUDIT_ARCH_I386, 20), REPORT_LAYER_TIMEOUT),
+                 "Phobos Security Error: the program tried to illegally use the Kernel Interface "
+                 "i386 system call 20 but was blocked by Phobos.\n")
+              == 0);
+    check("another ABI is named by its audit number",
+          strstr(refusal_answered(foreign_call(AUDIT_ARCH_ARM, 7), REPORT_LAYER_TIMEOUT),
+                 "use the Kernel Interface foreign ABI 0x40000028 system call 7 but") != NULL);
+#ifdef __X32_SYSCALL_BIT
+    check("an x32 call names its ABI and its own number",
+          strstr(refusal_answered(native_call((int)(__X32_SYSCALL_BIT | 41U), 0, 0, 0, 0, 0),
+                                  REPORT_LAYER_TIMEOUT),
+                 "use the Kernel Interface x32 system call 41 but") != NULL);
+#endif
+    capture_stderr_begin();
+    report_summary();
+    check("the refusals are counted for the layer given",
+          strstr(capture_stderr_end(), "1 in the network layer and ") != NULL);
+}
+
+/* -------------------------------------------------------------------------- the filter */
+
+/* Runs a classic BPF program over one call, the way the kernel runs a seccomp filter, and answers
+ * the action it returns. Only the instructions the filters here use are known. */
+static constexpr unsigned int UNKNOWN_INSTRUCTION = 0xdeadbeef;
+
+static unsigned int run_filter(const struct sock_filter *program, size_t length,
+                               const struct seccomp_data *data) {
+    uint32_t accumulator = 0;
+    for (size_t counter = 0; counter < length; counter++) {
+        const struct sock_filter *instruction = &program[counter];
+        switch (instruction->code) {
+        case BPF_LD | BPF_W | BPF_ABS:
+            memcpy(&accumulator, (const char *)data + instruction->k, sizeof(accumulator));
+            break;
+        case BPF_JMP | BPF_JEQ | BPF_K:
+            counter += accumulator == instruction->k ? instruction->jt : instruction->jf;
+            break;
+        case BPF_JMP | BPF_JSET | BPF_K:
+            counter += (accumulator & instruction->k) != 0 ? instruction->jt : instruction->jf;
+            break;
+        case BPF_RET | BPF_K:
+            return instruction->k;
+        default:
+            return UNKNOWN_INSTRUCTION;
+        }
+    }
+    return UNKNOWN_INSTRUCTION;
+}
+
+static bool in_report_set(int number) {
+    for (size_t index = 0; index < REPORT_TRAPPED_CALL_COUNT; index++) {
+        if (REPORT_TRAPPED_CALLS[index] == number) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Whether a filter traps exactly what it should, for every native number tried and a foreign ABI. */
+static bool filter_traps_exactly(bool file_traps, bool refusal_traps) {
+    struct sock_filter program[REPORT_FILTER_MAXIMUM];
+    size_t length = build_report_filter(program, file_traps, refusal_traps);
+    bool exact = true;
+    for (int number = 0; number <= HIGHEST_NUMBER_TRIED; number++) {
+        struct seccomp_data data = native_call(number, 0, 0, 0, 0, 0);
+        bool refusal = number == __NR_setsid || number == __NR_setpgid;
+        bool trapped = (file_traps && in_report_set(number)) || (refusal_traps && refusal);
+        unsigned int expected = trapped ? SECCOMP_RET_USER_NOTIF : SECCOMP_RET_ALLOW;
+        exact = exact && run_filter(program, length, &data) == expected;
+    }
+    struct seccomp_data foreign = foreign_call(AUDIT_ARCH_I386, __NR_openat);
+    exact = exact && run_filter(program, length, &foreign)
+                         == (refusal_traps ? SECCOMP_RET_USER_NOTIF : SECCOMP_RET_ALLOW);
+#ifdef __X32_SYSCALL_BIT
+    struct seccomp_data x32 = native_call((int)(__X32_SYSCALL_BIT | 1U), 0, 0, 0, 0, 0);
+    exact = exact && run_filter(program, length, &x32)
+                         == (refusal_traps ? SECCOMP_RET_USER_NOTIF : SECCOMP_RET_ALLOW);
+#endif
+    return exact;
+}
+
+static void test_the_filter(void) {
+    printf("\nThe report-only supervisor's filter\n");
+    check("with the observation traps alone it traps exactly the report set",
+          filter_traps_exactly(true, false));
+    check("with the refusal traps alone it traps exactly setsid, setpgid and foreign ABIs",
+          filter_traps_exactly(false, true));
+    check("with both it traps exactly the union", filter_traps_exactly(true, true));
+    struct sock_filter program[REPORT_FILTER_MAXIMUM];
+    check("the traps are not written into too small a room",
+          append_report_traps(program, REPORT_TRAPPED_CALL_COUNT) == 0);
+    check("every trap is one comparison and one answer",
+          append_report_traps(program, REPORT_FILTER_MAXIMUM) == 2 * REPORT_TRAPPED_CALL_COUNT);
+    struct sock_filter unknown[] = {BPF_STMT(BPF_LD | BPF_B | BPF_ABS, 0)};
+    struct seccomp_data data = native_call(0, 0, 0, 0, 0, 0);
+    check("the interpreter refuses an instruction it does not know, and a program with no answer",
+          run_filter(unknown, 1, &data) == UNKNOWN_INSTRUCTION
+              && run_filter(program, 0, &data) == UNKNOWN_INSTRUCTION);
+    reset_fakes();
+    reset_script();
+    check("the filter is installed with a listener",
+          install_report_filter(true, true) == FAKE_LISTENER && script->filters_installed == 1
+              && script->installed_flags == SECCOMP_FILTER_FLAG_NEW_LISTENER);
+    size_t length = build_report_filter(program, true, true);
+    check("as built", script->installed_length == length
+                          && memcmp(script->installed, program, length * sizeof(program[0])) == 0);
+    script->active = false;
+}
+
+/* -------------------------------------------------------------------------- the probes */
+
+/* Runs body in a real child of the suite and answers how it ended: its exit status, or 128 plus the
+ * signal that ended it. */
+static int ended_with(void (*body)(void)) {
+    fflush(NULL);
+    pid_t child = __real_fork();
+    if (child == 0) {
+        body();
+        _exit(RETURNED_STATUS);
+    }
+    int status = 0;
+    __real_waitpid(child, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+}
+
+static void probe_continue_in_child(void) {
+    continue_supported();
+}
+
+static void probe_group_lock_in_child(void) {
+    group_lock_present();
+}
+
+/* A script in which the continue probe's parent half sees everything go right. */
+static void script_continue_probe(void) {
+    reset_fakes();
+    reset_script();
+    script_forks(FAKE_CHILD_PID, 0, 0);
+    script->fork_count = 1;
+    script_poll(1, POLLIN, 0);
+    script_notification(native_call(__NR_getppid, 0, 0, 0, 0, 0));
+    script->read_value = getpid();
+}
+
+static void test_the_continue_probe(void) {
+    printf("\nThe probe that proves CONTINUE\n");
+    script_continue_probe();
+    check("a probe whose trapped call was continued proves it", __real_continue_supported());
+    check("by answering it with CONTINUE",
+          script->last_response.flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+    script_continue_probe();
+    script->send_fails = true;
+    check("a refused CONTINUE does not", !__real_continue_supported());
+    script_continue_probe();
+    script->read_value = getpid() + 1;
+    check("nor a probe that reports another parent", !__real_continue_supported());
+    script_continue_probe();
+    script->read_result = 0;
+    check("nor a probe that reports nothing", !__real_continue_supported());
+    script_continue_probe();
+    script->polls[0].result = 0;
+    script->polls[0].listener_events = 0;
+    check("nor a notification that never comes", !__real_continue_supported());
+    script_continue_probe();
+    script->polls[0].listener_events = POLLHUP;
+    check("nor a listener that hangs up", !__real_continue_supported());
+    script_continue_probe();
+    script->notification_count = 0;
+    check("nor a notification that cannot be received", !__real_continue_supported());
+    script_continue_probe();
+    script->calloc_fails = true;
+    check("nor a probe with no memory to answer it", !__real_continue_supported());
+    script_continue_probe();
+    script->receive_result = -1;
+    check("nor a probe that hands no listener over", !__real_continue_supported());
+    script_continue_probe();
+    script->forks[0] = -1;
+    check("nor a fork that fails", !__real_continue_supported());
+    script_continue_probe();
+    script->socketpair_fails = true;
+    check("nor a socket pair that fails", !__real_continue_supported());
+    script_continue_probe();
+    script->forks[0] = 0;
+    check("the probe child that reports ends cleanly", ended_with(probe_continue_in_child) == 0);
+    script_continue_probe();
+    script->forks[0] = 0;
+    script->write_result = 0;
+    check("one that cannot report ends with its failure status",
+          ended_with(probe_continue_in_child) == PROBE_FAILED_STATUS);
+    script_continue_probe();
+    script->forks[0] = 0;
+    script->send_result = false;
+    check("as does one that cannot hand its listener over",
+          ended_with(probe_continue_in_child) == PROBE_FAILED_STATUS);
+    script_continue_probe();
+    script->forks[0] = 0;
+    script->listener_result = -1;
+    script->listener_error = EBUSY;
+    check("or install one", ended_with(probe_continue_in_child) == PROBE_FAILED_STATUS);
+    script_continue_probe();
+    script->forks[0] = 0;
+    script->prctl_fails = true;
+    check("or set no_new_privs", ended_with(probe_continue_in_child) == PROBE_FAILED_STATUS);
+    script->active = false;
+}
+
+static void test_notification_buffers(void) {
+    printf("\nNotification buffers of the kernel's sizes\n");
+    reset_fakes();
+    reset_script();
+    struct seccomp_notif *request = NULL;
+    struct seccomp_notif_resp *response = NULL;
+    size_t size = 0;
+    check("a kernel's larger sizes are used",
+          allocate_notification_buffers(&request, &size, &response)
+              && size == sizeof(struct seccomp_notif) + 16);
+    free(request);
+    free(response);
+    script->notif_sizes_small = true;
+    check("never less than this build's structures",
+          allocate_notification_buffers(&request, &size, &response)
+              && size == sizeof(struct seccomp_notif));
+    free(request);
+    free(response);
+    script->notif_sizes_small = false;
+    script->notif_sizes_fail = true;
+    check("and this build's sizes when the kernel does not say",
+          allocate_notification_buffers(&request, &size, &response)
+              && size == sizeof(struct seccomp_notif));
+    free(request);
+    free(response);
+    script->calloc_fails = true;
+    check("no memory leaves neither allocated",
+          !allocate_notification_buffers(&request, &size, &response) && request == NULL
+              && response == NULL);
+    script->active = false;
+}
+
+static void test_the_group_lock_probe(void) {
+    printf("\nThe probe that finds the group lock's signature\n");
+    reset_fakes();
+    reset_script();
+    script_forks(FAKE_CHILD_PID, 0, 0);
+    script->fork_count = 1;
+    script->wait_status = 0;
+    check("a probe that saw the signature finds the lock", __real_group_lock_present());
+    reset_script();
+    script_forks(FAKE_CHILD_PID, 0, 0);
+    script->fork_count = 1;
+    script->wait_status = 1 << 8;
+    check("one that did not, does not", !__real_group_lock_present());
+    reset_script();
+    script_forks(FAKE_CHILD_PID, 0, 0);
+    script->fork_count = 1;
+    script->wait_status = SIGKILL;
+    check("nor one that was killed", !__real_group_lock_present());
+    reset_script();
+    script_forks(-1, 0, 0);
+    script->fork_count = 1;
+    check("nor a fork that fails", !__real_group_lock_present());
+    reset_script();
+    script_forks(0, 0, 0);
+    script->fork_count = 1;
+    script->setpgid_error = ENOTRECOVERABLE;
+    check("the probe child reports ENOTRECOVERABLE as the signature",
+          ended_with(probe_group_lock_in_child) == 0);
+    reset_script();
+    script_forks(0, 0, 0);
+    script->fork_count = 1;
+    script->setpgid_error = EINVAL;
+    check("and the kernel's own EINVAL as its absence", ended_with(probe_group_lock_in_child) == 1);
+    reset_script();
+    script_forks(0, 0, 0);
+    script->fork_count = 1;
+    script->setpgid_result = 0;
+    script->setpgid_error = ENOTRECOVERABLE;
+    check("and a call that went through as its absence too",
+          ended_with(probe_group_lock_in_child) == 1);
+    script->active = false;
+}
+
+/* ----------------------------------------------------------------- the supervisor's stages */
+
+/* The arguments the next supervisor run is given, and how many there are. */
+static char *supervisor_arguments[16];
+static int supervisor_argument_count = 0;
+
+static void run_supervisor(void) {
+    _exit(sut_main(supervisor_argument_count, supervisor_arguments));
+}
+
+/* Runs the supervisor with the given arguments in a real child, and answers how it ended; what it
+ * printed is in captured_text. */
+static int supervisor_ended_with(const char *const *words) {
+    supervisor_argument_count = 0;
+    for (; words[supervisor_argument_count] != NULL; supervisor_argument_count++) {
+        supervisor_arguments[supervisor_argument_count] = (char *)words[supervisor_argument_count];
+    }
+    supervisor_arguments[supervisor_argument_count] = NULL;
+    capture_stderr_begin();
+    int status = ended_with(run_supervisor);
+    capture_stderr_end();
+    return status;
+}
+
+/* A script for one run with everything available: Landlock 8, CONTINUE proved, no group lock, a
+ * fork into the parent, and a listener that arrives. */
+static void script_supervisor(void) {
+    reset_fakes();
+    reset_script();
+    reset_report_for_tests();
+    reset_reporter_for_tests();
+    script->landlock_version_faked = true;
+    script->fake_landlock_version = 8;
+    script->fake_continue = 1;
+    script->fake_group_lock = 0;
+    script->reap_faked = true;
+    script_forks(FAKE_CHILD_PID, FAKE_CHILD_PID, FAKE_CHILD_PID);
+}
+
+static void test_supervisor_usage(void) {
+    printf("\nThe supervisor's command line\n");
+    script_supervisor();
+    const char *nothing[] = {"phobos-seccomp-filesystem", NULL};
+    check("no arguments are a usage error", supervisor_ended_with(nothing) == EXIT_CODE_USAGE
+                                                && strstr(captured_text, "Usage:") != NULL);
+    const char *unknown[] = {"phobos-seccomp-filesystem", "--nonsense", "--", "true", NULL};
+    check("an unknown option is one", supervisor_ended_with(unknown) == EXIT_CODE_USAGE);
+    const char *dangling[] = {"phobos-seccomp-filesystem", "--landlock-bin", NULL};
+    check("--landlock-bin with no value is one", supervisor_ended_with(dangling) == EXIT_CODE_USAGE);
+    const char *no_command[] = {"phobos-seccomp-filesystem", "--landlock-bin", "/bin/true", "--",
+                                NULL};
+    check("nothing to run is one", supervisor_ended_with(no_command) == EXIT_CODE_USAGE);
+    const char *no_enforcer[] = {"phobos-seccomp-filesystem", "--", "true", NULL};
+    check("no --landlock-bin is one", supervisor_ended_with(no_enforcer) == EXIT_CODE_USAGE);
+    script->active = false;
+}
+
+static void test_supervisor_with_nothing_to_watch(void) {
+    printf("\nA supervisor with nothing to watch execs the command\n");
+    const char *no_landlock[] = {"phobos-seccomp-filesystem", "--verbose", "--landlock-bin",
+                                 "/bin/true", "--no-landlock", "--", "/bin/true", NULL};
+    script_supervisor();
+    check("without Landlock to report and no group lock above, the command runs unsupervised",
+          supervisor_ended_with(no_landlock) == EXIT_CODE_STAND_IN && script->executions == 1
+              && script->fork_next == 0 && script->filters_installed == 0
+              && strstr(captured_text, "nothing to watch") != NULL);
+    const char *watch[] = {"phobos-seccomp-filesystem", "--landlock-bin", "/bin/true", "--",
+                           "/bin/true", NULL};
+    script_supervisor();
+    script->fake_landlock_version = 0;
+    check("a kernel without Landlock is said once",
+          supervisor_ended_with(watch) == EXIT_CODE_STAND_IN && script->filters_installed == 0
+              && strstr(captured_text, "because this kernel has no Landlock") != NULL);
+    script_supervisor();
+    script->fake_continue = 0;
+    check("so is a kernel that cannot continue a supervised call",
+          supervisor_ended_with(watch) == EXIT_CODE_STAND_IN && script->filters_installed == 0
+              && strstr(captured_text, "cannot continue a supervised call") != NULL);
+    const char *lock_above[] = {"phobos-seccomp-filesystem", "--landlock-bin", "/bin/true",
+                                "--no-landlock", "--group-lock-above", "--", "/bin/true", NULL};
+    script_supervisor();
+    check("a group lock the layers name but whose signature is missing is said, and not trapped",
+          supervisor_ended_with(lock_above) == EXIT_CODE_STAND_IN && script->filters_installed == 0
+              && strstr(captured_text, "its signature was not found") != NULL);
+    const char *missing[] = {"phobos-seccomp-filesystem", "--landlock-bin", "/bin/true",
+                             "--no-landlock", "--", "/no/such/program", NULL};
+    script_supervisor();
+    check("a command that cannot be executed ends with 127",
+          supervisor_ended_with(missing) == EXIT_CODE_COMMAND_NOT_EXECUTABLE);
+    script->active = false;
+}
+
+static void test_supervisor_child(void) {
+    printf("\nThe supervisor's child installs the filter and becomes the command\n");
+    const char *watch[] = {"phobos-seccomp-filesystem", "--landlock-bin", "/bin/true", "--",
+                           "/bin/true", NULL};
+    script_supervisor();
+    script->forks[0] = 0;
+    check("it installs one filter with a listener, hands it up and execs the command",
+          supervisor_ended_with(watch) == EXIT_CODE_STAND_IN && script->filters_installed == 1
+              && script->installed_flags == SECCOMP_FILTER_FLAG_NEW_LISTENER
+              && strcmp(script->executed, "/bin/true") == 0);
+    struct sock_filter observation_only[REPORT_FILTER_MAXIMUM];
+    size_t length = build_report_filter(observation_only, true, false);
+    check("with the observation traps and no refusal trap when there is no group lock",
+          script->installed_length == length
+              && memcmp(script->installed, observation_only, length * sizeof(observation_only[0]))
+                     == 0);
+    const char *both[] = {"phobos-seccomp-filesystem", "--landlock-bin", "/bin/true",
+                          "--group-lock-above", "--", "/bin/true", NULL};
+    script_supervisor();
+    script->forks[0] = 0;
+    script->fake_group_lock = 1;
+    struct sock_filter with_refusals[REPORT_FILTER_MAXIMUM];
+    length = build_report_filter(with_refusals, true, true);
+    check("with both kinds when the layers and the signature agree on the group lock",
+          supervisor_ended_with(both) == EXIT_CODE_STAND_IN && script->installed_length == length
+              && memcmp(script->installed, with_refusals, length * sizeof(with_refusals[0])) == 0);
+    script_supervisor();
+    script->forks[0] = 0;
+    script->fake_group_lock = 1;
+    script->fake_landlock_version = 0;
+    length = build_report_filter(with_refusals, false, true);
+    check("and the refusal traps alone when Landlock is missing",
+          supervisor_ended_with(both) == EXIT_CODE_STAND_IN && script->installed_length == length
+              && memcmp(script->installed, with_refusals, length * sizeof(with_refusals[0])) == 0);
+    script_supervisor();
+    script->forks[0] = 0;
+    script->listener_result = -1;
+    script->listener_error = EBUSY;
+    check("a listener held above it is said once, and the command runs unsupervised",
+          supervisor_ended_with(watch) == EXIT_CODE_STAND_IN && script->executions == 1
+              && strstr(captured_text, "another supervisor already holds the run's listener")
+                     != NULL);
+    script_supervisor();
+    script->forks[0] = 0;
+    script->listener_result = -1;
+    script->listener_error = EINVAL;
+    check("so is any other filter that cannot be installed",
+          supervisor_ended_with(watch) == EXIT_CODE_STAND_IN
+              && strstr(captured_text, "its seccomp filter could not be installed") != NULL);
+    script_supervisor();
+    script->forks[0] = 0;
+    script->prctl_fails = true;
+    check("and no_new_privs that cannot be set",
+          supervisor_ended_with(watch) == EXIT_CODE_STAND_IN && script->filters_installed == 0
+              && strstr(captured_text, "its seccomp filter could not be installed") != NULL);
+    script_supervisor();
+    script->forks[0] = 0;
+    script->send_result = false;
+    check("a listener that cannot be handed up ends the child, whose calls would all fail",
+          supervisor_ended_with(watch) == EXIT_CODE_RUNTIME && script->executions == 0);
+    script->active = false;
+}
+
+static void test_supervisor_parent(void) {
+    printf("\nThe supervisor answers until its child has ended\n");
+    const char *watch[] = {"phobos-seccomp-filesystem", "--landlock-bin", "/bin/true",
+                           "--group-lock-above", "--", "/bin/true", NULL};
+    script_supervisor();
+    script->fake_group_lock = 1;
+    script->reaped_status = 7 << 8;
+    script_notification(native_call(__NR_openat, AT_FDCWD_ARGUMENT, NAME_ADDRESS, O_RDONLY, 0, 0));
+    script_notification(native_call(__NR_setsid, 0, 0, 0, 0, 0));
+    script_poll(-1, 0, 0);
+    script->polls[0].error = EINTR;
+    script_poll(1, POLLIN, 0);
+    script_poll(1, POLLIN, 0);
+    script_poll(1, 0, POLLIN);
+    check("it ends with its child's status",
+          supervisor_ended_with(watch) == 7 && script->notification_next == 2);
+    check("having continued the observation trap and refused the refusal trap",
+          script->responses_sent == 2 && refused_exactly(&script->last_response,
+                                                         FAKE_NOTIFICATION_ID + 1));
+    check("and reported the refusal", strstr(captured_text, "leave the Session") != NULL);
+    check("and handed what is left to a drainer", script->fork_next == 2);
+    script_supervisor();
+    script->reaped_status = 3 << 8;
+    script_poll(1, POLLHUP, 0);
+    check("when no task is left it starts no drainer",
+          supervisor_ended_with(watch) == 3 && script->fork_next == 1);
+    script_supervisor();
+    script_poll(1, POLLIN, 0);
+    script_poll(1, POLLHUP, 0);
+    check("a notification that vanished before it was received is answered by nobody",
+          supervisor_ended_with(watch) == 0 && script->responses_sent == 0);
+    script_supervisor();
+    script_poll(-1, 0, 0);
+    check("a poll that fails ends the supervision like a hangup",
+          supervisor_ended_with(watch) == 0 && script->fork_next == 1);
+    script_supervisor();
+    script->pidfd_result = -1;
+    script_poll(1, POLLIN | POLLHUP, 0);
+    script_notification(native_call(__NR_getpid, 0, 0, 0, 0, 0));
+    check("without a process descriptor it answers until no task is left",
+          supervisor_ended_with(watch) == 0 && script->responses_sent == 1);
+    script_supervisor();
+    script->set_flags_fails = true;
+    script_poll(1, POLLHUP, 0);
+    check("a kernel without synchronous wake-up is said once",
+          supervisor_ended_with(watch) == 0
+              && strstr(captured_text, "cannot wake the reporter synchronously") != NULL);
+    script_supervisor();
+    script->receive_result = -1;
+    script->reaped_status = 9 << 8;
+    check("a child that ran without a filter is waited for and its status kept",
+          supervisor_ended_with(watch) == 9 && script->responses_sent == 0);
+    script_supervisor();
+    script->calloc_fails = true;
+    script->reaped_status = 4 << 8;
+    check("no memory for notifications is said, and the child's status kept",
+          supervisor_ended_with(watch) == 4
+              && strstr(captured_text, "no memory to answer notifications") != NULL);
+    script_supervisor();
+    script->socketpair_fails = true;
+    check("a socket pair that fails ends the run with PHB-ERUNTIME",
+          supervisor_ended_with(watch) == EXIT_CODE_RUNTIME);
+    script_supervisor();
+    script->forks[0] = -1;
+    check("so does a fork that fails", supervisor_ended_with(watch) == EXIT_CODE_RUNTIME);
+    script->active = false;
+}
+
+static void test_the_drainer(void) {
+    printf("\nThe drainer answers what the child left behind\n");
+    const char *watch[] = {"phobos-seccomp-filesystem", "--landlock-bin", "/bin/true", "--",
+                           "/bin/true", NULL};
+    script_supervisor();
+    script->forks[1] = 0;
+    script_poll(1, 0, POLLIN);
+    script_poll(1, POLLIN, 0);
+    script_poll(1, POLLHUP, 0);
+    script_notification(native_call(__NR_openat, AT_FDCWD_ARGUMENT, NAME_ADDRESS, O_RDONLY, 0, 0));
+    check("it answers until no task is left and ends cleanly",
+          supervisor_ended_with(watch) == 0 && script->responses_sent == 1
+              && script->every_response_continued);
+    script->active = false;
+}
+
 int main(int argument_count, char *arguments[]) {
     if (argument_count == 3 && strcmp(arguments[1], "--quote") == 0) {
         static char out[REPORT_QUOTED_MAXIMUM];
@@ -2154,6 +3129,12 @@ int main(int argument_count, char *arguments[]) {
         fputs(out, stdout);
         return 0;
     }
+    script = mmap(NULL, sizeof(*script), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (script == MAP_FAILED) {
+        perror("mmap");
+        return 2;
+    }
+    memset(script, 0, sizeof(*script));
     printf("denial reporter unit tests\n");
     test_quoting_matches_bash();
     test_a_long_path_is_cut();
@@ -2192,6 +3173,17 @@ int main(int argument_count, char *arguments[]) {
     test_arming_in_order();
     test_arming_refusals();
     test_reporter_handles();
+    test_the_refusal_class();
+    test_answering_refusals();
+    test_the_filter();
+    test_the_continue_probe();
+    test_notification_buffers();
+    test_the_group_lock_probe();
+    test_supervisor_usage();
+    test_supervisor_with_nothing_to_watch();
+    test_supervisor_child();
+    test_supervisor_parent();
+    test_the_drainer();
     remove_tree();
     printf("\n%d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
