@@ -13,6 +13,11 @@
  *
  * Reporting decides nothing. It is told about a decision that has already been made, by Landlock,
  * by the connect guard or by a seccomp filter, and it only words it.
+ *
+ * It keeps its table and counts in static storage without a lock, because it runs in exactly one
+ * thread: the supervisor's, which services one notification at a time however many threads the
+ * supervised program runs. The program's threads never call it; they only wait in their trapped
+ * calls until the supervisor has answered.
  */
 #ifndef PHOBOS_SECCOMP_FILESYSTEM_MESSAGE_H
 #define PHOBOS_SECCOMP_FILESYSTEM_MESSAGE_H
