@@ -332,6 +332,21 @@ def normalised(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
     return dataclasses.replace(policy, fs=generalise.normalise_hierarchy(narrowed))
 
 
+def filesystem_run(pruning: Pruning, policy: cfgfile.Policy, observe: bool, stage: str) -> runner.RunResult:
+    """One run of the filesystem stage: the network layer off, so only the filesystem can refuse.
+
+    An exercise that declares hosts can reach them only through the network layer, which maps each
+    name and starts the egress broker, so its filesystem runs keep that layer on with every rule the
+    permissive run held (the loopback, port 0 and the declared hosts): the network still refuses
+    nothing a policy may grant, and the stage's grants still come from filesystem refusals only.
+    """
+    if not pruning.exercise.declared_hosts:
+        return pruning.run(policy, OBSERVED_FILESYSTEM if observe else UNOBSERVED_FILESYSTEM, stage)
+    connect = cfgfile.PERMISSIVE_CONNECT + network.seed_rules(pruning.exercise.declared_hosts)
+    open_network = dataclasses.replace(policy, connect=connect, bind=cfgfile.PERMISSIVE_BIND)
+    return pruning.run(open_network, OBSERVED_NETWORK if observe else UNOBSERVED_NETWORK, stage)
+
+
 def grow_filesystem(pruning: Pruning, seed: cfgfile.Policy) -> cfgfile.Policy:
     """Stage 1's grow loop from a seed policy (A.6.4)."""
     snapshots: list[tuple[generalise.Snapshot, cfgfile.Policy]] = []
@@ -339,7 +354,7 @@ def grow_filesystem(pruning: Pruning, seed: cfgfile.Policy) -> cfgfile.Policy:
     def observed(policy: cfgfile.Policy) -> runner.RunResult:
         """One observed filesystem run, with the snapshot taken before it."""
         snapshots.append((snapshot_for(pruning, policy), policy))
-        return pruning.run(normalised(pruning, policy), OBSERVED_FILESYSTEM, "filesystem")
+        return filesystem_run(pruning, normalised(pruning, policy), True, "filesystem")
 
     def derive(result: runner.RunResult) -> dict[str, frozenset[str]]:
         """The grants of one run's denials, generalised against the snapshot taken before it."""
@@ -347,18 +362,18 @@ def grow_filesystem(pruning: Pruning, seed: cfgfile.Policy) -> cfgfile.Policy:
 
     def unobserved(policy: cfgfile.Policy) -> runner.RunResult:
         """The same run without the observer."""
-        return pruning.run(normalised(pruning, policy), UNOBSERVED_FILESYSTEM, "filesystem rerun")
+        return filesystem_run(pruning, normalised(pruning, policy), False, "filesystem rerun")
 
     return search.grow(observed, seed, pruning.reference, pruning.budget.grow_rounds, derive, unobserved)
 
 
-def minimise_policy_fs(pruning: Pruning, policy: cfgfile.Policy, shape: runner.RunShape, stage: str) -> cfgfile.Policy:
-    """Removes every (path, section) grant two unobserved runs show is not needed (A.6.4, decision 10)."""
+def minimise_policy_fs(pruning: Pruning, policy: cfgfile.Policy, stage: str) -> cfgfile.Policy:
+    """Removes every (path, section) grant two unobserved filesystem runs show is not needed (A.6.4, decision 10)."""
     pairs = sorted((path, section) for path, sections in policy.fs.items() for section in sections)
 
     def passes(kept: list[tuple[str, str]]) -> bool:
         """One unobserved run with only the kept grants."""
-        return pruning.matches(pruning.run(normalised(pruning, with_pairs(policy, kept)), shape, stage))
+        return pruning.matches(filesystem_run(pruning, normalised(pruning, with_pairs(policy, kept)), False, stage))
 
     result = search.minimise(pairs, passes)
     final = normalised(pruning, with_pairs(policy, result.kept))
@@ -382,8 +397,7 @@ def prune_filesystem(pruning: Pruning, seed: cfgfile.Policy) -> cfgfile.Policy:
     grown = grow_filesystem(pruning, seed)
     compacted = generalise.compact(grown.fs, generalise.DEFAULT_COMPACTION_THRESHOLD, generalise.DEFAULT_FINE_ROOTS)
     pruning.note("compaction", before=sorted(grown.fs), after=sorted(compacted))
-    minimised = minimise_policy_fs(pruning, normalised(pruning, dataclasses.replace(grown, fs=compacted)),
-                                   UNOBSERVED_FILESYSTEM, "filesystem")
+    minimised = minimise_policy_fs(pruning, normalised(pruning, dataclasses.replace(grown, fs=compacted)), "filesystem")
     comments = {**pruning.comments, **generalise.per_run_grants(pruning.history)[1]}
     pruning.note("widenings", grants=widenings(pruning, minimised))
     return dataclasses.replace(minimised, comments={path: text for path, text in comments.items() if path in minimised.fs})

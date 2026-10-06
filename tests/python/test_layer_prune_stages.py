@@ -334,3 +334,20 @@ def test_the_merged_verification_runs_every_layer_under_the_files_as_given_and_a
     with pytest.raises(search.PruneAbort, match="did not match the reference"):
         stages.verify_merged(exercise, configs, runner.Environment(log_dir=str(tmp_path / "logs")), index)
     assert shapes == [("gate", configs), (stages.JOINT, configs), (stages.JOINT, configs)]
+
+
+def test_the_filesystem_stage_of_an_exercise_with_declared_hosts_keeps_the_network_open_to_them(tmp_path,
+                                                                                                  monkeypatch):
+    asked = feed(monkeypatch, result(PASSED))
+    plain = pruning(tmp_path)
+    stages.filesystem_run(plain, cfgfile.Policy(fs={}, connect=(), bind=(), limits={}), True, "filesystem")
+    declared = pruning(tmp_path)
+    declared.exercise = runner.Exercise(**{**declared.exercise.__dict__, "declared_hosts": ("api.example.org:443",)})
+    shapes = []
+    monkeypatch.setattr(runner, "run_layers", lambda exercise, policy, shape, environment: (
+        asked.append(policy), shapes.append(shape), result(PASSED))[-1])
+    stages.filesystem_run(declared, cfgfile.Policy(fs={}, connect=(), bind=(), limits={}), True, "filesystem")
+    assert asked[0].connect == ()
+    assert asked[1].connect == (*cfgfile.PERMISSIVE_CONNECT, "allow api.example.org:443")
+    assert asked[1].bind == cfgfile.PERMISSIVE_BIND
+    assert shapes == [stages.OBSERVED_NETWORK]
