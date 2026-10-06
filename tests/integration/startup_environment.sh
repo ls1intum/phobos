@@ -2,8 +2,8 @@
 # What every entry point does with the environment it is started in, before it runs anything:
 # no PATH entry that is relative or empty, which means the current directory, is ever used to
 # find a program, CDPATH never redirects the entry point's own cd, a relative TMPDIR never puts a
-# layer's scratch files in the current directory, and a PATH with no absolute entry at all is
-# refused rather than searched. The current directory is the submission's tree when a grader
+# layer's scratch files in the current directory, the C library's own path variables keep only
+# what is absolute, and a PATH with no absolute entry at all is refused rather than searched. The current directory is the submission's tree when a grader
 # starts Phobos there, and every program found through it would run before any sandbox exists.
 #
 # Both directions. A tool of every name the absolute PATH holds is planted in the current
@@ -30,6 +30,9 @@ source "${CORE}/phobos-tools-common/phobos-constants.sh"
 WORK="$(mktemp -d)"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
+# Every variable this suite sets for a run on purpose, so that a value the caller's environment
+# carries can neither pass a control nor fail a check that expects it absent.
+unset TMPDIR CDPATH GCONV_PATH LOCPATH NLSPATH HOSTALIASES TZDIR
 
 # The suite's own PATH with only its absolute directories, the PATH a clean run is given.
 CLEAN_PATH=""
@@ -237,7 +240,9 @@ echo
 echo "== a relative TMPDIR never puts a layer's scratch in the current directory =="
 # The network layer makes its scratch files through mktemp -t, which honours TMPDIR. A relative
 # TMPDIR naming no directory makes that fail the run, and one naming a directory puts the files
-# in the submission's tree; an absolute TMPDIR is the grader's choice and is kept.
+# in the submission's tree; an absolute TMPDIR is the grader's choice and is kept. The layer
+# removes those files again before the command starts, so a directory left empty afterwards
+# proves nothing, and the relative TMPDIR naming no directory is what makes the lookup visible.
 run_entry "$CLEAN_PATH" "$CORE_X/phobos.sh" --spec-parent "$SPECS" --landlock-bin "$PASS" --pgroup-lock-bin "$PASS" \
   --connect-guard-bin "$PASS" --config "$CONNECT_CFG" -- /usr/bin/env
 if [[ "$RC" -eq 0 && "$OUT" != *TMPDIR=* ]]; then
@@ -249,9 +254,9 @@ OUT="$(cd "$SUB" && PATH="$CLEAN_PATH" TMPDIR=no-such-relative-dir "$BASH_BIN" "
   --landlock-bin "$PASS" --pgroup-lock-bin "$PASS" --connect-guard-bin "$PASS" --config "$CONNECT_CFG" -- /usr/bin/env 2>&1)"
 RC=$?
 if [[ "$RC" -eq 0 && "$OUT" != *TMPDIR=* ]]; then
-  ok "a relative TMPDIR is dropped: the run makes no scratch beneath the current directory, the command is not given it"
+  ok "a relative TMPDIR is dropped: mktemp no longer resolves it beneath the current directory, the command is not given it"
 else
-  bad "a relative TMPDIR is dropped: the run makes no scratch beneath the current directory, the command is not given it" \
+  bad "a relative TMPDIR is dropped: mktemp no longer resolves it beneath the current directory, the command is not given it" \
     "exit 0, no TMPDIR" "exit ${RC}: ${OUT}"
 fi
 mkdir -p "$WORK/tmp"
@@ -263,5 +268,62 @@ if [[ "$RC" -eq 0 && "$OUT" == *"TMPDIR=${WORK}/tmp"* ]]; then
 else
   bad "an absolute TMPDIR is kept, and the command is given it" "exit 0, TMPDIR=${WORK}/tmp" "exit ${RC}: ${OUT}"
 fi
+
+echo
+echo "== the C library's own path variables keep only what is absolute =="
+# GCONV_PATH, LOCPATH and NLSPATH are lists the C library searches in every program Phobos
+# starts, GCONV_PATH for code it loads; HOSTALIASES and TZDIR name one file or directory. A
+# relative entry in any of them resolves against the submission's tree. The command's own
+# environment, printed by env, shows what every program before it was given.
+# Whether OUT holds the line $1 exactly, as env prints one variable.
+out_has_line() {
+  grep -qxF -- "$1" <<<"$OUT"
+}
+for entry in "${ENTRIES[@]}"; do
+  [[ "$entry" == phobos-policysystem.sh ]] && continue
+  mapfile -d '' -t args < <(entry_args "$entry")
+  OUT="$(cd "$SUB" && PATH="$CLEAN_PATH" GCONV_PATH=".:/gconv-a::relative/dir" LOCPATH="relative/dir" \
+    NLSPATH="/nls/%N:%N" HOSTALIASES="hosts" TZDIR="zone" "$BASH_BIN" "${args[@]}" 2>&1)"
+  RC=$?
+  if [[ "$RC" -eq 0 ]] && out_has_line "GCONV_PATH=/gconv-a" && out_has_line "NLSPATH=/nls/%N" \
+        && [[ "$OUT" != *LOCPATH=* && "$OUT" != *HOSTALIASES=* && "$OUT" != *TZDIR=* ]]; then
+    ok "$entry drops the relative entries of GCONV_PATH, LOCPATH and NLSPATH, and a relative HOSTALIASES and TZDIR"
+  else
+    bad "$entry drops the relative entries of GCONV_PATH, LOCPATH and NLSPATH, and a relative HOSTALIASES and TZDIR" \
+      "exit 0, GCONV_PATH=/gconv-a, NLSPATH=/nls/%N, no LOCPATH, HOSTALIASES or TZDIR" "exit ${RC}: ${OUT}"
+  fi
+  OUT="$(cd "$SUB" && PATH="$CLEAN_PATH" GCONV_PATH="/gconv-a:/gconv-b" LOCPATH="/locale" NLSPATH="/nls/%N" \
+    HOSTALIASES="/etc/host.aliases" TZDIR="/zone" "$BASH_BIN" "${args[@]}" 2>&1)"
+  RC=$?
+  if [[ "$RC" -eq 0 && "$OUT" != *NOTICE* ]] && out_has_line "GCONV_PATH=/gconv-a:/gconv-b" \
+        && out_has_line "LOCPATH=/locale" && out_has_line "NLSPATH=/nls/%N" \
+        && out_has_line "HOSTALIASES=/etc/host.aliases" && out_has_line "TZDIR=/zone"; then
+    ok "$entry passes absolute values of the same five variables on unchanged and without a notice"
+  else
+    bad "$entry passes absolute values of the same five variables on unchanged and without a notice" \
+      "exit 0, all five as given, no notice" "exit ${RC}: ${OUT}"
+  fi
+done
+
+echo
+echo "== no PATH in the environment: the command is given none, as before, and nothing is said =="
+# Bash invents a PATH when its environment has none, without exporting it, and the default of
+# some builds ends in ".". Each entry point cleans that invented PATH for its own lookups and
+# leaves it unexported, so the command is given no PATH, as it was before, and a run says nothing
+# about a PATH its caller never gave.
+for entry in "${ENTRIES[@]}"; do
+  [[ "$entry" == phobos-policysystem.sh ]] && continue
+  mapfile -d '' -t args < <(entry_args "$entry")
+  : > "$PLANTED_LOG"
+  OUT="$(cd "$SUB" && env -u PATH "$BASH_BIN" "${args[@]}" 2>&1)"
+  RC=$?
+  PLANTED="$(sort -u "$PLANTED_LOG" | tr '\n' ' ')"
+  if [[ "$RC" -eq 0 && -z "$PLANTED" && "$OUT" == *"HOME="* && "$OUT" != *NOTICE* ]] && ! grep -q '^PATH=' <<<"$OUT"; then
+    ok "$entry with no PATH runs the command, gives it no PATH and prints no notice"
+  else
+    bad "$entry with no PATH runs the command, gives it no PATH and prints no notice" \
+      "exit 0, nothing planted ran, no PATH line, no notice" "exit ${RC}, planted: ${PLANTED}: ${OUT}"
+  fi
+done
 
 finish
