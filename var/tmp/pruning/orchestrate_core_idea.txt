@@ -1,5 +1,5 @@
 ┌─────────────────────────────┐
-│ host: ./var/tmp             │  ← one bind mount, shared by every container
+│ host: ./var/tmp             │  ← the only channel between the containers
 │   path_sets/                │
 │   testing-dir/<lang>/...    │
 │   opt/core/config/          │
@@ -17,14 +17,19 @@
 └─────────────────────────────┘
 
 
-    Every container mounts the same host directory, read-write, at /var/tmp, so they all
-    see the same path_sets and opt/core.
+    The Python container and the orchestrator mount the host directory read-write at /var/tmp.
+    The Java containers mount only what they need from it: the exercises and the helpers
+    read-only, path_sets read-write, and verify_java the merged opt/core/config read-only.
 
-    Each prune container writes one <lang>_<exercise>.paths (and .json) per exercise into
-    path_sets.
+    The Java container (the layer pruner) writes one java_<exercise>.cfg and its .json record
+    per exercise into path_sets; the Python container (Bubblewrap) one python_<exercise>.paths
+    and its .json.
 
-    The orchestrate service then folds each language's results into <lang>_union.paths,
-    merges the languages, and writes BaseLanguage-<lang>.cfg and TailPhobos.cfg into
-    opt/core/config. Copying them into core/config is a reviewed step of its own.
+    The orchestrate service then holds every artefact to its record, folds the Python path sets
+    into python_union.paths, merges each language's exercises into BaseLanguage-<lang>.cfg (no
+    [limits]), writes each Java exercise's remainder and limits to exercises/java_<exercise>.cfg,
+    and writes BasePhobos.cfg and TailPhobos.cfg into opt/core/config. The verify_java service
+    then runs every Java exercise under that base and its exercise file and writes
+    path_sets/verify/. Copying the result into core/config is a reviewed step of its own.
 
 No network between the containers and no docker cp: the shared bind mount is the only channel.

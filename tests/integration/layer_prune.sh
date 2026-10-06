@@ -10,6 +10,9 @@
 #   forbidden  under the same policy the probe is refused the unneeded file, the optional file the
 #              build did without, a sibling of a granted prefix, a write into what was only read,
 #              10.0.0.1:80 and port 8080, and each derived limit ends a run that exceeds it;
+#   merged     the orchestrator merges the artefacts into BaseLanguage-java.cfg and the exercise's
+#              own file, and the fixture passes under that pair (main.py --verify), as grading applies it;
+#              a hand-edited .cfg its record does not vouch for stops the merge;
 #   wrong reasons  a flaky reference, NO-SOURCE, a needed setsid, a needed external host and a
 #              failure no refused call explains each abort the exercise and write no policy.
 #
@@ -188,6 +191,40 @@ PY
     "containment check passed: canary /srv/phobos-prune-canary/secret" "$(tail -1 <<<"${out}")"
 }
 
+# The orchestrator merges the artefacts, the fixture passes under the merged pair, and an artefact its
+# record does not vouch for stops the merge.
+check_merged_and_verified() {
+  [[ -f "${CFG}" ]] || { bad "the merged configuration can be checked" "no policy was written"; return; }
+  local core="${WORK}/core"
+  if python3 "${REPO}/docker/prune_phase/orchestrate/orchestrate.py" --langs java --path-dir "${OUTPUT}" \
+      --core-dir "${core}" --helpers-dir "${HELPERS}" --skip-prune >"${WORK}/merge.log" 2>&1 \
+      && [[ -f "${core}/BaseLanguage-java.cfg" ]] && ! grep -q '^\[limits\]' "${core}/BaseLanguage-java.cfg" \
+      && grep -q '^\[limits\]' "${core}/exercises/java_fixture.cfg"; then
+    ok "the orchestrator merges the artefacts into a base without limits and the exercise's own file with them"
+  else
+    bad "the orchestrator merges the artefacts into a base without limits and the exercise's own file with them" \
+      "$(tail -5 "${WORK}/merge.log")"
+  fi
+  local out
+  out="$(python3 "${HELPERS}/layer_prune/main.py" --verify "${core}" --output-dir "${WORK}/verify-out" java 2>&1)"
+  if [[ $? -eq 0 && "${out}" == *"java/fixture: verified"* ]]; then
+    ok "the fixture passes under the merged base and its own file, every layer on"
+  else
+    bad "the fixture passes under the merged base and its own file, every layer on" "$(tail -3 <<<"${out}")"
+  fi
+  local tampered="${WORK}/tampered"
+  cp -r "${OUTPUT}" "${tampered}"
+  printf '[read]\n/\n' >> "${tampered}/java_fixture.cfg"
+  if python3 "${REPO}/docker/prune_phase/orchestrate/orchestrate.py" --langs java --path-dir "${tampered}" \
+      --core-dir "${WORK}/core-tampered" --helpers-dir "${HELPERS}" --skip-prune >"${WORK}/tampered.log" 2>&1; then
+    bad "a .cfg its record does not vouch for stops the merge" "the orchestrator merged it"
+  elif grep -q 'its SHA-256 differs' "${WORK}/tampered.log"; then
+    ok "a .cfg its record does not vouch for stops the merge"
+  else
+    bad "a .cfg its record does not vouch for stops the merge" "$(tail -3 "${WORK}/tampered.log")"
+  fi
+}
+
 # Each wrong-reason variant aborts with its reason and writes no policy.
 check_wrong_reasons() {
   local variant
@@ -221,5 +258,6 @@ check_permitted
 check_forbidden
 check_limits_and_containment
 check_containment_catches_a_widening
+check_merged_and_verified
 check_wrong_reasons
 finish

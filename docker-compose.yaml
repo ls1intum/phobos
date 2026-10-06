@@ -7,13 +7,27 @@ services:
         target: /var/tmp
     command: ["--verbose", "--cache-dir", "/home/sandboxuser/.cache/pip", "python"]
 
-  prune_java:
-    build: docker/prune_phase/java
+  # Java is pruned on the grading layers themselves (docker/prune_phase/layers, README "The layer
+  # pruner"). The image is built on the run-phase image docker/run_phase/java/docker-compose.yaml
+  # builds. The exercises are mounted read-only and only the artefacts' directory is writable, since
+  # every run replaces /var/tmp/testing-dir with a fresh copy of the exercise (A.6.1). No network, no
+  # privilege and no capability: strace traces only the pruner's own children.
+  prune_java: &prune_layers
+    build:
+      context: .
+      dockerfile: docker/prune_phase/layers/Dockerfile
+      args:
+        RUN_PHASE_IMAGE: ${RUN_PHASE_IMAGE:-phobos-run-phase-java}
+    image: phobos-prune-layers
+    entrypoint: ["python3", "/var/tmp/helpers/layer_prune/main.py"]
+    network_mode: none
+    mem_limit: 3g
+    pids_limit: 1024
     volumes:
-      - type: bind
-        source: ./var/tmp
-        target: /var/tmp
-    command: ["--verbose", "--cache-dir", "/home/sandboxuser/.gradle", "java" ]
+      - ./var/tmp/testing-dir:/srv/phobos-prune-exercises:ro
+      - ./var/tmp/helpers:/var/tmp/helpers:ro
+      - ./var/tmp/path_sets:/var/tmp/path_sets
+    command: ["--stage", "all", "java"]
 
   # The recording pruner: records the instructor's reference program while a person uses it, with
   # no sandbox at all, and replays it under the layers with `check`. Started only on purpose, as
@@ -62,3 +76,18 @@ services:
         "--langs", "python,java",
         "--path-dir", "/var/tmp/path_sets", "--skip-prune"
       ]
+
+  # Runs every Java exercise once more under what grading will apply: the merged
+  # BaseLanguage-java.cfg and the exercise's own file under exercises/, as the orchestrator wrote them.
+  # Its records go to path_sets/verify/; it changes no artefact of the prune.
+  verify_java:
+    <<: *prune_layers
+    volumes:
+      - ./var/tmp/testing-dir:/srv/phobos-prune-exercises:ro
+      - ./var/tmp/helpers:/var/tmp/helpers:ro
+      - ./var/tmp/path_sets:/var/tmp/path_sets
+      - ./var/tmp/opt/core/config:/srv/phobos-merged:ro
+    depends_on:
+      orchestrate:
+        condition: service_completed_successfully
+    command: ["--verify", "/srv/phobos-merged", "java"]
