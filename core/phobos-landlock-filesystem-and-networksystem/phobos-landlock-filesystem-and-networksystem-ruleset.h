@@ -159,9 +159,6 @@ static_assert(offsetof(struct landlock_ruleset_attributes, handled_access_networ
 static_assert(offsetof(struct landlock_ruleset_attributes, scoped) == KERNEL_RULESET_SCOPED_OFFSET,
               "the kernel expects scoped as the third member");
 
-/* Rights available at the given Landlock version. */
-uint64_t filesystem_rights_for_version(int landlock_version);
-
 /* Size of the attribute structure the given version understands. */
 size_t ruleset_attributes_size_for_version(int landlock_version);
 

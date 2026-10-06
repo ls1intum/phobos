@@ -22,6 +22,7 @@
  * with lives beside it:
  *
  *   phobos-landlock-filesystem-and-networksystem-options.h      the command line, read into one object
+ *   phobos-landlock-filesystem-and-networksystem-policy.h       the same reading, answering rather than exiting
  *   phobos-landlock-filesystem-and-networksystem-path-rule.h    one allow-listed path and its rights
  *   phobos-landlock-filesystem-and-networksystem-ruleset.h      the kernel object and the operations on it
  *   phobos-landlock-filesystem-and-networksystem-diagnostics.h  reporting and giving up

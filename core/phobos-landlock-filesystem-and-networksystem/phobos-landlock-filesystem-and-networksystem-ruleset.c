@@ -4,6 +4,7 @@
 
 #include "phobos-landlock-filesystem-and-networksystem-diagnostics.h"
 #include "phobos-landlock-filesystem-and-networksystem-path-rule.h"
+#include "phobos-landlock-filesystem-and-networksystem-policy.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -14,31 +15,6 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
-
-uint64_t filesystem_rights_for_version(int landlock_version) {
-    uint64_t rights =
-        LANDLOCK_ACCESS_FILESYSTEM_EXECUTE | LANDLOCK_ACCESS_FILESYSTEM_WRITE_FILE |
-        LANDLOCK_ACCESS_FILESYSTEM_READ_FILE | LANDLOCK_ACCESS_FILESYSTEM_READ_DIRECTORY |
-        LANDLOCK_ACCESS_FILESYSTEM_REMOVE_DIRECTORY | LANDLOCK_ACCESS_FILESYSTEM_REMOVE_FILE |
-        LANDLOCK_ACCESS_FILESYSTEM_MAKE_CHARACTER_DEVICE |
-        LANDLOCK_ACCESS_FILESYSTEM_MAKE_DIRECTORY | LANDLOCK_ACCESS_FILESYSTEM_MAKE_REGULAR_FILE |
-        LANDLOCK_ACCESS_FILESYSTEM_MAKE_SOCKET | LANDLOCK_ACCESS_FILESYSTEM_MAKE_NAMED_PIPE |
-        LANDLOCK_ACCESS_FILESYSTEM_MAKE_BLOCK_DEVICE |
-        LANDLOCK_ACCESS_FILESYSTEM_MAKE_SYMBOLIC_LINK;
-    if (landlock_version >= FIRST_VERSION_WITH_REFER) {
-        rights |= LANDLOCK_ACCESS_FILESYSTEM_REFER;
-    }
-    if (landlock_version >= FIRST_VERSION_WITH_TRUNCATE) {
-        rights |= LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE;
-    }
-    if (landlock_version >= FIRST_VERSION_WITH_IOCTL_DEVICE) {
-        rights |= LANDLOCK_ACCESS_FILESYSTEM_IOCTL_DEVICE;
-    }
-    if (landlock_version >= FIRST_VERSION_WITH_RESOLVE_UNIX) {
-        rights |= LANDLOCK_ACCESS_FILESYSTEM_RESOLVE_UNIX;
-    }
-    return rights;
-}
 
 /* Older kernels reject the larger structure, so send only the part they know. */
 size_t ruleset_attributes_size_for_version(int landlock_version) {
@@ -53,8 +29,7 @@ size_t ruleset_attributes_size_for_version(int landlock_version) {
 
 int detect_landlock_version(int minimum_landlock_version, bool network_rules_wanted,
                             bool udp_rules_wanted) {
-    long landlock_version =
-        syscall(SYSCALL_NUMBER_LANDLOCK_CREATE_RULESET, nullptr, 0, LANDLOCK_CREATE_RULESET_VERSION);
+    long landlock_version = query_landlock_version();
     if (landlock_version < 0) {
         exit_with_message("Landlock is not available on this kernel (refusing to run "
                           "unprotected)");

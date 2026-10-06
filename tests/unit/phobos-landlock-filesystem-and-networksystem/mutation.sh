@@ -65,7 +65,9 @@ mkdir -p /tmp/objects
 # works with one source file per invocation.
 for source in tests/unit/phobos-landlock-filesystem-and-networksystem/landlock_filesystem_and_networksystem_unit.c core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-diagnostics.c \
               core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-path-rule.c core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-options.c \
-              core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-ruleset.c; do
+              core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-ruleset.c \
+              core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-policy.c \
+              core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-model.c; do
   "clang-${LLVM_VERSION}" -std=gnu23 "-fpass-plugin=/usr/lib/mull-ir-frontend-${LLVM_VERSION}" \
     -g -grecord-command-line -O0 -c -o "/tmp/objects/$(basename "${source%.c}").o" "$source"
 done
