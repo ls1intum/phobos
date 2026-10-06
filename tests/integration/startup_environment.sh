@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # What every entry point does with the environment it is started in, before it runs anything:
 # no PATH entry that is relative or empty, which means the current directory, is ever used to
-# find a program, CDPATH never redirects the entry point's own cd, a relative TMPDIR never puts a
-# layer's scratch files in the current directory, the C library's own path variables keep only
-# what is absolute, and a PATH with no absolute entry at all is refused rather than searched.
+# find a program, CDPATH never redirects the entry point's own cd, a relative TMPDIR never reaches
+# a program that would make its temporary files beneath the current directory, the C library's own
+# path variables keep only what is absolute, and a PATH with no absolute entry at all is refused rather than searched.
 # The current directory is the submission's tree when a grader starts Phobos there, and every
 # program found through it would run before any sandbox exists.
 #
@@ -239,12 +239,12 @@ for entry in "${ENTRIES[@]}"; do
 done
 
 echo
-echo "== a relative TMPDIR never puts a layer's scratch in the current directory =="
-# The network layer makes its scratch files through mktemp -t, which honours TMPDIR. A relative
-# TMPDIR naming no directory makes that fail the run, and one naming a directory puts the files
-# in the submission's tree; an absolute TMPDIR is the grader's choice and is kept. The layer
-# removes those files again before the command starts, so a directory left empty afterwards
-# proves nothing, and the relative TMPDIR naming no directory is what makes the lookup visible.
+echo "== a relative TMPDIR is dropped, an absolute one is kept =="
+# A program that honours TMPDIR, mktemp -t among them, makes its temporary files beneath the
+# current directory when TMPDIR is relative, so no program Phobos or the command starts is given
+# one. A relative TMPDIR naming no directory would also fail any such use in the run. An absolute
+# TMPDIR is the grader's choice and is kept. Phobos's own files never go through TMPDIR, which
+# scratch_location.sh holds.
 run_entry "$CLEAN_PATH" "$CORE_X/phobos.sh" --spec-parent "$SPECS" --landlock-bin "$PASS" --pgroup-lock-bin "$PASS" \
   --connect-guard-bin "$PASS" --config "$CONNECT_CFG" -- /usr/bin/env
 if [[ "$RC" -eq 0 && "$OUT" != *TMPDIR=* ]]; then
@@ -256,9 +256,9 @@ OUT="$(cd "$SUB" && PATH="$CLEAN_PATH" TMPDIR=no-such-relative-dir "$BASH_BIN" "
   --landlock-bin "$PASS" --pgroup-lock-bin "$PASS" --connect-guard-bin "$PASS" --config "$CONNECT_CFG" -- /usr/bin/env 2>&1)"
 RC=$?
 if [[ "$RC" -eq 0 && "$OUT" != *TMPDIR=* ]]; then
-  ok "a relative TMPDIR is dropped: mktemp no longer resolves it beneath the current directory, the command is not given it"
+  ok "a relative TMPDIR is dropped: the run works and the command is not given it"
 else
-  bad "a relative TMPDIR is dropped: mktemp no longer resolves it beneath the current directory, the command is not given it" \
+  bad "a relative TMPDIR is dropped: the run works and the command is not given it" \
     "exit 0, no TMPDIR" "exit ${RC}: ${OUT}"
 fi
 mkdir -p "$WORK/tmp"

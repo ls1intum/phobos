@@ -9,8 +9,8 @@
 # directory in the current one. Every external program Phobos runs before the sandbox exists
 # would then be looked up there first. Where the environment has no PATH, bash invents one, and
 # some builds end it in ".". CDPATH would likewise move the cd an entry point makes to find its
-# own directory, a relative TMPDIR would put the network layer's scratch files in the
-# submission's tree, and the C library resolves a relative entry of GCONV_PATH (modules it
+# own directory, a relative TMPDIR would make every program that honours it, mktemp -t among
+# them, put its temporary files in the submission's tree, and the C library resolves a relative entry of GCONV_PATH (modules it
 # loads as code), LOCPATH, NLSPATH, HOSTALIASES and TZDIR there in every program it runs.
 #
 # Every entry point sources this file first, before phobos-common.sh, by a path it builds in

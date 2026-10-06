@@ -126,6 +126,11 @@ jobs:
       - name: No entry point looks a program up in the current directory
         if: ${{ !cancelled() }}
         run: bash tests/integration/startup_environment.sh
+      # Every temporary file of a run lies in its own specification directory, out of the reach of
+      # the command of a concurrent run, and never in TMPDIR, or /tmp when it is unset.
+      - name: A run's temporary files stay in its specification directory
+        if: ${{ !cancelled() }}
+        run: bash tests/integration/scratch_location.sh
 
       # How the network allow-list becomes Landlock TCP-port rules: a concrete port is
       # enforced, a loopback host with no port is tolerated, a non-loopback host with no
