@@ -118,6 +118,17 @@ else
   bad "a variable whose value ends in a newline is refused, not read without it" "status ${PHB_EPOLICY}" "${result}"
 fi
 
+for entry in "." "" "cwd-relative"; do
+  mkdir -p "${WORK}/cwd/cwd-relative"
+  cp "${WORK}/opt/tool/bin/tool" "${WORK}/cwd/cwd-relative/onlyhere"
+  result="$(printf '[base]\nBaseLanguage-x.cfg\n[placeholders]\na = command-ancestor onlyhere 1\n' | PATH="${entry}:${PATH}" load_result RELATIVE_PATH_CONFIGURATION)"
+  if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"found no command 'onlyhere' on the PATH"* ]]; then
+    ok "a command reachable only through the relative PATH entry '${entry}' is not used"
+  else
+    bad "a command reachable only through the relative PATH entry '${entry}' is not used" "status ${PHB_EPOLICY}" "${result}"
+  fi
+done
+
 mkdir -p "${WORK}/tools"
 for tool in head od tr wc realpath dirname; do
   ln -s "$(type -P "$tool")" "${WORK}/tools/${tool}"

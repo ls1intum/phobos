@@ -165,10 +165,30 @@ determine_by_environment() {
   fi
 }
 
+# Sets language_found to the first executable file of that name in a directory of the PATH, or to
+# nothing. Only the PATH's absolute entries are searched: an empty entry, ".", and any other
+# relative one name the current directory or one below it, which may be the assignment tree, so
+# they are skipped. Takes the command's name, which holds no slash. Assumes it runs inside
+# load_language_configuration, whose language_found it sets.
+find_command_on_absolute_path() {
+  local command="$1"
+  local directory
+  local -a directories=()
+  language_found=""
+  IFS=: read -ra directories <<< "${PATH:-}"
+  for directory in "${directories[@]}"; do
+    [[ "$directory" == /* ]] || continue
+    if [[ -f "${directory}/${command}" && -x "${directory}/${command}" ]]; then
+      language_found="${directory}/${command}"
+      return 0
+    fi
+  done
+}
+
 # Sets language_value to the directory a command on the PATH lives in, that many levels up from
 # the command resolved through every symbolic link: java at /opt/java/openjdk/bin/java with 2
-# gives /opt/java/openjdk. The command is looked up on the PATH alone, never in the current
-# directory, and a command name with a slash is refused. Takes the placeholder's name, the
+# gives /opt/java/openjdk. The command is looked up in the absolute entries of the PATH alone,
+# never in the current directory, and a command name with a slash is refused. Takes the placeholder's name, the
 # primitive as written, and the primitive's arguments, the command and the levels. Assumes GNU
 # realpath, that it runs inside load_language_configuration, with PARSE_LOCATION naming the line,
 # and that it is called plainly, so that a refusal ends the run.
@@ -177,6 +197,7 @@ determine_by_command_ancestor() {
   local written="$2"
   local command="${3:-}"
   local levels="${4:-}"
+  local language_found=""
   local found
   local step
   if (( $# != 4 )); then
@@ -188,7 +209,8 @@ determine_by_command_ancestor() {
   if [[ ! "$levels" =~ $LANGUAGE_LEVELS_PATTERN ]]; then
     refuse_cfg "${levels@Q} in ${written@Q} is not a number of levels from 1 to 99"
   fi
-  found="$(type -P -- "$command" || true)"
+  find_command_on_absolute_path "$command"
+  found="$language_found"
   if [[ "$found" != /* ]]; then
     refuse_cfg "\${${placeholder}} cannot be determined: ${written@Q} found no command ${command@Q} on the PATH"
   fi
