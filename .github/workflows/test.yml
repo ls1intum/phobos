@@ -127,7 +127,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/integration/startup_environment.sh
       # Every temporary file of a run lies in its own specification directory, out of the reach of
-      # the command of a concurrent run, and never in TMPDIR, which is /tmp and writable to it.
+      # the command of a concurrent run, and never in TMPDIR, or /tmp when it is unset.
       - name: A run's temporary files stay in its specification directory
         if: ${{ !cancelled() }}
         run: bash tests/integration/scratch_location.sh

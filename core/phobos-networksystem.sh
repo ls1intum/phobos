@@ -169,8 +169,9 @@ SPEC_DIR="$1"; shift 2
 
 # The temporary files this layer makes, the port lists it builds the Landlock rules from among
 # them, go under the specification directory, which lies outside every write path and is removed
-# whole. Set here rather than inherited, so that neither TMPDIR, which is /tmp and writable to the
-# command of a concurrent run, nor a PHOBOS_SCRATCH left in the environment decides where they go.
+# whole. Set here rather than inherited, so that neither TMPDIR, or /tmp when it is unset, which
+# the command of a concurrent run may write, nor a PHOBOS_SCRATCH left in the environment decides
+# where they go.
 PHOBOS_SCRATCH="${SPEC_DIR}/${PHB_SPEC_SCRATCH}"
 mkdir -p "$PHOBOS_SCRATCH"
 

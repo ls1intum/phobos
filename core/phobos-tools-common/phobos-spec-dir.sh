@@ -10,9 +10,9 @@
 # shellcheck disable=SC2034
 
 # Ends the shell with PHB_ERUNTIME when PHOBOS_SCRATCH names no directory. There is deliberately
-# no fallback to TMPDIR: that is /tmp, which the shipped policies make writable to the graded
-# command, so a command of a concurrent run could see, and as the same user rewrite, a file this
-# run still reads its rules from. Assumes the script that called it set PHOBOS_SCRATCH to the
+# no fallback to TMPDIR, or to /tmp when it is unset, which the shipped policies make writable to
+# the graded command, so a command of a concurrent run could see, and as the same user replace, a
+# file this run still reads its rules from. Assumes the script that called it set PHOBOS_SCRATCH to the
 # scratch subdirectory of the specification directory it owns, never taking it from the
 # environment.
 refuse_missing_scratch() {

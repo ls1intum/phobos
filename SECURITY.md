@@ -152,13 +152,14 @@ adding back only what the command needs.
 ## A run's own files are out of the command's reach
 
 Every temporary file Phobos makes for a run, the port lists the network layer builds its Landlock
-rules from among them, lives in the scratch subdirectory of the run's specification directory,
-which `phobos.sh` refuses to place beneath a write path. Each layer that makes such files sets
-that directory itself, rather than taking `PHOBOS_SCRATCH` or `TMPDIR` from its environment, and
-a helper called without one refuses with `PHB-ERUNTIME` rather than fall back to `TMPDIR`. Before
-this, the network layer made its port lists in `/tmp`, which the shipped policies make writable:
-they were removed before its own command started, but the command of a concurrent run in the
-same container could see them appear while they were being read.
+rules from among them, lives in the run's specification directory, most of them in its scratch
+subdirectory. The policy program refuses to place a specification directory it builds beneath a
+write path; one handed straight to a layer is the caller's to place. Each layer that makes such
+files sets the scratch directory itself, rather than taking `PHOBOS_SCRATCH` or `TMPDIR` from its
+environment, and a helper called without one refuses with `PHB-ERUNTIME` rather than fall back to
+`TMPDIR`, or to `/tmp`, which the shipped policies make writable, so the command of a concurrent
+run in the same container could see such a file, and as the same user replace it, while another
+run still reads its rules from it.
 
 ## Inbound filtering assumes a networked container, and is defence in depth, not a boundary
 
