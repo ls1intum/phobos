@@ -79,31 +79,36 @@ SELF_LINKS = ("/proc/self", "/proc/thread-self")
 
 @dataclasses.dataclass(frozen=True)
 class Snapshot:
-    """What existed before a run: every path and every directory under the scanned roots.
+    """What existed before a run: every path and every directory under the scanned and the indexed roots.
 
     `existed` and `is_directory` answer from the snapshot for a path under a scanned root (the
-    exercise and the write grants, which a run may change) and from the filesystem now for any other
-    path, which no run could have created; such a path that is missing now is reported by the
-    callers, never climbed from.
+    exercise and the write grants, which a run may change) or under an indexed root (what the caller
+    walked before any run, so that an earlier run's leftovers do not read as part of the system), and
+    from the filesystem now for any other path. Only a scanned root is climbed from: a path missing
+    from an indexed root, or missing now elsewhere, is reported by the callers.
     """
 
     existing: frozenset[str]
     directories: frozenset[str]
     scanned: tuple[str, ...]
+    indexed: tuple[str, ...] = ()
 
     @classmethod
-    def take(cls, roots: Iterable[str]) -> Snapshot:
-        """Walks each root, resolved first, without following symbolic links beneath it; an unreadable directory raises."""
+    def take(cls, roots: Iterable[str], excluded: tuple[str, ...] = ()) -> Snapshot:
+        """Walks each root, resolved first, without following symbolic links beneath it, and without
+        descending into an excluded path; an unreadable directory raises."""
         existing: set[str] = set()
         directories: set[str] = set()
         scanned = tuple(os.path.realpath(root) for root in roots)
         for root in scanned:
-            if not os.path.lexists(root):
+            if not os.path.lexists(root) or within(root, excluded):
                 continue
             existing.add(root)
             if os.path.isdir(root):
                 directories.add(root)
             for current, subdirectories, files in os.walk(root, onerror=raise_walk_error):
+                subdirectories[:] = [name for name in subdirectories
+                                     if not within(os.path.join(current, name), excluded)]
                 for name in subdirectories:
                     full = os.path.join(current, name)
                     existing.add(full)
@@ -113,16 +118,20 @@ class Snapshot:
         return cls(existing=frozenset(existing), directories=frozenset(directories), scanned=scanned)
 
     def scanned_path(self, path: str) -> bool:
-        """Whether a path lies under a root the snapshot walked."""
+        """Whether a path lies under a root the snapshot walked to climb from."""
         return any(path == root or is_beneath(path, root) for root in self.scanned)
+
+    def answered(self, path: str) -> bool:
+        """Whether the snapshot, rather than the filesystem now, says whether the path existed."""
+        return self.scanned_path(path) or within(path, self.indexed)
 
     def existed(self, path: str) -> bool:
         """Whether the path existed before the run."""
-        return path in self.existing if self.scanned_path(path) else os.path.lexists(path)
+        return path in self.existing if self.answered(path) else os.path.lexists(path)
 
     def is_directory(self, path: str) -> bool:
         """Whether the path was a directory before the run."""
-        return path in self.directories if self.scanned_path(path) else os.path.isdir(path)
+        return path in self.directories if self.answered(path) else os.path.isdir(path)
 
 
 def raise_walk_error(error: OSError) -> None:

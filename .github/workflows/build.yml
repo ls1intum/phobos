@@ -136,7 +136,7 @@ jobs:
   run-phase:
     name: Build the run-phase image (${{ matrix.platform }}) and hold it to the acceptance suites
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 100
     permissions:
       contents: read
     strategy:
@@ -383,15 +383,16 @@ jobs:
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/reporting.sh
 
-      # The prune image is the run-phase image this job just built plus strace and python3, with a
-      # base that grants nothing. It is built on top of that exact image, so the layer pruner's
-      # observer is held to the layers this job has just proven.
+      # The prune image is the run-phase image this job just built plus strace, python3 and the
+      # protection matrix's probe, with a base that grants nothing. It is built on top of that exact
+      # image, so the layer pruner is held to the layers this job has just proven. Built from the
+      # repository root, since the probe's source lives under tests/.
       - name: Build the prune image on the run-phase image
         id: prune-build
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci \
-            -t phobos-prune-layers:ci docker/prune_phase/layers
+            -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers:ci .
 
       # strace observes a Landlock refusal made inside the shipped chain, a permitted read beside it
       # still works, and the parser and attribution turn the record into exactly that one denial. An
@@ -410,6 +411,17 @@ jobs:
       - name: The recording pruner records with the terminal passed through and replays under the layers
         if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
         run: bash tests/integration/record_host.sh phobos-prune-layers:ci phobos-run-phase:ci
+
+      # The whole pipeline on the fixture exercise: the derived policy passes the build with every
+      # layer on, refuses what the build did not need, bounds each limit, and every wrong-reason
+      # variant aborts without a policy. The repository is mounted read-only; the suite copies what
+      # it prunes.
+      - name: The layer pruner derives a policy that holds in both directions
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        timeout-minutes: 50
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}:/repo:ro" phobos-prune-layers:ci bash /repo/tests/integration/layer_prune.sh
 
   # Mutation testing installs clang and mull into a container and then runs the suite
   # once per mutant. It runs on every change like the other jobs, and a run that does

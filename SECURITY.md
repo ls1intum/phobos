@@ -65,6 +65,10 @@ rest exists to take privileges away. None of the following is a vulnerability.
   directory was needed. Its orchestrator therefore starts processes and interprets their
   failures, and its output becomes the allow-list the sandbox later trusts. The discovery
   phase uses Bubblewrap to hide directories; the sandbox an exercise runs in does not.
+  The layer pruner beside it (`docker/prune_phase/layers/`, `var/tmp/helpers/layer_prune/`)
+  runs the reference under the grading layers instead and records their refusals with
+  `strace`. strace and the containment probe are installed in the prune image only, never in
+  the run-phase image a submission is graded in, and the prune container needs no privilege.
 - The Dockerfiles under `docker/` extend the Artemis test images and compile the C products.
   The run-phase image needs no user namespaces, no added capabilities and no security
   options: Landlock, the connect guard and the timeout are all self-imposed by the
