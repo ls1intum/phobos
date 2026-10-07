@@ -65,6 +65,18 @@ def test_earlier_artefacts_of_the_key_are_removed_and_other_keys_kept(tmp_path, 
     assert sorted(path.name for path in output.iterdir()) == ["java_alpha.cfg", "java_alpha.json", "python_kept.cfg"]
 
 
+def test_the_path_sets_of_the_retired_pruner_are_removed_for_the_key_only(tmp_path, pruned):
+    root = exercise_tree(tmp_path / "exercises", "alpha")
+    output = tmp_path / "out"
+    output.mkdir()
+    for name in ("java_old.paths", "java_union.paths", "java_intersection.paths", "python_old.paths",
+                 "java-egress_old.paths"):
+        (output / name).write_text("/x\n")
+    main.main(["--testing-root", str(root), "--output-dir", str(output), "java"])
+    assert sorted(path.name for path in output.iterdir()) == ["java-egress_old.paths", "java_alpha.cfg",
+                                                              "java_alpha.json", "python_old.paths"]
+
+
 def test_an_aborted_exercise_writes_no_cfg_and_the_command_names_it(tmp_path, pruned, capsys):
     root = exercise_tree(tmp_path / "exercises", "alpha", "broken")
     output = tmp_path / "out"
@@ -179,6 +191,9 @@ def test_verify_runs_each_exercise_under_the_merged_pair_and_leaves_the_prune_ar
     beta = json.loads((output / "verify" / "java_beta.json").read_text())
     assert alpha["verified"] is True
     assert alpha["provenance"] == ORIGIN
+    assert alpha["configs_sha256"] == [hashlib.sha256(b"[read]\n/usr\n").hexdigest(),
+                                       hashlib.sha256(b"[limits]\ntimeout=60\n").hexdigest()]
+    assert "configs_sha256" not in beta
     assert beta["verified"] is False
     assert "java_beta.cfg" in beta["aborted"]
 

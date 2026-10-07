@@ -99,9 +99,10 @@ def write_atomically(path: pathlib.Path, text: str) -> None:
 
 
 def remove_stale(output: pathlib.Path, key: str) -> None:
-    """Removes every earlier artefact of this key, partial ones and verifications included, so none survives a prune."""
+    """Removes every earlier artefact of this key, partial ones, verifications and the `.paths` of the retired
+    Bubblewrap pruner included, so none survives a prune."""
     for directory in (output, output / PARTIAL_DIRECTORY, output / VERIFY_DIRECTORY):
-        for pattern in (f"{key}_*.cfg", f"{key}_*.json"):
+        for pattern in (f"{key}_*.cfg", f"{key}_*.json", f"{key}_*.paths"):
             for path in directory.glob(pattern):
                 path.unlink()
 
@@ -182,6 +183,8 @@ def verify_one(directory: pathlib.Path, key: str, environment: runner.Environmen
     configs = (merged / f"BaseLanguage-{key}.cfg", merged / "exercises" / f"{key}_{directory.name}.cfg")
     entry: dict = {"schema_version": SCHEMA_VERSION, "key": key, "exercise": directory.name,
                    "configs": [str(config) for config in configs], "provenance": origin}
+    if all(config.is_file() for config in configs):
+        entry["configs_sha256"] = [hashlib.sha256(config.read_bytes()).hexdigest() for config in configs]
     reason = None
     try:
         missing = [str(config) for config in configs if not config.is_file()]

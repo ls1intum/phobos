@@ -1,8 +1,8 @@
 """The per-exercise pipeline of A.6.4: baseline, permissive run, filesystem, network, limits, verification.
 
 Each stage has one layer that can deny, which keeps attribution unambiguous: the filesystem stage runs
-with the network layer and the limits off, the network stage with the filesystem fixed, the limits
-stage under both. The joint verification is the only run shape that matters for grading, and a denial
+with the network layer and the limits off (except for the declared hosts of an exercise that names
+some, see filesystem_run), the network stage with the filesystem fixed, the limits stage under both. The joint verification is the only run shape that matters for grading, and a denial
 found there goes back to the stage that owns it. Everything a stage concludes is appended to the
 record, so a reviewer of the generated policy sees why each grant is there and what was left out.
 """
@@ -133,6 +133,10 @@ def canonical(path: str) -> str:
     return os.path.realpath(path)
 
 
+# The outcomes of a test that mean it did not pass; a skipped test is neither passed nor failed.
+FAILING_OUTCOMES = (verdict.FAILED, verdict.UNREADABLE)
+
+
 def baseline(pruning: Pruning) -> verdict.Verdict:
     """Three reference runs that ran tests, without NO-SOURCE or an infrastructure failure, all alike (A.8)."""
     reference = None
@@ -147,12 +151,12 @@ def baseline(pruning: Pruning) -> verdict.Verdict:
             raise search.PruneAbort("flaky reference", {"first": dataclasses.asdict(reference),
                                                         "later": dataclasses.asdict(found)})
         reference = found
-    if pruning.exercise.declared_hosts and any(outcome != verdict.PASSED for _, outcome in reference.tests):
-        diagnose_declared_reference(pruning)
+    if pruning.exercise.declared_hosts and any(outcome in FAILING_OUTCOMES for _, outcome in reference.tests):
+        diagnose_declared_reference(pruning, reference)
     return reference
 
 
-def diagnose_declared_reference(pruning: Pruning) -> None:
+def diagnose_declared_reference(pruning: Pruning, reference: verdict.Verdict) -> None:
     """Says why the reference of an exercise that declares hosts fails tests under the layers; always raises PruneAbort.
 
     Such a reference runs under the layers with its declared hosts as its only external rules, so a
@@ -160,7 +164,9 @@ def diagnose_declared_reference(pruning: Pruning) -> None:
     would take that failure as the outcome to reproduce. One observed run names the undeclared
     destination ("needs external network", A.6.5); without one, the reference is not one to prune from.
     This errs restrictive: a reference that declares hosts and fails a test by design is not pruned,
-    while one without declared hosts may fail as long as it fails the same way every time.
+    while one without declared hosts may fail as long as it fails the same way every time. A skipped
+    test is not a failure and never starts this diagnosis. A diagnosis run that matches the reference
+    is reported as such, since then the failure is not the layers' doing.
     """
     policy = cfgfile.permissive_policy(pathlib.Path("/"), pruning.exercise.declared_hosts)
     result = pruning.run(policy, OBSERVED_NETWORK, "reference diagnosis")
@@ -169,7 +175,11 @@ def diagnose_declared_reference(pruning: Pruning) -> None:
     if external:
         raise search.PruneAbort("needs external network: undeclared " + ", ".join(external),
                                 {"refused_external": list(external)})
-    raise search.PruneAbort("the reference fails its own tests under the layers with only its declared hosts",
+    if verdict.same_outcome(result.verdict, reference):
+        raise search.PruneAbort("the reference fails its own tests, also under the layers with only its declared hosts",
+                                {"verdict": dataclasses.asdict(result.verdict)})
+    raise search.PruneAbort("the reference fails its own tests under the layers with only its declared hosts, "
+                            "and the diagnosis run did not match it",
                             {"verdict": dataclasses.asdict(result.verdict)})
 
 
@@ -396,7 +406,9 @@ def minimise_policy_fs(pruning: Pruning, policy: cfgfile.Policy, stage: str,
     """Removes every (path, section) grant two unobserved runs show is not needed (A.6.4, decision 10).
 
     The runs are filesystem runs (filesystem_run), or with `final_network` runs under the policy's own
-    [connect] and [bind] rules with the network layer on.
+    [connect] and [bind] rules with the network layer on; those first prove that the whole policy passes
+    under them, since a minimisation from a policy that does not pass would keep everything and fail later
+    for a reason it did not name.
     """
     pairs = sorted((path, section) for path, sections in policy.fs.items() for section in sections)
 
@@ -407,6 +419,9 @@ def minimise_policy_fs(pruning: Pruning, policy: cfgfile.Policy, stage: str,
             return pruning.matches(pruning.run(candidate, UNOBSERVED_NETWORK, stage))
         return pruning.matches(filesystem_run(pruning, candidate, False, stage))
 
+    if final_network and not passes(pairs):
+        raise search.PruneAbort("the filesystem grants do not pass under the final network rules, so there is nothing "
+                                "to minimise from")
     result = search.minimise(pairs, passes)
     final = normalised(pruning, with_pairs(policy, result.kept))
     removed = set(pairs) - {(path, section) for path, sections in final.fs.items() for section in sections}
@@ -425,7 +440,10 @@ def with_pairs(policy: cfgfile.Policy, pairs: list[tuple[str, str]]) -> cfgfile.
 
 
 def prune_filesystem(pruning: Pruning, seed: cfgfile.Policy) -> cfgfile.Policy:
-    """Stage 1: grow from denials, compact, normalise, minimise, with the network layer and the limits off."""
+    """Stage 1: grow from denials, compact, normalise, minimise, with the network layer and the limits off.
+
+    The network layer stays on for the declared hosts of an exercise that names some (filesystem_run).
+    """
     grown = grow_filesystem(pruning, seed)
     compacted = generalise.compact(grown.fs, generalise.DEFAULT_COMPACTION_THRESHOLD, generalise.DEFAULT_FINE_ROOTS)
     pruning.note("compaction", before=sorted(grown.fs), after=sorted(compacted))
@@ -659,6 +677,17 @@ def verify(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
     raise search.PruneAbort("the joint verification did not settle")
 
 
+def require_prune_container() -> None:
+    """Refuses to go on outside the prune container, which sets PRUNE_CONTAINER_VARIABLE=1.
+
+    Every run restores the index taken before the first one, which deletes what the runs left, so
+    anything that does so must not run on a host. Assumes the container sets the variable.
+    """
+    if os.environ.get(PRUNE_CONTAINER_VARIABLE) != "1":
+        raise runner.PrunerDefect(-1, pathlib.Path(os.devnull), "the pruner removes what its runs leave behind, so it "
+                                  f"runs only in the prune container, which sets {PRUNE_CONTAINER_VARIABLE}=1")
+
+
 def verify_merged(exercise: runner.Exercise, configs: tuple[pathlib.Path, ...], environment: runner.Environment,
                   pristine: generalise.Snapshot) -> list[dict]:
     """Runs the exercise under the merged configuration files exactly as grading will apply them (A.9); the record.
@@ -670,6 +699,7 @@ def verify_merged(exercise: runner.Exercise, configs: tuple[pathlib.Path, ...], 
     The base is passed with --config, so its [read] and [execute] paths must exist as an exercise
     configuration's must, which a base beside phobos-policysystem.sh need not: this errs restrictive.
     """
+    require_prune_container()
     if not sampler.become_subreaper():
         raise runner.PrunerDefect(-1, pathlib.Path(os.devnull), "the kernel refused to make the pruner a child subreaper")
     pruning = Pruning(exercise=exercise, budget=Budget(), environment=environment, pristine=pristine)
@@ -698,9 +728,7 @@ def prune_exercise(exercise: runner.Exercise, budget: Budget, environment: runne
     its evidence. `pristine` is the index of what existed before the container's first run
     (pristine_index), taken here when the caller passes none.
     """
-    if os.environ.get(PRUNE_CONTAINER_VARIABLE) != "1":
-        raise runner.PrunerDefect(-1, pathlib.Path(os.devnull), "the pruner removes what its runs leave behind, so it "
-                                  f"runs only in the prune container, which sets {PRUNE_CONTAINER_VARIABLE}=1")
+    require_prune_container()
     containment.plant_canaries()
     if not sampler.become_subreaper():
         raise runner.PrunerDefect(-1, pathlib.Path(os.devnull), "the kernel refused to make the pruner a child subreaper")

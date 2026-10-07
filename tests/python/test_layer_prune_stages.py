@@ -341,6 +341,30 @@ def test_the_merged_verification_runs_every_layer_under_the_files_as_given_and_a
         stages.verify_merged(exercise, configs, runner.Environment(log_dir=str(tmp_path / "logs")), index)
 
 
+def test_the_merged_verification_stops_at_a_baseline_that_fails_with_the_record_and_restores_before_each_run(
+        tmp_path, monkeypatch):
+    configs = (tmp_path / "BaseLanguage-java.cfg", tmp_path / "java_fixture.cfg")
+    restored = []
+    index = stages.generalise.Snapshot(existing=frozenset(), directories=frozenset(), scanned=())
+    exercise = pruning(tmp_path).exercise
+    monkeypatch.setattr(stages.sampler, "become_subreaper", lambda: True)
+    monkeypatch.setattr(runner, "gate_configs", lambda *arguments: pytest.fail("the baseline fails first"))
+
+    def refuse(pruning):
+        pruning.note("baseline", attempt=1)
+        raise search.PruneAbort("flaky reference")
+    monkeypatch.setattr(stages, "baseline", refuse)
+    with pytest.raises(search.PruneAbort, match="flaky reference") as raised:
+        stages.verify_merged(exercise, configs, runner.Environment(log_dir=str(tmp_path / "logs")), index)
+    assert raised.value.evidence["record"] == [{"stage": "baseline", "attempt": 1}]
+    monkeypatch.setattr(stages, "baseline", lambda pruning: PASSED)
+    monkeypatch.setattr(runner, "gate_configs", lambda *arguments: None)
+    monkeypatch.setattr(stages, "restore_pristine", lambda pruning: restored.append("restore") or [])
+    monkeypatch.setattr(runner, "run_configured", lambda *arguments: restored.append("run") or sampled(PASSED, None))
+    stages.verify_merged(exercise, configs, runner.Environment(log_dir=str(tmp_path / "logs")), index)
+    assert restored == ["restore", "run"] * stages.Budget().verification_runs
+
+
 def test_the_filesystem_stage_of_an_exercise_with_declared_hosts_keeps_the_network_open_to_them(tmp_path,
                                                                                                   monkeypatch):
     asked = feed(monkeypatch, result(PASSED))
@@ -398,8 +422,44 @@ def test_a_declared_host_reference_that_fails_its_tests_names_the_undeclared_des
     with pytest.raises(search.PruneAbort, match="needs external network: undeclared 10.0.0.1:80 tcp"):
         stages.baseline(found)
     feed(monkeypatch, result(FAILED))
-    with pytest.raises(search.PruneAbort, match="fails its own tests under the layers"):
+    with pytest.raises(search.PruneAbort, match="fails its own tests, also under the layers"):
         stages.baseline(declared_pruning(tmp_path))
+    feed(monkeypatch, result(PASSED))
+    with pytest.raises(search.PruneAbort, match="the diagnosis run did not match it"):
+        stages.baseline(declared_pruning(tmp_path))
+
+
+SKIPPED = verdict.Verdict(exit_class="success", tests=(("T.a", "passed"), ("T.b", "skipped")), tests_ran=True,
+                          no_source=False, infra_failure=False)
+
+
+def test_a_declared_host_reference_with_a_skipped_test_is_taken_as_it_is_without_a_diagnosis(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "run_reference", lambda exercise, environment: sampled(SKIPPED, None))
+    monkeypatch.setattr(stages, "diagnose_declared_reference", lambda *arguments: pytest.fail("nothing failed"))
+    assert stages.baseline(declared_pruning(tmp_path)) == SKIPPED
+
+
+def test_a_declared_host_reference_that_passes_needs_no_diagnosis(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "run_reference", lambda exercise, environment: sampled(PASSED, None))
+    monkeypatch.setattr(stages, "diagnose_declared_reference", lambda *arguments: pytest.fail("nothing failed"))
+    assert stages.baseline(declared_pruning(tmp_path)) == PASSED
+
+
+def test_merged_verification_runs_only_in_the_prune_container(tmp_path, monkeypatch):
+    monkeypatch.delenv(stages.PRUNE_CONTAINER_VARIABLE, raising=False)
+    monkeypatch.setattr(stages.sampler, "become_subreaper", lambda: pytest.fail("must not get that far"))
+    index = stages.generalise.Snapshot(existing=frozenset(), directories=frozenset(), scanned=())
+    with pytest.raises(runner.PrunerDefect, match="only in the prune container"):
+        stages.verify_merged(pruning(tmp_path).exercise, (), runner.Environment(), index)
+
+
+def test_a_minimisation_under_the_final_network_rules_first_needs_the_whole_policy_to_pass(tmp_path, monkeypatch):
+    found = declared_pruning(tmp_path)
+    found.reference = PASSED
+    feed(monkeypatch, result(FAILED))
+    policy = cfgfile.Policy(fs={"/usr": frozenset({"read"})}, connect=("allow 127.0.0.1:*",), bind=(), limits={})
+    with pytest.raises(search.PruneAbort, match="do not pass under the final network rules"):
+        stages.minimise_policy_fs(found, policy, "filesystem after network", final_network=True)
 
 
 def test_a_reference_without_declared_hosts_may_fail_tests_as_long_as_it_does_so_every_time(tmp_path, monkeypatch):

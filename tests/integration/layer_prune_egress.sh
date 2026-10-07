@@ -45,7 +45,7 @@ CFG="${OUTPUT}/${KEY}_fixture.cfg"
 cleanup() {
   [[ -n "${dns_pid:-}" ]] && kill "${dns_pid}" 2>/dev/null
   [[ -n "${server_pid:-}" ]] && kill "${server_pid}" 2>/dev/null
-  rm -rf "${WORK}"
+  rm -rf "${WORK}" "${EXERCISES:?}/${KEY}" "${HELPERS}"
 }
 trap cleanup EXIT
 
@@ -119,6 +119,8 @@ PY
 )"
   check "the record lists the unused declared host among the rules the minimisation removed" \
     "['allow unused.example.org:${SERVER_PORT}']" "${dropped}"
+  check "the filesystem was minimised again under the final network rules once a declared host was dropped" "1" \
+    "$(python3 -c 'import json, sys; print(sum(entry["stage"] == "filesystem after network minimisation" for entry in json.load(open(sys.argv[1]))["log"]))' "${OUTPUT}/${KEY}_fixture.json")"
   if [[ "$(asked_under_policy api.example.org)" == *"200 ok"* ]]; then
     ok "under the derived policy the build's request reaches the declared host"
   else
@@ -137,15 +139,16 @@ PY
     bad "on the kept rule's port the egress broker closes a connect to the dropped host unanswered" \
       "$(tail -3 <<<"${dropped_answer}")"
   fi
-  if [[ "${other_port_answer}" == *"errno=13"* || "${other_port_answer}" == *"Permission denied"* ]]; then
+  if [[ "${other_port_answer}" == *"errno=13"* ]]; then
     ok "on any other port the guard refuses a connect to the dropped host with EACCES"
   else
     bad "on any other port the guard refuses a connect to the dropped host with EACCES" "$(tail -3 <<<"${other_port_answer}")"
   fi
-  if [[ "$(asked_under_policy api.example.org unused.example.org)" == *"200 ok"* ]]; then
-    bad "naming the dropped host while aiming at the kept host's address gets no answer either" "it answered"
-  else
+  named_answer="$(asked_under_policy api.example.org unused.example.org)"
+  if [[ "${named_answer}" == *"unexpected eof"* ]]; then
     ok "naming the dropped host while aiming at the kept host's address gets no answer either"
+  else
+    bad "naming the dropped host while aiming at the kept host's address gets no answer either" "$(tail -3 <<<"${named_answer}")"
   fi
 else
   bad "the pruner wrote ${KEY}_fixture.cfg" "$(tail -5 "${WORK}/prune.log")"

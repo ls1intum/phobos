@@ -10,7 +10,11 @@ A language reaches it from one of two producers, and the orchestrator merges bot
 * the Bubblewrap pruner (`run_minimal_fs_all.sh` and `emit_artifacts.py`, Python until it
   moves to the layer pruner), which writes `<lang>_<exercise>.paths` and its .json.
 Each artefact is held to the record written beside it in the same run before anything is
-merged, and a language holding artefacts of both producers is refused. The configuration
+merged, and a language holding artefacts of both producers is refused. The merge errs wide on
+purpose, as the Bubblewrap union did: an exercise is graded with what every other exercise of its
+language needed, and so with their [connect] and [bind] rules too, which is why the layer pruner's
+opt-in `java-egress` output, where declared hosts are kept, is never merged by it. Where it cannot
+tell, it errs narrow: an [execute] it cannot prove safe beside a write refuses the merge. The configuration
 files are read and written with `layer_prune/cfgfile.py`, found through --helpers-dir.
 
 ### Outputs (all in /var/tmp/opt/core/config)
@@ -23,9 +27,10 @@ files are read and written with `layer_prune/cfgfile.py`, found through --helper
   ancestor (Landlock grants those rights there anyway), and its [connect] and [bind] rules.
   Never a [limits] section: a limit belongs to one exercise. The merge is refused when the
   union would let [execute] sit beside a write-class right no exercise had beside it.
-* **exercises/<lang>_<exercise>.cfg** - what one layer-pruned exercise needs beyond its
-  language's base, plus its [limits]: an entry the base already grants along its ancestors
-  is dropped. It is passed with --config on top of the base.
+* **exercises/<lang>_<exercise>.cfg** - its [limits], and any entry its language's base does not
+  already grant along its ancestors. The base is the union of every exercise of the language, so
+  it already holds all of the exercise's own entries and, in practice, this file carries only the
+  [limits]. It is passed with --config on top of the base.
 * **TailPhobos.cfg**            - the runtime chdir, the only tail option the
   phobos-landlock-filesystem-and-networksystem runtime accepts. (The pruning run's Bubblewrap mount and
   namespace flags and its per-exercise `--chdir` are dropped; the runtime chdir
@@ -293,7 +298,7 @@ def artefact_disagreements(lang: str, path_dir: Path) -> list[str]:
             continue
         try:
             record = json.loads(record_file.read_text())
-        except json.JSONDecodeError as exc:
+        except ValueError as exc:
             problems.append(f'{record_file.name} is not readable as JSON: {exc}')
             continue
         recorded = [f'{entry["mode"]} {entry["path"]}' for entry in record.get('paths_all', [])]
@@ -316,7 +321,7 @@ def cfg_record_disagreement(lang: str, exercise: str, cfg_file: Path, record_fil
         return f'{cfg_file.name} has no {record_file.name} beside it'
     try:
         record = json.loads(record_file.read_text())
-    except json.JSONDecodeError as exc:
+    except ValueError as exc:
         return f'{record_file.name} is not readable as JSON: {exc}'
     if not isinstance(record, dict) or record.get('schema_version') != LAYER_RECORD_SCHEMA:
         return f'{record_file.name} is not a layer pruner record of schema version {LAYER_RECORD_SCHEMA}'

@@ -157,8 +157,8 @@ docker compose -f docker/run_phase/java/docker-compose.yaml up --build
 ```
 
 Each prune container works independently on its language and writes its result into the
-shared `var/tmp/path_sets` directory; nothing passes between containers except through
-`var/tmp`. The Java prune needs the run-phase image `phobos-run-phase-java` built first, and
+shared `var/tmp/path_sets` directory, `verify_java` being the one that reads the orchestrator's
+output back; nothing passes between containers except through `var/tmp`. The Java prune needs the run-phase image `phobos-run-phase-java` built first, and
 `verify_java` re-runs the Java exercises under the merged configuration at the end.
 
 ### The host

@@ -28,9 +28,11 @@ if [[ "${FAKE_RUN:-0}" == 1 ]]; then
 fi
 exit "${FAKE_STATUS:-0}"
 """
-# A phobos-policysystem.sh stand-in that refuses a candidate holding the word REFUSE.
+# A phobos-policysystem.sh stand-in that refuses any configuration file holding the word REFUSE.
 FAKE_POLICYSYSTEM = """#!/bin/bash
-grep -q REFUSE "$4" && { echo "Policy invalid. (PHB-EPOLICY)" >&2; exit 11; }
+for argument in "$@"; do
+  [[ -f "$argument" ]] && grep -q REFUSE "$argument" && { echo "Policy invalid. (PHB-EPOLICY)" >&2; exit 11; }
+done
 exit 0
 """
 # A strace stand-in: it writes an empty trace where -o says and runs the rest.
@@ -144,6 +146,24 @@ def test_a_candidate_the_gate_refuses_is_a_pruner_defect(tmp_path, environment):
     refused = cfgfile.Policy(fs={}, connect=("allow REFUSE:1",), bind=(), limits={})
     with pytest.raises(runner.PrunerDefect, match="refused the candidate"):
         runner.run_layers(exercise(tmp_path), refused, SHAPE_PLAIN, environment)
+
+
+def test_a_pair_of_configuration_files_is_passed_as_two_config_arguments_in_the_order_given(tmp_path, environment):
+    base = tmp_path / "BaseLanguage-java.cfg"
+    own = tmp_path / "java_fixture.cfg"
+    base.write_text("[read]\n/usr\n")
+    own.write_text("[limits]\ntimeout=60\n")
+    runner.run_configured(exercise(tmp_path), (base, own), SHAPE_PLAIN, environment, runner.log_paths(environment, "pair"))
+    assert recorded(environment, "argv")[:4] == ["--config", str(base), "--config", str(own)]
+
+
+def test_a_pair_whose_second_file_the_gate_refuses_is_a_pruner_defect(tmp_path, environment):
+    base = tmp_path / "BaseLanguage-java.cfg"
+    own = tmp_path / "java_fixture.cfg"
+    base.write_text("[read]\n/usr\n")
+    own.write_text("[connect]\nallow REFUSE:1\n")
+    with pytest.raises(runner.PrunerDefect, match="refused the candidate"):
+        runner.gate_configs((base, own), environment, tmp_path / "gate.log")
 
 
 def test_a_candidate_render_refuses_is_a_pruner_defect(tmp_path, environment):

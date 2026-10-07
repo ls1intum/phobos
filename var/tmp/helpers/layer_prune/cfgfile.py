@@ -245,7 +245,9 @@ def remainder(exercise: Policy, base: Policy) -> Policy:
 
     A filesystem entry keeps only the sections whose rights the base does not already grant along
     its ancestors; an entry left with none is dropped. Network rules the base names are dropped, and
-    the limits stay, since the base holds none.
+    the limits stay, since the base holds none. Against a base that is the union of every exercise, as
+    the orchestrator's is, everything but the limits is dropped, since the base holds the exercise's own
+    entries.
     """
     fs: dict[str, frozenset[str]] = {}
     for path, sections in exercise.fs.items():
