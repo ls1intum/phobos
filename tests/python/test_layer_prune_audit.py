@@ -1,9 +1,11 @@
 """Checks the audit observer: records read as denials, the cross-check with strace, and the ABI 10 rows.
 
-The fixture under fixtures/audit/ is written in the layout the kernel documents for the Landlock audit
-records (Linux 6.15 and later), not captured: the KVM run uploads the raw lines it read, and they replace
-this file once the first run has produced them. What these tests pin is this module's reading of that
-layout, in both directions: an agreeing pair passes, a mismatched one is reported.
+fixtures/audit/captured.txt holds the lines a KVM guest on Linux 7.2.9 printed in run 37614084135 of
+prune-kvm.yml: filesystem records of refused reads and an execute, and the domain records beside them.
+fixtures/audit/records.txt is written in the same layout and adds what no run has produced yet (network
+records, a path in hex, a damaged line); it is to be replaced by captured lines as runs produce them. What these
+tests pin is this module's reading of that layout, in both directions: an agreeing pair passes, a
+mismatched one is reported.
 """
 
 from __future__ import annotations
@@ -150,3 +152,16 @@ def test_a_strace_denial_that_asks_for_more_does_not_take_the_record_meant_for_o
     result = audit.cross_check([strace_denial("/x", "read", "write"), strace_denial("/x", "read")],
                                audit.denials(records))
     assert result["mismatches"] == [] and result["audit_only"] == []
+
+
+def test_the_records_a_real_guest_printed_are_read_as_the_refusals_they_are():
+    captured = (REPO_ROOT / "tests" / "python" / "fixtures" / "audit" / "captured.txt").read_text().splitlines()
+    records, unparsed = audit.parse(captured)
+    assert unparsed == []
+    assert [item.path for item in records].count("/etc/hostname") == 2
+    assert "/etc/phobos-kvm-sentinel" in [item.path for item in records]
+    execute = next(item for item in records if item.path == "/usr/bin/bash")
+    assert execute.blockers == ("fs.execute", "fs.read_file")
+    assert audit.sections_of(execute) == {"execute", "read"}
+    agreeing = audit.cross_check([strace_denial("/usr/bin/bash", "execute", "read")], audit.denials(records))
+    assert agreeing["mismatches"] == []
