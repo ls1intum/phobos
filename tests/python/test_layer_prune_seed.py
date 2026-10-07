@@ -237,7 +237,16 @@ def run_prune_filesystem(monkeypatch, found: stages.Pruning, start: cfgfile.Poli
     monkeypatch.setattr(stages, "minimise_policy_fs",
                         lambda pruning, policy, stage: cfgfile.Policy(fs=kept, connect=(), bind=(), limits={}))
     monkeypatch.setattr(stages, "widenings", lambda pruning, policy: [])
-    return stages.prune_filesystem(found, start)
+    return stages.seed_comments(found, stages.prune_filesystem(found, start))
+
+
+def test_the_seed_comment_follows_the_policy_the_prune_ends_with_not_the_first_minimisation(scratch, monkeypatch):
+    found = pruning_for(scratch, "java.cfg")
+    target = str(scratch / "scratch")
+    stages.seed_policy(found, write_seed(scratch, rows(scratch, "read", "write", "create")))
+    later = cfgfile.Policy(fs={target: frozenset({"read"})}, connect=(), bind=(), limits={})
+    assert stages.seed_comments(found, later).comments[target].startswith(f"seed: [read] on {target} come from")
+    assert stages.seed_comments(found, cfgfile.Policy(fs={}, connect=(), bind=(), limits={})).comments == {}
 
 
 def test_the_seed_comment_names_only_the_sections_that_survived_the_minimisation(scratch, monkeypatch):

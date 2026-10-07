@@ -1,13 +1,15 @@
-# The interactive Python session of record_replay.sh, typed into python3 -q. Every marker is printed
-# in two halves, so the echo of the typed line can never satisfy an expectation.
+# The interactive Python session of record_replay.sh, typed into python3 -q. It runs under the
+# recorder alone, no layer between it and the terminal, so one Ctrl+C reaches Python once. Every step
+# waits for something Python prints, never for a time, and markers are printed in two halves so the
+# echo of the typed line can never satisfy an expectation.
 expect >>>
 send import time
 send print("OK-" + "P1")
 expect OK-P1
-send time.sleep(30)
-sleep 1
+send print("OK-" + "P2", flush=True); time.sleep(30)
+expect OK-P2
 key ctrl-c
 expect KeyboardInterrupt
-send print("OK-" + "P2")
-expect OK-P2
+send print("OK-" + "P3")
+expect OK-P3
 send exit(0)
