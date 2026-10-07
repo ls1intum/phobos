@@ -1510,6 +1510,23 @@ static void test_mapped_ipv4_destinations(void) {
     check("localhost still admits ::1 and refuses an IPv6 destination that only ends like loopback",
           permits_v6("::1", 1) && !permits_v6("2001:db8::7f00:1", 1));
 
+    /* Only the mapped spelling is the IPv4 endpoint. Every other IPv6 address that carries 7f00:1 in its last
+     * 32 bits is another destination and stays refused: the IPv4-compatible and SIIT forms, NAT64, a
+     * documentation prefix, and addresses that match the mapped prefix only in part. */
+    static const char *const lookalikes[] = {
+        "::7f00:1", "::ffff:0:7f00:1", "64:ff9b::7f00:1", "2001:db8::ffff:7f00:1", "1::ffff:7f00:1",
+        "0:0:0:1:0:ffff:7f00:1", "0:0:0:0:1:ffff:7f00:1", "fe80::ffff:7f00:1", "100::ffff:7f00:1",
+    };
+    for (size_t index = 0; index < sizeof(lookalikes) / sizeof(lookalikes[0]); index++) {
+        reset_behaviour();
+        remember_rule("localhost", "*", false);
+        remember_rule("127.0.0.1", "*", false);
+        remember_rule("localhost", "*", true);
+        remember_rule("127.0.0.1", "*", true);
+        check("a look-alike of the mapped loopback is refused over TCP and UDP",
+              !permits_v6(lookalikes[index], 80) && !permits_mapped_udp(lookalikes[index], 80));
+    }
+
     reset_behaviour();
     remember_rule("127.0.0.1", "*", false);
     check("an IPv4 literal on any port admits its mapped spelling", permits_v6("::ffff:127.0.0.1", 40000));

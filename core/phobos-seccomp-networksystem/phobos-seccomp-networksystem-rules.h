@@ -62,9 +62,9 @@ bool address_within(const struct in6_addr *address, const struct in6_addr *netwo
  * network. An IP literal is held to the exact address and the name "localhost" to the loopback
  * range, every 127.x.x.x address and ::1. An IPv4-mapped IPv6 destination, ::ffff:a.b.c.d, is the
  * IPv4 endpoint a.b.c.d, so a literal IPv4 rule and "localhost" cover it exactly as they cover that
- * IPv4 address; an IPv6 literal rule still covers only the IPv6 address it names. Any other hostname is one this guard cannot tie to an
- * address, so its host is not enforced here and the rule rests on its port alone, with the egress
- * broker checking the host name. */
+ * IPv4 address; an IPv6 literal rule still covers only the IPv6 address it names. Any other
+ * hostname is one this guard cannot tie to an address, so its host is not enforced here and the
+ * rule rests on its port alone, with the egress broker checking the host name. */
 bool rule_host_matches(const struct connect_rule *rule, int family, const void *address);
 
 /* Whether the allow-list permits a connection to this destination on the given transport. An
