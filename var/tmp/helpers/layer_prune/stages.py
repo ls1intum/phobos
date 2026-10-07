@@ -398,7 +398,9 @@ def grow_filesystem(pruning: Pruning, seed: cfgfile.Policy) -> cfgfile.Policy:
         """The same run without the observer."""
         return filesystem_run(pruning, normalised(pruning, policy), False, "filesystem rerun")
 
-    return search.grow(observed, seed, pruning.reference, pruning.budget.grow_rounds, derive, unobserved)
+    grown = search.grow(observed, seed, pruning.reference, pruning.budget.grow_rounds, derive, unobserved)
+    pruning.note("grow", rounds=len(snapshots), grants=len(grown.fs))
+    return grown
 
 
 def minimise_policy_fs(pruning: Pruning, policy: cfgfile.Policy, stage: str,

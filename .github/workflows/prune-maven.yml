@@ -16,6 +16,13 @@ on:
   # the pull request is rebased onto main.
   push:
     branches: [ "feature/prune-maven-reference" ]
+    paths:
+      - ".github/workflows/prune-maven.yml"
+      - "tests/integration/layer_prune_maven.sh"
+      - "var/tmp/helpers/layer_prune/**"
+      - "var/tmp/testing-dir/java-maven/**"
+      - "docker/**"
+      - "docker-compose.yaml"
 
 permissions: {}
 
@@ -72,7 +79,7 @@ jobs:
 
       # Kept even when the suite failed, since the record of a failed prune is what explains it.
       - name: Keep the artefacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: maven-prune-${{ matrix.platform }}

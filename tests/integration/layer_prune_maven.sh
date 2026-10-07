@@ -4,13 +4,14 @@
 #
 # The exercise is var/tmp/testing-dir/java-maven/maven-reference: Artemis's Maven test template with
 # Ares 2, built offline from the repository pre-loaded into the run-phase image. The suite
-#   input      holds the image to its committed manifest first, since a prune that observed other
-#              artefacts than grading reads would be about another image;
+#   input      re-hashes every file the committed manifest lists first (the image build already held the
+#              whole repository to it), since a prune that observed other artefacts than grading reads
+#              would be about another image;
 #   permitted  prunes the exercise, merges the result into BaseLanguage-java-maven.cfg and its own file,
 #              and has the exercise pass under exactly that pair with every layer on;
-#   forbidden  reads the record: both tests passed in all three baseline runs, every containment check
-#              refused, every grant under /root a single file that exists (never a directory), and no
-#              write-class right under /root/.m2;
+#   forbidden  reads the record: both tests passed in all three baseline runs, whose log shows the weaving
+#              step and the copy of the Ares runtime jars, every containment check refused, every grant under
+#              /root a single file that exists (never a directory), and no write-class right under /root/.m2;
 #   wrong reasons  a copy without its tests aborts with no tests run, a copy that pins a version the
 #              repository lacks aborts as an infrastructure failure, and neither writes a policy.
 #
@@ -43,6 +44,12 @@ cleanup() {
   if [[ -n "${ARTEFACTS_DIR:-}" && -d "${ARTEFACTS_DIR}" ]]; then
     cp -r "${OUTPUT}/." "${ARTEFACTS_DIR}/" 2>/dev/null
     [[ -d "${CORE}" ]] && cp -r "${CORE}" "${ARTEFACTS_DIR}/core" 2>/dev/null
+    cp "${WORK}/prune.log" "${WORK}/merge.log" "${ARTEFACTS_DIR}/" 2>/dev/null
+    [[ -d "${WORK}/verify-out" ]] && cp -r "${WORK}/verify-out" "${ARTEFACTS_DIR}/verify-out" 2>/dev/null
+    local wrong
+    for wrong in "${WORK}/${KEY}"-*; do
+      [[ -d "${wrong}" ]] && cp -r "${wrong}" "${ARTEFACTS_DIR}/$(basename "${wrong}")" 2>/dev/null
+    done
   fi
   rm -rf "${WORK}"
 }
@@ -112,9 +119,12 @@ check_record() {
   summary="$(python3 - "${RECORD}" "${CFG}" <<'PY'
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, "/var/tmp/helpers")
+
+import glob
 
 from layer_prune import cfgfile
 
@@ -123,35 +133,41 @@ policy = cfgfile.read_policy(open(sys.argv[2]).read())
 baselines = [entry for entry in record["log"] if entry["stage"] == "baseline"]
 good = [
     entry for entry in baselines
-    if len(entry["verdict"]["tests"]) == 2
+    if entry["status"] == 0 and entry["verdict"]["exit_class"] == "success" and len(entry["verdict"]["tests"]) == 2
     and all(outcome == "passed" for _, outcome in entry["verdict"]["tests"])
-    and {name.rsplit(".", 1)[1] for name, _ in entry["verdict"]["tests"]} == {"addsTwoNumbers", "addsANegativeNumber"}
+    and {name.rsplit(".", 1)[1].removesuffix("()") for name, _ in entry["verdict"]["tests"]}
+    == {"addsTwoNumbers", "addsANegativeNumber"}
     and entry["verdict"]["tests_ran"] and not entry["verdict"]["no_source"] and not entry["verdict"]["infra_failure"]
 ]
 print("baseline", len(baselines), len(good))
+logs = sorted(glob.glob("/var/tmp/layer-prune-logs/run-*-direct.log"))
+text = open(logs[0], errors="replace").read() if logs else ""
+print("ares-log", bool(re.search(r"aspectj[^\n]*:compile", text)) and "copy-ares-runtime-jars" in text)
 checks = [entry for entry in record["log"] if entry["stage"] == "containment"][0]["checks"]
 print("containment", len(checks), "refused" if all(check["refused"] or check.get("unchecked") for check in checks) else "passed")
 under_root = {path: sections for path, sections in policy.fs.items() if path == "/root" or path.startswith("/root/")}
-directories = sorted(path for path in under_root if os.path.isdir(path))
-print("root-grants", len(under_root), "directories", directories)
-write_class = {"write", "create", "create-ipc", "create-symlink", "delete", "restructure"}
-writable = sorted(path for path, sections in under_root.items() if sections & write_class)
+not_files = sorted(path for path in under_root if not os.path.isfile(path))
+print("root-grants", len(under_root), "not-files", not_files)
+writable = sorted(path for path, sections in under_root.items()
+                  if (path == "/root/.m2" or path.startswith("/root/.m2/")) and sections & set(cfgfile.WRITE_SECTIONS))
 print("root-writes", writable)
 PY
 )"
   check "the baseline holds both test cases, passed, in all three runs, with tests run and no wrong-reason marker" \
     "baseline 3 3" "$(grep '^baseline' <<<"${summary}")"
-  if grep -q '^containment [0-9]* refused' <<<"${summary}"; then
+  check "the baseline log shows the weaving step and the copy of the Ares runtime jars" "ares-log True" \
+    "$(grep '^ares-log' <<<"${summary}")"
+  if grep -q '^containment [1-9][0-9]* refused' <<<"${summary}"; then
     ok "every containment check was refused"
   else
     bad "every containment check was refused" "${summary}"
   fi
-  if grep -q '^root-grants [1-9][0-9]* directories \[\]' <<<"${summary}"; then
-    ok "every grant under /root is a single file, never a directory"
+  if grep -q '^root-grants [1-9][0-9]* not-files \[\]' <<<"${summary}"; then
+    ok "every grant under /root is a single file that exists, never a directory"
   else
-    bad "every grant under /root is a single file, never a directory" "$(grep '^root-grants' <<<"${summary}")"
+    bad "every grant under /root is a single file that exists, never a directory" "$(grep '^root-grants' <<<"${summary}")"
   fi
-  check "no write-class right is granted under /root" "root-writes []" "$(grep '^root-writes' <<<"${summary}")"
+  check "no write-class right is granted under /root/.m2" "root-writes []" "$(grep '^root-writes' <<<"${summary}")"
 }
 
 # The merged pair passes with every layer on, as grading applies it.

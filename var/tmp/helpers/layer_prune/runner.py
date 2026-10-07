@@ -48,7 +48,8 @@ REAP_INTERVAL_SECONDS = 0.05
 SETTING_TYPES = {"report_globs": list, "declared_hosts": list, "heap_pinned": bool, "grow_rounds": int}
 # The most rounds an exercise's prune.json may ask the grow loop for. A build that stops at the first
 # file it cannot read (Maven offline) shows the pruner one such file per round, so it needs about as
-# many rounds as the files it opens; the bound keeps a build that never converges from running for ever.
+# many rounds as the files it opens. A round costs one observed run, and every run, and the minimisation
+# after it, costs more as the policy grows, so the real bound on a prune is the CI job's wall clock.
 MAX_GROW_ROUNDS = 2000
 
 
