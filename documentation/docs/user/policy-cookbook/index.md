@@ -1,7 +1,7 @@
 ---
 title: "Policy Cookbook"
 sidebar_position: 0
-description: "Six situations, each with the smallest policy that solves it and the wrong version that looks like it does."
+description: "Seven situations, each with the smallest policy that solves it and the wrong version that looks like it does."
 ---
 
 :::tip[Simple Story]
@@ -26,8 +26,9 @@ ${PHOBOS_HOME}/phobos.sh --config exercise.cfg -- <your command>
 | [Allowing exactly one host](allowing-exactly-one-host.md) | the command fetches from one host and no other |
 | [Exposing a listener](exposing-a-listener.md) | the command serves something that has to be reachable |
 | [Setting time and memory budgets](setting-time-and-memory-budgets.md) | the run has to end, whatever the command does |
+| [Importing an Ares 2 policy](importing-an-ares-2-policy.md) | the exercise already carries its policy for Ares 2 |
 
-Two habits are worth carrying through all six.
+Two habits are worth carrying through all seven.
 
 **Check both directions.** A test that shows the permitted case working proves nothing about
 containment, and a test that shows the forbidden case refused proves nothing about usability.
