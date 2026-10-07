@@ -10,7 +10,7 @@ anything is merged. The configuration files are read and written with `layer_pru
 found through --helpers-dir, pinned by tests to the format the shell parser reads. It prunes
 nothing itself: each language is pruned in its own container first.
 
-The merge errs wide on purpose, as the Bubblewrap union did: an exercise is graded with what every
+The merge errs wide on purpose: an exercise is graded with what every
 other exercise of its language needed, and so with their [connect] and [bind] rules too, which is
 why the layer pruner's opt-in `java-egress` output, where declared hosts are kept, is never merged
 by it. Where it cannot tell, it errs narrow: an [execute] it cannot prove safe beside a write
@@ -187,7 +187,7 @@ def aborted_exercises(lang: str, path_dir: Path) -> list[str]:
     for record_file in sorted(path_dir.glob(f'{lang}_*{ABORTED_SUFFIX}')):
         try:
             reason = json.loads(record_file.read_text()).get('aborted', 'no reason recorded')
-        except (json.JSONDecodeError, AttributeError):
+        except (ValueError, AttributeError):
             reason = 'its record is not readable'
         problems.append(f'{record_file.name.removesuffix(ABORTED_SUFFIX)} was aborted: {reason}')
     return problems

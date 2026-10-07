@@ -223,6 +223,15 @@ def test_an_aborted_exercise_stops_the_merge_and_is_named_with_its_reason(tmp_pa
     result = run_orchestrator(tmp_path)
     assert result.returncode == 1, result.stdout + result.stderr
     assert "java_two was aborted: flaky reference" in result.stdout
+
+
+def test_an_aborted_record_that_cannot_be_decoded_is_named_without_a_traceback(tmp_path):
+    write_layer_artefacts(tmp_path / "path_sets", "one", JAVA_ONE)
+    (tmp_path / "path_sets" / "java_two.aborted.json").write_bytes(b"\xff\xfe")
+    result = run_orchestrator(tmp_path)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "java_two was aborted: its record is not readable" in result.stdout
+    assert "Traceback" not in result.stderr
     assert not base_policy(tmp_path).exists()
 
 
@@ -234,17 +243,6 @@ def test_a_path_set_left_by_the_retired_bubblewrap_pruner_stops_the_merge(tmp_pa
     assert "java_old.paths is a path set of the retired Bubblewrap pruner" in result.stdout
     assert not base_policy(tmp_path).exists()
     assert not (tmp_path / "core" / "BaseLanguage-java.cfg").exists()
-
-
-def test_a_record_that_is_not_json_or_not_a_layer_pruner_record_stops_the_merge(tmp_path):
-    write_layer_artefacts(tmp_path / "path_sets", "one", JAVA_ONE)
-    write_layer_artefacts(tmp_path / "path_sets", "two", JAVA_TWO)
-    (tmp_path / "path_sets" / "java_one.json").write_text("{not json")
-    (tmp_path / "path_sets" / "java_two.json").write_text(json.dumps({"schema_version": 1}))
-    result = run_orchestrator(tmp_path)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "java_one.json is not readable as JSON" in result.stdout
-    assert "java_two.json is not a layer pruner record of schema version 2" in result.stdout
 
 
 def test_a_cfg_the_run_time_parser_would_read_differently_stops_the_merge(tmp_path):

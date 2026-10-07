@@ -27,8 +27,8 @@ DEFAULT_REPORT_GLOBS = ("build/test-results/**/*.xml", "target/surefire-reports/
 # NO-SOURCE on a Java or Kotlin compile task or the test task, of the root project or a subproject,
 # Maven's "No tests to run." or "No tests to run!" and its "Tests are skipped.", and pytest's summary
 # "no tests ran in <seconds>s", which it prints with status 5. A pytest run whose tests were all
-# deselected says "deselected" instead and is not matched: it has no report, so the baseline aborts
-# on it as a run that ran no tests all the same. A NO-SOURCE on another task, such as
+# deselected says "deselected" instead and is not matched: its report names no test, so the baseline
+# aborts on it as a run that ran no tests all the same. A NO-SOURCE on another task, such as
 # processResources, is ordinary.
 NO_SOURCE_PATTERNS = (
     r"> Task (?::[\w.-]+)*:(?:compileJava|compileTestJava|compileKotlin|compileTestKotlin|test) NO-SOURCE",
