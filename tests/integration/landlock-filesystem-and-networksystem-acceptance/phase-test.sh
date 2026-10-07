@@ -35,7 +35,9 @@ cat > $P/pom.xml <<'POM'
 <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties>
 <build><pluginManagement><plugins>
 <plugin><groupId>org.apache.maven.plugins</groupId>
-<artifactId>maven-compiler-plugin</artifactId><version>3.14.0</version></plugin>
+<artifactId>maven-compiler-plugin</artifactId><version>3.16.0</version></plugin>
+<plugin><groupId>org.apache.maven.plugins</groupId>
+<artifactId>maven-resources-plugin</artifactId><version>3.5.0</version></plugin>
 </plugins></pluginManagement></build></project>
 POM
 echo 'public class App { public static void main(String[] a){ System.out.println("app"); } }' > $P/src/main/java/App.java
@@ -62,10 +64,14 @@ probe_read() {
 }
 
 # Offline like every other step. The base image brings its own Maven repository,
-# so nothing needs to be downloaded here; the compiler plugin version is set in
-# the POM above because Maven's default would be 3.13.0 and the image holds only
-# 3.14.0. A network access at this point could make the run fail without it
-# having anything to do with Landlock.
+# so nothing needs to be downloaded here. The POM above names the version of each
+# plugin the build uses, compile and resources, because Maven's defaults are not
+# the versions the image holds: it carries the ones Artemis's Java template pins,
+# the compiler plugin 3.16.0 and the resources plugin 3.5.0. A project that took
+# the defaults, or the versions of an earlier image, would be refused offline for
+# a plugin that is not there, which has nothing to do with Landlock. A network
+# access at this point could make the run fail without it having anything to do
+# with Landlock.
 hdr "Phase 0: preparation, unrestricted (baseline, without restriction)"
 (cd $P && mvn -o -q compile > /tmp/prep.log 2>&1) && ok "Baseline compiled" || { bad "Preparation failed"; tail -n "$LOG_EXCERPT_LINES" /tmp/prep.log; }
 
