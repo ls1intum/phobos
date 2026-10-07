@@ -123,8 +123,8 @@ root that leads to some other place than the root itself, and so resolves to som
 where the path says, is refused with the file and the line. A link before the path enters the root
 that leads away from it, such as `/bin` to `/usr/bin`, stays allowed. The project root itself must
 be the real path of a project directory: `/`, a root that reaches its directory through a symbolic
-link and a root with a `..` segment are refused with PHB-EPOLICY, whether it comes from
-`--project-root` or from the last `--chdir`, because what lies below such a root cannot be told from
+link and a root with a `..` segment are refused with PHB-EPOLICY, from `--project-root` always
+and from the last `--chdir` where an imported path needs the root, because what lies below such a root cannot be told from
 a link. The check is made when the specification is built, so a link the submission places between that moment and the start of the command is not
 seen; the grader builds the specification after the submission is in place and starts the command
 right after. A path in an exercise configuration that lies in the submission's tree carries the

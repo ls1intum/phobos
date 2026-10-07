@@ -58,8 +58,11 @@ OPTIONS
   --project-root <dir>        The directory a relative path and \${PROJECT_ROOT} in an Ares 2
                               policy are resolved against: the one the build tool starts
                               the test JVM in. It must be an absolute path to an existing
-                              directory. Without it, the last --chdir of the tail flags is
-                              used, and with neither such a path is refused.
+                              directory, and the real path of a project directory: not "/",
+                              and not reached through a symbolic link. Without it, the last
+                              --chdir of the tail flags is used, held to the same rule where
+                              an imported path needs it, and with neither such a path is
+                              refused.
   --tail-flags-file <file>    The tail flags, applied last
                               (default: "${HERE}/TailPhobos.cfg").
   --debug, -d                 Print the effective specification on stderr, one line per file.

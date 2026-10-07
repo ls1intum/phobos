@@ -277,6 +277,16 @@ for root in / "$WORK/proj-link"; do
   run_policy --project-root "$root" --config "$WORK/relative.yaml"
   if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"must be the real path of a project directory"* ]]; then ok "--project-root '${root}' is refused as not a real project directory"; else bad "--project-root '${root}' is refused as not a real project directory" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
 done
+printf '[read]\n/usr\n' > "$WORK/no-ares.cfg"
+run_policy --project-root "$WORK/proj-link" --config "$WORK/no-ares.cfg"
+if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"must be the real path of a project directory"* ]]; then ok "--project-root '${WORK}/proj-link' is refused with no Ares policy at all"; else bad "--project-root is refused with no Ares policy at all" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
+printf -- '--chdir %s\n' "$WORK/proj-link" > "$WORK/tail-link.flags"
+run_policy --tail-flags-file "$WORK/tail-link.flags" --config "$WORK/relative.yaml"
+if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"must be the real path of a project directory"* ]]; then ok "a tail --chdir that is a link is refused where an imported path needs it"; else bad "a tail --chdir that is a link is refused where an imported path needs it" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
+printf -- '--chdir /\n' > "$WORK/tail-slash.flags"
+policy /usr/bin read > "$WORK/usr-bin.yaml"
+run_policy --tail-flags-file "$WORK/tail-slash.flags" --config "$WORK/usr-bin.yaml"
+if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"the root of the file system"* ]]; then ok "a tail --chdir of / is refused where an imported path needs it"; else bad "a tail --chdir of / is refused where an imported path needs it" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
 mkdir -p "$WORK/spec-parent-empty-root"
 out="$(bash "$CORE_X/phobos.sh" --tail-flags-file "$WORK/tail.flags" --spec-parent "$WORK/spec-parent-empty-root" --project-root "" \
   -nfr -nnr -ntr -nrr --config "$WORK/relative.yaml" -- /bin/true 2>&1)"
