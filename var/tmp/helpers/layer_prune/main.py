@@ -100,7 +100,10 @@ def write_atomically(path: pathlib.Path, text: str) -> None:
 
 def remove_stale(output: pathlib.Path, key: str) -> None:
     """Removes every earlier artefact of this key, partial ones, verifications and the `.paths` of the retired
-    Bubblewrap pruner included, so none survives a prune."""
+    Bubblewrap pruner included, so none survives a prune.
+
+    Meant for the keys the layer pruner owns: a key still produced as path sets would lose them.
+    """
     for directory in (output, output / PARTIAL_DIRECTORY, output / VERIFY_DIRECTORY):
         for pattern in (f"{key}_*.cfg", f"{key}_*.json", f"{key}_*.paths"):
             for path in directory.glob(pattern):

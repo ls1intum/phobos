@@ -323,6 +323,7 @@ def test_what_earlier_runs_left_is_removed_before_a_layered_run_and_what_was_the
 
 def test_the_merged_verification_runs_every_layer_under_the_files_as_given_and_aborts_on_a_mismatch(tmp_path,
                                                                                                     monkeypatch):
+    monkeypatch.setenv(stages.PRUNE_CONTAINER_VARIABLE, "1")
     configs = (tmp_path / "BaseLanguage-java.cfg", tmp_path / "java_fixture.cfg")
     shapes = []
     outcomes = iter([PASSED, FAILED])
@@ -343,6 +344,7 @@ def test_the_merged_verification_runs_every_layer_under_the_files_as_given_and_a
 
 def test_the_merged_verification_stops_at_a_baseline_that_fails_with_the_record_and_restores_before_each_run(
         tmp_path, monkeypatch):
+    monkeypatch.setenv(stages.PRUNE_CONTAINER_VARIABLE, "1")
     configs = (tmp_path / "BaseLanguage-java.cfg", tmp_path / "java_fixture.cfg")
     restored = []
     index = stages.generalise.Snapshot(existing=frozenset(), directories=frozenset(), scanned=())
