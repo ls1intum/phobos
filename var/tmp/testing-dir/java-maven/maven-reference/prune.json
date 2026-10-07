@@ -1,1 +1,1 @@
-{"report_globs": ["target/surefire-reports/TEST-*.xml"], "declared_hosts": []}
+{"report_globs": ["target/surefire-reports/TEST-*.xml"], "declared_hosts": [], "heap_pinned": true}

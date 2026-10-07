@@ -63,7 +63,7 @@ environment, offline, and grading itself only applies a fixed configuration.
 - C for `phobos-landlock-filesystem-and-networksystem`, the connect guard, the timeout's group lock and the report-only supervisor `phobos-seccomp-filesystem`, all four compiled inside the run-phase image
 - Python for the prune orchestrator and the artefact helpers
 - Docker for both phases, one image per language environment
-- Java for the two template checkers under `.github/scripts/` (`CheckPullRequestTemplate.java` and `CheckReleaseTemplate.java`), and for the two reference exercises under `var/tmp/testing-dir/` (`java/gradle-reference` and `java-maven/maven-reference`), which are inputs of the prune phase and are built, never analysed
+- Java for the two template checkers under `.github/scripts/` (`CheckPullRequestTemplate.java` and `CheckReleaseTemplate.java`), and for the two reference exercises under `var/tmp/testing-dir/` (`java/gradle-reference` and `java-maven/maven-reference`), which are built, in the run-phase image's stages and by the prune phase, never analysed
 
 The filesystem layer is enforced by Landlock, an unprivileged Linux kernel sandbox, applied
 by `phobos-landlock-filesystem-and-networksystem` (the C program under `core/`). The run phase needs no privileges, no
