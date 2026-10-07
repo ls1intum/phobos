@@ -682,23 +682,41 @@ def verify(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
     raise search.PruneAbort("the joint verification did not settle")
 
 
-def verify_pinned_roots(pruning: Pruning) -> None:
-    """Checks every pinned read root the exercise declares against its manifest before any run; PruneAbort if one does not match.
+def verify_pinned_roots(pruning: Pruning, when: str = "before the first run") -> None:
+    """Checks every pinned read root the exercise declares against its manifest; PruneAbort if one does not match.
 
-    Only a root that passed is ever granted as a directory (generalise.grants_and_notes); the record
-    says which were checked and how many files each manifest fixes.
+    Done before the first run, since only a root that passed is ever granted as a directory
+    (generalise.grants_and_notes), and again before the joint verification and at the end, because the
+    runs execute as the uid that could change the tree: a prune whose runs changed it is not one to ship.
+    The record says which were checked, how many files each manifest fixes and what else each tree holds.
     """
     checked = []
     for root in pruning.exercise.pinned_read_roots:
         try:
-            files = pinned.verify(root)
+            counts = pinned.verify(root)
         except ValueError as failure:
-            raise search.PruneAbort(f"a pinned read root does not match its manifest: {failure}",
+            raise search.PruneAbort(f"a pinned read root does not match its manifest ({when}): {failure}",
                                     {"path": root.path, "manifest": root.manifest}) from failure
         pruning.pinned_roots[root.path] = pinned.GRANT_COMMENT.format(path=root.path, manifest=root.manifest)
-        checked.append({"path": root.path, "manifest": root.manifest, "files": files})
+        checked.append({"path": root.path, "manifest": root.manifest, **counts})
     if checked:
-        pruning.note("pinned read roots", roots=checked)
+        pruning.note("pinned read roots", when=when, roots=checked)
+
+
+def check_pinned_grants(pruning: Pruning, policy: cfgfile.Policy) -> None:
+    """Refuses a policy that makes a pinned read root anything but read-only; PruneAbort naming the entry.
+
+    The root itself may hold [read] and nothing else, and no write-class right may sit on it or on an
+    ancestor of it, which would make the pinned tree writable. Writes beneath it stay file by file.
+    """
+    for root in pruning.pinned_roots:
+        if set(policy.fs.get(root, ())) - {"read"}:
+            raise search.PruneAbort(f"the pinned read root {root} is granted more than [read]",
+                                    {"sections": sorted(policy.fs[root])})
+        for path, sections in policy.fs.items():
+            if sections & generalise.WRITE_CLASS and (path == root or generalise.is_beneath(root, path)):
+                raise search.PruneAbort(f"the pinned read root {root} lies under a write-class grant on {path}",
+                                        {"sections": sorted(sections)})
 
 
 def require_prune_container() -> None:
@@ -769,9 +787,13 @@ def prune_exercise(exercise: runner.Exercise, budget: Budget, environment: runne
                 policy = minimise_policy_fs(pruning, policy, "filesystem after network", final_network=True)
         if stage in ("limits", "all"):
             policy = prune_limits(pruning, policy)
+        check_pinned_grants(pruning, policy)
         if stage == "all":
+            verify_pinned_roots(pruning, "before the joint verification")
             policy = verify(pruning, policy)
+            check_pinned_grants(pruning, policy)
             pruning.note("containment", checks=containment.run_checks(policy, environment))
+        verify_pinned_roots(pruning, "after the last run")
     except search.PruneAbort as abort:
         abort.evidence["record"] = pruning.log
         raise

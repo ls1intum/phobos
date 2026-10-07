@@ -24,10 +24,14 @@ import pathlib
 import posixpath
 import re
 
-from layer_prune import generalise
+from layer_prune import cfgfile, generalise
 
-# Where the prune container mounts the manifests, read-only.
+# Where the prune container mounts the manifests; the manifest file itself is mounted read-only.
 MANIFEST_DIRECTORY = "/srv/phobos-manifest"
+# The pseudo file systems no pinned root may be in: nothing there is fixed by a checksum.
+PSEUDO_ROOTS = ("/proc", "/dev", "/sys")
+# The characters a manifest file name has: no newline, no control character, nothing a policy line cannot carry.
+MANIFEST_NAME = re.compile(r"[A-Za-z0-9._-]+")
 # The keys of one declaration, and no others.
 DECLARATION_KEYS = frozenset({"path", "manifest"})
 # A line of a manifest: the SHA-256 and the path relative to the tree, two spaces apart.
@@ -48,35 +52,42 @@ class PinnedRoot:
     manifest: str
 
 
-def refusal(message: str) -> ValueError:
-    """The error for a declaration that is not strictly one; a ValueError whatever the wrong type, as the callers expect."""
-    return ValueError(message)
+class DeclarationError(ValueError):
+    """A declaration or a tree that is not strictly what a pinned read root is."""
 
 
 def parse(entries: object, source: str) -> tuple[PinnedRoot, ...]:
     """The declarations of a prune.json value; ValueError, naming `source`, for anything that is not strictly one."""
     if not isinstance(entries, list):
-        raise refusal(f"{source}: pinned_read_roots is a list of objects")
+        raise DeclarationError(f"{source}: pinned_read_roots is a list of objects")
     roots = []
     for entry in entries:
         if not isinstance(entry, dict) or set(entry) != DECLARATION_KEYS:
-            raise ValueError(f"{source}: a pinned read root is an object with exactly path and manifest, "
+            raise DeclarationError(f"{source}: a pinned read root is an object with exactly path and manifest, "
                              "and no right can be named in it")
         path = entry["path"]
         manifest = entry["manifest"]
         if not isinstance(path, str) or not isinstance(manifest, str):
-            raise refusal(f"{source}: the path and the manifest of a pinned read root are strings")
+            raise DeclarationError(f"{source}: the path and the manifest of a pinned read root are strings")
         if not path.startswith("/") or posixpath.normpath(path) != path:
-            raise ValueError(f"{source}: the pinned read root {path!r} is not an absolute, normalised path")
+            raise DeclarationError(f"{source}: the pinned read root {path!r} is not an absolute, normalised path")
+        try:
+            cfgfile.check_path(path)
+        except ValueError as failure:
+            raise DeclarationError(f"{source}: the pinned read root {path!r} cannot be written in a policy: {failure}") \
+                from failure
+        if generalise.within(path, PSEUDO_ROOTS):
+            raise DeclarationError(f"{source}: the pinned read root {path!r} is in a pseudo file system")
         if path in generalise.DEFAULT_FINE_ROOTS or not generalise.within(path, generalise.DEFAULT_FINE_ROOTS):
-            raise ValueError(f"{source}: the pinned read root {path!r} does not lie strictly beneath a fine-grained "
+            raise DeclarationError(f"{source}: the pinned read root {path!r} does not lie strictly beneath a fine-grained "
                              f"root ({', '.join(generalise.DEFAULT_FINE_ROOTS)})")
         if (posixpath.normpath(manifest) != manifest or posixpath.dirname(manifest) != MANIFEST_DIRECTORY
-                or posixpath.basename(manifest) in ("", ".", "..")):
-            raise ValueError(f"{source}: the manifest {manifest!r} is not a file directly in {MANIFEST_DIRECTORY}")
+                or MANIFEST_NAME.fullmatch(posixpath.basename(manifest)) is None
+                or posixpath.basename(manifest) in (".", "..")):
+            raise DeclarationError(f"{source}: the manifest {manifest!r} is not a file directly in {MANIFEST_DIRECTORY}")
         if any(path == other.path or generalise.is_beneath(path, other.path) or generalise.is_beneath(other.path, path)
                for other in roots):
-            raise ValueError(f"{source}: the pinned read root {path!r} repeats or overlaps another")
+            raise DeclarationError(f"{source}: the pinned read root {path!r} repeats or overlaps another")
         roots.append(PinnedRoot(path=path, manifest=manifest))
     return tuple(roots)
 
@@ -95,41 +106,79 @@ def digest(file: pathlib.Path) -> str:
 def listed(manifest: pathlib.Path) -> list[tuple[str, str]]:
     """The (sum, relative path) of every line of a manifest; ValueError when it is missing, empty or malformed."""
     try:
-        text = manifest.read_text()
+        text = manifest.read_bytes().decode()
     except (OSError, UnicodeDecodeError) as failure:
-        raise ValueError(f"the manifest {manifest} cannot be read: {failure}") from failure
+        raise DeclarationError(f"the manifest {manifest} cannot be read: {failure}") from failure
+    if "\r" in text:
+        raise DeclarationError(f"the manifest {manifest} has a carriage return, which the shell does not read as a line end")
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
     entries = []
-    for number, line in enumerate(text.splitlines(), start=1):
+    for number, line in enumerate(lines, start=1):
         matched = MANIFEST_LINE.fullmatch(line)
         if matched is None:
-            raise ValueError(f"line {number} of {manifest} is not '<sha256>  <path>'")
+            raise DeclarationError(f"line {number} of {manifest} is not '<sha256>  <path>'")
         relative = matched.group(2)
-        if posixpath.isabs(relative) or posixpath.normpath(relative) != relative or relative.startswith(".."):
-            raise ValueError(f"line {number} of {manifest} names {relative!r}, which is not a path beneath the tree")
+        if posixpath.isabs(relative) or posixpath.normpath(relative) != relative or ".." in relative.split("/"):
+            raise DeclarationError(f"line {number} of {manifest} names {relative!r}, which is not a path beneath the tree")
         entries.append((matched.group(1), relative))
     if not entries:
-        raise ValueError(f"the manifest {manifest} lists no file, so it fixes nothing")
+        raise DeclarationError(f"the manifest {manifest} lists no file, so it fixes nothing")
     return entries
 
 
-def verify(root: PinnedRoot) -> int:
-    """Checks the tree against its manifest; the number of files checked, ValueError naming what does not match.
+def survey(tree: pathlib.Path, listed_files: set[str]) -> dict[str, int]:
+    """What lies in the tree beside the listed files: how many other regular files, links and special files.
+
+    The listed files are fixed by the manifest; the others came with the base image, which is itself pinned by
+    digest, so they are counted for the record and not refused, except that a file that is neither a regular
+    file, a directory nor a link (a device, a socket, a pipe) is never something a dependency repository holds.
+    """
+    unlisted = links = special = 0
+    for current, directories, files in os.walk(tree, followlinks=False):
+        for name in [*directories, *files]:
+            full = pathlib.Path(current) / name
+            relative = str(full.relative_to(tree))
+            if full.is_symlink():
+                links += 1
+            elif full.is_dir():
+                continue
+            elif full.is_file():
+                unlisted += relative not in listed_files
+            else:
+                special += 1
+    return {"unlisted_files": unlisted, "links": links, "special_files": special}
+
+
+def verify(root: PinnedRoot) -> dict[str, int]:
+    """Checks the tree against its manifest; the counts of what was checked, DeclarationError naming what does not match.
 
     The tree must be a real directory, not a link, and every listed file a regular file that really lies
-    beneath it with the sum the manifest gives. Nothing is read outside the listed files.
+    beneath it with the sum the manifest gives; the manifest must be a real file. A file that cannot be read
+    is a mismatch. The record gets how many files the manifest fixes and what else the tree holds (survey).
     """
     tree = pathlib.Path(root.path)
     if tree.is_symlink() or not tree.is_dir() or os.path.realpath(root.path) != root.path:
-        raise ValueError(f"the pinned read root {root.path} is not a real directory")
+        raise DeclarationError(f"the pinned read root {root.path} is not a real directory")
+    if os.path.realpath(root.manifest) != root.manifest or not os.path.isfile(root.manifest):
+        raise DeclarationError(f"the manifest {root.manifest} is not a real file")
     problems = []
     entries = listed(pathlib.Path(root.manifest))
     for wanted, relative in entries:
         file = tree / relative
-        if file.is_symlink() or not file.is_file() or os.path.realpath(file) != str(file):
-            problems.append(f"{relative}: missing, or not a regular file beneath the tree")
-        elif digest(file) != wanted:
-            problems.append(f"{relative}: its SHA-256 differs from the manifest's")
+        try:
+            if file.is_symlink() or not file.is_file() or os.path.realpath(file) != str(file):
+                problems.append(f"{relative}: missing, or not a regular file beneath the tree")
+            elif digest(file) != wanted:
+                problems.append(f"{relative}: its SHA-256 differs from the manifest's")
+        except OSError as failure:
+            problems.append(f"{relative}: cannot be read: {failure}")
     if problems:
-        raise ValueError(f"{root.path} does not match {root.manifest}: {'; '.join(problems[:5])}"
-                         f"{' and more' if len(problems) > 5 else ''}")
-    return len(entries)
+        raise DeclarationError(f"{root.path} does not match {root.manifest}: {'; '.join(problems[:5])}"
+                               f"{' and more' if len(problems) > 5 else ''}")
+    found = survey(tree, {relative for _, relative in entries})
+    if found["special_files"]:
+        raise DeclarationError(f"{root.path} holds {found['special_files']} file(s) that are neither regular files, "
+                               "directories nor links")
+    return {"files": len(entries), **found}

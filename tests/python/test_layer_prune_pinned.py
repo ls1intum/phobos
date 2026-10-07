@@ -13,7 +13,7 @@ import pytest
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "var" / "tmp" / "helpers"))
 
-from layer_prune import generalise, pinned, record, runner, search, stages
+from layer_prune import cfgfile, generalise, pinned, record, runner, search, stages
 
 GOOD = {"path": "/root/.m2/repository", "manifest": "/srv/phobos-manifest/maven-repository.sha256"}
 
@@ -48,6 +48,13 @@ def tree(tmp_path: pathlib.Path, files: dict[str, bytes], wanted: dict[str, str]
     {"path": "/root/.m2/repository", "manifest": "/srv/phobos-manifest/../x"},
     {"path": "/root/.m2/repository", "manifest": "/srv/phobos-manifest/sub/x.sha256"},
     {"path": "/root/.m2/repository", "manifest": "relative.sha256"},
+    {"path": "/proc/1/root", "manifest": GOOD["manifest"]},
+    {"path": "/dev/shm/x", "manifest": GOOD["manifest"]},
+    {"path": "/sys/fs/cgroup", "manifest": GOOD["manifest"]},
+    {"path": "/root/.m2/repository\n[write]", "manifest": GOOD["manifest"]},
+    {"path": "/root/.m2/repository*", "manifest": GOOD["manifest"]},
+    {"path": "/root/.m2/repository", "manifest": "/srv/phobos-manifest/m\n"},
+    {"path": "/root/.m2/repository", "manifest": "/srv/phobos-manifest/a b"},
     {"path": 1, "manifest": GOOD["manifest"]},
     "a string",
 ])
@@ -82,11 +89,25 @@ def test_the_digest_drops_the_comment_lines_of_a_remote_repositories_file_and_no
 
 def test_a_tree_that_matches_its_manifest_is_verified_and_counted(tmp_path):
     root = tree(tmp_path, {"a/a.pom": b"A", "b/_remote.repositories": b"#t\nx\n"})
-    assert pinned.verify(root) == 2
+    assert pinned.verify(root) == {"files": 2, "unlisted_files": 0, "links": 0, "special_files": 0}
+
+
+def test_what_else_the_tree_holds_is_counted_for_the_record_and_a_special_file_is_refused(tmp_path):
+    root = tree(tmp_path, {"a.pom": b"A"})
+    base = pathlib.Path(root.path)
+    (base / "other.jar").write_bytes(b"from the base image")
+    (base / "sub").mkdir()
+    (base / "sub" / "more.pom").write_bytes(b"M")
+    (base / "link").symlink_to(base / "a.pom")
+    assert pinned.verify(root) == {"files": 1, "unlisted_files": 2, "links": 1, "special_files": 0}
+    import os
+    os.mkfifo(base / "pipe")
+    with pytest.raises(ValueError, match="neither regular files"):
+        pinned.verify(root)
 
 
 @pytest.mark.parametrize("damage", ["changed", "missing", "link", "empty manifest", "malformed", "escaping path",
-                                    "no manifest"])
+                                    "no manifest", "unreadable", "crlf", "manifest link"])
 def test_a_tree_that_does_not_match_its_manifest_is_never_verified(tmp_path, damage):
     root = tree(tmp_path, {"a/a.pom": b"A", "b/b.pom": b"B"})
     base = pathlib.Path(root.path)
@@ -104,8 +125,19 @@ def test_a_tree_that_does_not_match_its_manifest_is_never_verified(tmp_path, dam
         manifest.write_text("not a manifest line\n")
     elif damage == "escaping path":
         manifest.write_text(f"{sha(b'A')}  ../outside\n")
+    elif damage == "unreadable":
+        (base / "a" / "a.pom").chmod(0)
+    elif damage == "crlf":
+        manifest.write_bytes(manifest.read_bytes().replace(b"\n", b"\r\n"))
+    elif damage == "manifest link":
+        real = manifest.with_name("real.sha256")
+        manifest.rename(real)
+        manifest.symlink_to(real)
     else:
         manifest.unlink()
+    import os
+    if damage == "unreadable" and os.geteuid() == 0:
+        pytest.skip("root reads a file with no mode")
     with pytest.raises(ValueError):
         pinned.verify(root)
 
@@ -140,6 +172,92 @@ def test_every_read_beneath_a_pinned_root_is_granted_as_that_one_directory_with_
          denial("/root/.m2/repository", "read")], SNAPSHOT, generalise.DEFAULT_FINE_ROOTS, None, PINNED)
     assert grants == {"/root/.m2/repository": frozenset({"read"})}
     assert notes.comments["/root/.m2/repository"] == "pinned: why"
+
+
+def test_a_name_that_only_starts_like_the_root_and_a_dot_dot_name_are_not_in_it():
+    outside = generalise.Snapshot(existing=frozenset({"/root/.m2/repository-evil/x", "/root/.m2/repository/..hidden"}),
+                                  directories=frozenset({"/root/.m2", "/root/.m2/repository"}), scanned=("/",))
+    grants, _ = generalise.grants_and_notes([denial("/root/.m2/repository-evil/x", "read")], outside,
+                                            generalise.DEFAULT_FINE_ROOTS, None, PINNED)
+    assert grants == {"/root/.m2/repository-evil/x": frozenset({"read"})}
+
+
+def test_a_read_and_write_denial_splits_and_only_the_read_goes_to_the_root():
+    both = record.Denial(pid=300, layer=record.LAYER_FILESYSTEM, operation="openat",
+                         objects=("/root/.m2/repository/a/a.pom",), sections=frozenset({"read", "write"}), address=None,
+                         port=None, transport=None, errno="EACCES", run=1, tid=300)
+    grants, _ = generalise.grants_and_notes([both], SNAPSHOT, generalise.DEFAULT_FINE_ROOTS, None, PINNED)
+    assert grants["/root/.m2/repository"] == frozenset({"read"})
+    assert grants["/root/.m2/repository/a/a.pom"] == frozenset({"write"})
+
+
+SCANNED = generalise.Snapshot(existing=frozenset({"/root/.m2", "/root/.m2/repository"}),
+                              directories=frozenset({"/root", "/root/.m2", "/root/.m2/repository"}), scanned=("/",))
+
+
+@pytest.mark.parametrize("path", ["/root/.m2/repository/new.xml", "/root/.m2/new"])
+@pytest.mark.parametrize("section", ["create", "write", "delete"])
+def test_a_write_class_right_is_never_granted_on_the_pinned_root_or_an_ancestor_even_by_the_climb(path, section):
+    grants, notes = generalise.grants_and_notes([denial(path, section)], SCANNED, generalise.DEFAULT_FINE_ROOTS, None,
+                                                PINNED)
+    assert not any(target in ("/root/.m2/repository", "/root/.m2", "/root") for target in grants)
+    assert any("pinned read root" in item["reason"] for item in notes.reported)
+
+
+def test_a_policy_that_makes_the_pinned_root_more_than_read_or_writable_through_an_ancestor_is_refused(tmp_path):
+    root = tree(tmp_path, {"a.pom": b"A"})
+    found = stages.Pruning(exercise=exercise_with(tmp_path, (root,)), budget=stages.Budget(),
+                           environment=runner.Environment())
+    stages.verify_pinned_roots(found)
+    ok = cfgfile.Policy(fs={root.path: frozenset({"read"}), "/srv/other": frozenset({"create"})}, connect=(), bind=(),
+                        limits={})
+    stages.check_pinned_grants(found, ok)
+    for fs in ({root.path: frozenset({"read", "write"})}, {str(pathlib.Path(root.path).parent): frozenset({"create"}),
+                                                          root.path: frozenset({"read"})}):
+        with pytest.raises(search.PruneAbort, match="pinned read root"):
+            stages.check_pinned_grants(found, cfgfile.Policy(fs=fs, connect=(), bind=(), limits={}))
+
+
+def test_a_tree_changed_after_the_first_check_aborts_at_the_next_one(tmp_path):
+    root = tree(tmp_path, {"a.pom": b"A"})
+    found = stages.Pruning(exercise=exercise_with(tmp_path, (root,)), budget=stages.Budget(),
+                           environment=runner.Environment())
+    stages.verify_pinned_roots(found)
+    (pathlib.Path(root.path) / "a.pom").write_bytes(b"changed by a run")
+    with pytest.raises(search.PruneAbort, match="after the last run"):
+        stages.verify_pinned_roots(found, "after the last run")
+
+
+def test_the_grants_of_the_pruning_reach_the_generalisation_through_the_filesystem_stage(tmp_path, monkeypatch):
+    root = tree(tmp_path, {"a.pom": b"A"})
+    found = stages.Pruning(exercise=exercise_with(tmp_path, (root,)), budget=stages.Budget(),
+                           environment=runner.Environment())
+    stages.verify_pinned_roots(found)
+    inside = str(pathlib.Path(root.path) / "a.pom")
+    monkeypatch.setattr(stages.control, "landlock_caused", lambda found_denial: True)
+    snapshot = generalise.Snapshot(existing=frozenset({inside, root.path}), directories=frozenset({root.path}),
+                                   scanned=("/",))
+    grants = stages.filesystem_grants(found, [denial(inside, "read")], snapshot, {})
+    assert grants == {root.path: frozenset({"read"})}
+    assert found.comments[root.path].startswith("pinned: [read] on the directory")
+
+
+def test_the_digest_of_an_empty_a_comment_only_and_a_crlf_remote_repositories_file(tmp_path):
+    cases = {b"": b"", b"#only a comment\n": b"", b"#c\r\nx\r\n": b"x\r\n", b"x\n\ny": b"x\n\ny\n"}
+    for number, (content, kept) in enumerate(cases.items()):
+        file = tmp_path / str(number) / "_remote.repositories"
+        file.parent.mkdir()
+        file.write_bytes(content)
+        assert pinned.digest(file) == sha(kept)
+
+
+def test_the_first_check_is_recorded_with_what_else_the_tree_holds(tmp_path):
+    root = tree(tmp_path, {"a.pom": b"A"})
+    (pathlib.Path(root.path) / "base.jar").write_bytes(b"B")
+    found = stages.Pruning(exercise=exercise_with(tmp_path, (root,)), budget=stages.Budget(),
+                           environment=runner.Environment())
+    stages.verify_pinned_roots(found)
+    assert found.log[-1]["roots"][0]["unlisted_files"] == 1 and found.log[-1]["when"] == "before the first run"
 
 
 def test_a_file_beside_the_pinned_root_is_still_granted_file_by_file_and_never_widened():
@@ -180,7 +298,8 @@ def test_the_pruning_verifies_the_declared_roots_before_it_grants_any_and_record
     stages.verify_pinned_roots(found)
     assert list(found.pinned_roots) == [root.path]
     assert root.manifest in found.pinned_roots[root.path]
-    assert found.log[-1]["roots"] == [{"path": root.path, "manifest": root.manifest, "files": 1}]
+    assert found.log[-1]["roots"] == [{"path": root.path, "manifest": root.manifest, "files": 1, "unlisted_files": 0,
+                                       "links": 0, "special_files": 0}]
 
 
 def test_a_root_that_does_not_match_its_manifest_aborts_the_exercise_and_grants_nothing(tmp_path):

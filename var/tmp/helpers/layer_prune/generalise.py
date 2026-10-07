@@ -433,7 +433,8 @@ def grants_and_notes(denials: list[Denial], snapshot: Snapshot, fine_roots: tupl
     """The grants the filesystem denials ask for outside per-run names, with the comments and reports beside them.
 
     `pinned_roots` maps each verified pinned read root to the comment its grant gets (pinned.py). A
-    [read] of anything in one goes on that directory; no other section ever does.
+    [read] of anything in one goes on that directory; no other section ever does, and no write-class right
+    is ever granted on one or on an ancestor of one: that is reported instead.
 
     [execute] is narrowed to the executed files wherever it would sit on a directory that overlaps a
     write-class right of these grants or of `held`, the policy they are layered on (narrow_execute).
@@ -459,6 +460,11 @@ def grants_and_notes(denials: list[Denial], snapshot: Snapshot, fine_roots: tupl
                     notes.comments.setdefault(pinned, (pinned_roots or {})[pinned])
                     continue
                 target = placed(path, section, snapshot, fine_roots, notes)
+                if target is not None and section not in READ_CLASS and any(
+                        target == root or is_beneath(root, target) for root in pinned_roots or {}):
+                    notes.report(path, section, "a write-class right on a pinned read root or on an ancestor of one "
+                                                "would make the pinned tree writable")
+                    continue
                 if target is not None:
                     grants.setdefault(target, set()).add(section)
     found = {path: frozenset(sections) for path, sections in grants.items()}

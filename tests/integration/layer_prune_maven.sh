@@ -7,8 +7,8 @@
 #   input      re-hashes every file the committed manifest lists first (the image build already held the
 #              whole repository to it), since a prune that observed other artefacts than grading reads
 #              would be about another image;
-#   permitted  checks the pre-loaded repository against the manifest the exercise's prune.json declares it
-#              by (a pinned read root), prunes the exercise, merges the result into BaseLanguage-java-maven.cfg and its own file,
+#   permitted  prunes the exercise, whose prune.json declares the pre-loaded repository a pinned read root that
+#              the pruner checks against its manifest first, merges the result into BaseLanguage-java-maven.cfg and its own file,
 #              and has the exercise pass under exactly that pair with every layer on;
 #   forbidden  reads the record: both tests passed in all three baseline runs, whose log shows the weaving
 #              step and the copy of the Ares runtime jars, every containment check refused, and under /root
@@ -62,7 +62,8 @@ trap cleanup EXIT
 # Puts the exercise and the helpers where the prune container has them (A.6.1).
 set_up() {
   if [[ ! -f "${MANIFEST}" ]]; then
-    MANIFEST="${REPO}/docker/run_phase/java/maven-repository.sha256"
+    echo "no manifest at ${MANIFEST}: mount docker/run_phase/java/maven-repository.sha256 there, read-only" >&2
+    exit 1
   fi
   rm -rf "${EXERCISES}" "${HELPERS}"
   mkdir -p "${EXERCISES}/${KEY}"
@@ -239,7 +240,10 @@ check_tampered_manifest() {
   local manifest_directory=/srv/phobos-manifest
   local tampered="${manifest_directory}/tampered.sha256"
   mkdir -p "${manifest_directory}"
-  { printf '%064d  %s\n' 0 "$(head -1 "${MANIFEST}" | cut -d' ' -f3-)"; tail -n +2 "${MANIFEST}"; } > "${tampered}"
+  local first
+  first="$(head -1 "${MANIFEST}" | cut -d' ' -f3-)"
+  { printf '%064d  %s\n' 0 "${first}"; tail -n +2 "${MANIFEST}"; } > "${tampered}" \
+    || { bad "a tampered manifest can be written for the check"; return; }
   rm -rf "${EXERCISES:?}/${key}"
   mkdir -p "${EXERCISES}/${key}"
   cp -r "${EXERCISES}/${KEY}/${EXERCISE}" "${EXERCISES}/${key}/${EXERCISE}"
@@ -247,7 +251,11 @@ check_tampered_manifest() {
   local out
   out="$(prune "${key}" "${WORK}/${key}" 2>&1)"
   local status=$?
+  local runs
+  runs="$(python3 -c 'import json, sys; print(len(json.load(open(sys.argv[1]))["evidence"]["record"]))' \
+    "${WORK}/${key}/${key}_${EXERCISE}.aborted.json" 2>&1)"
   if [[ "${status}" -ne 0 && "${out}" == *"aborted: a pinned read root does not match its manifest"* \
+        && "${out}" == *"${first}: its SHA-256 differs from the manifest's"* && "${runs}" == 0 \
         && ! -e "${WORK}/${key}/${key}_${EXERCISE}.cfg" ]]; then
     ok "a copy whose manifest does not match the repository aborts before any run and writes no policy"
   else

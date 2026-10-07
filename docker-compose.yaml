@@ -73,6 +73,7 @@ services:
   prune_java_maven:
     <<: *prune_layers
     network_mode: none
+    # The base's three mounts again, since a merge replaces a list instead of extending it.
     volumes:
       - ./var/tmp/testing-dir:/srv/phobos-prune-exercises:ro
       - ./var/tmp/helpers:/var/tmp/helpers:ro

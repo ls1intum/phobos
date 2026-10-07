@@ -5,7 +5,7 @@
 # Manual on purpose. The prune runs the build under strace many times, so it takes far longer than a
 # suite belonging to every change, and its output is an artefact to be reviewed and handed on, not a
 # check. The suite it runs, tests/integration/layer_prune_maven.sh, also holds the result to the
-# conditions of the plan's Task 14.1 and shows the two wrong reasons aborting, so a green run is a
+# conditions of the plan's Task 14.1 and shows the three wrong reasons aborting, so a green run is a
 # prune that passed them, never one that merely ended with status 0.
 name: Prune the Maven reference exercise
 
