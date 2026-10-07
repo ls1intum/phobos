@@ -91,6 +91,22 @@ source /mnt/data/env.sh
 # shellcheck disable=SC1091
 source /mnt/data/setup.sh
 
+# What the guest finds out about the kernel before the observer starts: printed to the console, where the
+# host keeps it, so that a guest that cannot see Landlock's records says what it did see.
+diagnose() {
+  printf 'PHOBOS-KVM-DIAG cmdline: %s\n' "$(cat /proc/cmdline)"
+  printf 'PHOBOS-KVM-DIAG printk: %s / ratelimit %s\n' "$(cat /proc/sys/kernel/printk)" \
+    "$(cat /proc/sys/kernel/printk_ratelimit)"
+  dmesg | grep -i -E 'audit|landlock|LSM' | head -20 | sed 's/^/PHOBOS-KVM-DIAG boot: /'
+  printf '[read]\n/usr/local/libexec/phobos-prune-probe\n/dev/null\n\n[execute]\n/usr/local/libexec/phobos-prune-probe\n' \
+    > /tmp/diag.cfg
+  "${PHOBOS_HOME}/phobos.sh" --debug --config /tmp/diag.cfg -- /usr/local/libexec/phobos-prune-probe read /etc/hostname 2>&1 \
+    | head -40 | sed 's/^/PHOBOS-KVM-DIAG probe: /'
+  sleep 2
+  dmesg | tail -12 | sed 's/^/PHOBOS-KVM-DIAG ring: /'
+}
+diagnose
+
 printf 'PHOBOS-KVM-KERNEL %s\n' "$(uname -r)"
 python3 /var/tmp/helpers/layer_prune/main.py --kernel-observer audit --output-dir /var/tmp/path_sets "${KEY}"
 status=$?

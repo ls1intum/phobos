@@ -126,7 +126,8 @@ class Capture:
             if any(item.path == SENTINEL_FILE for item in audit.parse(lines)[0]):
                 return [line for line in lines if SENTINEL_FILE not in line]
             if time.monotonic() > deadline:
-                raise Indeterminate(f"the record of the sentinel refusal did not arrive in {SETTLE_SECONDS} s")
+                raise Indeterminate(f"the record of the sentinel refusal did not arrive in {SETTLE_SECONDS} s; "
+                                    f"{len(lines)} ring line(s) were read, the last: {lines[-3:]}")
             time.sleep(SETTLE_INTERVAL_SECONDS)
 
     def close(self) -> None:
