@@ -63,7 +63,7 @@ ulimit -n "${OPEN_FILES}" 2>/dev/null
 KEY="$(cmdline_value phobos_key)"
 [[ -n "${KEY}" ]] || { echo "no phobos_key on the kernel command line"; finish "${EXIT_SETUP}"; }
 
-mkdir -p /mnt/data /srv/phobos-prune-exercises /var/tmp/helpers /var/tmp/path_sets
+mkdir -p /mnt/data /srv/phobos-prune-exercises /var/tmp/helpers /var/tmp/path_sets /var/tmp/testing-dir
 mount /dev/vdb /mnt/data || { echo "the data disk cannot be mounted"; finish "${EXIT_SETUP}"; }
 mount --bind /mnt/data/exercises /srv/phobos-prune-exercises
 mount --bind /mnt/data/helpers /var/tmp/helpers

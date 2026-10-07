@@ -135,11 +135,13 @@ def selftest_with(monkeypatch, tmp_path, lines: list[str], version: int = 10):
     """Runs the self-test with a probe stand-in that makes the kernel write `lines`."""
     monkeypatch.setenv(kvm.LOG_VARIABLE, "1")
     monkeypatch.setattr(kvm.subprocess, "run", lambda *arguments, **keywords: subprocess.CompletedProcess([], 1, "", ""))
-    return kvm.selftest(runner.Environment(), FakeCapture([], lines), version, tmp_path)
+    return kvm.selftest(runner.Environment(testing_dir=str(tmp_path / "testing-dir")), FakeCapture([], lines), version,
+                        tmp_path)
 
 
 def test_the_self_test_passes_with_exactly_one_record_naming_the_refused_file(monkeypatch, tmp_path):
     proof = selftest_with(monkeypatch, tmp_path, [READ_RECORD])
+    assert (tmp_path / "testing-dir").is_dir(), "Phobos refuses a run whose working directory is not there"
     assert proof["landlock_abi"] == 10 and "/etc/hostname" in proof["selftest_record"]
     assert "[execute]" in (tmp_path / "refusal.cfg").read_text()
 
@@ -160,7 +162,8 @@ def test_the_self_test_is_indeterminate_rather_than_a_pass_when_the_guest_cannot
 def test_the_self_test_is_indeterminate_when_the_enforcer_was_not_asked_to_have_the_kernel_log(monkeypatch, tmp_path):
     monkeypatch.delenv(kvm.LOG_VARIABLE, raising=False)
     with pytest.raises(kvm.Indeterminate, match="would log no refusal"):
-        kvm.selftest(runner.Environment(), FakeCapture([], [READ_RECORD]), 10, tmp_path)
+        kvm.selftest(runner.Environment(testing_dir=str(tmp_path / "testing-dir")), FakeCapture([], [READ_RECORD]), 10,
+                     tmp_path)
 
 
 def fake_pruning(monkeypatch, tmp_path):
