@@ -45,7 +45,11 @@ DEFAULT_RUN_SECONDS = 1800
 REAP_SECONDS = 10
 REAP_INTERVAL_SECONDS = 0.05
 # The keys prune.json may hold, with the type each value must have (A.6.8).
-SETTING_TYPES = {"report_globs": list, "declared_hosts": list, "heap_pinned": bool}
+SETTING_TYPES = {"report_globs": list, "declared_hosts": list, "heap_pinned": bool, "grow_rounds": int}
+# The most rounds an exercise's prune.json may ask the grow loop for. A build that stops at the first
+# file it cannot read (Maven offline) shows the pruner one such file per round, so it needs about as
+# many rounds as the files it opens; the bound keeps a build that never converges from running for ever.
+MAX_GROW_ROUNDS = 2000
 
 
 class PrunerDefect(Exception):
@@ -78,6 +82,7 @@ class Exercise:
     report_globs: tuple[str, ...]
     declared_hosts: tuple[str, ...]
     heap_pinned: bool = False
+    grow_rounds: int | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -132,7 +137,8 @@ RUN_NUMBERS = itertools.count(1)
 
 def read_settings(directory: pathlib.Path) -> dict:
     """The exercise's prune.json, or an empty one; ExerciseRefused when it is not a JSON object of the known
-    keys, each of its type, with only strings in its lists and only relative report globs."""
+    keys, each of its type, with only strings in its lists, only relative report globs and a grow_rounds
+    between 1 and MAX_GROW_ROUNDS."""
     path = directory / "prune.json"
     if not path.is_file():
         return {}
@@ -149,6 +155,9 @@ def read_settings(directory: pathlib.Path) -> dict:
             raise ExerciseRefused(f"{path} holds {key!r} with an entry that is not a non-empty string")
     if any(pattern.startswith("/") for pattern in settings.get("report_globs", ())):
         raise ExerciseRefused(f"{path} holds an absolute report glob")
+    rounds = settings.get("grow_rounds")
+    if rounds is not None and (isinstance(rounds, bool) or not 1 <= rounds <= MAX_GROW_ROUNDS):
+        raise ExerciseRefused(f"{path} holds a grow_rounds outside 1 to {MAX_GROW_ROUNDS}")
     return settings
 
 
@@ -172,7 +181,8 @@ def read_exercise(directory: pathlib.Path) -> Exercise:
     if stale:
         raise ExerciseRefused(f"{directory} already holds a report its globs match: {stale[0]}")
     return Exercise(name=directory.name, workdir=directory, build_script=script, report_globs=globs,
-                    declared_hosts=declared, heap_pinned=bool(settings.get("heap_pinned", False)))
+                    declared_hosts=declared, heap_pinned=bool(settings.get("heap_pinned", False)),
+                    grow_rounds=settings.get("grow_rounds"))
 
 
 def restore(exercise: Exercise, environment: Environment) -> pathlib.Path:

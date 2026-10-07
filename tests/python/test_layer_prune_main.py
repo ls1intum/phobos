@@ -229,3 +229,20 @@ def test_verify_takes_no_stage(tmp_path, pruned, capsys):
     assert main.main(["--verify", str(tmp_path), "--stage", "network", "--testing-root", str(root), "--output-dir",
                       str(tmp_path / "out"), "java"]) == main.EXIT_ABORTED
     assert "no --stage" in capsys.readouterr().err
+
+
+def test_an_exercise_gets_the_default_grow_budget_unless_its_prune_json_asks_for_more(tmp_path, monkeypatch):
+    budgets = {}
+
+    def fake(exercise, budget, environment, stage, pristine):
+        budgets[exercise.name] = budget.grow_rounds
+        return cfgfile.Policy(fs={"/usr": frozenset({"read"})}, connect=(), bind=(), limits={}), []
+    monkeypatch.setattr(stages, "prune_exercise", fake)
+    monkeypatch.setenv(stages.PRUNE_CONTAINER_VARIABLE, "1")
+    monkeypatch.setattr(stages, "pristine_index", lambda environment: generalise.Snapshot(
+        existing=frozenset(), directories=frozenset(), scanned=()))
+    monkeypatch.setattr(main, "provenance", lambda environment: ORIGIN)
+    root = exercise_tree(tmp_path / "exercises", "plain", "long")
+    (root / "java" / "long" / "prune.json").write_text('{"grow_rounds": 900}')
+    assert main.main(["--testing-root", str(root), "--output-dir", str(tmp_path / "out"), "java"]) == 0
+    assert budgets == {"plain": stages.Budget().grow_rounds, "long": 900}

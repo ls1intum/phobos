@@ -122,6 +122,13 @@ def abort_record(failure: BaseException) -> dict:
     return {"aborted": f"a defect of the pruner: {type(failure).__name__}: {failure}", "evidence": {}}
 
 
+def budget_of(exercise: runner.Exercise) -> stages.Budget:
+    """The default budget, with the grow rounds the exercise's prune.json asks for where it asks for any."""
+    if exercise.grow_rounds is None:
+        return stages.Budget()
+    return stages.Budget(grow_rounds=exercise.grow_rounds)
+
+
 def prune_one(directory: pathlib.Path, key: str, stage: str, environment: runner.Environment,
               output: pathlib.Path, origin: dict[str, str | int], pristine: generalise.Snapshot) -> str | None:
     """Prunes one exercise and writes its artefacts; the abort reason, or None when it succeeded.
@@ -132,7 +139,7 @@ def prune_one(directory: pathlib.Path, key: str, stage: str, environment: runner
     base = f"{key}_{directory.name}"
     try:
         exercise = runner.read_exercise(directory)
-        pruned = stages.prune_exercise(exercise, stages.Budget(), environment, stage, pristine)
+        pruned = stages.prune_exercise(exercise, budget_of(exercise), environment, stage, pristine)
         policy = pruned[0]
         text = header(origin, key, directory.name, stage) + cfgfile.render(policy)
     except Exception as failure:  # noqa: BLE001

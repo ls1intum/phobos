@@ -59,18 +59,44 @@ set_up() {
   cp -r "${REPO}/var/tmp/helpers" "${HELPERS}"
 }
 
-# The image carries JDK 25 and exactly the bytes the manifest names.
+# Prints the SHA-256 of one file as docker/run_phase/java/pin-repository.sh reckons it: of its content
+# without the comment lines for a file named _remote.repositories, which Maven writes beside every
+# artefact with a comment holding the time it was written, and of the whole content for any other file.
+manifest_digest() {
+  local file="$1"
+  local sum
+  if [[ "${file##*/}" == "_remote.repositories" ]]; then
+    sum="$(grep -v '^#' "${file}" | sha256sum)"
+  else
+    sum="$(sha256sum < "${file}")"
+  fi
+  printf '%s' "${sum%% *}"
+}
+
+# The image carries JDK 25 and exactly the bytes the manifest names. The image build already held the
+# repository to the manifest with pin-repository.sh verify, which runs the exercise's online build and so
+# needs a network; here, with none, each listed file is hashed again by the same rule, which is what
+# makes the prune about the image grading reads.
 check_input() {
   local version
   version="$(java -version 2>&1 | head -1)"
   if [[ "${version}" == *'"25'* ]]; then ok "the image runs JDK 25"; else bad "the image runs JDK 25" "${version}"; fi
-  local verified
-  verified="$(cd "${REPOSITORY}" && sha256sum --strict -c "${MANIFEST}" 2>&1)"
-  local status=$?
-  if [[ ${status} -eq 0 && "$(grep -vc ': OK$' <<<"${verified}")" -eq 0 ]]; then
-    ok "every file of the pre-loaded repository is as the manifest says ($(wc -l < "${MANIFEST}") files)"
+  local wanted
+  local path
+  local listed=0
+  local wrong=()
+  while read -r wanted path; do
+    listed=$((listed + 1))
+    if [[ ! -f "${REPOSITORY}/${path}" ]]; then
+      wrong+=("missing: ${path}")
+    elif [[ "$(manifest_digest "${REPOSITORY}/${path}")" != "${wanted}" ]]; then
+      wrong+=("differs: ${path}")
+    fi
+  done < "${MANIFEST}"
+  if [[ ${listed} -gt 0 && ${#wrong[@]} -eq 0 ]]; then
+    ok "every file of the pre-loaded repository is as the manifest says (${listed} files)"
   else
-    bad "every file of the pre-loaded repository is as the manifest says" "$(grep -v ': OK$' <<<"${verified}" | head -5)"
+    bad "every file of the pre-loaded repository is as the manifest says" "${listed} listed; ${wrong[*]:0:5}"
   fi
 }
 
