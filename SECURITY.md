@@ -96,6 +96,27 @@ instructor and must never be writable by the code being graded; a submission tha
 its own exercise configuration could grant itself any access, and that is an integration
 requirement Phobos relies on rather than a boundary it enforces.
 
+An Ares 2 security policy given to `--config` grants access exactly as an exercise
+configuration does, so the same holds for it: it must come from the instructor's test
+repository, never from the student's assignment tree. In an Artemis build a
+`security-policy.yaml` usually sits in the test repository's `src/test/resources`, and a
+grading script that searched the merged working tree for such a file could pick up a copy the
+submission placed there. The values an import depends on are operator input in the same way:
+the project root (`--project-root`, or the tail flags' last `--chdir`), which must be the
+directory the build tool starts the test JVM in, and the placeholder values a programming
+language configuration determines from the environment, the `PATH` and the password database
+of the process that runs `phobos.sh`. All of them are fixed before the command is started; a
+grading setup that hands `phobos.sh` an environment the submission influenced breaks this.
+
+A path a policy names is resolved through its symbolic links when the filesystem layer
+applies it, just before the command starts, and by then the submission is in place. A relative
+path in an Ares 2 policy names a place inside the project root, which usually holds the
+submission's checkout. A symbolic link the submission places at any component of a path that is
+only read or executed, or at any component but the last of a path that may be changed (the
+enforcer refuses a changeable path that is itself a link), makes the grant land where the link
+points. The same holds for a path in an exercise configuration that lies in the submission's
+tree. Grant such a path only where no component of it is the submission's to choose.
+
 ## The environment Phobos is started in
 
 A grader may start Phobos with the submission's tree as the current directory, so anything

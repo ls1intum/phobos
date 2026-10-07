@@ -201,6 +201,57 @@ refused "a sign in front of a count" "$PHB_EPOLICY" "[limits]" "cpu=+5"
 refused "an empty value for a count" "$PHB_EPOLICY" "[limits]" "cpu="
 
 echo
+echo "== Ares 2 policies =="
+# ares_accepted TITLE ENTRY...: the imported policy is accepted and the command runs and ends with status 0.
+ares_accepted() {
+  local title="$1"
+  local config
+  shift
+  config="$(ares_cfg syntax "$@")"
+  run_pm --config "$config" -- "$P" cwd
+  if started && (( PM_STATUS == 0 )); then ok "accepted: an Ares 2 policy with ${title}"; else bad "accepted: an Ares 2 policy with ${title}" "$(pm_describe)"; fi
+}
+# ares_refused TITLE FROM TO: the imported policy with the line FROM replaced by TO is refused with PHB-EPOLICY before
+# the command is reached.
+ares_refused() {
+  local title="$1"
+  local config
+  config="$(ares_cfg syntax "fs $PM/ro r" "net 127.0.0.1 80")"
+  sed -i "s|$2|$3|" "$config"
+  run_pm --config "$config" -- "$P" cwd
+  if ! started && (( PM_STATUS == PHB_EPOLICY )); then ok "refused with ${PHB_EPOLICY}: an Ares 2 policy with ${title}"; else bad "refused: an Ares 2 policy with ${title}" "$(pm_describe)"; fi
+}
+ares_accepted "no entry at all"
+ares_accepted "a read entry" "fs $PM/ro r"
+ares_accepted "every right on a tree" "fs $PM/rw rwcxd"
+ares_accepted "an entry that grants nothing" "fs $PM/none -"
+ares_accepted "a loopback network entry with a port" "net 127.0.0.1 80"
+ares_accepted "localhost on every port" "net localhost 0"
+ares_accepted "a timeout" "timeout 30000"
+# The shipped configuration determines these three from the image: the JDK the java on the PATH belongs to, the password
+# database's home of the user running the suite, and /tmp.
+ares_accepted "the shipped configuration's three placeholders" 'fs ${java.home}/lib r' 'fs ${user.home} r' 'fs ${java.io.tmpdir} r'
+run_pm --debug --config "$PM/cfg/syntax.yaml" -- "$P" cwd
+if grep -q "\${java.home} is $(dirname "$(dirname "$(readlink -f "$(command -v java)")")")" "$PM_ERR" && grep -q "\${java.io.tmpdir} is /tmp" "$PM_ERR" \
+  && grep -q "\${user.home} is $(getent passwd "$(id -u)" | cut -d: -f6)" "$PM_ERR"; then
+  ok "and each resolves to what the image and the password database say"
+else
+  bad "the shipped configuration's placeholders resolve to what the image says" "$(pm_describe)"
+fi
+ares_refused "version 2" "PolicyVersion: 1" "PolicyVersion: 2"
+ares_refused "an unknown configuration" "$PM_ARES_CONFIGURATION" "NO_SUCH_CONFIGURATION"
+ares_refused "a boolean spelt yes" "readAllFiles: true" "readAllFiles: yes"
+ares_refused "a quoted port" "onThePort: 80" "onThePort: \"80\""
+ares_refused "a port past 65535" "onThePort: 80" "onThePort: 70000"
+ares_refused "a connection opened but no data sent" "sendData: true" "sendData: false"
+ares_refused "the whole file system as a path" "\"$PM/ro\"" "\"*\""
+ares_refused "a path that does not exist" "\"$PM/ro\"" "\"$PM/no-such-path\""
+ares_refused "a '..' segment" "\"$PM/ro\"" "\"$PM/ro/../none\""
+ares_refused "a placeholder the configuration does not name" "\"$PM/ro\"" "\"\${HOME}/x\""
+ares_refused "an unknown key" "theFollowingClassesAreTestClasses: \\[\\]" "theFollowingClassesAreTestClasses: []\\n  unknownKey: 1"
+ares_refused "a timeout of 0" "regardingTimeouts: \\[\\]" "regardingTimeouts:\\n      - timeout: 0"
+
+echo
 echo "== section headers and the shape of a file =="
 for header in "[Read]" "[read ]" "[ read]" "[read]]" "[[read]]" "[unknown]" "[READ]" "[connect ]" "[limits ]"; do
   config="$PM/cfg/header.cfg"

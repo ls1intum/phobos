@@ -201,6 +201,34 @@ deny_case "and a datagram to the named address on another port is refused" net "
 deny_case "and a datagram to another address on the named port is refused" net "$c_udp_mixed" sendto "$DENIED_ERRNOS" -- "$P" udp_send sendto 127.0.0.3 "$UDP_PORT" "BAD-mixed-address"
 
 echo
+echo "== an imported Ares 2 policy: TCP and UDP under a programming language configuration =="
+# Each granted Ares entry becomes a TCP rule and the same rule for UDP, and the configuration adds allow localhost udp,
+# so the UDP rules that name a port are held by the connect guard alone and the run starts below Landlock version 10.
+# The minimal base has no TCP loopback wildcard, so a TCP port the import does not name stays closed.
+a_net="$(ares_cfg ares_net "net 127.0.0.1 $PORT_A" "net 127.0.0.1 $UDP_PORT" "net 10.0.0.1 $UDP_PORT")"
+allow_case "an imported loopback entry connects over TCP to its port" "$a_net" connect -- "$P" tcp 127.0.0.1 "$PORT_A"
+deny_case "and not to another TCP port of the same address" net "$a_net" connect "$DENIED_ERRNOS" -- "$P" tcp 127.0.0.1 "$PORT_B"
+allow_case "a datagram to the imported port goes, on every kernel, the ones below Landlock version 10 included" "$a_net" sendto -- "$P" udp_send sendto 127.0.0.1 "$UDP_PORT" "PAY-ares"
+if grep -q 'connect guard alone enforces them' "$PM_ERR"; then ok "and the network layer says the connect guard alone enforces the udp port"; else bad "the network layer says the connect guard alone enforces the udp port" "$(pm_describe)"; fi
+allow_case "the configuration's loopback rule lets a datagram to another port of 127.0.0.1 go" "$a_net" sendto -- "$P" udp_send sendto 127.0.0.1 "$((UDP_PORT + 1))" "PAY-ares-other"
+allow_case "and one to 127.0.0.2, which is loopback too" "$a_net" sendto -- "$P" udp_send sendto 127.0.0.2 "$UDP_PORT" "PAY-ares-loop"
+run_pm --config "$a_net" -- "$P" udp_send sendto 10.0.0.1 "$UDP_PORT" "PAY-ares-far"
+if op_failed_with sendto ENETUNREACH; then ok "a datagram to an imported non-loopback entry passes the guard and meets the missing network"; else bad "a datagram to an imported non-loopback entry passes the guard" "$(pm_describe)"; fi
+for target in "192.0.2.1 ${UDP_PORT}" "10.0.0.1 $((UDP_PORT + 1))"; do
+  read -r address port <<< "$target"
+  run_pm --config "$a_net" -- "$P" udp_send sendto "$address" "$port" "BAD-ares"
+  refused_by_guard=0
+  op_failed_with sendto $DENIED_ERRNOS && refused_by_guard=1
+  guarded_run="$(pm_describe)"
+  run_pm --no-networksystem-restriction --config "$a_net" -- "$P" udp_send sendto "$address" "$port" "BAD-ares"
+  if (( refused_by_guard )) && op_failed_with sendto ENETUNREACH; then
+    ok "a datagram to ${address}:${port}, which no rule names, is refused by the sandbox, and without the network layer it meets the missing network"
+  else
+    bad "a datagram to ${address}:${port} is refused by the sandbox" "guarded: ${guarded_run}; network layer off: $(pm_describe)"
+  fi
+done
+
+echo
 echo "== UDP: the destination cannot be swapped between the check and the send =="
 run_direct_args() {
   shift

@@ -35,7 +35,9 @@ USAGE
 POLICY
   Base configuration      every "${HERE}/Base*.cfg", applied first, in sorted order. With
                           none present Phobos refuses to run (PHB-EPOLICY) rather than run
-                          the command unconfined.
+                          the command unconfined. When a --config file is an Ares 2
+                          policy, the bases are instead the ones its programming language
+                          configuration lists, with that configuration's [connect] rows.
   Exercise configuration  only the files given with --config, applied in that order.
   Tail configuration      "${HERE}/TailPhobos.cfg", flags only, applied last.
 
@@ -80,7 +82,14 @@ RESTRICTION OPTIONS (every restriction is applied by default)
 
 OTHER OPTIONS
   --config <file>, -c <file>
-        An exercise configuration, applied on top of the base. May be given repeatedly.
+        An exercise configuration, applied on top of the base. May be given repeatedly. A file
+        whose name ends in .yaml or .yml is read as an Ares 2 security policy: the programming
+        language configuration it names decides the base policies, and its file system, network
+        and timeout permissions are imported; README.md says how each is mapped.
+  --project-root <dir>
+        The directory a relative path and \${PROJECT_ROOT} in an Ares 2 policy are resolved
+        against, which must be the one the build tool starts the test JVM in. Without it, the
+        last --chdir of the tail flags is used, and with neither such a path is refused.
   --debug, -d
         Report on stderr what each layer does and runs, and have the enforcers report
         verbosely too. It prints the whole effective policy, so it is meant for diagnosis
@@ -201,6 +210,8 @@ opt_tail_flags_file=""
 opt_spec_parent=""
 opt_haproxy_bin=""
 opt_resolver=""
+opt_project_root=""
+opt_project_root_given=0
 
 cfgs=()
 cmd=()
@@ -240,6 +251,8 @@ while (( "$#" )); do
       shift; [[ $# -gt 0 ]] || usage; opt_tail_flags_file="$1"; shift;;
     --spec-parent)
       shift; [[ $# -gt 0 ]] || usage; opt_spec_parent="$1"; shift;;
+    --project-root)
+      shift; [[ $# -gt 0 ]] || usage; opt_project_root="$1"; opt_project_root_given=1; shift;;
     --)
       shift
       while (( "$#" )); do cmd+=("$1"); shift; done
@@ -316,6 +329,7 @@ trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 # the one policy program, over the directory this script owns and the chain below reads.
 policy_flags=( --spec-dir "$SPEC_DIR" --tail-flags-file "$tail_flags_file" )
 if (( enable_debug )); then policy_flags+=( --debug ); fi
+if (( opt_project_root_given )); then policy_flags+=( --project-root "$opt_project_root" ); fi
 for c in "${cfgs[@]}"; do policy_flags+=( --config "$c" ); done
 "${HERE}/phobos-policysystem.sh" "${policy_flags[@]}"
 
