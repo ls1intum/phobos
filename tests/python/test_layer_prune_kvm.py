@@ -159,6 +159,13 @@ def test_the_self_test_is_indeterminate_rather_than_a_pass_when_the_guest_cannot
         selftest_with(monkeypatch, tmp_path, lines, version)
 
 
+def test_the_refusal_makes_its_scratch_directory_again_since_the_cleaning_between_runs_removes_it(monkeypatch, tmp_path):
+    monkeypatch.setattr(kvm.subprocess, "run", lambda *arguments, **keywords: subprocess.CompletedProcess([], 1, "", ""))
+    scratch = tmp_path / "gone" / "scratch"
+    kvm.refuse_read(runner.Environment(testing_dir=str(tmp_path / "testing-dir")), scratch, "/etc/hostname")
+    assert (scratch / "refusal.cfg").is_file()
+
+
 def test_the_self_test_is_indeterminate_when_the_enforcer_was_not_asked_to_have_the_kernel_log(monkeypatch, tmp_path):
     monkeypatch.delenv(kvm.LOG_VARIABLE, raising=False)
     with pytest.raises(kvm.Indeterminate, match="would log no refusal"):

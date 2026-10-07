@@ -139,9 +139,11 @@ def refuse_read(environment: runner.Environment, directory: pathlib.Path, target
     """Has the probe, which is granted nothing on `target`, try to read it under the layers: one refusal for the kernel to log.
 
     Phobos enters the working directory before the command starts and refuses the run when it is not
-    there, so the directory is made first; the first guest run found the probe never started without it.
+    there, so the directory is made first; the first guest run found the probe never started without it. The
+    scratch directory is made again as well, since the cleaning between runs removes what a run left in /tmp.
     """
     pathlib.Path(environment.testing_dir).mkdir(parents=True, exist_ok=True)
+    directory.mkdir(parents=True, exist_ok=True)
     cfg = directory / "refusal.cfg"
     cfg.write_text(f"[read]\n{PROBE}\n/dev/null\n\n[execute]\n{PROBE}\n")
     argv = [os.path.join(environment.phobos_home, "phobos.sh"), "--config", str(cfg), "--", PROBE, "read", target]
