@@ -1,0 +1,13 @@
+# The interactive Python session of record_replay.sh, typed into python3 -q. Every marker is printed
+# in two halves, so the echo of the typed line can never satisfy an expectation.
+expect >>>
+send import time
+send print("OK-" + "P1")
+expect OK-P1
+send time.sleep(30)
+sleep 1
+key ctrl-c
+expect KeyboardInterrupt
+send print("OK-" + "P2")
+expect OK-P2
+send exit(0)

@@ -456,8 +456,18 @@ def denials(trace: strace_parse.Trace, working_directory: str) -> list[Denial]:
     `working_directory` is where the command started, which a relative path is resolved against
     when strace did not decorate AT_FDCWD; every clone inherits it and every chdir moves it.
     """
+    return [denial for _, denial, _ in refusals(trace, working_directory)]
+
+
+def refusals(trace: strace_parse.Trace, working_directory: str) -> list[tuple[Syscall, Denial, str]]:
+    """What denials answers, each Denial with the refused call and its thread's working directory.
+
+    The recording pruner's replay check reads the refused call itself and not only its Denial, so
+    that it can compare exactly the accesses of that call with the ones a recorded session needed.
+    Assumes the same as denials.
+    """
     state = RunState(trace, working_directory)
-    found: list[Denial] = []
+    found: list[tuple[Syscall, Denial, str]] = []
     for index, call in enumerate(trace.syscalls):
         if call.errno is None:
             state.follow(call)
@@ -466,5 +476,6 @@ def denials(trace: strace_parse.Trace, working_directory: str) -> list[Denial]:
             continue
         denial = attribute_call(call, state)
         if denial is not None:
-            found.append(dataclasses.replace(denial, pid=state.group(call.pid), tid=call.pid))
+            attributed = dataclasses.replace(denial, pid=state.group(call.pid), tid=call.pid)
+            found.append((call, attributed, state.directory(call.pid)))
     return found

@@ -79,6 +79,27 @@ def read_listing(path: pathlib.Path) -> dict[str, str]:
     return listing
 
 
+class Existing:
+    """Answers whether a path existed before a container's first session, by its listing.
+
+    The kernel trees and the recordings directory are never listed, and a per-run name such as a
+    pseudo-terminal is left out, so each of them counts as existing: no session creates them.
+    """
+
+    def __init__(self, listing: dict[str, str]):
+        """Holds the listed paths; assumes the listing is one read_listing or fingerprint answered."""
+        self.paths = frozenset(listing)
+
+    def existed(self, path: str) -> bool:
+        """Whether the path existed before the first session; assumes an absolute, canonical path."""
+        return path in self.paths or _skipped(path, DEFAULT_SKIP) or PER_RUN_NAME.match(path) is not None
+
+
+def existing(path: pathlib.Path) -> Existing:
+    """The paths a listing written by take holds, as an Existing; assumes take wrote the file."""
+    return Existing(read_listing(path))
+
+
 def _walk(root: pathlib.Path, skip: tuple[str, ...]) -> dict[str, str]:
     """Every path under root, written as absolute from root, mapped to its fingerprint.
 

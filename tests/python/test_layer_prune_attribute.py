@@ -303,6 +303,19 @@ def test_enoent_is_not_a_denial():
     assert attribute.denials(trace, "/w") == []
 
 
+def test_refusals_pair_each_denial_with_its_call_and_the_threads_working_directory():
+    trace = trace_of(RESTRICT,
+                     '300 chdir("/srv") = 0',
+                     '300 openat(AT_FDCWD, "a/data.txt", O_RDONLY) = -1 EACCES (Permission denied)',
+                     '300 openat(AT_FDCWD</srv>, "/srv/missing", O_RDONLY) = -1 ENOENT (No such file or directory)')
+    [(call, denial, directory)] = attribute.refusals(trace, "/w")
+    assert call.name == "openat"
+    assert call.errno == "EACCES"
+    assert denial.objects == ("/srv/a/data.txt",)
+    assert directory == "/srv"
+    assert attribute.denials(trace, "/w") == [denial]
+
+
 def elf_with_interpreter(interpreter: bytes) -> bytes:
     """A minimal 64-bit little-endian ELF header with one PT_INTERP program header naming `interpreter`."""
     header_size = 64

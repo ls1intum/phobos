@@ -67,6 +67,17 @@ def parse(text: str) -> list[Action]:
     return actions
 
 
+@dataclasses.dataclass(frozen=True)
+class Outcome:
+    """How a scripted session ended: the command's status, and whether every expectation held.
+
+    Kept apart because a command may itself end with the status EXPECT_FAILED stands for.
+    """
+
+    status: int
+    expectations_met: bool
+
+
 def run(command: list[str], actions: list[Action], cwd: pathlib.Path, transcript: pathlib.Path,
         step_seconds: float = 60.0) -> int:
     """Runs the command in a new pseudo-terminal in cwd and types the actions into it.
@@ -78,6 +89,17 @@ def run(command: list[str], actions: list[Action], cwd: pathlib.Path, transcript
     action is hung up on, as closing a terminal window would, and its process group is killed
     when it is still running step_seconds after that.
     """
+    outcome = drive(command, actions, cwd, transcript, step_seconds)
+    return outcome.status if outcome.expectations_met else EXPECT_FAILED
+
+
+def drive(command: list[str], actions: list[Action], cwd: pathlib.Path, transcript: pathlib.Path,
+          step_seconds: float = 60.0) -> Outcome:
+    """What run does, answered as an Outcome, so a caller can tell an unmet expectation apart.
+
+    Assumes what run assumes. After an unmet expectation the status is the one the killed command
+    ended with.
+    """
     pid, descriptor = pty.fork()
     if pid == 0:
         _start(command, cwd)
@@ -86,12 +108,11 @@ def run(command: list[str], actions: list[Action], cwd: pathlib.Path, transcript
         for action in actions:
             if not _perform(terminal, action, step_seconds):
                 _kill_group(pid)
-                _status(pid)
-                return EXPECT_FAILED
+                return Outcome(status=_status(pid), expectations_met=False)
         terminal.drain(step_seconds)
     finally:
         os.close(descriptor)
-    return _reap(pid, step_seconds)
+    return Outcome(status=_reap(pid, step_seconds), expectations_met=True)
 
 
 class _Terminal:
