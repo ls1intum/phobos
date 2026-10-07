@@ -119,10 +119,11 @@ component but the last of a path that may be changed (the enforcer refuses a cha
 that is itself a link), makes the grant land where the link points. For an Ares 2 policy this is
 a rule where the import can see the risk: a path the import names that reaches the project root,
 which usually holds the submission's checkout, through a symbolic link, or through a name for the
-root that is not the operator's, and so resolves to somewhere other than where the path says, is
-refused with the file and the line. A link before the path enters the root that leads away from
+root that leads to some other place than the root itself, and so resolves to somewhere other than
+where the path says, is refused with the file and the line. A link before the path enters the root that leads away from
 it, such as `/bin` to `/usr/bin`, stays allowed, and so does a project root that is itself a link,
-since the operator's statement of the root is trusted. The check is made when the specification
+since the operator's statement of the root is trusted; that trust holds only while no ancestor of
+the root is the submission's to write. A project root with a `..` segment is refused. The check is made when the specification
 is built, so a link the submission places between that moment and the start of the command is not
 seen; the grader builds the specification after the submission is in place and starts the command
 right after. A path in an exercise configuration that lies in the submission's tree carries the

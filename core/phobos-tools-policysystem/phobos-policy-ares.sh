@@ -462,8 +462,10 @@ ares_expand_placeholders() {
 # file, resolving to exactly its parent plus its own name. A link before that point that leads away from
 # the root, such as /bin to /usr/bin, is not the submission's to place and stays allowed, and so does a
 # project root that is itself a link or has another name: the operator's statement of the root is trusted,
-# and only what lies below it is compared. A path that never enters the root, and every path when there is
-# no project root, is not refused here. The check is made when the specification is built; the residual is
+# and only what lies below it is compared, which assumes that no ancestor of the root is the submission's
+# to write. A project root with a '..' segment is refused, since what lies below it cannot be told from a
+# link. A path that never enters the root, every path when there is no project root, and every path under
+# a project root that does not exist, which no existing path can lie under, is not refused here. The check is made when the specification is built; the residual is
 # stated in SECURITY.md. Takes the absolute path, which exists, the project root, which may be empty, and
 # the value as written for the message. Assumes GNU realpath, which refuse_missing_realpath has
 # established, and PARSE_LOCATION naming the value's line, and that it is called plainly, so that a
