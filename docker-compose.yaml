@@ -65,6 +65,20 @@ services:
     <<: *record
     network_mode: bridge
 
+  # The Maven reference exercise (var/tmp/testing-dir/java-maven) is pruned under its own key, in the
+  # same image as Gradle's, with the same mounts and no network, no privilege and no capability. The
+  # repository manifest is mounted read-only for the one check made before the first run: that the
+  # image holds the bytes the grading image was built with (README "The Maven prune").
+  prune_java_maven:
+    <<: *prune_layers
+    network_mode: none
+    volumes:
+      - ./var/tmp/testing-dir:/srv/phobos-prune-exercises:ro
+      - ./var/tmp/helpers:/var/tmp/helpers:ro
+      - ./var/tmp/path_sets:/var/tmp/path_sets
+      - ./docker/run_phase/java/maven-repository.sha256:/srv/phobos-manifest/maven-repository.sha256:ro
+    command: ["--stage", "all", "java-maven"]
+
   # Opt-in, for the Java exercises under var/tmp/testing-dir/java-egress whose prune.json declares
   # hosts (A.6.5): unlike the other layer-pruner services it has a network, and it keeps or drops
   # declared rules but never adds one. The project's own network gives the container Docker's
@@ -88,9 +102,11 @@ services:
         condition: service_completed_successfully
       prune_java:
         condition: service_completed_successfully
+      prune_java_maven:
+        condition: service_completed_successfully
     command:
       [
-        "--langs", "python,java",
+        "--langs", "python,java,java-maven",
         "--path-dir", "/var/tmp/path_sets", "--skip-prune"
       ]
 
@@ -109,3 +125,17 @@ services:
       orchestrate:
         condition: service_completed_successfully
     command: ["--verify", "/srv/phobos-merged", "java"]
+
+  # The same for the Maven reference exercise, under the merged BaseLanguage-java-maven.cfg.
+  verify_java_maven:
+    <<: *prune_layers
+    network_mode: none
+    volumes:
+      - ./var/tmp/testing-dir:/srv/phobos-prune-exercises:ro
+      - ./var/tmp/helpers:/var/tmp/helpers:ro
+      - ./var/tmp/path_sets:/var/tmp/path_sets
+      - ./var/tmp/opt/core/config:/srv/phobos-merged:ro
+    depends_on:
+      orchestrate:
+        condition: service_completed_successfully
+    command: ["--verify", "/srv/phobos-merged", "java-maven"]
