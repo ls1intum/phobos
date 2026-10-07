@@ -113,6 +113,13 @@ as a dependency.
 - A pruning heuristic that treats an ambiguous outcome as "needed" produces a larger
   allow-list, which is a weaker sandbox that still looks like it works. Say in the pull
   request which direction a heuristic errs in.
+- In the layer pruner, a grant needs an attributed denial: a refusal recorded inside the
+  command's sandbox, by the layer under test, which the control replay confirms the sandbox
+  caused. A run that fails without one is never turned into a grant.
+- The prune container runs without privileges, as every suite here does, and with `--network none`
+  unless the exercise declares a host; ptrace of one's own child needs neither. Between layered runs
+  the pruner removes whatever earlier runs added outside the working directory, so it refuses to run
+  anywhere but in that container.
 
 ## The compiled binaries
 

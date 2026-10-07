@@ -67,6 +67,10 @@ jobs:
             case "${name}" in
               harness.sh | lib.sh | run-all.sh | policy-redundancy-probe.sh) continue ;;
             esac
+            # A fixture's script is an exercise a suite runs, not a suite of its own.
+            case "${suite}" in
+              */*-fixture/*) continue ;;
+            esac
             if ! grep -rqF -- "${name}" .github/workflows; then
               echo "::error file=${suite}::no workflow starts this suite, so it runs nowhere"
               missing=1

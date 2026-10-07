@@ -21,14 +21,16 @@ services:
   # and each `run` is a new container, which is what a replay check needs. Offline; the networked
   # service is for a program that must reach hosts. Never point either at an untrusted submission.
   # No privilege, capability or security option: strace traces only the recorder's own children.
-  # The image is built on the run-phase image docker/run_phase/java/docker-compose.yaml builds. The
+  # The image is built from the repository root, since its Dockerfile copies files by their
+  # repository paths, on the run-phase image docker/run_phase/java/docker-compose.yaml builds. The
   # recordings are written as root under ./var/tmp/recordings, so removing one may need sudo; without
   # RECORD_EXERCISE an empty directory there stands in for the exercise.
   record: &record
     profiles: ["record"]
     image: phobos-prune-layers-record
     build:
-      context: docker/prune_phase/layers
+      context: .
+      dockerfile: docker/prune_phase/layers/Dockerfile
       args:
         RUN_PHASE_IMAGE: ${RUN_PHASE_IMAGE:-phobos-run-phase-java}
     entrypoint: ["/var/tmp/helpers/layer_record/phobos-record"]
