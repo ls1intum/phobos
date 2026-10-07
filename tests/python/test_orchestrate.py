@@ -326,7 +326,8 @@ def write_kvm_artefacts(path_dir: pathlib.Path, exercise: str, rows: str | None,
     """Writes the KVM run's record, and its sidecar when `rows` is given, beside an exercise's .cfg."""
     cfg = (path_dir / f"{key}_{exercise}.cfg").read_bytes()
     record = {"schema_version": 1, "key": key, "exercise": exercise, "verified": True, "mismatches": [],
-              "verified_cfg_sha256": hashlib.sha256(cfg).hexdigest(), "abi10_cfg_sha256": None}
+              "verified_cfg_sha256": hashlib.sha256(cfg).hexdigest(), "abi10_cfg_sha256": None,
+              "landlock_abi": 10}
     if rows is not None:
         (path_dir / f"{key}_{exercise}.abi10.cfg").write_text(rows)
         record["abi10_cfg_sha256"] = hashlib.sha256(rows.encode()).hexdigest()
@@ -344,22 +345,36 @@ def two_exercises(tmp_path: pathlib.Path) -> pathlib.Path:
     return tmp_path / "path_sets"
 
 
-def test_a_udp_row_the_kvm_run_added_reaches_the_base_of_the_language(tmp_path):
+def test_a_udp_row_the_kvm_run_added_reaches_its_own_files_and_never_the_base(tmp_path):
     write_kvm_artefacts(two_exercises(tmp_path), "two", UDP_ROW)
     result = run_orchestrator(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
-    base = (tmp_path / "core" / "BaseLanguage-java.cfg").read_text()
-    assert "[bind]\nallow 0\nallow 5000 udp\n" in base
-    assert (tmp_path / "core" / "exercises" / "java_two.cfg").read_text() == "[limits]\ntimeout=90\n"
-    assert not list((tmp_path / "core" / "exercises").glob("*abi10*"))
+    core = tmp_path / "core"
+    assert "udp" not in (core / "BaseLanguage-java.cfg").read_text()
+    assert "udp" not in (core / "BasePhobos.cfg").read_text()
+    assert (core / "Abi10-java.cfg").read_text() == "[bind]\nallow 5000 udp\n"
+    assert (core / "exercises" / "java_two.abi10.cfg").read_text() == "[bind]\nallow 5000 udp\n"
+    assert (core / "exercises" / "java_two.cfg").read_text() == "[limits]\ntimeout=90\n"
+    assert not (core / "exercises" / "java_one.abi10.cfg").exists()
 
 
-def test_without_a_kvm_run_the_base_holds_no_such_row_and_a_record_without_a_sidecar_is_accepted(tmp_path):
+def test_a_later_merge_without_the_kvm_run_leaves_no_abi10_file_behind(tmp_path):
+    path_dir = two_exercises(tmp_path)
+    write_kvm_artefacts(path_dir, "two", UDP_ROW)
+    assert run_orchestrator(tmp_path).returncode == 0
+    for leftover in path_dir.glob("*.abi10.*"):
+        leftover.unlink()
+    assert run_orchestrator(tmp_path).returncode == 0
+    assert not (tmp_path / "core" / "Abi10-java.cfg").exists()
+    assert not list((tmp_path / "core" / "exercises").glob("*.abi10.cfg"))
+
+
+def test_a_record_without_a_sidecar_is_accepted_and_writes_no_abi10_file(tmp_path):
     path_dir = two_exercises(tmp_path)
     write_kvm_artefacts(path_dir, "one", None)
     result = run_orchestrator(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "udp" not in (tmp_path / "core" / "BaseLanguage-java.cfg").read_text()
+    assert not (tmp_path / "core" / "Abi10-java.cfg").exists()
 
 
 def test_a_kvm_record_that_verified_another_cfg_stops_the_merge(tmp_path):
@@ -385,6 +400,8 @@ def test_a_sidecar_that_is_not_the_one_its_record_names_stops_the_merge(tmp_path
     ({"verified": False}, "did not verify the policy"),
     ({"mismatches": [{"objects": ["/x"]}]}, "did not verify the policy"),
     ({"schema_version": 2}, "is not a KVM record of schema version 1"),
+    ({"landlock_abi": 9}, "a kernel below Landlock version 10"),
+    ({"landlock_abi": None}, "a kernel below Landlock version 10"),
     ({"exercise": "one"}, "records java/one, not java_two"),
 ])
 def test_a_kvm_record_that_is_not_a_clean_verification_of_this_exercise_stops_the_merge(tmp_path, changes, reason):
@@ -407,7 +424,9 @@ def test_a_sidecar_without_its_record_and_a_record_without_its_cfg_stop_the_merg
 
 
 @pytest.mark.parametrize("rows", ["[read]\n/srv/extra\n", "[connect]\nallow api.example.org:443\n",
-                                  "[bind]\nallow 5000\n", "[limits]\ntimeout=1\n"])
+                                  "[bind]\nallow 5000\n", "[limits]\ntimeout=1\n", "[bind]\nallow 0 udp\n",
+                                  "[bind]\nallow 65536 udp\n", "[bind]\nallow 007 udp\n",
+                                  "[bind]\nallow \u0665000 udp\n"])
 def test_a_sidecar_holding_anything_but_udp_bind_rows_stops_the_merge_whatever_its_hash_says(tmp_path, rows):
     path_dir = two_exercises(tmp_path)
     write_kvm_artefacts(path_dir, "two", rows)

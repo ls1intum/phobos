@@ -125,6 +125,15 @@ static constexpr int FIRST_VERSION_WITH_IOCTL_DEVICE = 5;
 static constexpr int FIRST_VERSION_WITH_SCOPED = 6;
 static constexpr int FIRST_VERSION_WITH_RESOLVE_UNIX = 9;
 static constexpr int FIRST_VERSION_WITH_UDP = 10;
+/* The first version whose landlock_restrict_self takes the audit logging flags. */
+static constexpr int FIRST_VERSION_WITH_LOG_FLAGS = 7;
+/* LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON: also log what a program started after the restriction is
+ * refused. Without it the kernel logs only what the restricting process itself is refused, which
+ * is nothing here, since this program restricts itself and then becomes the command. */
+static constexpr unsigned int RESTRICT_SELF_LOG_NEW_EXEC_ON = 1U << 1;
+/* The environment variable that asks for it, set to exactly "1". It only adds audit records for
+ * refusals the domain makes anyway and changes no outcome, so a command that sets it gains nothing. */
+#define LOG_NEW_EXEC_VARIABLE "PHOBOS_LANDLOCK_LOG_NEW_EXEC"
 
 /* Layout fixed by the kernel. Raw data, never a class. */
 struct landlock_ruleset_attributes {
@@ -210,8 +219,13 @@ void add_path_rule(int ruleset_descriptor, int landlock_version, const struct pa
 void add_port_rule(int ruleset_descriptor, uint64_t port, uint64_t allowed_access,
                    const char *what, const char *protocol);
 
+/* The flags landlock_restrict_self is given: none, unless the environment asks for the audit log
+ * of the command's own refusals and the kernel has the flag (version 7 or later). A kernel too old
+ * for the flag is told about it in the verbose log and the restriction is made without it. */
+unsigned int restrict_self_flags(int landlock_version);
+
 /* The one-way door: after this the process, and everything it starts, can only
- * lose access, never regain it. */
-void apply_restriction(int ruleset_descriptor);
+ * lose access, never regain it. `flags` are those of restrict_self_flags. */
+void apply_restriction(int ruleset_descriptor, unsigned int flags);
 
 #endif

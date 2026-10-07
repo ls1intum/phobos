@@ -12,6 +12,8 @@ set -u
 
 # The status the guest reports when it could not even start the observer.
 readonly EXIT_SETUP=70
+# The open-file limit a container of the prune would give its processes, which a guest's init does not.
+readonly OPEN_FILES=1048576
 
 # Prints the value of one key=value word of the kernel command line, or nothing.
 cmdline_value() {
@@ -22,23 +24,41 @@ cmdline_value() {
   return 0
 }
 
-# Ends the guest: the status line first, then everything written, then power off.
+# Ends the guest: the status line first, then everything written, then power off. The data disk is
+# unmounted after the three directories bound from it, which would otherwise keep it busy.
 finish() {
   printf 'PHOBOS-KVM-STATUS %s\n' "$1"
   sync
   umount /var/tmp/path_sets 2>/dev/null
+  umount /var/tmp/helpers 2>/dev/null
+  umount /srv/phobos-prune-exercises 2>/dev/null
   umount /mnt/data 2>/dev/null
   sync
   echo o > /proc/sysrq-trigger
   sleep 60
+  exit "$1"
 }
 
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev 2>/dev/null
+# What a container has under /dev and a bare devtmpfs does not: the descriptor links the shell's process
+# substitution goes through, the pseudo-terminal devices and shared memory.
+ln -sfn /proc/self/fd /dev/fd
+ln -sfn /proc/self/fd/0 /dev/stdin
+ln -sfn /proc/self/fd/1 /dev/stdout
+ln -sfn /proc/self/fd/2 /dev/stderr
+mkdir -p /dev/pts /dev/shm
+mount -t devpts devpts /dev/pts
+ln -sfn pts/ptmx /dev/ptmx
+mount -t tmpfs tmpfs /dev/shm
 mount -t tmpfs tmpfs /tmp
 mount -t tmpfs tmpfs /run
 echo 1 > /proc/sys/kernel/sysrq 2>/dev/null
+# Audit records reach the message ring through a rate limit by default (ten in five seconds), which would
+# drop most of what a run provokes; the observer ends as indeterminate when it sees a record go missing.
+echo 0 > /proc/sys/kernel/printk_ratelimit
+ulimit -n "${OPEN_FILES}" 2>/dev/null
 
 KEY="$(cmdline_value phobos_key)"
 [[ -n "${KEY}" ]] || { echo "no phobos_key on the kernel command line"; finish "${EXIT_SETUP}"; }
@@ -54,9 +74,17 @@ s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 flags = struct.unpack("16sH", fcntl.ioctl(s, 0x8913, struct.pack("16sH", b"lo", 0)))[1]
 fcntl.ioctl(s, 0x8914, struct.pack("16sH", b"lo", flags | 1))'
 
+# The environment the image declares, which an exported root file system does not carry, then the
+# variables the prune needs. The kernel is asked, through PHOBOS_LANDLOCK_LOG_NEW_EXEC, to log what the
+# command is refused, which it does for a program that restricts itself and then execs only on request.
+if [[ -f /etc/phobos-image-env ]]; then
+  # shellcheck disable=SC1091
+  source /etc/phobos-image-env
+fi
 export PHOBOS_HOME=/var/tmp/opt/core
 export PHOBOS_PRUNE_CONTAINER=1
-export PATH="${PHOBOS_HOME}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PHOBOS_LANDLOCK_LOG_NEW_EXEC=1
+export PATH="${PHOBOS_HOME}:${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
 export HOME=/root
 # shellcheck disable=SC1091
 source /mnt/data/env.sh

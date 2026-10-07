@@ -37,6 +37,10 @@ class FakeCapture:
         """The next batch, or nothing."""
         return self.batches.pop(0) if self.batches else []
 
+    def collect(self) -> list[str]:
+        """What the kernel has written, which for the stand-in is the next batch."""
+        return self.drain()
+
     def close(self) -> None:
         """Nothing to close."""
 
@@ -48,9 +52,78 @@ def test_a_capture_reads_only_what_was_written_after_it_was_opened(tmp_path):
     assert capture.drain() == []
     with open(ring, "a") as handle:
         handle.write("new line\n")
-    assert capture.drain() == ["new line\n"]
+    assert capture.drain() == ["new line"]
     assert capture.drain() == []
     capture.close()
+
+
+def numbered(sequence: int, message: str) -> str:
+    """A line as /dev/kmsg hands it out: priority, sequence number, time and flags, then the message."""
+    return f"5,{sequence},{sequence * 1000},-;{message}\n"
+
+
+def test_a_gap_in_the_numbers_of_the_ring_is_indeterminate_and_a_clean_run_of_them_is_not(tmp_path):
+    ring = tmp_path / "ring"
+    ring.write_text("")
+    capture = kvm.Capture(str(ring))
+    with open(ring, "a") as handle:
+        handle.write(numbered(10, "audit: one"))
+    assert len(capture.drain()) == 1
+    with open(ring, "a") as handle:
+        handle.write(numbered(11, "audit: two"))
+    assert len(capture.drain()) == 1
+    with open(ring, "a") as handle:
+        handle.write(numbered(13, "audit: four"))
+    with pytest.raises(kvm.Indeterminate, match="skipped from record 11 to 13"):
+        capture.drain()
+
+
+def test_a_line_that_says_audit_records_were_dropped_is_indeterminate(tmp_path):
+    ring = tmp_path / "ring"
+    ring.write_text("")
+    capture = kvm.Capture(str(ring))
+    with open(ring, "a") as handle:
+        handle.write(numbered(1, "audit: audit_lost=3 audit_rate_limit=0 audit_backlog_limit=64"))
+    with pytest.raises(kvm.Indeterminate, match="dropped audit records"):
+        capture.drain()
+
+
+def test_a_ring_that_overwrote_records_is_indeterminate(tmp_path, monkeypatch):
+    ring = tmp_path / "ring"
+    ring.write_text("")
+    capture = kvm.Capture(str(ring))
+
+    def overwritten(descriptor, size):
+        raise OSError(kvm.errno.EPIPE, "records were overwritten")
+    monkeypatch.setattr(kvm.os, "read", overwritten)
+    with pytest.raises(kvm.Indeterminate, match="overwrote records"):
+        capture.drain()
+
+
+def test_collecting_waits_for_the_sentinel_and_leaves_its_record_out(tmp_path):
+    ring = tmp_path / "ring"
+    ring.write_text("")
+    sequence = iter(range(1, 10))
+
+    def sentinel():
+        with open(ring, "a") as handle:
+            handle.write(numbered(next(sequence), 'audit: type=1423 audit(1.0:9): domain=a blockers=fs.read_file '
+                                                  f'path="{kvm.SENTINEL_FILE}"'))
+    capture = kvm.Capture(str(ring), sentinel=sentinel)
+    with open(ring, "a") as handle:
+        handle.write(numbered(next(sequence), READ_RECORD))
+    collected = capture.collect()
+    assert len(collected) == 1 and "/etc/hostname" in collected[0]
+    assert kvm.SENTINEL_FILE not in "".join(collected)
+
+
+def test_a_sentinel_whose_record_never_arrives_is_indeterminate(tmp_path, monkeypatch):
+    ring = tmp_path / "ring"
+    ring.write_text("")
+    monkeypatch.setattr(kvm, "SETTLE_SECONDS", 0.2)
+    capture = kvm.Capture(str(ring), sentinel=lambda: None)
+    with pytest.raises(kvm.Indeterminate, match="did not arrive"):
+        capture.collect()
 
 
 def test_the_narrowed_policy_keeps_every_second_entry_in_path_order():
@@ -60,6 +133,7 @@ def test_the_narrowed_policy_keeps_every_second_entry_in_path_order():
 
 def selftest_with(monkeypatch, tmp_path, lines: list[str], version: int = 10):
     """Runs the self-test with a probe stand-in that makes the kernel write `lines`."""
+    monkeypatch.setenv(kvm.LOG_VARIABLE, "1")
     monkeypatch.setattr(kvm.subprocess, "run", lambda *arguments, **keywords: subprocess.CompletedProcess([], 1, "", ""))
     return kvm.selftest(runner.Environment(), FakeCapture([], lines), version, tmp_path)
 
@@ -67,7 +141,7 @@ def selftest_with(monkeypatch, tmp_path, lines: list[str], version: int = 10):
 def test_the_self_test_passes_with_exactly_one_record_naming_the_refused_file(monkeypatch, tmp_path):
     proof = selftest_with(monkeypatch, tmp_path, [READ_RECORD])
     assert proof["landlock_abi"] == 10 and "/etc/hostname" in proof["selftest_record"]
-    assert "[execute]" in (tmp_path / "selftest.cfg").read_text()
+    assert "[execute]" in (tmp_path / "refusal.cfg").read_text()
 
 
 @pytest.mark.parametrize("lines, version, why", [
@@ -81,6 +155,12 @@ def test_the_self_test_is_indeterminate_rather_than_a_pass_when_the_guest_cannot
                                                                                           version, why):
     with pytest.raises(kvm.Indeterminate, match=why):
         selftest_with(monkeypatch, tmp_path, lines, version)
+
+
+def test_the_self_test_is_indeterminate_when_the_enforcer_was_not_asked_to_have_the_kernel_log(monkeypatch, tmp_path):
+    monkeypatch.delenv(kvm.LOG_VARIABLE, raising=False)
+    with pytest.raises(kvm.Indeterminate, match="would log no refusal"):
+        kvm.selftest(runner.Environment(), FakeCapture([], [READ_RECORD]), 10, tmp_path)
 
 
 def fake_pruning(monkeypatch, tmp_path):
@@ -171,6 +251,12 @@ def test_a_clean_cross_check_and_no_row_writes_a_record_naming_the_cfg_it_verifi
     assert entry["abi10_cfg_sha256"] is None
 
 
+def test_a_cross_check_that_compared_nothing_although_grants_were_removed_fails_the_exercise(monkeypatch, tmp_path):
+    nothing = {**CLEAN, "strace_denials": 0, "audit_records": 0}
+    entry, sidecar, reason = verify(monkeypatch, tmp_path, artefacts(tmp_path), nothing, [])
+    assert "nothing was compared" in reason and sidecar is None and entry["verified"] is False
+
+
 def test_a_row_gives_a_sidecar_whose_hash_the_record_carries(monkeypatch, tmp_path):
     entry, sidecar, reason = verify(monkeypatch, tmp_path, artefacts(tmp_path), CLEAN,
                                     [{"rule": "allow 5000 udp", "audit": [UDP_RECORD]}])
@@ -202,7 +288,7 @@ def kernel_run(monkeypatch, tmp_path, capture: object, results: list):
     monkeypatch.setattr(stages, "pristine_index", lambda environment: generalise.Snapshot(
         existing=frozenset(), directories=frozenset(), scanned=()))
     monkeypatch.setattr(main, "provenance", lambda environment: ORIGIN)
-    monkeypatch.setattr(kvm, "Capture", lambda: capture)
+    monkeypatch.setattr(kvm, "Capture", lambda sentinel=None: capture)
     monkeypatch.setattr(kvm, "selftest", lambda *arguments: {"selftest_record": "x"})
     monkeypatch.setattr(kvm, "verify_exercise", lambda *arguments: results.pop(0))
     root = tmp_path / "exercises" / "java" / "fixture"
@@ -245,7 +331,7 @@ def test_a_guest_that_cannot_observe_ends_the_command_with_status_3_and_writes_n
     monkeypatch.setattr(stages, "pristine_index", lambda environment: generalise.Snapshot(
         existing=frozenset(), directories=frozenset(), scanned=()))
     monkeypatch.setattr(main, "provenance", lambda environment: ORIGIN)
-    monkeypatch.setattr(kvm, "Capture", lambda: FakeCapture())
+    monkeypatch.setattr(kvm, "Capture", lambda sentinel=None: FakeCapture())
     root = tmp_path / "exercises" / "java" / "fixture"
     root.mkdir(parents=True)
     (root / "build_script.sh").write_text("exit 0\n")
@@ -263,3 +349,20 @@ def test_the_audit_observer_takes_neither_verify_nor_a_stage(tmp_path, capsys):
         == main.EXIT_ABORTED
     assert "takes neither --verify nor --stage" in capsys.readouterr().err
 
+
+
+def test_a_ring_that_cannot_be_opened_ends_the_command_with_status_3(monkeypatch, tmp_path):
+    def cannot_open(sentinel=None):
+        raise FileNotFoundError("/dev/kmsg")
+    monkeypatch.setenv(stages.PRUNE_CONTAINER_VARIABLE, "1")
+    monkeypatch.setattr(stages, "pristine_index", lambda environment: generalise.Snapshot(
+        existing=frozenset(), directories=frozenset(), scanned=()))
+    monkeypatch.setattr(main, "provenance", lambda environment: ORIGIN)
+    monkeypatch.setattr(kvm, "Capture", cannot_open)
+    root = tmp_path / "exercises" / "java" / "fixture"
+    root.mkdir(parents=True)
+    (root / "build_script.sh").write_text("exit 0\n")
+    (root / "build_script.sh").chmod(0o755)
+    status = main.main(["--kernel-observer", "audit", "--testing-root", str(tmp_path / "exercises"), "--output-dir",
+                        str(tmp_path / "out"), "java"])
+    assert status == kvm.EXIT_INDETERMINATE

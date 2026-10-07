@@ -39,14 +39,6 @@ on:
         options:
           - fixture
           - reference
-      run_phase:
-        description: "The run-phase image the prune and the guest run on"
-        required: true
-        default: java
-        type: choice
-        options:
-          - java
-          - python
   # Temporary. GitHub can dispatch only a workflow the default branch already holds, so until this file
   # is on main a push to the branch it is written on starts a run of the fixture. Remove it when the pull
   # request is rebased onto main.
@@ -57,6 +49,7 @@ on:
       - ".github/scripts/*kvm*"
       - ".github/scripts/stage-prune-inputs.sh"
       - "var/tmp/helpers/layer_prune/**"
+      - "core/phobos-landlock-filesystem-and-networksystem/**"
       - "tests/integration/kvm_fixture_result.sh"
 
 permissions: {}
@@ -69,7 +62,8 @@ env:
   # A push has no inputs, so these are the fixture's.
   PRUNE_KEY: ${{ inputs.key || 'java' }}
   PRUNE_SOURCE: ${{ inputs.source || 'fixture' }}
-  RUN_PHASE: ${{ inputs.run_phase || 'java' }}
+  # The run-phase image follows the key: python has its own, every other key is a Java one.
+  RUN_PHASE: ${{ (inputs.key || 'java') == 'python' && 'python' || 'java' }}
 
 jobs:
   prune:
@@ -105,8 +99,21 @@ jobs:
             -v "${RUNNER_TEMP}/inputs/helpers:/var/tmp/helpers:ro" \
             -v "${RUNNER_TEMP}/inputs/setup.sh:/setup.sh:ro" -v "${RUNNER_TEMP}/inputs/env.sh:/env.sh:ro" \
             -v "${RUNNER_TEMP}/path_sets:/var/tmp/path_sets" \
-            phobos-prune-layers:ci bash -c 'source /env.sh && source /setup.sh \
+            --entrypoint bash phobos-prune-layers:ci -c 'source /env.sh && source /setup.sh \
               && exec python3 /var/tmp/helpers/layer_prune/main.py --stage all "$0"' "${PRUNE_KEY}"
+
+      # The guest runs this very image, not one built again from the same Dockerfiles: the packages the
+      # prune image installs are not pinned, so a second build could hold other versions.
+      - name: Save the prune image for the guests
+        run: docker save phobos-prune-layers:ci | gzip -1 > "${RUNNER_TEMP}/prune-image.tar.gz"
+
+      - name: Keep the prune image
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: prune-image
+          path: ${{ runner.temp }}/prune-image.tar.gz
+          retention-days: 1
+          if-no-files-found: error
 
       - name: Keep the artefacts of the default prune
         if: ${{ !cancelled() }}
@@ -146,17 +153,17 @@ jobs:
       - name: Build the pinned Linux 7.2 guest kernel
         run: .github/scripts/build-kvm-kernel.sh "${RUNNER_TEMP}/kernel"
 
-      - name: Assemble the build context and stage the inputs
-        run: |
-          .github/scripts/assemble-run-phase-context.sh "${RUNNER_TEMP}/run-phase-context"
-          .github/scripts/stage-prune-inputs.sh "${PRUNE_SOURCE}" "${PRUNE_KEY}" "${RUNNER_TEMP}/inputs"
+      - name: Stage the inputs
+        run: .github/scripts/stage-prune-inputs.sh "${PRUNE_SOURCE}" "${PRUNE_KEY}" "${RUNNER_TEMP}/inputs"
 
-      - name: Build the run-phase image and the prune image on it
-        run: |
-          docker build -f "docker/run_phase/${RUN_PHASE}/Dockerfile" -t phobos-run-phase:ci \
-            "${RUNNER_TEMP}/run-phase-context"
-          docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci \
-            -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers:ci .
+      - name: Download the prune image the default prune ran in
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: prune-image
+          path: ${{ runner.temp }}/image
+
+      - name: Load it
+        run: gunzip -c "${RUNNER_TEMP}/image/prune-image.tar.gz" | docker load
 
       - name: Download the artefacts of the default prune
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -213,7 +220,20 @@ jobs:
         with:
           path: ${{ runner.temp }}/artefacts
 
-      # One directory, as the orchestrator reads it; the guest on ubuntu-26.04 is the one whose rows are folded.
+      # The two guests run the same pinned kernel on the same image, so they must find the same rows; a
+      # difference fails the job rather than letting either leg stand for both. The comment header of a
+      # sidecar holds a date, so the rows are compared without comments.
+      - name: Compare the two guests
+        run: |
+          left="${RUNNER_TEMP}/artefacts/kvm-ubuntu-24.04"
+          right="${RUNNER_TEMP}/artefacts/kvm-ubuntu-26.04"
+          diff <(cd "${left}" && ls ./*.abi10.cfg 2> /dev/null) <(cd "${right}" && ls ./*.abi10.cfg 2> /dev/null)
+          for sidecar in "${left}"/*.abi10.cfg; do
+            [ -e "${sidecar}" ] || continue
+            diff <(grep -v '^#' "${sidecar}") <(grep -v '^#' "${right}/$(basename "${sidecar}")")
+          done
+
+      # One directory, as the orchestrator reads it; the records of the guest on ubuntu-26.04 stand for both.
       - name: Put both sets in one directory and merge
         run: |
           mkdir -p "${RUNNER_TEMP}/path_sets"

@@ -25,8 +25,8 @@ readonly EXIT_USAGE=2
 readonly EXIT_UNFIT=3
 
 [[ $# -eq 1 ]] || { printf 'usage: build-kvm-kernel.sh <destination directory>\n' >&2; exit "${EXIT_USAGE}"; }
-DESTINATION="$1"
-mkdir -p "${DESTINATION}"
+mkdir -p "$1"
+DESTINATION="$(realpath "$1")"
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
@@ -40,14 +40,15 @@ make x86_64_defconfig kvm_guest.config
 # on a serial console, runs ptrace, seccomp user notification and a loopback network, needs built in.
 for option in SECURITY SECURITY_LANDLOCK AUDIT AUDITSYSCALL EXT4_FS VIRTIO_BLK DEVTMPFS DEVTMPFS_MOUNT PROC_FS SYSFS \
               TMPFS SECCOMP SECCOMP_FILTER PTRACE INET IPV6 UNIX BINFMT_ELF BINFMT_SCRIPT SERIAL_8250 \
-              SERIAL_8250_CONSOLE MAGIC_SYSRQ POSIX_TIMERS FHANDLE; do
+              SERIAL_8250_CONSOLE MAGIC_SYSRQ POSIX_TIMERS FHANDLE SECURITY_NETWORK VIRTIO_PCI ACPI BLK_DEV; do
   scripts/config --enable "${option}"
 done
-scripts/config --disable DEBUG_INFO --disable DEBUG_INFO_BTF --disable DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT
+scripts/config --enable DEBUG_INFO_NONE --disable DEBUG_INFO_BTF
 scripts/config --set-str LSM "landlock,lockdown,yama,integrity"
 make olddefconfig
 
-for wanted in CONFIG_SECURITY_LANDLOCK=y CONFIG_AUDIT=y CONFIG_VIRTIO_BLK=y CONFIG_EXT4_FS=y CONFIG_SECCOMP_FILTER=y; do
+for wanted in CONFIG_SECURITY_LANDLOCK=y CONFIG_AUDIT=y CONFIG_VIRTIO_BLK=y CONFIG_EXT4_FS=y CONFIG_SECCOMP_FILTER=y \
+              CONFIG_SECURITY_NETWORK=y CONFIG_VIRTIO_PCI=y CONFIG_SERIAL_8250_CONSOLE=y CONFIG_MAGIC_SYSRQ=y CONFIG_ACPI=y; do
   if ! grep -q "^${wanted}$" .config; then
     printf 'the configuration lacks %s\n' "${wanted}" >&2
     exit "${EXIT_UNFIT}"

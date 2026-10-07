@@ -218,27 +218,31 @@ def verify_one(directory: pathlib.Path, key: str, environment: runner.Environmen
 def kernel_observe(options: argparse.Namespace, environment: runner.Environment, exercises: list[pathlib.Path],
                    output: pathlib.Path, origin: dict[str, str | int], pristine: generalise.Snapshot) -> int:
     """Runs the audit observer over every exercise of the key; 0 when all held, EXIT_ABORTED or EXIT_INDETERMINATE."""
-    capture = kvm.Capture()
-    try:
-        with tempfile.TemporaryDirectory(prefix="layer-prune-kvm.") as scratch:
-            proof = kvm.selftest(environment, capture, int(origin["landlock_abi"]), pathlib.Path(scratch))
-        print(f"the guest observes Landlock: {proof['selftest_record']}", flush=True)
-    except kvm.Indeterminate as failure:
-        print(f"the guest cannot observe Landlock's audit records: {failure}", file=sys.stderr)
-        return kvm.EXIT_INDETERMINATE
     failed = False
-    for directory in exercises:
-        entry, sidecar, reason = kvm.verify_exercise(directory, options.key, environment, output, pristine, origin,
-                                                     capture, abort_record)
-        base = f"{options.key}_{directory.name}"
-        for stale in (output / f"{base}.abi10.cfg", output / f"{base}.abi10.json"):
-            stale.unlink(missing_ok=True)
-        if sidecar is not None:
-            write_atomically(output / f"{base}.abi10.cfg", sidecar)
-        write_atomically(output / f"{base}.abi10.json", json.dumps(entry, indent=2, sort_keys=True) + "\n")
-        print(f"{options.key}/{directory.name}: {'verified on this kernel' if reason is None else 'failed: ' + reason}", flush=True)
-        failed = failed or reason is not None
-    capture.close()
+    with tempfile.TemporaryDirectory(prefix="layer-prune-kvm.") as scratch:
+        capture = None
+        try:
+            capture = kvm.Capture(sentinel=kvm.sentinel_for(environment, pathlib.Path(scratch)))
+            proof = kvm.selftest(environment, capture, int(origin["landlock_abi"]), pathlib.Path(scratch))
+            print(f"the guest observes Landlock: {proof['selftest_record']}", flush=True)
+            for directory in exercises:
+                entry, sidecar, reason = kvm.verify_exercise(directory, options.key, environment, output, pristine,
+                                                             origin, capture, abort_record)
+                base = f"{options.key}_{directory.name}"
+                for stale in (output / f"{base}.abi10.cfg", output / f"{base}.abi10.json"):
+                    stale.unlink(missing_ok=True)
+                if sidecar is not None:
+                    write_atomically(output / f"{base}.abi10.cfg", sidecar)
+                write_atomically(output / f"{base}.abi10.json", json.dumps(entry, indent=2, sort_keys=True) + "\n")
+                print(f"{options.key}/{directory.name}: "
+                      f"{'verified on this kernel' if reason is None else 'failed: ' + reason}", flush=True)
+                failed = failed or reason is not None
+        except (kvm.Indeterminate, OSError) as failure:
+            print(f"the guest cannot observe Landlock's audit records: {failure}", file=sys.stderr)
+            return kvm.EXIT_INDETERMINATE
+        finally:
+            if capture is not None:
+                capture.close()
     return EXIT_ABORTED if failed else 0
 
 

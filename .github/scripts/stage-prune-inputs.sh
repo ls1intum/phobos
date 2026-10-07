@@ -29,6 +29,12 @@ case "${KIND}" in
   fixture | reference) ;;
   *) printf 'the kind is fixture or reference, not %s\n' "${KIND}" >&2; exit "${EXIT_USAGE}" ;;
 esac
+# The key ends up on a kernel command line and in file names, so it is a plain word.
+[[ "${KEY}" =~ ^[a-z0-9-]+$ ]] || { printf 'the key is lower-case letters, digits and hyphens, not %s\n' "${KEY}" >&2; exit "${EXIT_USAGE}"; }
+if [[ "${KIND}" == fixture && "${KEY}" != java ]]; then
+  printf 'the fixture is pruned under the key java, not %s\n' "${KEY}" >&2
+  exit "${EXIT_USAGE}"
+fi
 if [[ -e "${DESTINATION}" ]]; then
   if [[ -f "${DESTINATION}/${MARKER}" ]]; then
     rm -rf -- "${DESTINATION:?}"

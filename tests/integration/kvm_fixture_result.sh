@@ -10,8 +10,8 @@
 #              exactly one row, `allow 5000 udp`, in a sidecar whose SHA-256 the record carries;
 #   forbidden  no other rule was added, nothing was granted for a refusal the kernel did not name, and the
 #              record names the .cfg it verified by its SHA-256, so a changed .cfg is not mistaken for it;
-#   merged     the orchestrator folds the sidecar into the base, which then holds the row, while a
-#              sidecar changed afterwards stops the merge.
+#   merged     the orchestrator writes the row to Abi10-java.cfg and never into the base, which an older
+#              kernel would refuse to run under, while a sidecar changed afterwards stops the merge.
 # Runs on the host, after the guest, with python3 and the helpers of this repository.
 set -uo pipefail
 
@@ -66,10 +66,15 @@ merge() {
   python3 "${REPO}/docker/prune_phase/orchestrate/orchestrate.py" --langs java --path-dir "$1" --core-dir "$2" \
     --helpers-dir "${REPO}/var/tmp/helpers" > "${WORK}/merge.log" 2>&1
 }
-if merge "${PATH_SETS}" "${WORK}/core" && grep -q '^allow 5000 udp$' "${WORK}/core/BaseLanguage-java.cfg"; then
-  ok "the orchestrator folds the sidecar into the base of the language"
+if merge "${PATH_SETS}" "${WORK}/core" && grep -q '^allow 5000 udp$' "${WORK}/core/Abi10-java.cfg"; then
+  ok "the orchestrator writes the row to Abi10-java.cfg"
 else
-  bad "the orchestrator folds the sidecar into the base of the language" "$(tail -3 "${WORK}/merge.log")"
+  bad "the orchestrator writes the row to Abi10-java.cfg" "$(tail -3 "${WORK}/merge.log")"
+fi
+if grep -q 'udp' "${WORK}/core/BaseLanguage-java.cfg"; then
+  bad "the base of the language holds no UDP row" "$(grep udp "${WORK}/core/BaseLanguage-java.cfg")"
+else
+  ok "the base of the language holds no UDP row"
 fi
 mkdir -p "${WORK}/tampered"
 cp "${PATH_SETS}"/java_fixture.* "${WORK}/tampered/"

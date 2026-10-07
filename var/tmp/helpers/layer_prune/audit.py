@@ -50,6 +50,9 @@ NETWORK_BLOCKERS = frozenset({"net.bind_tcp", "net.connect_tcp", BIND_UDP, "net.
 LOCAL_PORT_KEYS = ("lport", "src", "sport")
 REMOTE_PORT_KEYS = ("dest", "fport", "dport")
 
+# A UDP bind rule a row may be: a port from 1 to 65535 in ASCII digits, no leading zero, and the marker.
+UDP_BIND_RULE = re.compile(r"allow ([1-9][0-9]{0,4}) udp", re.ASCII)
+PORT_MAXIMUM = 65535
 RECORD_PATTERN = re.compile(r"type=(?P<type>\w+)\b.*?audit\((?P<stamp>[0-9.]+):(?P<serial>\d+)\):\s*(?P<body>.*)$")
 FIELD_PATTERN = re.compile(r'(?P<key>[a-z_]+)=(?:"(?P<quoted>[^"]*)"|(?P<bare>\S+))')
 
@@ -90,12 +93,16 @@ def parse_line(line: str) -> AuditRecord | None:
     matched = RECORD_PATTERN.search(line)
     if matched is None or matched.group("type") not in RECORD_TYPES:
         return None
-    fields = {found.group("key"): found.group("quoted") if found.group("quoted") is not None else found.group("bare")
-              for found in FIELD_PATTERN.finditer(matched.group("body"))}
+    fields: dict[str, str] = {}
+    bare: set[str] = set()
+    for found in FIELD_PATTERN.finditer(matched.group("body")):
+        if found.group("quoted") is None:
+            bare.add(found.group("key"))
+        fields[found.group("key")] = found.group("quoted") if found.group("quoted") is not None else found.group("bare")
     if "domain" not in fields or "blockers" not in fields:
         return None
     blockers = tuple(blocker for blocker in fields["blockers"].split(",") if blocker)
-    path = decode_path(fields["path"]) if "path" in fields else None
+    path = (decode_path(fields["path"]) if "path" in bare else fields["path"]) if "path" in fields else None
     return AuditRecord(serial=int(matched.group("serial")), domain=fields["domain"], blockers=blockers, path=path,
                        port=port_of(fields, blockers), raw=line.strip())
 
@@ -155,13 +162,14 @@ def agrees(attributed: record.Denial, audit: record.Denial) -> bool:
 def cross_check(strace_denials: Iterable[record.Denial], audit_denials: Iterable[record.Denial]) -> dict[str, list[dict]]:
     """Pairs each Landlock filesystem denial strace attributed with an audit denial; what is left over is reported.
 
-    Each audit denial answers one strace denial at most. `mismatches` are strace denials with no audit
+    Each audit denial answers one strace denial at most, and strace denials that ask for fewer sections are
+    paired first, so one that asks for more cannot take the record meant for them. `mismatches` are strace denials with no audit
     denial that agrees, which means A.6.2's derivation is wrong for that call; `audit_only` are filesystem
     audit denials no strace denial explains, reported and never granted.
     """
     unmatched = [denial for denial in audit_denials if denial.layer == record.LAYER_FILESYSTEM]
     mismatches = []
-    for attributed in strace_denials:
+    for attributed in sorted(strace_denials, key=lambda denial: len(denial.sections)):
         if attributed.layer != record.LAYER_FILESYSTEM:
             continue
         partner = next((denial for denial in unmatched if agrees(attributed, denial)), None)
@@ -195,8 +203,8 @@ def abi10_rows(strace_bind_rules: Iterable[str], records: Iterable[AuditRecord],
     for rule in strace_bind_rules:
         if rule in held:
             continue
-        words = rule.split()
-        if len(words) == 3 and words[0] == "allow" and words[2] == "udp" and words[1].isdigit() and int(words[1]) in refused:
+        matched = UDP_BIND_RULE.fullmatch(rule)
+        if matched is not None and int(matched.group(1)) <= PORT_MAXIMUM and int(matched.group(1)) in refused:
             rows.append(rule)
         else:
             other.append(rule)

@@ -25,6 +25,7 @@ import os
 import pathlib
 import platform
 import subprocess  # nosec B404
+import time
 from collections.abc import Callable
 
 from layer_prune import audit, cfgfile, control, record, runner, search, stages
@@ -44,6 +45,19 @@ SELFTEST_FILE = "/etc/hostname"
 EXIT_INDETERMINATE = 3
 # The probe the prune image carries and the operation the self-test has it make.
 PROBE = "/usr/local/libexec/phobos-prune-probe"
+# The file the guest creates and the probe is refused a read of after every run: the kernel prints its
+# records through a queue, in order, so once this one has arrived every record of the run before it has.
+SENTINEL_FILE = "/etc/phobos-kvm-sentinel"
+# How long to wait for the sentinel's record, and between two looks at the ring.
+SETTLE_SECONDS = 60
+SETTLE_INTERVAL_SECONDS = 0.05
+# How long the probe may take.
+PROBE_SECONDS = 120
+# The variable that makes the enforcer ask the kernel to log what the command is refused. Without it
+# the kernel logs only what the restricting process itself is refused, which is nothing.
+LOG_VARIABLE = "PHOBOS_LANDLOCK_LOG_NEW_EXEC"
+# What the kernel prints when it drops audit records instead of queueing them.
+LOSS_MARKERS = ("audit_lost=", "audit_backlog=")
 
 
 class Indeterminate(Exception):
@@ -51,15 +65,32 @@ class Indeterminate(Exception):
 
 
 class Capture:
-    """Reads the kernel's message ring from where it is when the capture is opened, without blocking."""
+    """Reads the kernel's message ring from where it is when the capture is opened, without blocking.
 
-    def __init__(self, path: str = KMSG) -> None:
-        """Opens the ring and moves to its end, so that only what happens afterwards is read."""
+    Records are numbered, so a gap, a record the ring overwrote before it was read and a line that
+    says the audit queue dropped records each end the run as indeterminate: a missing record would
+    otherwise read as a mismatch, or hide the row it should have produced.
+    """
+
+    def __init__(self, path: str = KMSG, sentinel: Callable[[], None] | None = None) -> None:
+        """Opens the ring and moves to its end; `sentinel` makes the kernel log one record of its own."""
         self.descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
         os.lseek(self.descriptor, 0, os.SEEK_END)
+        self.sentinel = sentinel
+        self.last_sequence: int | None = None
+
+    def check_sequence(self, text: str) -> None:
+        """Raises Indeterminate when a ring record's number does not follow the last one's."""
+        header = text.split(";", 1)[0].split(",")
+        if len(header) < 2 or not header[1].isdigit():
+            return
+        sequence = int(header[1])
+        if self.last_sequence is not None and sequence != self.last_sequence + 1:
+            raise Indeterminate(f"the message ring skipped from record {self.last_sequence} to {sequence}")
+        self.last_sequence = sequence
 
     def drain(self) -> list[str]:
-        """Every line written since the last drain, as the ring holds them."""
+        """Every line of every record written since the last drain; the ring hands out one record per read."""
         lines: list[str] = []
         while True:
             try:
@@ -68,21 +99,60 @@ class Capture:
                 break
             except OSError as failure:
                 if failure.errno == errno.EPIPE:
-                    continue
+                    raise Indeterminate("the message ring overwrote records before they were read") from failure
                 raise
             if not data:
                 break
-            lines.append(data.decode("utf-8", errors="replace"))
+            text = data.decode("utf-8", errors="replace")
+            if any(marker in text for marker in LOSS_MARKERS):
+                raise Indeterminate(f"the kernel reports dropped audit records: {text.strip()[:200]}")
+            self.check_sequence(text)
+            lines.extend(text.splitlines())
         return lines
+
+    def collect(self) -> list[str]:
+        """Every record of the run so far, once the kernel has written them all; the sentinel's own left out.
+
+        The sentinel is a refusal made now: the kernel prints in order, so when its record has arrived
+        the records before it have too. Without a sentinel this is a plain drain.
+        """
+        if self.sentinel is None:
+            return self.drain()
+        self.sentinel()
+        lines: list[str] = []
+        deadline = time.monotonic() + SETTLE_SECONDS
+        while True:
+            lines += self.drain()
+            if any(item.path == SENTINEL_FILE for item in audit.parse(lines)[0]):
+                return [line for line in lines if SENTINEL_FILE not in line]
+            if time.monotonic() > deadline:
+                raise Indeterminate(f"the record of the sentinel refusal did not arrive in {SETTLE_SECONDS} s")
+            time.sleep(SETTLE_INTERVAL_SECONDS)
 
     def close(self) -> None:
         """Closes the ring."""
         os.close(self.descriptor)
 
 
+def refuse_read(environment: runner.Environment, directory: pathlib.Path, target: str) -> subprocess.CompletedProcess:
+    """Has the probe, which is granted nothing on `target`, try to read it under the layers: one refusal for the kernel to log."""
+    cfg = directory / "refusal.cfg"
+    cfg.write_text(f"[read]\n{PROBE}\n/dev/null\n\n[execute]\n{PROBE}\n")
+    argv = [os.path.join(environment.phobos_home, "phobos.sh"), "--config", str(cfg), "--", PROBE, "read", target]
+    return subprocess.run(argv, capture_output=True, text=True, check=False, timeout=PROBE_SECONDS)  # nosec B603
+
+
+def sentinel_for(environment: runner.Environment, directory: pathlib.Path) -> Callable[[], None]:
+    """The sentinel a Capture makes after each run: the probe refused a read of the sentinel file."""
+    def make() -> None:
+        """Makes the refusal."""
+        refuse_read(environment, directory, SENTINEL_FILE)
+    return make
+
+
 def read_records(capture: Capture) -> tuple[list[audit.AuditRecord], list[str], list[str]]:
-    """The audit records written since the last drain, the lines of that type that did not parse, and every line."""
-    lines = capture.drain()
+    """The audit records of the run so far, the lines of that type that did not parse, and every line."""
+    lines = capture.collect()
     records, unparsed = audit.parse(lines)
     return records, unparsed, lines
 
@@ -90,16 +160,16 @@ def read_records(capture: Capture) -> tuple[list[audit.AuditRecord], list[str], 
 def selftest(environment: runner.Environment, capture: Capture, version: int, directory: pathlib.Path) -> dict:
     """Proves the guest can observe Landlock before any prune run; raises Indeterminate when it cannot.
 
-    The kernel must offer Landlock version 10 or later, and one deliberate refusal, a read of a file the
-    probe was granted nothing on, must produce exactly one record that parses and names that file.
+    The kernel must offer Landlock version 10 or later, the enforcer must have been asked to have the
+    kernel log what the command is refused, and one deliberate refusal, a read of a file the probe was
+    granted nothing on, must produce exactly one record that parses and names that file.
     """
     if version < ABI10_VERSION:
         raise Indeterminate(f"the kernel offers Landlock version {version}, below {ABI10_VERSION}")
-    cfg = directory / "selftest.cfg"
-    cfg.write_text(f"[read]\n{PROBE}\n/dev/null\n\n[execute]\n{PROBE}\n")
-    capture.drain()
-    argv = [os.path.join(environment.phobos_home, "phobos.sh"), "--config", str(cfg), "--", PROBE, "read", SELFTEST_FILE]
-    finished = subprocess.run(argv, capture_output=True, text=True, check=False)  # nosec B603
+    if os.environ.get(LOG_VARIABLE) != "1":
+        raise Indeterminate(f"{LOG_VARIABLE} is not 1, so the kernel would log no refusal of a command")
+    capture.collect()
+    finished = refuse_read(environment, directory, SELFTEST_FILE)
     records, unparsed, lines = read_records(capture)
     if len(records) != 1 or records[0].path != SELFTEST_FILE or "fs.read_file" not in records[0].blockers:
         raise Indeterminate(f"one refused read of {SELFTEST_FILE} gave {len(records)} audit record(s), "
@@ -115,7 +185,7 @@ def narrowed(policy: cfgfile.Policy) -> cfgfile.Policy:
 
 def cross_check_run(pruning: stages.Pruning, policy: cfgfile.Policy, capture: Capture) -> dict:
     """One observed run under the narrowed policy, compared denial by denial with the kernel's records."""
-    capture.drain()
+    capture.collect()
     result = pruning.run(stages.normalised(pruning, narrowed(policy)), stages.OBSERVED_FILESYSTEM, "kvm cross-check")
     records, unparsed, _ = read_records(capture)
     attributed = [denial for denial in stages.denials_of(pruning, result)
@@ -136,7 +206,7 @@ def abi10_phase(pruning: stages.Pruning, policy: cfgfile.Policy, capture: Captur
     for _ in range(stages.ROUTING_ROUNDS + 1):
         if stages.joint_runs(pruning, current):
             return current, added
-        capture.drain()
+        capture.collect()
         diagnosis = pruning.run(current, stages.OBSERVED_JOINT, "kvm abi10 diagnosis")
         records, _, _ = read_records(capture)
         decision = stages.network_decision(pruning, diagnosis)
@@ -192,6 +262,9 @@ def verify_exercise(directory: pathlib.Path, key: str, environment: runner.Envir
         if entry["mismatches"]:
             reason = (f"the audit cross-check found {len(entry['mismatches'])} strace denial(s) the kernel's records do "
                       "not agree with")
+        elif entry["cross_check"]["strace_denials"] == 0 and len(narrowed(policy).fs) < len(policy.fs):
+            reason = ("the cross-check run was refused nothing strace could attribute, although it ran without "
+                      f"{len(policy.fs) - len(narrowed(policy).fs)} grant(s) the policy holds, so nothing was compared")
         _, entry["rows"] = abi10_phase(pruning, policy, capture)
         if entry["rows"] and reason is None:
             sidecar = sidecar_text(origin, key, directory.name, entry["rows"])
