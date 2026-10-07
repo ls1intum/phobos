@@ -1,0 +1,75 @@
+# Prunes the Maven reference exercise on the grading layers, on each architecture, and keeps what it
+# produces: the policy, its record and the merged base, which the Ares 2 import plan adopts as its
+# Maven base in a pull request of its own.
+#
+# Manual on purpose. The prune runs the build under strace many times, so it takes far longer than a
+# suite belonging to every change, and its output is an artefact to be reviewed and handed on, not a
+# check. The suite it runs, tests/integration/layer_prune_maven.sh, also holds the result to the
+# conditions of the plan's Task 14.1 and shows the two wrong reasons aborting, so a green run is a
+# prune that passed them, never one that merely ended with status 0.
+name: Prune the Maven reference exercise
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: prune-maven-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: Prune on ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 330
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: amd64
+            runner: ubuntu-26.04
+          - platform: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assemble the build context
+        run: .github/scripts/assemble-run-phase-context.sh "${RUNNER_TEMP}/run-phase-context"
+
+      # The Dockerfile's two repository stages hold the image to the committed manifests while it is
+      # built, so an image that builds holds the bytes grading will read.
+      - name: Build the run-phase image
+        run: |
+          docker build -f docker/run_phase/java/Dockerfile -t phobos-run-phase:ci "${RUNNER_TEMP}/run-phase-context"
+
+      - name: Build the prune image on the run-phase image
+        run: |
+          docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci \
+            -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers:ci .
+
+      # An ordinary container, as the Compose service starts it: no network, cgroup limits, and no
+      # privilege, capability or security option. The manifest is mounted read-only where Compose
+      # mounts it, and the artefacts directory is the only writable mount.
+      - name: Prune the exercise and hold the result to Task 14.1
+        run: |
+          mkdir -p "${RUNNER_TEMP}/artefacts"
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}:/repo:ro" \
+            -v "${PWD}/docker/run_phase/java/maven-repository.sha256:/srv/phobos-manifest/maven-repository.sha256:ro" \
+            -v "${RUNNER_TEMP}/artefacts:/artefacts" -e ARTEFACTS_DIR=/artefacts \
+            phobos-prune-layers:ci bash /repo/tests/integration/layer_prune_maven.sh
+
+      # Kept even when the suite failed, since the record of a failed prune is what explains it.
+      - name: Keep the artefacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: maven-prune-${{ matrix.platform }}
+          path: ${{ runner.temp }}/artefacts
+          if-no-files-found: warn

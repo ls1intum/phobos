@@ -135,6 +135,12 @@ docker run --rm --network none \
 
 Each exercise gets `<key>_<exercise>.cfg`, a complete Phobos configuration, and `<key>_<exercise>.json`, the record of every run, every denial with the grant it produced or the reason it produced none, every widening and every containment check. An exercise that aborts gets `<key>_<exercise>.aborted.json` and no configuration. The policy is still only as good as the reference: a code path the reference never took is refused when graded. Exercises that build with Gradle must build without a daemon, since the timeout's group lock refuses the `setsid` a daemon needs, and the memory limit is derived only for an exercise whose `prune.json` declares `"heap_pinned": true`. An exercise that needs an external host declares it in `prune.json` (`"declared_hosts": ["api.example.org:443"]`) and is pruned under the key `java-egress` by the opt-in Compose service `prune_java_egress`, the only layer-pruner service with a network (the recorder's networked service aside): it keeps a declared rule only when the build needs it, drops the others, and aborts on any host nobody declared.
 
+### The Maven prune
+
+The Maven reference exercise, `var/tmp/testing-dir/java-maven/maven-reference/` (Artemis's Maven test template with Ares 2, built offline), is pruned under its own key, `java-maven`, in the same image as Gradle's, by the Compose service `prune_java_maven`, and verified by `verify_java_maven`. The image holds the dependencies it resolves, pre-loaded and held to `docker/run_phase/java/maven-repository.sha256`; the service mounts that manifest read-only so that a run can first check that the image holds exactly those bytes. Every grant under `/root/.m2/repository` is a single file the reference opened, never a directory, and no write-class right is granted there. The result is `BaseLanguage-java-maven.cfg` and `exercises/java-maven_maven-reference.cfg` in `var/tmp/opt/core/config`, a base to review and adopt in a pull request of its own that lists every widening.
+
+On a machine without the Compose setup, the manual workflow `prune-maven.yml` builds both images on amd64 and arm64, runs `tests/integration/layer_prune_maven.sh` in an ordinary container, which prunes, merges and verifies the exercise and shows two wrong reasons aborting (no tests, a version the repository lacks), and keeps the policy, its record and the merged base as workflow artefacts.
+
 ## Running an exercise under Phobos
 
 Build the run-phase image (it compiles the four C products and bakes in the scripts and the shipped policy):
