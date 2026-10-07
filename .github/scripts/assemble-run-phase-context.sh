@@ -4,7 +4,9 @@
 # The Dockerfile copies the layer scripts flat (*.sh), the phobos-tools-* helper folders whole,
 # the four C source folders whole (phobos-landlock-filesystem-and-networksystem,
 # phobos-seccomp-networksystem, phobos-seccomp-filesystem and phobos-seccomp-timeoutsystem) for its
-# build stage, config/*.cfg and the folder config/language-configurations/. The C folders keep
+# build stage, config/*.cfg and the folder config/language-configurations/, and, for the two stages that
+# pre-load the dependency repositories, pin/ (pin-repository.sh and the two committed manifests) and
+# exercises/ (the two reference exercises those stages build). The C folders keep
 # their names because the report-only supervisor's sources include the other three folders'
 # headers by paths relative to their own. Those files live across several directories of this
 # repository, so the context has to be put together before docker build can see it, and no compose
@@ -55,6 +57,15 @@ for source_folder in phobos-landlock-filesystem-and-networksystem phobos-seccomp
 done
 cp "${REPOSITORY}"/core/config/*.cfg "${DESTINATION}/config/"
 cp -R "${REPOSITORY}"/core/config/language-configurations "${DESTINATION}/config/"
+# The two reference exercises and what pins the dependencies they resolve, in folders of their own so
+# that the flat *.sh copy of the layer scripts does not take pin-repository.sh with it. The exercises
+# stay in their stages; only the repositories those stages produce enter the image.
+mkdir -p "${DESTINATION}/pin" "${DESTINATION}/exercises/java-maven" "${DESTINATION}/exercises/java"
+cp "${REPOSITORY}"/docker/run_phase/java/pin-repository.sh "${DESTINATION}/pin/"
+cp "${REPOSITORY}"/docker/run_phase/java/maven-repository.sha256 "${DESTINATION}/pin/"
+cp "${REPOSITORY}"/docker/run_phase/java/gradle-repository.sha256 "${DESTINATION}/pin/"
+cp -R "${REPOSITORY}"/var/tmp/testing-dir/java-maven/maven-reference "${DESTINATION}/exercises/java-maven/"
+cp -R "${REPOSITORY}"/var/tmp/testing-dir/java/gradle-reference "${DESTINATION}/exercises/java/"
 
 touch "${DESTINATION}/${MARKER}"
 

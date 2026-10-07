@@ -1,0 +1,17 @@
+# Ares 2 security policy of the Phobos reference exercise, in the shape of the policy of Artemis's Java test template.
+# Docs: https://ls1intum.github.io/Ares2/instructor/policy-reference
+# Add every new test class below, otherwise Ares treats it like student code and blocks it.
+thisPolicyFileCompliesToThePolicyVersion: 1
+regardingTheSupervisedCode:
+  theFollowingProgrammingLanguageConfigurationIsUsed: JAVA_USING_MAVEN_ARCHUNIT_AND_ASPECTJ
+  theSupervisedCodeUsesTheFollowingPackage: "de.phobos.reference"
+  theMainClassInsideThisPackageIs: "Adder"
+  theFollowingClassesAreTestClasses:
+    - "de.phobos.reference.AdderTest"
+  theFollowingResourceAccessesArePermitted:
+    regardingFileSystemInteractions: [ ]
+    regardingNetworkConnections: [ ]
+    regardingCommandExecutions: [ ]
+    regardingThreadCreations: [ ]
+    regardingPackageImports: [ ]
+    regardingTimeouts: [ ]
