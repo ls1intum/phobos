@@ -109,7 +109,6 @@ sourceSets {
         }
     }
 
-
     main {
         java {
             srcDirs = [assignmentSrcDir]
@@ -128,7 +127,17 @@ test {
     useJUnitPlatform()
 }
 
-
+// Every JVM this build starts has the heap the exercise pins, so that what a run needs does not depend on the
+// host: the launching JVM (gradle.properties and gradlew), the test worker (above), the compile workers and the
+// two AspectJ compiler forks of the weaving plugin, which would otherwise take a quarter of the host's memory.
+tasks.withType(JavaCompile).configureEach {
+    options.forkOptions.memoryInitialSize = '64m'
+    options.forkOptions.memoryMaximumSize = '512m'
+}
+compileJava.ajc.options.forkOptions.memoryInitialSize = '64m'
+compileJava.ajc.options.forkOptions.memoryMaximumSize = '512m'
+compileTestJava.ajc.options.forkOptions.memoryInitialSize = '64m'
+compileTestJava.ajc.options.forkOptions.memoryMaximumSize = '512m'
 
 // Ares reserved-package build boundary, version 2: student code must not shadow trusted packages
 apply from: 'gradle/AresReservedPackages.gradle'

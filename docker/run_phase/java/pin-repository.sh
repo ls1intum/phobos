@@ -1,4 +1,5 @@
 #!/bin/bash
+# bash, for process substitution and read -d.
 # Pre-loads a build tool's dependency repository from a reference exercise and holds the result to a
 # committed manifest, so that the bytes the run-phase image carries are exactly the ones the manifest names.
 #
@@ -10,7 +11,14 @@
 # equal the paths in the manifest exactly, so an added file the manifest does not list fails as well as a listed
 # file the run did not produce, and every listed file must then hash to its line. generate mode writes the
 # manifest from the set instead, for whoever moves a version, and says what it wrote. Run in the stage of the
-# run-phase Dockerfile that builds the repository, and by hand from the same image to regenerate a manifest.
+# run-phase Dockerfile that builds the repository, and by hand from the same image to regenerate a manifest, for
+# example for Maven (from the exercise's folder, in the image the stage uses):
+#
+#   cp -a var/tmp/testing-dir/java-maven/maven-reference/. /var/tmp/testing-dir && cd /var/tmp/testing-dir &&
+#   pin-repository.sh generate /root/.m2/repository /tmp/maven-repository.sha256 mvn --batch-mode --strict-checksums clean test
+#
+# Only regular files the run added or changed are seen. A file the run removes, and a symbolic link, are not, and
+# a run that adds or changes nothing is refused in both modes, since a manifest that lists nothing pins nothing.
 #
 # A line is "<sha256>  <path>", the path relative to the repository. The one exception is a file named
 # _remote.repositories, which Maven writes beside every artefact with a comment line holding the time it was
@@ -36,11 +44,16 @@ digest() {
   local file="$1"
   local sum
   if [[ "${file##*/}" == "_remote.repositories" ]]; then
-    sum="$(grep -v '^#' "$file" | sha256sum)"
+    sum="$(grep -v '^#' "$file" | sha256sum)" || sum=""
   else
-    sum="$(sha256sum < "$file")"
+    sum="$(sha256sum < "$file")" || sum=""
   fi
-  printf '%s' "${sum%% *}"
+  sum="${sum%% *}"
+  if [[ ! "$sum" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "pin-repository.sh: cannot hash ${file}" >&2
+    exit 1
+  fi
+  printf '%s' "$sum"
 }
 
 # Prints "<sha256>  <path>" for every file under the repository, sorted by path, paths relative to it.
@@ -62,6 +75,10 @@ snapshot > "${scratch}/after"
 # What the run added or changed: a line of the second snapshot the first does not hold.
 LC_ALL=C comm -13 <(LC_ALL=C sort "${scratch}/before") <(LC_ALL=C sort "${scratch}/after") | LC_ALL=C sort -k2 > "${scratch}/changed"
 sed 's/^[0-9a-f]*  //' "${scratch}/changed" > "${scratch}/changed.paths"
+if [[ ! -s "${scratch}/changed" ]]; then
+  echo "pin-repository.sh: the run added or changed no file under ${repository}, so there is nothing to pin." >&2
+  exit 1
+fi
 
 if [[ "$mode" == generate ]]; then
   cp "${scratch}/changed" "$manifest"

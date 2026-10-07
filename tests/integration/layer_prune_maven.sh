@@ -272,7 +272,9 @@ check_tampered_manifest() {
   out="$(prune "${key}" "${WORK}/${key}" 2>&1)"
   local status=$?
   local runs
-  runs="$(python3 -c 'import json, sys; print(len(json.load(open(sys.argv[1]))["evidence"]["record"]))' \
+  # A run, the baseline's included, is the record entry that carries the status it ended with; the entries
+  # for the seed and the pinned roots, which are made before the first run, do not.
+  runs="$(python3 -c 'import json, sys; print(sum("status" in entry for entry in json.load(open(sys.argv[1]))["evidence"]["record"]))' \
     "${WORK}/${key}/${key}_${EXERCISE}.aborted.json" 2>&1)"
   if [[ "${status}" -ne 0 && "${out}" == *"aborted: a pinned read root does not match its manifest"* \
         && "${out}" == *"${first}: its SHA-256 differs from the manifest's"* && "${runs}" == 0 \
