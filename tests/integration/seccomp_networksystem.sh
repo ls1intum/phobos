@@ -444,6 +444,66 @@ else
 fi
 
 echo
+echo "== an IPv4-mapped destination is the IPv4 endpoint it maps =="
+# A program that opens an IPv6 socket and connects to ::ffff:127.0.0.1, as a Java virtual machine does by
+# default, reaches the listener on 127.0.0.1. The guard judges it as that IPv4 endpoint: what a rule admits
+# as 127.0.0.1 it admits mapped, on the same port, and nothing else. Where this kernel or container has no
+# IPv6 socket, the permitted checks skip, saying so, and the refusals still run.
+printf '* %s\n' "$PORT" > "$WORK/rules"
+lp=$(start_listener "$PORT")
+out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" inet6 ::ffff:127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+kill "$lp" 2>/dev/null
+wait "$lp" 2>/dev/null
+if [[ $rc -eq 0 && "$out" == *INET6-OK* ]]; then
+  mapped_reachable=1
+else
+  mapped_reachable=0
+  skip "an IPv4-mapped connect is admitted as the IPv4 endpoint it maps" "this environment cannot reach 127.0.0.1 through an IPv6 socket: rc=$rc out=$out"
+fi
+if (( mapped_reachable )); then
+  for rule in "localhost *" "127.0.0.1 ${PORT}" "127.0.0.1 *" "127.0.0.0/8 ${PORT}"; do
+    printf '%s\n' "$rule" > "$WORK/rules"
+    lp=$(start_listener "$PORT")
+    out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" inet6 ::ffff:127.0.0.1 "$PORT" 2>&1)"
+    rc=$?
+    kill "$lp" 2>/dev/null
+    wait "$lp" 2>/dev/null
+    if [[ $rc -eq 0 && "$out" == *INET6-OK* ]]; then
+      ok "the rule '${rule}' admits ::ffff:127.0.0.1 on the port it admits for 127.0.0.1"
+    else
+      bad "the rule '${rule}' admits ::ffff:127.0.0.1 on the port it admits for 127.0.0.1" "rc=$rc out=$out"
+    fi
+  done
+fi
+for rule in "localhost *" "127.0.0.1 ${PORT}" "127.0.0.1 *"; do
+  printf '%s\n' "$rule" > "$WORK/rules"
+  out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" inet6 ::ffff:10.0.0.1 "$PORT" 2>&1)"
+  rc=$?
+  if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
+    ok "the rule '${rule}' still refuses ::ffff:10.0.0.1"
+  else
+    bad "the rule '${rule}' still refuses ::ffff:10.0.0.1" "rc=$rc out=$out"
+  fi
+done
+printf '127.0.0.1 %s\n' "$PORT" > "$WORK/rules"
+out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" inet6 ::ffff:127.0.0.1 "$OTHER" 2>&1)"
+rc=$?
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
+  ok "::ffff:127.0.0.1 on a port no rule names is refused"
+else
+  bad "::ffff:127.0.0.1 on a port no rule names is refused" "rc=$rc out=$out"
+fi
+printf '127.0.0.2 %s\n' "$PORT" > "$WORK/rules"
+out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" inet6 ::ffff:127.0.0.1 "$PORT" 2>&1)"
+rc=$?
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
+  ok "::ffff:127.0.0.1 is refused when only 127.0.0.2 is allowed"
+else
+  bad "::ffff:127.0.0.1 is refused when only 127.0.0.2 is allowed" "rc=$rc out=$out"
+fi
+
+echo
 echo "== an empty allow-list denies every connect, the deny-first baseline =="
 : > "$WORK/rules"
 lp=$(start_listener "$PORT")

@@ -45,7 +45,8 @@ void remember_rule(const char *host, const char *port_text, bool is_udp);
  * run rather than fall open to allow-all on an unreadable policy. */
 bool load_rules(const char *path);
 
-/* Whether the address of the given family is a loopback address. */
+/* Whether the address of the given family is a loopback address. An IPv4-mapped IPv6 address
+ * counts as the IPv4 address it maps, so ::ffff:127.0.0.1 is loopback and ::ffff:10.0.0.1 is not. */
 bool address_is_loopback(int family, const void *address);
 
 /* Writes the destination into the canonical IPv6 form ranges are compared in: an IPv6 address
@@ -59,7 +60,9 @@ bool address_within(const struct in6_addr *address, const struct in6_addr *netwo
 
 /* Whether one rule's host covers this destination address. A range holds the address to its
  * network. An IP literal is held to the exact address and the name "localhost" to the loopback
- * range, every 127.x.x.x address and ::1; any other hostname is one this guard cannot tie to an
+ * range, every 127.x.x.x address and ::1. An IPv4-mapped IPv6 destination, ::ffff:a.b.c.d, is the
+ * IPv4 endpoint a.b.c.d, so a literal IPv4 rule and "localhost" cover it exactly as they cover that
+ * IPv4 address; an IPv6 literal rule still covers only the IPv6 address it names. Any other hostname is one this guard cannot tie to an
  * address, so its host is not enforced here and the rule rests on its port alone, with the egress
  * broker checking the host name. */
 bool rule_host_matches(const struct connect_rule *rule, int family, const void *address);
