@@ -55,15 +55,15 @@ is_loopback_host() {
   local index
   [[ "$host" == */* ]] && prefix="${host#*/}"
   if [[ "$address" == "localhost" ]]; then
-    [[ -z "$prefix" ]]
+    [[ "$host" != */* ]]
     return
   fi
   if is_ipv4_literal "$address"; then
-    [[ "$address" == 127.* && ( -z "$prefix" || "$prefix" == "32" ) ]]
+    [[ "$address" == 127.* && ( "$host" != */* || "$prefix" == "32" ) ]]
     return
   fi
   is_ipv6_literal "$address" || return 1
-  [[ -z "$prefix" || "$prefix" == "128" ]] || return 1
+  [[ "$host" != */* || "$prefix" == "128" ]] || return 1
   read -ra groups <<< "$(expand_ipv6_groups "$address")"
   if (( 16#${groups[5]} == 16#ffff )); then
     for index in 0 1 2 3 4; do
