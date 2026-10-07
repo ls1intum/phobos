@@ -28,6 +28,7 @@ from layer_prune import (
     runner,
     sampler,
     search,
+    seed,
     verdict,
 )
 
@@ -90,6 +91,7 @@ class Pruning:
     removed_rules: set[tuple[str, str]] = dataclasses.field(default_factory=set)
     comments: dict[str, str] = dataclasses.field(default_factory=dict)
     pinned_roots: dict[str, str] = dataclasses.field(default_factory=dict)
+    seed_name: str | None = None
     pristine: generalise.Snapshot = dataclasses.field(
         default_factory=lambda: generalise.Snapshot(existing=frozenset(), directories=frozenset(), scanned=()))
 
@@ -703,6 +705,27 @@ def verify_pinned_roots(pruning: Pruning, when: str = "before the first run") ->
         pruning.note("pinned read roots", when=when, roots=checked)
 
 
+def seed_policy(pruning: Pruning, directory: str = seed.SEED_DIRECTORY) -> cfgfile.Policy:
+    """The policy the filesystem stage starts from: empty, or the exercise's language seed (seed.py).
+
+    An exercise names its seed in prune.json. A seed that is missing or not one a seed may be aborts the
+    exercise, since the prune would otherwise fail later for a reason it did not name. The seed's
+    comments are kept for the policy, and the record says which rows were seeded.
+    """
+    name = pruning.exercise.seed
+    empty = cfgfile.Policy(fs={}, connect=(), bind=(), limits={})
+    if name is None:
+        return empty
+    try:
+        seeded = seed.load(name, directory, runner.SPEC_PARENT)
+    except ValueError as failure:
+        raise search.PruneAbort(f"the language seed cannot be used: {failure}", {"seed": name}) from failure
+    pruning.seed_name = name
+    pruning.comments.update(seed.comments_for(name, seeded))
+    pruning.note("seed", name=name, rows={entry: sorted(sections) for entry, sections in seeded.fs.items()})
+    return dataclasses.replace(empty, fs=dict(seeded.fs))
+
+
 def check_pinned_grants(pruning: Pruning, policy: cfgfile.Policy) -> None:
     """Refuses a policy that makes a pinned read root anything but read-only; PruneAbort naming the entry.
 
@@ -780,7 +803,7 @@ def prune_exercise(exercise: runner.Exercise, budget: Budget, environment: runne
         verify_pinned_roots(pruning)
         pruning.reference = baseline(pruning)
         permissive_run(pruning)
-        policy = prune_filesystem(pruning, cfgfile.Policy(fs={}, connect=(), bind=(), limits={}))
+        policy = prune_filesystem(pruning, seed_policy(pruning))
         if stage != "filesystem":
             policy = prune_network(pruning, policy)
             if set(network.seed_rules(exercise.declared_hosts)) - set(policy.connect):

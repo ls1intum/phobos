@@ -14,10 +14,12 @@
 #              step and the copy of the Ares runtime jars, every containment check refused, and under /root
 #              exactly one directory grant, [read] on the pinned repository with the comment saying why, and
 #              otherwise single files that exist, nothing on /root or /root/.m2 and no write-class right
-#              under /root/.m2;
+#              under /root/.m2; the rows of the Java seed on /tmp, commented as coming from it, and no
+#              write-class right anywhere but /tmp, the working directory and /dev/null;
 #   wrong reasons  a copy without its tests aborts with no tests run, a copy that pins a version the
 #              repository lacks aborts as an infrastructure failure, a copy whose manifest does not match
-#              the repository aborts before any run, and none writes a policy.
+#              the repository aborts before any run, a copy that does not name the seed aborts for the reason the
+#              prune had before the seed existed (its scratch files in /tmp are refused), and none writes a policy.
 #
 # Runs inside the prune image built on the run-phase image of this branch, with the repository mounted at
 # /repo read-only, in an ordinary container: --network none, cgroup limits, and no --privileged, no
@@ -158,6 +160,12 @@ print("pinned-comment", "pinned: [read] on the directory /root/.m2/repository as
 writable = sorted(path for path, sections in under_root.items()
                   if (path == "/root/.m2" or path.startswith("/root/.m2/")) and sections & set(cfgfile.WRITE_SECTIONS))
 print("root-writes", writable)
+write_class = set(cfgfile.WRITE_SECTIONS)
+elsewhere = sorted(path for path, sections in policy.fs.items() if sections & write_class and not (
+    path == "/tmp" or path == "/dev/null" or path == "/var/tmp/testing-dir" or path.startswith("/var/tmp/testing-dir/")))
+print("writes-elsewhere", elsewhere)
+print("tmp-sections", sorted(policy.fs.get("/tmp", ())))
+print("seed-comment", "from the java.cfg seed of the prune image" in open(sys.argv[2]).read())
 PY
 )"
   check "the baseline holds both test cases, passed, in all three runs, with tests run and no wrong-reason marker" \
@@ -180,6 +188,14 @@ PY
   check "the generated policy says why that directory is not granted file by file" "pinned-comment True" \
     "$(grep '^pinned-comment' <<<"${summary}")"
   check "no write-class right is granted under /root/.m2" "root-writes []" "$(grep '^root-writes' <<<"${summary}")"
+  check "no write-class right is granted anywhere but /tmp, the working directory and /dev/null" "writes-elsewhere []" \
+    "$(grep '^writes-elsewhere' <<<"${summary}")"
+  if grep -q "^tmp-sections \[.*'write'.*\]" <<<"${summary}"; then
+    ok "the rows of the Java seed that the build needed are in the policy for /tmp"
+  else
+    bad "the rows of the Java seed that the build needed are in the policy for /tmp" "$(grep '^tmp-sections' <<<"${summary}")"
+  fi
+  check "the policy says those /tmp rows come from the seed" "seed-comment True" "$(grep '^seed-comment' <<<"${summary}")"
 }
 
 # The merged pair passes with every layer on, as grading applies it.
@@ -265,6 +281,25 @@ check_tampered_manifest() {
   rm -f "${tampered}"
 }
 
+# Prunes a copy whose prune.json does not name the seed, and checks that it aborts as the prune did before the
+# seed existed: the build's scratch files in /tmp are refused and nothing grants them. No policy is written.
+check_no_seed() {
+  local key="${KEY}-noseed"
+  rm -rf "${EXERCISES:?}/${key}"
+  mkdir -p "${EXERCISES}/${key}"
+  cp -r "${EXERCISES}/${KEY}/${EXERCISE}" "${EXERCISES}/${key}/${EXERCISE}"
+  sed -i 's|, "seed": "java.cfg"||' "${EXERCISES}/${key}/${EXERCISE}/prune.json"
+  local out
+  out="$(prune "${key}" "${WORK}/${key}" 2>&1)"
+  local status=$?
+  if [[ "${status}" -ne 0 && "${out}" == *"aborted: a refusal survived its own grant"* \
+        && ! -e "${WORK}/${key}/${key}_${EXERCISE}.cfg" ]]; then
+    ok "a copy that does not name the seed aborts as before and writes no policy"
+  else
+    bad "a copy that does not name the seed aborts as before and writes no policy" "status ${status}: $(tail -3 <<<"${out}")"
+  fi
+}
+
 set_up
 check_input
 prune "${KEY}" "${OUTPUT}" > "${WORK}/prune.log" 2>&1
@@ -278,4 +313,5 @@ check_wrong_reason "a copy without its tests aborts with no tests run and writes
 check_wrong_reason "a copy that pins a version the repository lacks aborts as an infrastructure failure" missing-ares \
   "the reference run ran no tests" infra_failure sed -i 's|<ares.version>[^<]*</ares.version>|<ares.version>0.0.0-absent</ares.version>|' pom.xml
 check_tampered_manifest
+check_no_seed
 finish
