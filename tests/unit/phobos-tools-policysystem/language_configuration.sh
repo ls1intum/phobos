@@ -348,6 +348,7 @@ for file in "${CORE}"/config/language-configurations/*.cfg; do
     mkdir -p "${WORK}/shipped/${name}/language-configurations" "${WORK}/shipped/${name}/jdk/bin"
     cp "${CORE}/config/"Base*.cfg "${WORK}/shipped/${name}/"
     cp "$file" "${WORK}/shipped/${name}/language-configurations/"
+    cp -R "${CORE}/config/language-configurations/bases" "${WORK}/shipped/${name}/language-configurations/"
     printf '#!/bin/sh\nexit 0\n' > "${WORK}/shipped/${name}/jdk/bin/java"
     chmod +x "${WORK}/shipped/${name}/jdk/bin/java"
     export PATH="${WORK}/shipped/${name}/jdk/bin:${PATH}"
@@ -357,7 +358,9 @@ for file in "${CORE}"/config/language-configurations/*.cfg; do
       && determine_language_placeholder java.home && determine_language_placeholder java.io.tmpdir \
       && determine_language_placeholder user.home \
       && printf '%s ' "${LANGUAGE_CONFIGURATION_BASES[@]##*/}" "${#LANGUAGE_PLACEHOLDER_DEFINITIONS[@]}" "$LANGUAGE_PLACEHOLDER_VALUE") 2>&1)" || true
-  check "${name} loads, names its base and determines its placeholders, user.home from the password database" "BaseLanguage-java.cfg 3 ${REAL_HOME} " "$result"
+  expected_base="BaseLanguage-java.cfg"
+  if [[ "$name" == JAVA_USING_MAVEN_* ]]; then expected_base="BaseLanguage-java-maven.cfg"; fi
+  check "${name} loads, names its base and determines its placeholders, user.home from the password database" "${expected_base} 3 ${REAL_HOME} " "$result"
 done
 
 finish

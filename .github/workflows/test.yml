@@ -170,6 +170,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash tests/unit/phobos-tools-policysystem/no_language_in_code.sh
 
+      # The configurations the image ships, read by the real loader: each names exactly the base of
+      # its build tool, the Maven base is never folded by a run without an Ares 2 policy, and it
+      # grants no [execute] on a directory that can be written.
+      - name: The shipped programming language configurations
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/phobos-tools-policysystem/shipped_language_configurations.sh
+
       # How an Ares 2 policy becomes the parsed state a .cfg gives: every field the import maps is
       # mapped as the documentation says, and every element whose translation would widen or narrow
       # the sandbox without saying so is refused with its line.

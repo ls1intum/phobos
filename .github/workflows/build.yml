@@ -217,6 +217,17 @@ jobs:
             phobos-run-phase:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/shipped-policy-test.sh
 
+      # The Maven reference exercise under the Maven base, once per JAVA_USING_MAVEN_* configuration the
+      # image ships: both tests pass, and a file the base does not name, or the dependency repository to a
+      # run with no Ares 2 policy, stays refused. The exercise is mounted read-only, as grading copies it.
+      - name: The Maven base runs the Maven reference exercise under every Maven configuration
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+            -v "${PWD}/var/tmp/testing-dir/java-maven/maven-reference:/exercise:ro" \
+            phobos-run-phase:ci \
+            bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/maven-policy-test.sh
+
       # The kernel-enforced network boundary holds against a raw connect() syscall, which is
       # what makes concrete Landlock ports the network boundary alongside the connect guard.
       - name: The network port rule holds against a raw-syscall bypass
