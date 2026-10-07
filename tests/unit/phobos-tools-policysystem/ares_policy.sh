@@ -332,7 +332,7 @@ ln -s "$OUTSIDE" "${WORK}/link-to-outside"
 : > "${PROJ}/dir/inside.txt"
 for value in "link/data.txt" "link" "${PROJ}/link/data.txt"; do
   result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' "      - onThisPathAndAllPathsBelow: \"${value}\"" | parse_result)"
-  if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"lies inside the project root"* && "${result#*|}" == *"through a symbolic link to '${OUTSIDE}"* && "${result#*|}" == *"policy.yaml', line 11."* ]]; then
+  if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"reaches the project root"* && "${result#*|}" == *"resolves to '${OUTSIDE}"* && "${result#*|}" == *"policy.yaml', line 11."* ]]; then
     ok "refused at its line: ${value}"
   else
     bad "refused at its line: ${value}" "status ${PHB_EPOLICY}, a link inside the project root" "$result"
@@ -340,14 +340,50 @@ for value in "link/data.txt" "link" "${PROJ}/link/data.txt"; do
 done
 ln -s "$OUTSIDE" "${PROJ}/dir/deeper-link"
 result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' '      - onThisPathAndAllPathsBelow: "dir/deeper-link/data.txt"' | parse_result)"
-if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"lies inside the project root"* ]]; then ok "a link several components down is refused too"; else bad "a link several components down is refused too" "status ${PHB_EPOLICY}" "$result"; fi
+if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"reaches the project root"* && "${result#*|}" == *"resolves to '${OUTSIDE}"* && "${result#*|}" == *"policy.yaml', line 11."* ]]; then ok "a link several components down is refused too"; else bad "a link several components down is refused too" "status ${PHB_EPOLICY}" "$result"; fi
+# A link inside the project root that points to somewhere else inside it still lands the grant where the submission chose.
+ln -s "${PROJ}/dir" "${PROJ}/alias"
+refused_path() {
+  local title="$1"
+  local value="$2"
+  local root="$3"
+  local result
+  result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' "      - onThisPathAndAllPathsBelow: \"${value}\"" | parse_result "$root")"
+  if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"reaches the project root"* && "${result#*|}" == *"policy.yaml', line 11."* ]]; then
+    ok "refused at its line: ${title}"
+  else
+    bad "refused at its line: ${title}" "status ${PHB_EPOLICY}, reaches the project root" "$result"
+  fi
+}
+refused_path "a link inside the root to another place inside it" "alias/inside.txt" "$PROJ"
+refused_path "the same, written with a trailing slash on the root and a dot in the path" "./alias/inside.txt" "${PROJ}/"
 ln -s "$PROJ" "${WORK}/root-link"
+refused_path "a link below a project root that is itself a link" "dir/deeper-link/data.txt" "${WORK}/root-link"
+refused_path "the same written with the root's real name while the root is given as a link" "${PROJ}/dir/deeper-link/data.txt" "${WORK}/root-link"
+ln -s "$PROJ" "${WORK}/alias-of-root"
+refused_path "a path written through a name of the root that is not the operator's, with a link below it" "${WORK}/alias-of-root/dir/deeper-link/data.txt" "$PROJ"
+ln -s "${PROJ}/dir" "${WORK}/outside-link-into-root"
+refused_path "a link outside the root that points into it" "${WORK}/outside-link-into-root/inside.txt" "$PROJ"
+mkdir -p "${PROJ}2/dir"
+: > "${PROJ}2/dir/sibling.txt"
+result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' "      - onThisPathAndAllPathsBelow: \"${PROJ}2/dir/sibling.txt\"" | parse_result)"
+check "a sibling whose name starts with the root's is not inside it" "${PROJ}2/dir/sibling.txt " "$(field read "$result")"
+result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' '      - onThisPathAndAllPathsBelow: "dir/inside.txt"' | parse_result "${PROJ}/")"
+check "a project root with a trailing slash does not change what is allowed" "${PROJ}/dir/inside.txt " "$(field read "$result")"
+result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' '      - onThisPathAndAllPathsBelow: "dir/inside.txt"' | parse_result "${PROJ}/../proj")"
+if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"holds a '..' segment"* ]]; then ok "a project root with a '..' segment is refused"; else bad "a project root with a '..' segment is refused" "status ${PHB_EPOLICY}" "$result"; fi
+if [[ -L /bin ]]; then
+  result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' '      - onThisPathAndAllPathsBelow: "/bin/true"' | parse_result "")"
+  check "with no project root nothing lies inside it, and /bin/true, through the /bin link of the image, is written" "/bin/true " "$(field read "$result")"
+  result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' '      - onThisPathAndAllPathsBelow: "/bin/true"' | parse_result)"
+  check "and with a project root elsewhere /bin/true is written too: the link is not the submission's" "/bin/true " "$(field read "$result")"
+else
+  skip "paths through the /bin link of the image" "/bin is not a symbolic link in this image"
+fi
 result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' '      - onThisPathAndAllPathsBelow: "dir/inside.txt"' | parse_result "${WORK}/root-link")"
 check "a project root that is itself a link is the operator's statement and is not a link inside it" "${WORK}/root-link/dir/inside.txt |0" "$(field read "$result")|$(field skipped "$result")"
 result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' "      - onThisPathAndAllPathsBelow: \"${WORK}/link-to-outside/data.txt\"" | parse_result)"
 check "a link outside the project root is allowed, and written as written" "${WORK}/link-to-outside/data.txt " "$(field read "$result")"
-result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' '      - onThisPathAndAllPathsBelow: "/bin/true"' | parse_result "")"
-check "with no project root nothing lies inside it, and /bin/true, through the /bin link of the image, is written" "/bin/true " "$(field read "$result")"
 result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' '      - onThisPathAndAllPathsBelow: "dir"' | parse_result)"
 check "a real path inside the project root is written as it was" "${PROJ}/dir " "$(field read "$result")"
 
@@ -363,7 +399,10 @@ result="$(policy_with '        overwriteAllFiles: false' '        overwriteAllFi
 check "a right the base does not grant there is written" "${PROJ}/allowed.txt " "$(field write "$result")"
 # A link outside the project root to a directory beneath a base row: lexically the imported path is under no base row,
 # but resolved it is under one, so a skip by resolved comparison leaves it out and a lexical one would write it.
-ln -s "${PROJ}/dir" "${WORK}/link-to-covered"
+mkdir -p "${WORK}/covered-target"
+: > "${WORK}/covered-target/inside.txt"
+ln -s "${WORK}/covered-target" "${WORK}/link-to-covered"
+printf '%s\n' "${WORK}/covered-target" > "${BASE}/read.paths"
 result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' "      - onThisPathAndAllPathsBelow: \"${WORK}/link-to-covered/inside.txt\"" | parse_result "$PROJ" "$BASE")"
 check "a row reached through a link outside the project root is judged by where it resolves, and left out as covered there" "|1" "$(field read "$result")|$(field skipped "$result")"
 printf '%s\n' "${WORK}/not-covering" > "${BASE}/read.paths"

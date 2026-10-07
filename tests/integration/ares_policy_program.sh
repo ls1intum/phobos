@@ -3,7 +3,7 @@
 # configuration it names selects the base policies and adds its [connect] rows to them, and the policy
 # is folded in as an exercise configuration, beside any .cfg, by the same additive merge. Both
 # directions are pinned: what the import grants arrives in the specification, and what it must not
-# touch, a base row, a row that is only lexically under the base, a .cfg-only run, stays as it was.
+# touch, a base row, a .cfg-only run, stays as it was.
 # No Landlock kernel is needed: this checks the files the program writes and runs the filesystem
 # layer's hierarchy check over them.
 set -uo pipefail
@@ -122,7 +122,7 @@ if spec_has read.paths "$OUTSIDE/data.txt"; then ok "an absolute path outside th
 
 policy link/data.txt read > "$WORK/link.yaml"
 run_policy --tail-flags-file "$WORK/tail.flags" --config "$WORK/link.yaml"
-if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"lies inside the project root"* && "$ERR" == *"link.yaml', line 7."* ]]; then ok "a symbolic link inside the project root is refused, with file and line"; else bad "a symbolic link inside the project root is refused, with file and line" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
+if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"reaches the project root"* && "$ERR" == *"link.yaml', line 7."* ]]; then ok "a symbolic link inside the project root is refused, with file and line"; else bad "a symbolic link inside the project root is refused, with file and line" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
 ln -s "$OUTSIDE" "$WORK/outside-link"
 policy "$WORK/outside-link/data.txt" read > "$WORK/outside-link.yaml"
 run_policy --tail-flags-file "$WORK/tail.flags" --config "$WORK/outside-link.yaml"
