@@ -28,16 +28,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Writes the script typed into the interactive bash. Every marker is printed in two halves, so the
-# echo of the typed line can never satisfy an expectation.
+# Writes the script typed into the interactive bash. Every step waits for something Python prints,
+# never for a time: OK-S1 is printed as the sleep begins, so Ctrl+C cannot come before it. What is typed
+# after fg waits in the terminal's queue, where only Python reads it, since bash reads nothing while the
+# job it resumed is in the foreground. Every marker is printed in two halves, so the echo of the typed
+# line can never satisfy an expectation.
 write_script() {
   cat > "${OUT}/session.script" <<SCRIPT
 expect SHELL[$]
 send ${RECORDER} record --name interactive -- python3 -q
 expect >>>
 send import time, sys
-send time.sleep(60)
-sleep 1
+send print("OK-" + "S1", flush=True); time.sleep(60)
+expect OK-S1
 key ctrl-c
 expect KeyboardInterrupt
 send print("OK-" + "C1")
@@ -45,7 +48,6 @@ expect OK-C1
 key ctrl-z
 expect Stopped
 send fg
-sleep 1
 send print("OK-" + "Z1")
 expect OK-Z1
 send sys.stderr.write("OK-" + "E2" + "\\n")
