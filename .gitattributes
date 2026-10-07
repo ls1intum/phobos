@@ -20,6 +20,7 @@
 *.tgz      binary
 *.zip      binary
 *.7z       binary
+*.jar      binary
 
 # Not exported in an archive.
 .gitattributes export-ignore
