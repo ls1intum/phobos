@@ -23,6 +23,7 @@ from layer_prune import (
     generalise,
     limits,
     network,
+    pinned,
     record,
     runner,
     sampler,
@@ -88,6 +89,7 @@ class Pruning:
     removed_pairs: set[tuple[str, str]] = dataclasses.field(default_factory=set)
     removed_rules: set[tuple[str, str]] = dataclasses.field(default_factory=set)
     comments: dict[str, str] = dataclasses.field(default_factory=dict)
+    pinned_roots: dict[str, str] = dataclasses.field(default_factory=dict)
     pristine: generalise.Snapshot = dataclasses.field(
         default_factory=lambda: generalise.Snapshot(existing=frozenset(), directories=frozenset(), scanned=()))
 
@@ -338,7 +340,8 @@ def filesystem_grants(pruning: Pruning, current: list[record.Denial], snapshot: 
                 kept.append(path)
         if kept:
             remaining.append(dataclasses.replace(denial, objects=tuple(kept)))
-    found, notes = generalise.grants_and_notes(remaining, snapshot, generalise.DEFAULT_FINE_ROOTS, held)
+    found, notes = generalise.grants_and_notes(remaining, snapshot, generalise.DEFAULT_FINE_ROOTS, held,
+                                               pruning.pinned_roots)
     notes.reported.extend(per_run_reported)
     for path, sections in found.items():
         grants.setdefault(path, set()).update(sections)
@@ -679,6 +682,25 @@ def verify(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
     raise search.PruneAbort("the joint verification did not settle")
 
 
+def verify_pinned_roots(pruning: Pruning) -> None:
+    """Checks every pinned read root the exercise declares against its manifest before any run; PruneAbort if one does not match.
+
+    Only a root that passed is ever granted as a directory (generalise.grants_and_notes); the record
+    says which were checked and how many files each manifest fixes.
+    """
+    checked = []
+    for root in pruning.exercise.pinned_read_roots:
+        try:
+            files = pinned.verify(root)
+        except ValueError as failure:
+            raise search.PruneAbort(f"a pinned read root does not match its manifest: {failure}",
+                                    {"path": root.path, "manifest": root.manifest}) from failure
+        pruning.pinned_roots[root.path] = pinned.GRANT_COMMENT.format(path=root.path, manifest=root.manifest)
+        checked.append({"path": root.path, "manifest": root.manifest, "files": files})
+    if checked:
+        pruning.note("pinned read roots", roots=checked)
+
+
 def require_prune_container() -> None:
     """Refuses to go on outside the prune container, which sets PRUNE_CONTAINER_VARIABLE=1.
 
@@ -737,6 +759,7 @@ def prune_exercise(exercise: runner.Exercise, budget: Budget, environment: runne
     index = pristine if pristine is not None else pristine_index(environment)
     pruning = Pruning(exercise=exercise, budget=budget, environment=environment, pristine=index)
     try:
+        verify_pinned_roots(pruning)
         pruning.reference = baseline(pruning)
         permissive_run(pruning)
         policy = prune_filesystem(pruning, cfgfile.Policy(fs={}, connect=(), bind=(), limits={}))

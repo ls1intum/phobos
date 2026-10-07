@@ -13,6 +13,11 @@ The rules, each erring in the direction A.7 names, and every case no rule covers
 - No directory nearer the root than MINIMUM_WIDENING_DEPTH is granted, except a write-class right on
   the directory Landlock checks it on (a creation in /tmp); a [read] of such a directory, or a
   widening or a climb that would reach one, is reported instead.
+- The one exception to "file by file" inside a fine-grained root, Markus's explicit decision: a tree the
+  exercise declares as a pinned read root (pinned.py), whose contents the image build fixed by checksum,
+  gets `[read]`, and only `[read]`, as one entry on exactly that directory, for every read of anything
+  beneath it, with a comment saying why. It is never widened to an ancestor, never write-class, and
+  [execute] and every other section on a path beneath it keep every rule above.
 - A per-run name (a kernel-assigned id in PER_RUN_PATTERNS whose value differs between observed runs,
   or equals the refusing process's or thread's own id) is granted on its smallest stable directory,
   with a comment, and only for [read] and [execute]; a write-class right on a per-run name is reported.
@@ -417,9 +422,18 @@ def narrow_execute(grants: dict[str, frozenset[str]], executed: Iterable[str], s
     return {path: frozenset(sections) for path, sections in result.items() if sections}
 
 
+def pinned_root_of(path: str, pinned_roots: dict[str, str]) -> str | None:
+    """The declared pinned read root a path is, or lies beneath; None when it is in none."""
+    return next((root for root in pinned_roots if path == root or is_beneath(path, root)), None)
+
+
 def grants_and_notes(denials: list[Denial], snapshot: Snapshot, fine_roots: tuple[str, ...],
-                     held: dict[str, frozenset[str]] | None = None) -> tuple[dict[str, frozenset[str]], Notes]:
+                     held: dict[str, frozenset[str]] | None = None,
+                     pinned_roots: dict[str, str] | None = None) -> tuple[dict[str, frozenset[str]], Notes]:
     """The grants the filesystem denials ask for outside per-run names, with the comments and reports beside them.
+
+    `pinned_roots` maps each verified pinned read root to the comment its grant gets (pinned.py). A
+    [read] of anything in one goes on that directory; no other section ever does.
 
     [execute] is narrowed to the executed files wherever it would sit on a directory that overlaps a
     write-class right of these grants or of `held`, the policy they are layered on (narrow_execute).
@@ -439,6 +453,11 @@ def grants_and_notes(denials: list[Denial], snapshot: Snapshot, fine_roots: tupl
                     continue
                 if section == "execute" and snapshot.existed(path):
                     executed.add(path)
+                pinned = pinned_root_of(path, pinned_roots or {}) if section == "read" else None
+                if pinned is not None:
+                    grants.setdefault(pinned, set()).add(section)
+                    notes.comments.setdefault(pinned, (pinned_roots or {})[pinned])
+                    continue
                 target = placed(path, section, snapshot, fine_roots, notes)
                 if target is not None:
                     grants.setdefault(target, set()).add(section)
@@ -447,13 +466,14 @@ def grants_and_notes(denials: list[Denial], snapshot: Snapshot, fine_roots: tupl
 
 
 def grants_for(denials: list[Denial], snapshot: Snapshot, fine_roots: tuple[str, ...],
-               held: dict[str, frozenset[str]] | None = None) -> dict[str, frozenset[str]]:
+               held: dict[str, frozenset[str]] | None = None,
+               pinned_roots: dict[str, str] | None = None) -> dict[str, frozenset[str]]:
     """The grants the filesystem denials ask for, generalised as the module docstring states.
 
     Denials of other layers are ignored, objects per_run_grants takes are left to it, and whatever no
     rule covers is left out; grants_and_notes says why. `held` is the policy the grants are layered on.
     """
-    return grants_and_notes(denials, snapshot, fine_roots, held)[0]
+    return grants_and_notes(denials, snapshot, fine_roots, held, pinned_roots)[0]
 
 
 def compact(grants: dict[str, frozenset[str]], threshold: int, fine_roots: tuple[str, ...],

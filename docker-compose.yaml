@@ -66,12 +66,18 @@ services:
     network_mode: bridge
 
   # The Maven reference exercise (var/tmp/testing-dir/java-maven) is pruned under its own key, in the
-  # same image as Gradle's, with the same mounts and no network, no privilege and no capability. That the
-  # image holds the bytes the grading image was built with is checked by
-  # tests/integration/layer_prune_maven.sh, not by this service (README "The Maven prune").
+  # same image as Gradle's, with the same mounts and no network, no privilege and no capability, and the
+  # manifest of the pre-loaded repository mounted read-only: the exercise's prune.json declares that
+  # repository as a pinned read root, and the pruner checks it against this file before any run
+  # (README "The Maven prune").
   prune_java_maven:
     <<: *prune_layers
     network_mode: none
+    volumes:
+      - ./var/tmp/testing-dir:/srv/phobos-prune-exercises:ro
+      - ./var/tmp/helpers:/var/tmp/helpers:ro
+      - ./var/tmp/path_sets:/var/tmp/path_sets
+      - ./docker/run_phase/java/maven-repository.sha256:/srv/phobos-manifest/maven-repository.sha256:ro
     command: ["--stage", "all", "java-maven"]
 
   # Opt-in, for the Java exercises under var/tmp/testing-dir/java-egress whose prune.json declares

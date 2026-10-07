@@ -1,1 +1,1 @@
-{"report_globs": ["target/surefire-reports/TEST-*.xml"], "declared_hosts": [], "grow_rounds": 1000}
+{"report_globs": ["target/surefire-reports/TEST-*.xml"], "declared_hosts": [], "pinned_read_roots": [{"path": "/root/.m2/repository", "manifest": "/srv/phobos-manifest/maven-repository.sha256"}]}

@@ -22,7 +22,7 @@ import tempfile
 import time
 import uuid
 
-from layer_prune import cfgfile, limits, network, sampler, strace_parse, verdict
+from layer_prune import cfgfile, limits, network, pinned, sampler, strace_parse, verdict
 
 # Where the run-phase image keeps Phobos, the working directory grading uses, and where the
 # candidate configurations are written. A pruned policy may grant writing under /run, so every
@@ -45,12 +45,7 @@ DEFAULT_RUN_SECONDS = 1800
 REAP_SECONDS = 10
 REAP_INTERVAL_SECONDS = 0.05
 # The keys prune.json may hold, with the type each value must have (A.6.8).
-SETTING_TYPES = {"report_globs": list, "declared_hosts": list, "heap_pinned": bool, "grow_rounds": int}
-# The most rounds an exercise's prune.json may ask the grow loop for. A build that stops at the first
-# file it cannot read (Maven offline) shows the pruner one such file per round, so it needs about as
-# many rounds as the files it opens. A round costs one observed run, and every run, and the minimisation
-# after it, costs more as the policy grows, so the real bound on a prune is the CI job's wall clock.
-MAX_GROW_ROUNDS = 2000
+SETTING_TYPES = {"report_globs": list, "declared_hosts": list, "heap_pinned": bool, "pinned_read_roots": list}
 
 
 class PrunerDefect(Exception):
@@ -83,7 +78,7 @@ class Exercise:
     report_globs: tuple[str, ...]
     declared_hosts: tuple[str, ...]
     heap_pinned: bool = False
-    grow_rounds: int | None = None
+    pinned_read_roots: tuple[pinned.PinnedRoot, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -138,8 +133,8 @@ RUN_NUMBERS = itertools.count(1)
 
 def read_settings(directory: pathlib.Path) -> dict:
     """The exercise's prune.json, or an empty one; ExerciseRefused when it is not a JSON object of the known
-    keys, each of its type, with only strings in its lists, only relative report globs and a grow_rounds
-    between 1 and MAX_GROW_ROUNDS."""
+    keys, each of its type, with only strings in its lists (the pinned read roots are objects, see
+    pinned.parse) and only relative report globs."""
     path = directory / "prune.json"
     if not path.is_file():
         return {}
@@ -152,13 +147,15 @@ def read_settings(directory: pathlib.Path) -> dict:
     for key, value in settings.items():
         if key not in SETTING_TYPES or not isinstance(value, SETTING_TYPES[key]):
             raise ExerciseRefused(f"{path} holds {key!r} with a value prune.json does not take")
-        if isinstance(value, list) and not all(isinstance(item, str) and item for item in value):
+        if key == "pinned_read_roots":
+            try:
+                pinned.parse(value, str(path))
+            except ValueError as error:
+                raise ExerciseRefused(str(error)) from error
+        elif isinstance(value, list) and not all(isinstance(item, str) and item for item in value):
             raise ExerciseRefused(f"{path} holds {key!r} with an entry that is not a non-empty string")
     if any(pattern.startswith("/") for pattern in settings.get("report_globs", ())):
         raise ExerciseRefused(f"{path} holds an absolute report glob")
-    rounds = settings.get("grow_rounds")
-    if rounds is not None and (isinstance(rounds, bool) or not 1 <= rounds <= MAX_GROW_ROUNDS):
-        raise ExerciseRefused(f"{path} holds a grow_rounds outside 1 to {MAX_GROW_ROUNDS}")
     return settings
 
 
@@ -183,7 +180,7 @@ def read_exercise(directory: pathlib.Path) -> Exercise:
         raise ExerciseRefused(f"{directory} already holds a report its globs match: {stale[0]}")
     return Exercise(name=directory.name, workdir=directory, build_script=script, report_globs=globs,
                     declared_hosts=declared, heap_pinned=bool(settings.get("heap_pinned", False)),
-                    grow_rounds=settings.get("grow_rounds"))
+                    pinned_read_roots=pinned.parse(settings.get("pinned_read_roots", []), str(directory / "prune.json")))
 
 
 def restore(exercise: Exercise, environment: Environment) -> pathlib.Path:

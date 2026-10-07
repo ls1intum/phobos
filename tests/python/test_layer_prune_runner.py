@@ -225,10 +225,7 @@ def test_a_run_past_the_hard_limit_is_killed_with_its_group_and_reads_as_a_timeo
 
 
 @pytest.mark.parametrize("settings", ["{not json", "[]", '{"heap_pinned": "false"}', '{"report_globs": "x.xml"}',
-                                      '{"report_globs": ["/abs/*.xml"]}', '{"declared_hosts": [1]}', '{"unknown": 1}',
-                                      '{"grow_rounds": 0}', '{"grow_rounds": 2001}', '{"grow_rounds": true}',
-                                      '{"grow_rounds": "400"}', '{"grow_rounds": 1.5}', '{"grow_rounds": null}',
-                                      '{"grow_rounds": -5}'])
+                                      '{"report_globs": ["/abs/*.xml"]}', '{"declared_hosts": [1]}', '{"unknown": 1}'])
 def test_a_prune_json_that_is_not_the_contract_refuses_the_exercise(tmp_path, settings):
     directory = tmp_path / "exercise"
     directory.mkdir()
@@ -268,13 +265,3 @@ def test_a_process_a_run_leaves_behind_is_killed_and_reaped(tmp_path, environmen
     runner.run_direct(exercise(tmp_path, f"sleep 300 &\necho $! > {marker}\n"), environment)
     pid = int(marker.read_text())
     assert not pathlib.Path(f"/proc/{pid}").exists()
-
-
-def test_a_prune_json_may_ask_for_more_grow_rounds_within_the_bound(tmp_path):
-    directory = tmp_path / "exercise"
-    directory.mkdir()
-    script(directory / "build_script.sh", "exit 0\n")
-    assert runner.read_exercise(directory).grow_rounds is None
-    for accepted in (1, runner.MAX_GROW_ROUNDS):
-        (directory / "prune.json").write_text(json.dumps({"grow_rounds": accepted}))
-        assert runner.read_exercise(directory).grow_rounds == accepted

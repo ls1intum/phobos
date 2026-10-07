@@ -34,7 +34,7 @@ jobs:
   prune:
     name: Prune on ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 355
+    timeout-minutes: 180
     permissions:
       contents: read
     strategy:

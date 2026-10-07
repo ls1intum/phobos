@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prunes the Maven reference exercise on the grading layers, reads the result, and shows the two wrong
+# Prunes the Maven reference exercise on the grading layers, reads the result, and shows the wrong
 # reasons it must not be fooled by (Task 14.1 of the prune plan).
 #
 # The exercise is var/tmp/testing-dir/java-maven/maven-reference: Artemis's Maven test template with
@@ -7,13 +7,17 @@
 #   input      re-hashes every file the committed manifest lists first (the image build already held the
 #              whole repository to it), since a prune that observed other artefacts than grading reads
 #              would be about another image;
-#   permitted  prunes the exercise, merges the result into BaseLanguage-java-maven.cfg and its own file,
+#   permitted  checks the pre-loaded repository against the manifest the exercise's prune.json declares it
+#              by (a pinned read root), prunes the exercise, merges the result into BaseLanguage-java-maven.cfg and its own file,
 #              and has the exercise pass under exactly that pair with every layer on;
 #   forbidden  reads the record: both tests passed in all three baseline runs, whose log shows the weaving
-#              step and the copy of the Ares runtime jars, every containment check refused, every grant under
-#              /root a single file that exists (never a directory), and no write-class right under /root/.m2;
+#              step and the copy of the Ares runtime jars, every containment check refused, and under /root
+#              exactly one directory grant, [read] on the pinned repository with the comment saying why, and
+#              otherwise single files that exist, nothing on /root or /root/.m2 and no write-class right
+#              under /root/.m2;
 #   wrong reasons  a copy without its tests aborts with no tests run, a copy that pins a version the
-#              repository lacks aborts as an infrastructure failure, and neither writes a policy.
+#              repository lacks aborts as an infrastructure failure, a copy whose manifest does not match
+#              the repository aborts before any run, and none writes a policy.
 #
 # Runs inside the prune image built on the run-phase image of this branch, with the repository mounted at
 # /repo read-only, in an ordinary container: --network none, cgroup limits, and no --privileged, no
@@ -148,6 +152,8 @@ print("containment", len(checks), "refused" if all(check["refused"] or check.get
 under_root = {path: sections for path, sections in policy.fs.items() if path == "/root" or path.startswith("/root/")}
 not_files = sorted(path for path in under_root if not os.path.isfile(path))
 print("root-grants", len(under_root), "not-files", not_files)
+print("pinned-sections", sorted(policy.fs.get("/root/.m2/repository", ())))
+print("pinned-comment", "pinned: [read] on the directory /root/.m2/repository as one entry" in open(sys.argv[2]).read())
 writable = sorted(path for path, sections in under_root.items()
                   if (path == "/root/.m2" or path.startswith("/root/.m2/")) and sections & set(cfgfile.WRITE_SECTIONS))
 print("root-writes", writable)
@@ -162,11 +168,16 @@ PY
   else
     bad "every containment check was refused" "${summary}"
   fi
-  if grep -q '^root-grants [1-9][0-9]* not-files \[\]' <<<"${summary}"; then
-    ok "every grant under /root is a single file that exists, never a directory"
+  if grep -q "^root-grants [1-9][0-9]* not-files \['/root/.m2/repository'\]" <<<"${summary}"; then
+    ok "under /root only the pinned repository is a directory grant, every other grant a single file that exists"
   else
-    bad "every grant under /root is a single file that exists, never a directory" "$(grep '^root-grants' <<<"${summary}")"
+    bad "under /root only the pinned repository is a directory grant, every other grant a single file that exists" \
+      "$(grep '^root-grants' <<<"${summary}")"
   fi
+  check "the pinned repository is granted [read] and nothing else" "pinned-sections ['read']" \
+    "$(grep '^pinned-sections' <<<"${summary}")"
+  check "the generated policy says why that directory is not granted file by file" "pinned-comment True" \
+    "$(grep '^pinned-comment' <<<"${summary}")"
   check "no write-class right is granted under /root/.m2" "root-writes []" "$(grep '^root-writes' <<<"${summary}")"
 }
 
@@ -220,6 +231,32 @@ check_wrong_reason() {
   fi
 }
 
+# Prunes a copy whose prune.json names a manifest that does not match the repository, and checks that the
+# exercise is refused before any run and no policy is written. The manifest is the real one with the sum of
+# its first line replaced; the directory is the one the prune container mounts manifests in.
+check_tampered_manifest() {
+  local key="${KEY}-tampered"
+  local manifest_directory=/srv/phobos-manifest
+  local tampered="${manifest_directory}/tampered.sha256"
+  mkdir -p "${manifest_directory}"
+  { printf '%064d  %s\n' 0 "$(head -1 "${MANIFEST}" | cut -d' ' -f3-)"; tail -n +2 "${MANIFEST}"; } > "${tampered}"
+  rm -rf "${EXERCISES:?}/${key}"
+  mkdir -p "${EXERCISES}/${key}"
+  cp -r "${EXERCISES}/${KEY}/${EXERCISE}" "${EXERCISES}/${key}/${EXERCISE}"
+  sed -i "s|${manifest_directory}/[^\"]*|${tampered}|" "${EXERCISES}/${key}/${EXERCISE}/prune.json"
+  local out
+  out="$(prune "${key}" "${WORK}/${key}" 2>&1)"
+  local status=$?
+  if [[ "${status}" -ne 0 && "${out}" == *"aborted: a pinned read root does not match its manifest"* \
+        && ! -e "${WORK}/${key}/${key}_${EXERCISE}.cfg" ]]; then
+    ok "a copy whose manifest does not match the repository aborts before any run and writes no policy"
+  else
+    bad "a copy whose manifest does not match the repository aborts before any run and writes no policy" \
+      "status ${status}: $(tail -3 <<<"${out}")"
+  fi
+  rm -f "${tampered}"
+}
+
 set_up
 check_input
 prune "${KEY}" "${OUTPUT}" > "${WORK}/prune.log" 2>&1
@@ -232,4 +269,5 @@ check_wrong_reason "a copy without its tests aborts with no tests run and writes
   "the reference run ran no tests" no_source rm -rf test
 check_wrong_reason "a copy that pins a version the repository lacks aborts as an infrastructure failure" missing-ares \
   "the reference run ran no tests" infra_failure sed -i 's|<ares.version>[^<]*</ares.version>|<ares.version>0.0.0-absent</ares.version>|' pom.xml
+check_tampered_manifest
 finish
