@@ -12,6 +12,9 @@
 #   FIXTURE_NEEDS_NET=1       a test passes only when the external attempt is not refused by the sandbox
 #   FIXTURE_UNATTRIBUTABLE=1  writesOutput fails once no_new_privs is set, which every layered run sets
 #                             and no refused call shows; the external attempt is left out
+# one more binds a UDP port, which only a kernel that handles Landlock's UDP bind right (version 10)
+# refuses, for the KVM run (.github/workflows/prune-kvm.yml):
+#   FIXTURE_UDP=1             bindsAUdpPort passes only when 127.0.0.1:5000/udp can be bound
 # and one more makes it need a declared host, for tests/integration/layer_prune_egress.sh:
 #   FIXTURE_DECLARED=1        reachesItsDeclaredHost asks https://api.example.org:8443/ over TLS and
 #                             passes only when the answer arrives
@@ -96,6 +99,14 @@ if [[ "${FIXTURE_DECLARED:-0}" == 1 ]]; then
   [[ "$answer" == *"200 ok"* ]] && declared_status=0
 fi
 
+udp_status=0
+if [[ "${FIXTURE_UDP:-0}" == 1 ]]; then
+  udp_status=1
+  python3 -S -c 'import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.bind(("127.0.0.1", 5000))' 2>/dev/null && udp_status=0
+fi
+
 setsid_status=0
 if [[ "${FIXTURE_SETSID:-0}" == 1 ]]; then
   setsid true || setsid_status=1
@@ -111,6 +122,7 @@ mkdir -p "$REPORT_DIRECTORY"
   testcase reachesTheNetworkWhenItMust "$external_status"
   testcase startsASession "$setsid_status"
   [[ "${FIXTURE_DECLARED:-0}" == 1 ]] && testcase reachesItsDeclaredHost "$declared_status"
+  [[ "${FIXTURE_UDP:-0}" == 1 ]] && testcase bindsAUdpPort "$udp_status"
   printf '</testsuite>\n'
 } > "${REPORT_DIRECTORY}/TEST-fixture.xml"
 exit 0
