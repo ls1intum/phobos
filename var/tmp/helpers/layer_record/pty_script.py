@@ -7,11 +7,18 @@ can drive one:
     send import os          types the text and Enter
     expect ^OK-R1           waits for output matching the regular expression
     key ctrl-c              sends one control character
+    idle                    waits until every process of the terminal's foreground group is asleep
     sleep 1                 waits, in seconds
 
 An expectation is searched in the output after the previous match, and the terminal echoes what
 is typed, so a script prints markers the echo of its own line cannot contain (`"OK-" + "R1"`).
-Job control cannot be scripted this way, since it needs an interactive shell around the command.
+Job control needs an interactive shell around the command, whose own typed lines the script drives.
+
+`idle` is for what a script cannot see in the output: a signal some process of the command is
+still about to pass on, which a busy machine delivers late, and which would land on whatever is typed
+next. A process that has such a signal to handle is awake, so once every process of the foreground
+group has been asleep, or stopped, on several samples in a row there is none left. It never replaces
+an `expect` for something the command prints; it is for the quiet after a key such as Ctrl+C.
 """
 
 from __future__ import annotations
@@ -23,6 +30,7 @@ import pty
 import re
 import select
 import signal
+import sys
 import time
 
 # The status a session ends with when an expectation was not met within its time.
@@ -31,7 +39,21 @@ EXPECT_FAILED = 4
 # The control characters a script may send, each as the terminal driver reads it.
 KEYS = {"ctrl-c": "\x03", "ctrl-d": "\x04", "ctrl-z": "\x1a", "ctrl-backslash": "\x1c"}
 
-KINDS = ("send", "expect", "key", "sleep")
+KINDS = ("send", "expect", "key", "idle", "sleep")
+
+# How many samples in a row must find every process of the foreground group asleep or stopped for
+# `idle` to answer, and how far apart they are. A shell that polls its child wakes for a moment every
+# tenth of a second, so one awake sample says nothing; the next sample is taken again.
+IDLE_SAMPLES = 4
+IDLE_INTERVAL_SECONDS = 0.05
+
+# The states of /proc/<pid>/stat that count as idle: sleeping, stopped (by a signal or a tracer),
+# a zombie nobody has waited for yet, and the idle kernel thread state.
+IDLE_STATES = frozenset("SZTtI")
+
+# The number of the process group among the fields of /proc/<pid>/stat after the command's name and
+# the state, counting the state as 0 and the parent as 1.
+GROUP_FIELD = 2
 
 # How long one read of the terminal waits before the deadline is looked at again.
 POLL_SECONDS = 0.2
@@ -157,6 +179,26 @@ class _Terminal:
         while self.closed and time.monotonic() < deadline:
             time.sleep(min(POLL_SECONDS, deadline - time.monotonic()))
 
+    def idle(self, seconds: float) -> bool:
+        """Waits until the terminal's foreground process group is quiet, at most seconds; False if it is not.
+
+        Quiet is IDLE_SAMPLES samples in a row, IDLE_INTERVAL_SECONDS apart, each finding every process
+        of the group asleep or stopped (IDLE_STATES). Output is read between the samples, so a command
+        that writes is never blocked on a full terminal meanwhile. Assumes Linux, where /proc names the
+        group's processes; elsewhere there is nothing to look at, so it answers True at once. A command
+        that has closed the terminal has nothing left to wait for either.
+        """
+        if not sys.platform.startswith("linux"):
+            return True
+        deadline = time.monotonic() + seconds
+        quiet = 0
+        while time.monotonic() < deadline:
+            quiet = quiet + 1 if all(state in IDLE_STATES for state in foreground_states(self.descriptor)) else 0
+            if quiet >= IDLE_SAMPLES or self.closed:
+                return True
+            self.read(IDLE_INTERVAL_SECONDS)
+        return False
+
     def drain(self, seconds: float) -> None:
         """Reads until the command has closed the terminal, at most seconds.
 
@@ -187,6 +229,31 @@ class _Terminal:
         self.buffer += chunk.decode("utf-8", "replace")
 
 
+def foreground_states(descriptor: int) -> list[str]:
+    """The /proc state letter of every process in the terminal's foreground process group.
+
+    Assumes Linux and that `descriptor` is the master side of the pseudo-terminal. A process that
+    ends while /proc is read is left out; a terminal with no foreground group answers an empty list.
+    """
+    try:
+        group = os.tcgetpgrp(descriptor)
+    except OSError:
+        return []
+    states = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat", encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+        except OSError:
+            continue
+        fields = text[text.rfind(")") + 2:].split()
+        if len(fields) > GROUP_FIELD and int(fields[GROUP_FIELD]) == group:
+            states.append(fields[0])
+    return states
+
+
 def _checked(action: Action, number: int) -> Action:
     """The action unchanged when it is well formed; raises ValueError naming its line otherwise.
 
@@ -196,6 +263,8 @@ def _checked(action: Action, number: int) -> Action:
         raise ValueError(f"line {number}: unknown action {action.kind!r}; expected one of {', '.join(KINDS)}")
     if action.kind == "key" and action.value not in KEYS:
         raise ValueError(f"line {number}: unknown key {action.value!r}; expected one of {', '.join(KEYS)}")
+    if action.kind == "idle" and action.value:
+        raise ValueError(f"line {number}: idle takes nothing after it, not {action.value!r}")
     if action.kind == "sleep" and not _seconds(action.value):
         raise ValueError(f"line {number}: sleep needs a non-negative number of seconds, not {action.value!r}")
     if action.kind == "expect":
@@ -226,6 +295,8 @@ def _perform(terminal: _Terminal, action: Action, step_seconds: float) -> bool:
         terminal.send(action.value + "\r")
     elif action.kind == "key":
         terminal.send(KEYS[action.value])
+    elif action.kind == "idle":
+        return terminal.idle(step_seconds)
     elif action.kind == "sleep":
         terminal.wait(float(action.value))
     else:
