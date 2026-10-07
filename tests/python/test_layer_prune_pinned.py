@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import pathlib
 import sys
 
@@ -100,7 +101,6 @@ def test_what_else_the_tree_holds_is_counted_for_the_record_and_a_special_file_i
     (base / "sub" / "more.pom").write_bytes(b"M")
     (base / "link").symlink_to(base / "a.pom")
     assert pinned.verify(root) == {"files": 1, "unlisted_files": 2, "links": 1, "special_files": 0}
-    import os
     os.mkfifo(base / "pipe")
     with pytest.raises(ValueError, match="neither regular files"):
         pinned.verify(root)
@@ -135,7 +135,6 @@ def test_a_tree_that_does_not_match_its_manifest_is_never_verified(tmp_path, dam
         manifest.symlink_to(real)
     else:
         manifest.unlink()
-    import os
     if damage == "unreadable" and os.geteuid() == 0:
         pytest.skip("root reads a file with no mode")
     with pytest.raises(ValueError):
@@ -325,3 +324,12 @@ def test_prune_json_declares_roots_strictly_and_the_exercise_carries_them(tmp_pa
     (directory / "prune.json").write_text(json.dumps({"pinned_read_roots": GOOD}))
     with pytest.raises(runner.ExerciseRefused):
         runner.read_exercise(directory)
+
+
+def test_the_comment_above_the_grant_is_one_line_the_policy_renderer_accepts_and_the_parser_reads_back():
+    comment = pinned.GRANT_COMMENT.format(path=GOOD["path"], manifest=GOOD["manifest"])
+    policy = cfgfile.Policy(fs={GOOD["path"]: frozenset({"read"})}, connect=(), bind=(), limits={},
+                            comments={GOOD["path"]: comment})
+    text = cfgfile.render(policy)
+    assert f"# {comment}\n{GOOD['path']}\n" in text
+    assert cfgfile.read_policy(text).fs == {GOOD["path"]: frozenset({"read"})}

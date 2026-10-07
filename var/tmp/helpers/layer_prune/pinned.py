@@ -40,8 +40,9 @@ MANIFEST_LINE = re.compile(r"([0-9a-f]{64})  (.+)")
 # such a file is that of its content without the comment lines, as pin-repository.sh reckons it.
 TIMESTAMPED_FILE = "_remote.repositories"
 # The comment above the grant, saying why this directory is not granted file by file.
-GRANT_COMMENT = ("pinned: [read] on the directory {path} as one entry, not file by file; its contents are fixed by "
-                 "the checksums of {manifest}, which the image build held it to and this prune checked again")
+GRANT_COMMENT = ("pinned: [read] on the directory {path} as one entry, not file by file; the files the pre-load added "
+                 "are fixed by the checksums of {manifest}, which the image build held it to and this prune checked "
+                 "again; the rest of the tree comes with the digest-pinned base image")
 
 
 @dataclasses.dataclass(frozen=True)
