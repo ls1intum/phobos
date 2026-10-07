@@ -1,35 +1,35 @@
 """The per-language seed of a prune: rows a language's build is known to need that no refusal can show (decision 7).
 
 The pruner derives every grant from a refusal, and never generalises a write-class right on a name that
-differs in every run. A build that writes scratch files with random names in /tmp (Ares writes
-/tmp/EssentialPackages_<random>.yaml, Surefire /tmp/surefire-root/...) therefore cannot be granted by
-refusals alone, and the shipped Java base grants /tmp anyway. Markus decided that such rows come from a
-seed: a configuration file named by the exercise's prune.json, `"seed": "java.cfg"`, that lives beside
-the prune image's Dockerfile and is copied into the image. Language-specific content is only ever in
-that file, never in the pruner's code or in core.
+differs in every run. A build that writes scratch files with random names in a shared directory cannot be
+granted by refusals alone. Markus decided that such rows come from a seed: a configuration file named by
+the exercise's prune.json, `"seed": "<language>.cfg"`, that lives beside the prune image's Dockerfile
+(docker/prune_phase/layers/seeds/) and is copied into the image. Language-specific content, and the reason
+for it, is only ever in that file, never in the pruner's code or in core.
 
 The seed is a starting point, not a grant: its rows go into the first policy, so the minimisation drops
-every row the build does not need, and each row that stays carries a comment saying it comes from the
-seed and that the shipped base grants it already. A seed names only filesystem rows on existing
-directories, never `/` and never the specification directory or an ancestor of it.
+every row the build does not need, and each row that stays carries a comment saying it comes from the seed.
+A seed names only filesystem rows with the sections below, on existing real directories, never `/` and
+never a directory the pruner owns (the specification, working, candidate, log and Phobos directories) or an
+ancestor of one.
 """
 
 from __future__ import annotations
 
+import os
 import pathlib
-import posixpath
 import re
+from collections.abc import Iterable
 
 from layer_prune import cfgfile
 
 # Where the prune image keeps the seeds, and what a seed file is called: a plain name ending in .cfg.
 SEED_DIRECTORY = "/usr/local/share/phobos-prune/seeds"
 SEED_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.cfg")
-# The sections a seed may name: reading what a build wrote, and the write-class rights on its scratch directory.
-SEED_SECTIONS = frozenset({"read", "write", "create", "delete", "create-ipc", "restructure"})
+# The sections a seed may name: reading what a build wrote, and creating, writing and deleting its own files.
+SEED_SECTIONS = frozenset({"read", "write", "create", "delete"})
 # The comment above a seed row that survived the minimisation.
-SEED_COMMENT = ("seed: {sections} on {path} come from the {name} seed of the prune image, for a build that writes "
-                "scratch files with random names there; the shipped base grants them already")
+SEED_COMMENT = "seed: {sections} on {path} come from the {name} seed of the prune image, not from a refusal"
 
 
 def parse_name(value: object, source: str) -> str:
@@ -39,12 +39,21 @@ def parse_name(value: object, source: str) -> str:
     return value
 
 
-def load(name: str, directory: str = SEED_DIRECTORY, spec_parent: str = "/var/tmp") -> cfgfile.Policy:
-    """The seed's rows as a policy; ValueError naming what is wrong with the seed or its absence."""
+def overlaps(entry: str, protected: Iterable[str]) -> bool:
+    """Whether an entry is, lies beneath, or is an ancestor of one of the protected directories."""
+    return any(entry == other or cfgfile.is_beneath(entry, other) or cfgfile.is_beneath(other, entry)
+               for other in protected)
+
+
+def load(name: str, directory: str, protected: Iterable[str]) -> cfgfile.Policy:
+    """The seed's rows as a policy; ValueError naming what is wrong with the seed or its absence.
+
+    `protected` are the directories the pruner owns, which no row may be, lie beneath or sit above.
+    """
     parse_name(name, "seed")
     path = pathlib.Path(directory) / name
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"the seed {name} is not a file in {directory}")
+    if os.path.realpath(path) != str(path) or not path.is_file():
+        raise ValueError(f"the seed {name} is not a real file in {directory}")
     try:
         policy = cfgfile.read_policy(path.read_text())
     except (OSError, UnicodeDecodeError, ValueError) as failure:
@@ -56,16 +65,14 @@ def load(name: str, directory: str = SEED_DIRECTORY, spec_parent: str = "/var/tm
     for entry, sections in policy.fs.items():
         if not sections <= SEED_SECTIONS:
             raise ValueError(f"the seed {name} names {sorted(sections - SEED_SECTIONS)} on {entry}, which a seed may not")
-        if entry == "/" or entry == spec_parent or spec_parent.startswith(entry.rstrip("/") + "/"):
-            raise ValueError(f"the seed {name} names {entry}, which is the root, the specification directory or an "
-                             "ancestor of it")
-        if posixpath.normpath(entry) != entry or not pathlib.Path(entry).is_dir() or pathlib.Path(entry).is_symlink():
+        if entry == "/" or overlaps(entry, protected):
+            raise ValueError(f"the seed {name} names {entry}, which is the root or a directory the pruner owns, "
+                             "or lies beneath or above one")
+        if os.path.realpath(entry) != entry or not pathlib.Path(entry).is_dir():
             raise ValueError(f"the seed {name} names {entry}, which is not an existing real directory")
     return policy
 
 
-def comments_for(name: str, policy: cfgfile.Policy) -> dict[str, str]:
-    """The comment above each seed path: which sections the seed gave it, and that the shipped base grants them."""
-    return {entry: SEED_COMMENT.format(sections=", ".join(f"[{section}]" for section in sorted(sections)), path=entry,
-                                       name=name)
-            for entry, sections in policy.fs.items()}
+def comment_for(name: str, path: str, sections: Iterable[str]) -> str:
+    """The comment above a seed path: the sections of the seed that survived, and that they came from it."""
+    return SEED_COMMENT.format(sections=", ".join(f"[{section}]" for section in sorted(sections)), path=path, name=name)

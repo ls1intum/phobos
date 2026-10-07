@@ -91,6 +91,7 @@ class Pruning:
     removed_rules: set[tuple[str, str]] = dataclasses.field(default_factory=set)
     comments: dict[str, str] = dataclasses.field(default_factory=dict)
     pinned_roots: dict[str, str] = dataclasses.field(default_factory=dict)
+    seeded: dict[str, frozenset[str]] = dataclasses.field(default_factory=dict)
     seed_name: str | None = None
     pristine: generalise.Snapshot = dataclasses.field(
         default_factory=lambda: generalise.Snapshot(existing=frozenset(), directories=frozenset(), scanned=()))
@@ -292,7 +293,9 @@ def snapshot_for(pruning: Pruning, policy: cfgfile.Policy) -> generalise.Snapsho
     """What existed before the runs: the pristine exercise at the working directory, and the index of the rest.
 
     Only the working directory and the write-granted directories are climbed from (A.6.5); every other
-    path is answered from the index taken before the first run.
+    path is answered from the index taken before the first run. A directory only a seed write-grants is
+    not climbed from: the seed is not a refusal, and climbing would let a refusal ask for write-class
+    rights on its subdirectories that neither the seed nor the shipped base grants.
     """
     existing: set[str] = set()
     directories: set[str] = set()
@@ -304,7 +307,8 @@ def snapshot_for(pruning: Pruning, policy: cfgfile.Policy) -> generalise.Snapsho
         existing.update(os.path.join(mapped, name) for name in files + subdirectories)
         directories.update(os.path.join(mapped, name) for name in subdirectories)
     roots = sorted(path for path, sections in policy.fs.items() if sections & set(cfgfile.WRITE_SECTIONS)
-                   and pruning.pristine.is_directory(path) and not within_testing_dir(path))
+                   and pruning.pristine.is_directory(path) and not within_testing_dir(path)
+                   and path not in pruning.seeded)
     return generalise.Snapshot(existing=frozenset(existing) | pruning.pristine.existing,
                                directories=frozenset(directories) | pruning.pristine.directories,
                                scanned=(runner.TESTING_DIR, *roots), indexed=pruning.pristine.scanned)
@@ -386,8 +390,8 @@ def filesystem_run(pruning: Pruning, policy: cfgfile.Policy, observe: bool, stag
     return pruning.run(open_network, OBSERVED_NETWORK if observe else UNOBSERVED_NETWORK, stage)
 
 
-def grow_filesystem(pruning: Pruning, seed: cfgfile.Policy) -> cfgfile.Policy:
-    """Stage 1's grow loop from a seed policy (A.6.4)."""
+def grow_filesystem(pruning: Pruning, start: cfgfile.Policy) -> cfgfile.Policy:
+    """Stage 1's grow loop from a starting policy (A.6.4)."""
     snapshots: list[tuple[generalise.Snapshot, cfgfile.Policy]] = []
 
     def observed(policy: cfgfile.Policy) -> runner.RunResult:
@@ -403,7 +407,7 @@ def grow_filesystem(pruning: Pruning, seed: cfgfile.Policy) -> cfgfile.Policy:
         """The same run without the observer."""
         return filesystem_run(pruning, normalised(pruning, policy), False, "filesystem rerun")
 
-    grown = search.grow(observed, seed, pruning.reference, pruning.budget.grow_rounds, derive, unobserved)
+    grown = search.grow(observed, start, pruning.reference, pruning.budget.grow_rounds, derive, unobserved)
     pruning.note("grow", rounds=len(snapshots), grants=len(grown.fs))
     return grown
 
@@ -446,16 +450,21 @@ def with_pairs(policy: cfgfile.Policy, pairs: list[tuple[str, str]]) -> cfgfile.
     return dataclasses.replace(policy, fs={path: frozenset(sections) for path, sections in fs.items()})
 
 
-def prune_filesystem(pruning: Pruning, seed: cfgfile.Policy) -> cfgfile.Policy:
+def prune_filesystem(pruning: Pruning, start: cfgfile.Policy) -> cfgfile.Policy:
     """Stage 1: grow from denials, compact, normalise, minimise, with the network layer and the limits off.
 
     The network layer stays on for the declared hosts of an exercise that names some (filesystem_run).
     """
-    grown = grow_filesystem(pruning, seed)
+    grown = grow_filesystem(pruning, start)
     compacted = generalise.compact(grown.fs, generalise.DEFAULT_COMPACTION_THRESHOLD, generalise.DEFAULT_FINE_ROOTS)
     pruning.note("compaction", before=sorted(grown.fs), after=sorted(compacted))
     minimised = minimise_policy_fs(pruning, normalised(pruning, dataclasses.replace(grown, fs=compacted)), "filesystem")
     comments = {**pruning.comments, **generalise.per_run_grants(pruning.history)[1]}
+    for path, rows in pruning.seeded.items():
+        surviving = rows & minimised.fs.get(path, frozenset())
+        if surviving:
+            note = seed.comment_for(pruning.seed_name or "", path, surviving)
+            comments[path] = f"{comments[path]}; {note}" if path in comments else note
     pruning.note("widenings", grants=widenings(pruning, minimised))
     return dataclasses.replace(minimised, comments={path: text for path, text in comments.items() if path in minimised.fs})
 
@@ -473,7 +482,8 @@ def widenings(pruning: Pruning, policy: cfgfile.Policy) -> list[dict[str, Any]]:
             continue
         behind = [item for item in observed if item == path or cfgfile.is_beneath(item, path)]
         found.append({"path": path, "sections": sorted(sections), "observed": behind[:WIDENING_EXAMPLES],
-                      "observed_count": len(behind), "covers": entries_beneath(path)})
+                      "observed_count": len(behind), "covers": entries_beneath(path),
+                      "seeded": sorted(sections & pruning.seeded.get(path, frozenset()))})
     return found
 
 
@@ -672,8 +682,8 @@ def verify(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
         pruning.note("verification routing", grants=jsonable(new_grants), connect=list(new_connect),
                      bind=list(new_bind))
         if new_grants:
-            seed = search.with_grants(current, new_grants)
-            current = dataclasses.replace(prune_filesystem(pruning, seed), connect=current.connect,
+            routed = search.with_grants(current, new_grants)
+            current = dataclasses.replace(prune_filesystem(pruning, routed), connect=current.connect,
                                           bind=current.bind, limits=current.limits)
         elif new_connect or new_bind:
             current = dataclasses.replace(prune_network(pruning, current, current.connect + new_connect,
@@ -709,19 +719,23 @@ def seed_policy(pruning: Pruning, directory: str = seed.SEED_DIRECTORY) -> cfgfi
     """The policy the filesystem stage starts from: empty, or the exercise's language seed (seed.py).
 
     An exercise names its seed in prune.json. A seed that is missing or not one a seed may be aborts the
-    exercise, since the prune would otherwise fail later for a reason it did not name. The seed's
-    comments are kept for the policy, and the record says which rows were seeded.
+    exercise, since the prune would otherwise fail later for a reason it did not name; this is done before
+    any run, so the seed is read before a build or the permissive run could have touched it. The record
+    says which rows were seeded, and their comments are made after the minimisation, from what survived.
     """
     name = pruning.exercise.seed
     empty = cfgfile.Policy(fs={}, connect=(), bind=(), limits={})
     if name is None:
         return empty
+    environment = pruning.environment
+    protected = (environment.spec_parent, environment.testing_dir, environment.candidate_dir, environment.log_dir,
+                 environment.phobos_home)
     try:
-        seeded = seed.load(name, directory, runner.SPEC_PARENT)
+        seeded = seed.load(name, directory, protected)
     except ValueError as failure:
         raise search.PruneAbort(f"the language seed cannot be used: {failure}", {"seed": name}) from failure
     pruning.seed_name = name
-    pruning.comments.update(seed.comments_for(name, seeded))
+    pruning.seeded = {entry: frozenset(sections) for entry, sections in seeded.fs.items()}
     pruning.note("seed", name=name, rows={entry: sorted(sections) for entry, sections in seeded.fs.items()})
     return dataclasses.replace(empty, fs=dict(seeded.fs))
 
@@ -800,10 +814,12 @@ def prune_exercise(exercise: runner.Exercise, budget: Budget, environment: runne
     index = pristine if pristine is not None else pristine_index(environment)
     pruning = Pruning(exercise=exercise, budget=budget, environment=environment, pristine=index)
     try:
+        seeded = seed_policy(pruning)
         verify_pinned_roots(pruning)
+        check_pinned_grants(pruning, seeded)
         pruning.reference = baseline(pruning)
         permissive_run(pruning)
-        policy = prune_filesystem(pruning, seed_policy(pruning))
+        policy = prune_filesystem(pruning, seeded)
         if stage != "filesystem":
             policy = prune_network(pruning, policy)
             if set(network.seed_rules(exercise.declared_hosts)) - set(policy.connect):
