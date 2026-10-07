@@ -11,6 +11,7 @@ control replay in control.py.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import struct
@@ -450,6 +451,8 @@ def attribute_call(call: Syscall, state: RunState) -> Denial | None:
 def denials(trace: strace_parse.Trace, working_directory: str) -> list[Denial]:
     """Every refusal inside the command's domain, attributed, in log order.
 
+    Each denial carries the refusing thread as `tid` and its thread group, the process, as `pid`.
+
     `working_directory` is where the command started, which a relative path is resolved against
     when strace did not decorate AT_FDCWD; every clone inherits it and every chdir moves it.
     """
@@ -463,5 +466,5 @@ def denials(trace: strace_parse.Trace, working_directory: str) -> list[Denial]:
             continue
         denial = attribute_call(call, state)
         if denial is not None:
-            found.append(denial)
+            found.append(dataclasses.replace(denial, pid=state.group(call.pid), tid=call.pid))
     return found

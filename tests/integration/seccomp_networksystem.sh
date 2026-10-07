@@ -187,8 +187,26 @@ int main(int argc, char **argv) {
         printf("CSEND-OK\n");
         return 0;
     }
+    if (argc >= 4 && strcmp(argv[1], "inet6") == 0) {
+        int fd = socket(AF_INET6, SOCK_STREAM, 0);
+        if (fd < 0) {
+            fprintf(stderr, "socket: %s\n", strerror(errno));
+            return PROBE_SEND_FAILED;
+        }
+        struct sockaddr_in6 address;
+        memset(&address, 0, sizeof(address));
+        address.sin6_family = AF_INET6;
+        address.sin6_port = htons((unsigned short)atoi(argv[3]));
+        inet_pton(AF_INET6, argv[2], &address.sin6_addr);
+        if (connect(fd, (struct sockaddr *)&address, sizeof(address)) != 0) {
+            fprintf(stderr, "connect: %s\n", strerror(errno));
+            return PROBE_REFUSED;
+        }
+        printf("INET6-OK\n");
+        return 0;
+    }
     if (argc < 4 || strcmp(argv[1], "inet") != 0) {
-        fprintf(stderr, "usage: probe inet <host> <port> | probe unix <path>\n");
+        fprintf(stderr, "usage: probe inet <host> <port> | probe inet6 <host> <port> | probe unix <path>\n");
         return PROBE_USAGE;
     }
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -379,6 +397,39 @@ if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* ]]; then
   ok "a connect to a non-listed port is refused with EACCES"
 else
   bad "a connect to a non-listed port is refused with EACCES" "rc=$rc out=$out"
+fi
+
+echo
+echo "== a verbose refusal names the refused endpoint, address and port, and still refuses =="
+# The line comes from format_endpoint: an IPv4 address and port, an IPv6 address in brackets,
+# an IPv4-mapped address in the IPv6 spelling, and the same for a refused datagram. The refusal
+# itself, EACCES, is unchanged.
+: > "$WORK/rules"
+# Runs the probe with the arguments after the first two under the verbose guard and an empty
+# allow-list, and checks it is refused with EACCES and the guard's line names the endpoint $2.
+check_named_refusal() {
+  local name="$1"
+  local endpoint="$2"
+  shift 2
+  local out
+  out="$("$WORK/guard" --verbose --rules "$WORK/rules" -- "$WORK/probe" "$@" 2>&1)"
+  local rc=$?
+  if [[ $rc -eq "$PROBE_REFUSED" && "$out" == *"Permission denied"* && "$out" == *"does not name: ${endpoint}"* ]]; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc out=$out"
+  fi
+}
+check_named_refusal "a refused IPv4 connect names 10.0.0.1:80" "10.0.0.1:80" inet 10.0.0.1 80
+check_named_refusal "a refused IPv6 connect names [2001:db8::1]:443" "[2001:db8::1]:443" inet6 2001:db8::1 443
+check_named_refusal "a refused IPv4-mapped connect names [::ffff:10.0.0.1]:80" "[::ffff:10.0.0.1]:80" inet6 ::ffff:10.0.0.1 80
+check_named_refusal "a refused datagram names 127.0.0.2:${OTHER}" "127.0.0.2:${OTHER}" udp 127.0.0.2 "$OTHER"
+out="$("$WORK/guard" --rules "$WORK/rules" -- "$WORK/probe" inet 10.0.0.1 80 2>&1)"
+rc=$?
+if [[ $rc -eq "$PROBE_REFUSED" && "$out" != *"does not name"* ]]; then
+  ok "without --verbose the refusal stays silent"
+else
+  bad "without --verbose the refusal stays silent" "rc=$rc out=$out"
 fi
 
 echo

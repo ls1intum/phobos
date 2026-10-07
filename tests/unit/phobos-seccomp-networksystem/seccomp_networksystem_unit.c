@@ -1587,6 +1587,51 @@ static void test_address_and_destination(void) {
     check("a non-INET destination carries no address", where.address == NULL);
 }
 
+/* format_endpoint writes each family as the guard's log line needs it, cuts short safely and
+ * never writes past the size it was given. */
+static void test_format_endpoint(void) {
+    char text[ENDPOINT_TEXT_SIZE];
+    struct in_addr v4;
+    inet_pton(AF_INET, "203.0.113.7", &v4);
+    struct destination where = { .family = AF_INET, .address = &v4, .port = 443 };
+    size_t length = format_endpoint(&where, text, sizeof(text));
+    check("an IPv4 endpoint is address colon port", strcmp(text, "203.0.113.7:443") == 0 && length == strlen(text));
+
+    struct in6_addr v6;
+    inet_pton(AF_INET6, "2001:db8::1", &v6);
+    where = (struct destination){ .family = AF_INET6, .address = &v6, .port = 443 };
+    format_endpoint(&where, text, sizeof(text));
+    check("an IPv6 endpoint is bracketed", strcmp(text, "[2001:db8::1]:443") == 0);
+
+    inet_pton(AF_INET6, "::ffff:203.0.113.7", &v6);
+    format_endpoint(&where, text, sizeof(text));
+    check("an IPv4-mapped endpoint keeps the IPv6 spelling in brackets", strcmp(text, "[::ffff:203.0.113.7]:443") == 0);
+
+    inet_pton(AF_INET6, "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", &v6);
+    where.port = 65535;
+    length = format_endpoint(&where, text, sizeof(text));
+    check("the longest IPv6 endpoint fits ENDPOINT_TEXT_SIZE whole",
+          strcmp(text, "[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535") == 0 && length < sizeof(text));
+
+    where = (struct destination){ .family = AF_UNIX, .address = nullptr, .port = 0 };
+    format_endpoint(&where, text, sizeof(text));
+    check("another family is named by its number", strcmp(text, "family 1") == 0);
+
+    where = (struct destination){ .family = AF_INET, .address = nullptr, .port = 80 };
+    format_endpoint(&where, text, sizeof(text));
+    check("an IPv4 destination without an address is named by its family", strcmp(text, "family 2") == 0);
+
+    char small[6];
+    memset(small, 'x', sizeof(small));
+    where = (struct destination){ .family = AF_INET, .address = &v4, .port = 443 };
+    length = format_endpoint(&where, small, sizeof(small));
+    check("a short buffer is cut short and terminated", strcmp(small, "203.0") == 0 && length == 5);
+
+    char untouched = 'x';
+    check("a zero size writes nothing and answers zero",
+          format_endpoint(&where, &untouched, 0) == 0 && untouched == 'x');
+}
+
 static void test_exit_code_mapping(void) {
     int status = 0;
     check("a clean exit maps to its code", exit_code_from_status((7 << WAIT_STATUS_EXIT_CODE_SHIFT)) == 7);
@@ -3805,6 +3850,7 @@ int main(void) {
     test_policy_matching();
     test_connect_ranges();
     test_address_and_destination();
+    test_format_endpoint();
     test_exit_code_mapping();
     test_child_signal_disposition();
     test_verbose_logging();

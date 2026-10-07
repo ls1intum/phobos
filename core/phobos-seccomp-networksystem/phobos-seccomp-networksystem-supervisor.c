@@ -328,8 +328,9 @@ static void service_connect(int notify_descriptor, struct seccomp_notif *request
     }
     if (!connection_permitted(where.family, where.address, where.port,
                               provenance == FD_TYPE_DGRAM)) {
-        log_verbose("refusing connect to a destination the allow-list does not name, port %u",
-                    (unsigned)where.port);
+        char endpoint[ENDPOINT_TEXT_SIZE];
+        format_endpoint(&where, endpoint, sizeof(endpoint));
+        log_verbose("refusing connect to a destination the allow-list does not name: %s", endpoint);
         answer(notify_descriptor, response, request->id, 0, -EACCES);
         return;
     }

@@ -284,6 +284,14 @@ def test_exhausted_resources_are_limit_refusals_only_for_the_calls_that_meet_a_l
         ("openat", record.LAYER_LIMIT), ("clone", record.LAYER_LIMIT)]
 
 
+def test_a_denial_names_the_refusing_thread_and_its_process():
+    trace = trace_of(RESTRICT,
+                     "300 clone3({flags=CLONE_VM|CLONE_THREAD|CLONE_SIGHAND, exit_signal=0}, 88) = 305",
+                     '305 openat(AT_FDCWD</w>, "/srv/a", O_RDONLY) = -1 EACCES (Permission denied)')
+    [denial] = attribute.denials(trace, "/w")
+    assert (denial.pid, denial.tid, denial.run) == (300, 305, 0)
+
+
 def test_a_refusal_outside_the_domain_is_ignored():
     trace = trace_of('200 openat(AT_FDCWD</w>, "/srv/a", O_RDONLY) = -1 EACCES (Permission denied)')
     assert attribute.denials(trace, "/w") == []
