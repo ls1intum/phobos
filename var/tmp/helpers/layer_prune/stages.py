@@ -460,13 +460,25 @@ def prune_filesystem(pruning: Pruning, start: cfgfile.Policy) -> cfgfile.Policy:
     pruning.note("compaction", before=sorted(grown.fs), after=sorted(compacted))
     minimised = minimise_policy_fs(pruning, normalised(pruning, dataclasses.replace(grown, fs=compacted)), "filesystem")
     comments = {**pruning.comments, **generalise.per_run_grants(pruning.history)[1]}
+    pruning.note("widenings", grants=widenings(pruning, minimised))
+    return dataclasses.replace(minimised, comments={path: text for path, text in comments.items() if path in minimised.fs})
+
+
+def seed_comments(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
+    """The policy with the comment above each seeded path that still holds seeded rows.
+
+    Made once, from the policy the prune ends with, because the later stages (the filesystem minimisation
+    after the network, the limits, the joint verification) may drop seeded rows the first minimisation kept.
+    The comment names only the seeded sections that are still there and is joined to any other comment on
+    the path; a path none of whose seeded sections remain gets none.
+    """
+    comments = dict(policy.comments)
     for path, rows in pruning.seeded.items():
-        surviving = rows & minimised.fs.get(path, frozenset())
+        surviving = rows & policy.fs.get(path, frozenset())
         if surviving:
             note = seed.comment_for(pruning.seed_name or "", path, surviving)
             comments[path] = f"{comments[path]}; {note}" if path in comments else note
-    pruning.note("widenings", grants=widenings(pruning, minimised))
-    return dataclasses.replace(minimised, comments={path: text for path, text in comments.items() if path in minimised.fs})
+    return dataclasses.replace(policy, comments=comments)
 
 
 def widenings(pruning: Pruning, policy: cfgfile.Policy) -> list[dict[str, Any]]:
@@ -721,15 +733,16 @@ def seed_policy(pruning: Pruning, directory: str = seed.SEED_DIRECTORY) -> cfgfi
     An exercise names its seed in prune.json. A seed that is missing or not one a seed may be aborts the
     exercise, since the prune would otherwise fail later for a reason it did not name; this is done before
     any run, so the seed is read before a build or the permissive run could have touched it. The record
-    says which rows were seeded, and their comments are made after the minimisation, from what survived.
+    says which rows were seeded, and their comments are made at the end of the prune (seed_comments).
     """
     name = pruning.exercise.seed
     empty = cfgfile.Policy(fs={}, connect=(), bind=(), limits={})
     if name is None:
         return empty
     environment = pruning.environment
-    protected = (environment.spec_parent, environment.testing_dir, environment.candidate_dir, environment.log_dir,
-                 environment.phobos_home)
+    protected = tuple(os.path.realpath(path) for path in (
+        environment.spec_parent, environment.testing_dir, environment.candidate_dir, environment.log_dir,
+        environment.phobos_home, *environment.kept))
     try:
         seeded = seed.load(name, directory, protected)
     except ValueError as failure:
@@ -836,4 +849,4 @@ def prune_exercise(exercise: runner.Exercise, budget: Budget, environment: runne
     except search.PruneAbort as abort:
         abort.evidence["record"] = pruning.log
         raise
-    return policy, pruning.log
+    return seed_comments(pruning, policy), pruning.log
