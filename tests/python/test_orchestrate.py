@@ -211,7 +211,7 @@ def test_a_record_naming_another_exercise_stops_the_merge(tmp_path):
 def test_a_record_that_is_not_the_layer_pruners_for_this_cfg_stops_the_merge(tmp_path, record, reason):
     write_layer_artefacts(tmp_path / "path_sets", "one", JAVA_ONE)
     (tmp_path / "path_sets" / "java_one.json").write_bytes(record)
-    result = run_orchestrator(tmp_path, langs="java", skip_prune=True)
+    result = run_orchestrator(tmp_path, langs="java")
     assert result.returncode == 1, result.stdout + result.stderr
     assert reason in result.stdout
     assert "Traceback" not in result.stderr
@@ -274,7 +274,7 @@ def test_a_union_that_puts_execute_beside_another_exercise_s_write_stops_the_mer
 def test_a_union_that_puts_execute_under_another_exercise_s_write_on_an_ancestor_stops_the_merge(tmp_path):
     write_layer_artefacts(tmp_path / "path_sets", "one", "[write]\n/srv/tool\n")
     write_layer_artefacts(tmp_path / "path_sets", "two", "[read]\n/srv/tool/bin\n\n[execute]\n/srv/tool/bin\n")
-    result = run_orchestrator(tmp_path, langs="java", skip_prune=True)
+    result = run_orchestrator(tmp_path, langs="java")
     assert result.returncode == 1, result.stdout + result.stderr
     assert "java: /srv/tool/bin" in result.stdout
 
@@ -283,7 +283,7 @@ def test_one_exercise_s_external_rules_reach_the_base_and_not_its_exercise_file(
     write_layer_artefacts(tmp_path / "path_sets", "one",
                           "[connect]\nallow api.example.org:443\n\n[limits]\ntimeout=60\n")
     write_layer_artefacts(tmp_path / "path_sets", "two", "[read]\n/srv/data\n")
-    result = run_orchestrator(tmp_path, langs="java", skip_prune=True)
+    result = run_orchestrator(tmp_path, langs="java")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "allow api.example.org:443" in (tmp_path / "core" / "BaseLanguage-java.cfg").read_text()
     assert (tmp_path / "core" / "exercises" / "java_one.cfg").read_text() == "[limits]\ntimeout=60\n"
