@@ -35,15 +35,47 @@ refuse_unusable_bind_port() {
   refuse_unusable_port "$host" "$port"
 }
 
-# True when the host is the loopback interface. Under the no-network container an exercise
-# runs in, loopback is the only network there is, so a loopback rule that names no port is
-# tolerated even though Landlock, which enforces ports and not hosts, cannot express it: the
-# container, not Landlock, is its boundary. Any other host with no port is refused instead.
+# True when the host names the loopback interface and nothing else: localhost, one IPv4 address in
+# 127.0.0.0/8 written as four numbers, or ::1 in any spelling, the IPv4-mapped form of a loopback
+# address included, each optionally with the prefix of one address (/32, or /128), never a wider
+# range and never a host name. Under the no-network container an exercise runs in, loopback is the
+# only network there is, so a loopback rule that names no port is tolerated even though Landlock,
+# which enforces ports and not hosts, cannot express it: the container, not Landlock, is its
+# boundary. A host that merely starts like one, 127.0.0.1/1, which the connect guard reads as half
+# the IPv4 space, or 127.evil.example, which a resolver makes any address, would stretch that
+# tolerance to a rule that reaches far beyond loopback, so it is not loopback here and a rule for
+# it with no port is refused instead, as is any other host with no port. Takes the host as
+# parse_network_target left it. Assumes is_ipv4_literal, is_ipv6_literal and expand_ipv6_groups are
+# defined, which phobos-common.sh arranges.
 is_loopback_host() {
-  case "$1" in
-    localhost | ::1 | 127.* ) return 0 ;;
-    * ) return 1 ;;
-  esac
+  local host="$1"
+  local address="${host%%/*}"
+  local prefix=""
+  local -a groups=()
+  local index
+  [[ "$host" == */* ]] && prefix="${host#*/}"
+  if [[ "$address" == "localhost" ]]; then
+    [[ -z "$prefix" ]]
+    return
+  fi
+  if is_ipv4_literal "$address"; then
+    [[ "$address" == 127.* && ( -z "$prefix" || "$prefix" == "32" ) ]]
+    return
+  fi
+  is_ipv6_literal "$address" || return 1
+  [[ -z "$prefix" || "$prefix" == "128" ]] || return 1
+  read -ra groups <<< "$(expand_ipv6_groups "$address")"
+  if (( 16#${groups[5]} == 16#ffff )); then
+    for index in 0 1 2 3 4; do
+      (( 16#${groups[index]} == 0 )) || return 1
+    done
+    (( 16#${groups[6]} / 256 == 127 ))
+    return
+  fi
+  for index in 0 1 2 3 4 5 6; do
+    (( 16#${groups[index]} == 0 )) || return 1
+  done
+  (( 16#${groups[7]} == 1 ))
 }
 
 # Reads a "host port [proto]" allow-list for one transport, writing the concrete ports it names on

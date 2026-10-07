@@ -58,6 +58,34 @@ r="$(run_rules "127.0.0.1 *
 [[ "$(field "$r" 3)" == *"network layer stays off"* ]] && ok "and it says the layer stays off" || bad "and it says the layer stays off" "a log line saying the layer stays off" "$(field "$r" 3)"
 
 echo
+echo "== every spelling of a single loopback address with no port is tolerated =="
+for host in localhost 127.0.0.1 127.7.7.7 127.0.0.1/32 ::1 0:0:0:0:0:0:0:1 0000:0000:0000:0000:0000:0000:0000:0001 ::ffff:127.0.0.1 ::ffff:7f00:1 ::ffff:127.9.9.9/128 ::1/128; do
+  r="$(run_rules "${host} *")"
+  if [[ "$(field "$r" 1)" == 0 && -z "$(field "$r" 2)" && "$(field "$r" 3)" == *"network layer stays off"* ]]; then
+    ok "${host} with no port is loopback, and the layer stays off"
+  else
+    bad "${host} with no port is loopback, and the layer stays off" "exit 0, no args, the layer stays off" "exit $(field "$r" 1): $(field "$r" 3)"
+  fi
+done
+
+echo
+echo "== what only starts like loopback, or is wider than one address, is not loopback =="
+# 127.0.0.1/1 is half the IPv4 space to the connect guard, 127.evil.example is a name a resolver may map anywhere, and a
+# range of loopback is more than one address; none of them may stretch the tolerance for a loopback rule with no port.
+for host in 127.0.0.1/1 127.0.0.0/8 127.0.0.1/31 127.evil.example 127.0.0.1.example.org 128.0.0.1 126.255.255.255 0.0.0.0 ::2 ::1/64 ::/0 ::ffff:128.0.0.1 ::ffff:127.0.0.1/96 ::ffff:0:1 1::1 localhost.example.org; do
+  r="$(run_rules "${host} *")"
+  if [[ "$(field "$r" 1)" == "${PHB_EPOLICY}" && "$(field "$r" 3)" == *"names a host with no port"* && -z "$(field "$r" 2)" ]]; then
+    ok "${host} with no port is refused with PHB-EPOLICY"
+  else
+    bad "${host} with no port is refused with PHB-EPOLICY" "exit ${PHB_EPOLICY} naming the unenforceable host" "exit $(field "$r" 1): $(field "$r" 3)"
+  fi
+done
+r="$(run_rules "127.0.0.1/1 8080")"
+[[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" == "--connect-tcp 8080" ]] && ok "a range of loopback addresses is still fine with a concrete port" || bad "a range of loopback addresses is still fine with a concrete port" "--connect-tcp 8080" "exit $(field "$r" 1): $(field "$r" 2) $(field "$r" 3)"
+r="$(run_rules "127.evil.example 443")"
+[[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" == "--connect-tcp 443" ]] && ok "and a name that starts like loopback is still an ordinary name with a concrete port" || bad "and a name that starts like loopback is still an ordinary name with a concrete port" "--connect-tcp 443" "exit $(field "$r" 1): $(field "$r" 2) $(field "$r" 3)"
+
+echo
 echo "== a non-loopback host with no port is refused =="
 # report() writes the refusal to stderr, which run_rules captures in field 3.
 r="$(run_rules "example.com *")"

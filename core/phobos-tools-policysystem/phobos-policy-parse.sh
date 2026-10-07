@@ -397,6 +397,9 @@ append_connect_rule() {
   refuse_wildcard_host_name "$host"
   refuse_malformed_address "$host" "$port" "$line"
   [[ "$port" == "*" ]] || refuse_unusable_port "$host" "$port"
+  if [[ "$port" == "*" ]] && ! is_loopback_host "$host"; then
+    refuse_cfg "${line@Q} in [connect] names ${host@Q} and no port, and only loopback may name no port: localhost, one address in 127.0.0.0/8, or ::1. A range such as 127.0.0.1/1 reaches far beyond loopback, and a host name is enforced by its port. Name a concrete port"
+  fi
   if [[ "$proto" == "udp" ]]; then
     printf '%s %s %s\n' "$host" "$port" "udp" >>"$rules"
   else
