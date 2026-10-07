@@ -63,8 +63,11 @@ COPY --from=enforcers /build/bin/phobos-seccomp-timeoutsystem ${PHOBOS_HOME}/
 COPY --from=enforcers /build/bin/phobos-seccomp-filesystem ${PHOBOS_HOME}/
 COPY config/BaseLanguage-python.cfg ${PHOBOS_HOME}/
 COPY config/TailPhobos.cfg          ${PHOBOS_HOME}/
-# No config/language-configurations: every Ares 2 programming language configuration there is a
-# Java one, so the Python image has none to import.
+# The programming language configurations are Phobos's own data, one per configuration name an Ares 2
+# policy can give, read only when a run imports such a policy; a run that imports none never reads them.
+# Every one there is a Java one, so a Python exercise has nothing to import, but the language-neutral
+# suites this image is held to import them to prove the import and they need the files beside the scripts.
+COPY config/language-configurations ${PHOBOS_HOME}/language-configurations
 RUN readelf -h ${PHOBOS_HOME}/phobos-landlock-filesystem-and-networksystem > /tmp/wrapper-header.txt \
  && readelf -d ${PHOBOS_HOME}/phobos-landlock-filesystem-and-networksystem > /tmp/wrapper-dynamic.txt \
  && readelf -h ${PHOBOS_HOME}/phobos-seccomp-networksystem > /tmp/guard-header.txt \
