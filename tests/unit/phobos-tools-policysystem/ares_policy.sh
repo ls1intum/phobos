@@ -358,8 +358,25 @@ refused_path() {
 refused_path "a link inside the root to another place inside it" "alias/inside.txt" "$PROJ"
 refused_path "the same, written with a trailing slash on the root and a dot in the path" "./alias/inside.txt" "${PROJ}/"
 ln -s "$PROJ" "${WORK}/root-link"
-refused_path "a link below a project root that is itself a link" "dir/deeper-link/data.txt" "${WORK}/root-link"
-refused_path "the same written with the root's real name while the root is given as a link" "${PROJ}/dir/deeper-link/data.txt" "${WORK}/root-link"
+root_refused() {
+  local title="$1"
+  local value="$2"
+  local root="$3"
+  local needle="$4"
+  local result
+  result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' "      - onThisPathAndAllPathsBelow: \"${value}\"" | parse_result "$root")"
+  if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"must be the real path of a project directory"* && "${result#*|}" == *"${needle}"* && "${result#*|}" == *"policy.yaml', line 11."* ]]; then
+    ok "refused at its line: ${title}"
+  else
+    bad "refused at its line: ${title}" "status ${PHB_EPOLICY}, must be the real path of a project directory, ${needle}" "$result"
+  fi
+}
+root_refused "a project root that is itself a link" "dir/inside.txt" "${WORK}/root-link" "resolves to '${PROJ}'"
+root_refused "the same for an absolute path written with the root's real name" "${PROJ}/dir/inside.txt" "${WORK}/root-link" "resolves to '${PROJ}'"
+root_refused "a project root that is the root of the file system" "/usr/bin/env" "/" "the root of the file system"
+mkdir -p "${WORK}/real-parent"
+ln -s "${PROJ}" "${WORK}/real-parent/hop"
+root_refused "a project root with a link in the middle of its path" "dir/inside.txt" "${WORK}/real-parent/hop" "resolves to '${PROJ}'"
 ln -s "$PROJ" "${WORK}/alias-of-root"
 refused_path "a path written through a name of the root that is not the operator's, with a link below it" "${WORK}/alias-of-root/dir/deeper-link/data.txt" "$PROJ"
 ln -s "${PROJ}/dir" "${WORK}/outside-link-into-root"
@@ -385,8 +402,6 @@ if [[ -L /bin ]]; then
 else
   skip "paths through the /bin link of the image" "/bin is not a symbolic link in this image"
 fi
-result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' '      - onThisPathAndAllPathsBelow: "dir/inside.txt"' | parse_result "${WORK}/root-link")"
-check "a project root that is itself a link is the operator's statement and is not a link inside it" "${WORK}/root-link/dir/inside.txt |0" "$(field read "$result")|$(field skipped "$result")"
 result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' "      - onThisPathAndAllPathsBelow: \"${WORK}/link-to-outside/data.txt\"" | parse_result)"
 check "a link outside the project root is allowed, and written as written" "${WORK}/link-to-outside/data.txt " "$(field read "$result")"
 result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' '      - onThisPathAndAllPathsBelow: "dir"' | parse_result)"

@@ -453,6 +453,30 @@ ares_expand_placeholders() {
   ares_expanded+="$rest"
 }
 
+# Says why a project root cannot be trusted as the place a policy's paths start from, or says nothing.
+# The project root must be a real project directory: not "/", which would make the whole file system
+# count as the submission's, and not a path that reaches its directory through a symbolic link, which
+# the submission or whoever wrote the link could aim elsewhere. A root that does not exist is left to the
+# callers that refuse it. Prints the reason and returns 0 when the root is unusable, and prints nothing
+# and returns 1 when it is fine. Takes the project root. Assumes GNU realpath, which
+# refuse_missing_realpath has established.
+unreal_project_root_reason() {
+  local project_root="$1"
+  local canonical
+  local resolved
+  canonical="$(realpath --canonicalize-missing --no-symlinks -- "$project_root")"
+  if [[ "$canonical" == "/" ]]; then
+    printf '%s' "it is the root of the file system, which no project directory is"
+    return 0
+  fi
+  resolved="$(realpath -e -- "$project_root" 2>/dev/null)" || return 1
+  if [[ "$resolved" != "$canonical" ]]; then
+    printf '%s' "it reaches its directory through a symbolic link and resolves to ${resolved@Q}"
+    return 0
+  fi
+  return 1
+}
+
 # Refuses an imported path that reaches the project root by any way but its real path. The project root
 # usually holds the submission's checkout, so a link the submission placed there would make the grant land
 # where the link points, which the policy does not say. The path is walked one component at a time, each
@@ -460,11 +484,10 @@ ares_expand_placeholders() {
 # below it, is where the path enters the root: it must resolve to the root itself, under whatever name the
 # path spells it, or be the real path already, and every component after it must be a real directory or
 # file, resolving to exactly its parent plus its own name. A link before that point that leads away from
-# the root, such as /bin to /usr/bin, is not the submission's to place and stays allowed, and so does a
-# project root that is itself a link or has another name: the operator's statement of the root is trusted,
-# and only what lies below it is compared, which assumes that no ancestor of the root is the submission's
-# to write. A project root with a '..' segment is refused, since what lies below it cannot be told from a
-# link. A path that never enters the root, every path when there is no project root, and every path under
+# the root, such as /bin to /usr/bin, is not the submission's to place and stays allowed. The project root
+# itself must be a real directory, which unreal_project_root_reason decides: "/" and a root that reaches
+# its directory through a link are refused, as is a root with a '..' segment, since what lies below it
+# cannot be told from a link. A path that never enters the root, every path when there is no project root, and every path under
 # a project root that does not exist, which no existing path can lie under, is not refused here. The check is made when the specification is built; the residual is
 # stated in SECURITY.md. Takes the absolute path, which exists, the project root, which may be empty, and
 # the value as written for the message. Assumes GNU realpath, which refuse_missing_realpath has
@@ -481,17 +504,17 @@ refuse_link_inside_project_root() {
   local current
   local previous=""
   local entered=0
+  local reason
   local -a components=()
   [[ -n "$project_root" ]] || return 0
   if [[ "/${project_root}/" == */../* ]]; then
     refuse_cfg "the project root ${project_root@Q} holds a '..' segment, so what lies below it cannot be told from a link; give it without one"
   fi
+  if reason="$(unreal_project_root_reason "$project_root")"; then
+    refuse_cfg "the project root ${project_root@Q} must be the real path of a project directory: ${reason}"
+  fi
   resolved_root="$(realpath -e -- "$project_root" 2>/dev/null)" || return 0
   canonical="$(realpath --canonicalize-missing --no-symlinks -- "$path")"
-  if [[ "$resolved_root" == "/" ]]; then
-    entered=1
-    previous="/"
-  fi
   IFS=/ read -ra components <<< "${canonical#/}"
   for component in "${components[@]}"; do
     [[ -n "$component" ]] || continue

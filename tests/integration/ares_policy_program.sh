@@ -272,6 +272,11 @@ for root in relative/root "$WORK/does-not-exist" "" "$PROJ/../other"; do
   run_policy --project-root "$root" --config "$WORK/relative.yaml"
   if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"is not an absolute path to an existing directory"* ]]; then ok "--project-root '${root}' is refused"; else bad "--project-root '${root}' is refused" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
 done
+ln -s "$PROJ" "$WORK/proj-link"
+for root in / "$WORK/proj-link"; do
+  run_policy --project-root "$root" --config "$WORK/relative.yaml"
+  if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"must be the real path of a project directory"* ]]; then ok "--project-root '${root}' is refused as not a real project directory"; else bad "--project-root '${root}' is refused as not a real project directory" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
+done
 mkdir -p "$WORK/spec-parent-empty-root"
 out="$(bash "$CORE_X/phobos.sh" --tail-flags-file "$WORK/tail.flags" --spec-parent "$WORK/spec-parent-empty-root" --project-root "" \
   -nfr -nnr -ntr -nrr --config "$WORK/relative.yaml" -- /bin/true 2>&1)"

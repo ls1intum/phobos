@@ -136,8 +136,9 @@ path without an absolute project root (--project-root, else the tail flags' last
 then the checks of a cfg path, existence included in every section, and then a refusal of a
 path that reaches the project root through a symbolic link, or through a name for the root that
 leads to some other place than the root, so that it resolves to somewhere else than it is written
-(a link before the root that leads away from it stays allowed, and so does a project root that is
-itself a link; a project root with a '..' segment is refused). A row the folded base already
+(a link before the root that leads away from it stays allowed). The project root must be the real
+path of a project directory: "/", a root that reaches its directory through a symbolic link and
+a root with a '..' segment are refused. A row the folded base already
 grants on the same path or an ancestor, both resolved through their symbolic links, is not
 written and is counted in the summary line.
 

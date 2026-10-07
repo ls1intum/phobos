@@ -169,10 +169,15 @@ done
 # is and refused by the import only where a path needs it. A --project-root that was given
 # empty, as an unset variable in a grading script gives it, is refused rather than taken for
 # none, and so is one with a ".." segment, which would name the root differently for a relative
-# path than for ${PROJECT_ROOT}.
+# path than for ${PROJECT_ROOT}, one that is "/" and one that reaches its directory through a
+# symbolic link (unreal_project_root_reason).
 if (( project_root_given )); then
   if [[ "$project_root_option" != /* || ! -d "$project_root_option" || "/${project_root_option}/" == */../* ]]; then
     report "Policy invalid: --project-root ${project_root_option@Q} is not an absolute path to an existing directory without a '..' segment. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  if project_root_reason="$(unreal_project_root_reason "$project_root_option")"; then
+    report "Policy invalid: --project-root ${project_root_option@Q} must be the real path of a project directory: ${project_root_reason}. (PHB-EPOLICY)"
     exit "${PHB_EPOLICY}"
   fi
   project_root="$project_root_option"
