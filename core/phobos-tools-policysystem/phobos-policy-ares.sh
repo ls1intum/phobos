@@ -453,11 +453,43 @@ ares_expand_placeholders() {
   ares_expanded+="$rest"
 }
 
+# Refuses an imported path that lies inside the project root and resolves, through a symbolic link at any of
+# its components below the root, to somewhere else than it is written. The project root usually holds the
+# submission's checkout, so a link the submission placed there would make the grant land where the link
+# points, which the policy does not say. A link outside the project root, such as /bin to /usr/bin, is not
+# the submission's to place and stays allowed, and so does a project root that is itself a link: the
+# operator's statement of the root is trusted, and only what lies below it is compared. With no project
+# root nothing is known to lie inside it, so nothing is refused here. Takes the absolute path, which exists,
+# the project root, which may be empty, and the value as written for the message. Assumes GNU realpath,
+# which refuse_missing_realpath has established, and PARSE_LOCATION naming the value's line, and that it is
+# called plainly, so that a refusal ends the run.
+refuse_link_inside_project_root() {
+  local path="$1"
+  local project_root="$2"
+  local value="$3"
+  local canonical
+  local root
+  local resolved_root
+  local resolved
+  local relative
+  [[ -n "$project_root" ]] || return 0
+  canonical="$(realpath --canonicalize-missing --no-symlinks -- "$path")"
+  root="$(realpath --canonicalize-missing --no-symlinks -- "$project_root")"
+  [[ "$canonical" == "$root" || "$canonical" == "${root%/}/"* ]] || return 0
+  resolved_root="$(realpath -e -- "$project_root" 2>/dev/null)" || refuse_cfg "the project root ${project_root@Q} cannot be resolved"
+  resolved="$(realpath -e -- "$canonical" 2>/dev/null)" || refuse_cfg "onThisPathAndAllPathsBelow ${value@Q} cannot be resolved"
+  relative="${canonical#"$root"}"
+  if [[ "$resolved" != "${resolved_root%/}${relative}" ]]; then
+    refuse_cfg "onThisPathAndAllPathsBelow ${value@Q} lies inside the project root ${project_root@Q}, which the submission can influence, and resolves through a symbolic link to ${resolved@Q}, so the grant would land where the link points and not where the policy says; write the real path"
+  fi
+}
+
 # Sets ares_path to the absolute path an onThisPathAndAllPathsBelow value names, or refuses it: "*",
 # which would mean the whole file system, a backslash, a placeholder that cannot be expanded, a ".."
 # segment, a relative path when the run has no absolute project root, a wildcard character, and a
 # path that does not exist, in every section, because Ares does not say whether a path is a file or
-# a directory and the filesystem layer would create a missing changeable one as an empty file.
+# a directory and the filesystem layer would create a missing changeable one as an empty file, and a
+# path inside the project root that resolves through a symbolic link somewhere else.
 # Takes the value, the project root and the section the row is for. Assumes PARSE_LOCATION names the
 # value's line, and that it is called plainly, so that a refusal ends the run.
 ares_resolve_policy_path() {
@@ -483,6 +515,7 @@ ares_resolve_policy_path() {
   refuse_relative_path "$ares_path" "$section"
   refuse_wildcard_path "$ares_path" "$section"
   refuse_missing_path "$ares_path" "$section"
+  refuse_link_inside_project_root "$ares_path" "$project_root" "$value"
 }
 
 # Whether the folded base already grants this section's right on the imported path: the base's

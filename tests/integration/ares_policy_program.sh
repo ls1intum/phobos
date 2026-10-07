@@ -122,7 +122,11 @@ if spec_has read.paths "$OUTSIDE/data.txt"; then ok "an absolute path outside th
 
 policy link/data.txt read > "$WORK/link.yaml"
 run_policy --tail-flags-file "$WORK/tail.flags" --config "$WORK/link.yaml"
-if spec_has read.paths "$PROJ/link/data.txt"; then ok "a row only lexically under the base, through a symbolic link, is written"; else bad "a row only lexically under the base, through a symbolic link, is written" "present" "$(cat "$SPEC/read.paths")"; fi
+if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"lies inside the project root"* && "$ERR" == *"link.yaml', line 7."* ]]; then ok "a symbolic link inside the project root is refused, with file and line"; else bad "a symbolic link inside the project root is refused, with file and line" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
+ln -s "$OUTSIDE" "$WORK/outside-link"
+policy "$WORK/outside-link/data.txt" read > "$WORK/outside-link.yaml"
+run_policy --tail-flags-file "$WORK/tail.flags" --config "$WORK/outside-link.yaml"
+if [[ "$STATUS" == 0 ]] && spec_has read.paths "$WORK/outside-link/data.txt"; then ok "a link outside the project root is allowed and written as written"; else bad "a link outside the project root is allowed and written as written" "status 0" "${STATUS}: ${ERR}"; fi
 
 policy /usr/bin "read execute" > "$WORK/usrbin.yaml"
 run_policy --config "$WORK/usrbin.yaml"
@@ -223,7 +227,7 @@ hierarchy="$(
 )"
 hierarchy_status=$?
 if (( hierarchy_status == PHB_EPOLICY )) && [[ "$hierarchy" == *"Policy unenforceable"* ]]; then ok "a strict-subset .cfg row beside an Ares policy is still refused by the hierarchy check"; else bad "a strict-subset .cfg row beside an Ares policy is still refused by the hierarchy check" "status ${PHB_EPOLICY}" "${hierarchy_status}: ${hierarchy}"; fi
-for case in "$PROJ/allowed.yaml|$PROJ" "$WORK/link.yaml|$PROJ/link/data.txt"; do
+for case in "$PROJ/allowed.yaml|$PROJ" "$WORK/outside-link.yaml|$WORK/outside-link/data.txt"; do
   yaml="${case%|*}"
   run_policy --tail-flags-file "$WORK/tail.flags" --config "$yaml"
   built="$STATUS"

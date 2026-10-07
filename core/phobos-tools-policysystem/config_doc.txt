@@ -133,7 +133,7 @@ The path is resolved in this order, and refused at the first step that fails: '*
 backslash, a placeholder (${PROJECT_ROOT} is the project root, every other one the value the
 programming language configuration determines on its first use), a '..' segment, a relative
 path without an absolute project root (--project-root, else the tail flags' last --chdir),
-then the checks of a cfg path, existence included in every section. A row the folded base
+then the checks of a cfg path, existence included in every section, and then a refusal of a path inside the project root that resolves through a symbolic link to somewhere else than it is written (a link outside the root stays allowed). A row the folded base
 already grants on the same path or an ancestor, both resolved through their symbolic links,
 is not written and is counted in the summary line.
 

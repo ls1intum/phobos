@@ -325,6 +325,32 @@ printf -- '--foo\n' > "${WORK}/none.flags"
 check "tail flags with no --chdir give nothing" "" "$(tail_flags_working_directory "${WORK}/none.flags")"
 check "absent tail flags give nothing" "" "$(tail_flags_working_directory "${WORK}/absent.flags")"
 
+echo "== a symbolic link inside the project root =="
+# The project root usually holds the submission's checkout, so a link there would redirect a grant. A link outside it,
+# the way /bin is a link to /usr/bin, is not the submission's to place.
+ln -s "$OUTSIDE" "${WORK}/link-to-outside"
+: > "${PROJ}/dir/inside.txt"
+for value in "link/data.txt" "link" "${PROJ}/link/data.txt"; do
+  result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' "      - onThisPathAndAllPathsBelow: \"${value}\"" | parse_result)"
+  if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"lies inside the project root"* && "${result#*|}" == *"through a symbolic link to '${OUTSIDE}"* && "${result#*|}" == *"policy.yaml', line 11."* ]]; then
+    ok "refused at its line: ${value}"
+  else
+    bad "refused at its line: ${value}" "status ${PHB_EPOLICY}, a link inside the project root" "$result"
+  fi
+done
+ln -s "$OUTSIDE" "${PROJ}/dir/deeper-link"
+result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' '      - onThisPathAndAllPathsBelow: "dir/deeper-link/data.txt"' | parse_result)"
+if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"lies inside the project root"* ]]; then ok "a link several components down is refused too"; else bad "a link several components down is refused too" "status ${PHB_EPOLICY}" "$result"; fi
+ln -s "$PROJ" "${WORK}/root-link"
+result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' '      - onThisPathAndAllPathsBelow: "dir/inside.txt"' | parse_result "${WORK}/root-link")"
+check "a project root that is itself a link is the operator's statement and is not a link inside it" "${WORK}/root-link/dir/inside.txt |0" "$(field read "$result")|$(field skipped "$result")"
+result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' "      - onThisPathAndAllPathsBelow: \"${WORK}/link-to-outside/data.txt\"" | parse_result)"
+check "a link outside the project root is allowed, and written as written" "${WORK}/link-to-outside/data.txt " "$(field read "$result")"
+result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' '      - onThisPathAndAllPathsBelow: "/bin/true"' | parse_result "")"
+check "with no project root nothing lies inside it, and /bin/true, through the /bin link of the image, is written" "/bin/true " "$(field read "$result")"
+result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' '      - onThisPathAndAllPathsBelow: "dir"' | parse_result)"
+check "a real path inside the project root is written as it was" "${PROJ}/dir " "$(field read "$result")"
+
 echo "== the covered-entry skip =="
 BASE="${WORK}/base"
 mkdir -p "$BASE"
@@ -335,8 +361,15 @@ check "a row the base covers through an ancestor is not written" "" "$(field rea
 check "and is counted" "1" "$(field skipped "$result")"
 result="$(policy_with '        overwriteAllFiles: false' '        overwriteAllFiles: true' | parse_result "$PROJ" "$BASE")"
 check "a right the base does not grant there is written" "${PROJ}/allowed.txt " "$(field write "$result")"
-result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' '      - onThisPathAndAllPathsBelow: "link/data.txt"' | parse_result "$PROJ" "$BASE")"
-check "a row whose ancestor is only lexical, through a symbolic link, is written" "${PROJ}/link/data.txt " "$(field read "$result")"
+# A link outside the project root to a directory beneath a base row: lexically the imported path is under no base row,
+# but resolved it is under one, so a skip by resolved comparison leaves it out and a lexical one would write it.
+ln -s "${PROJ}/dir" "${WORK}/link-to-covered"
+result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' "      - onThisPathAndAllPathsBelow: \"${WORK}/link-to-covered/inside.txt\"" | parse_result "$PROJ" "$BASE")"
+check "a row reached through a link outside the project root is judged by where it resolves, and left out as covered there" "|1" "$(field read "$result")|$(field skipped "$result")"
+printf '%s\n' "${WORK}/not-covering" > "${BASE}/read.paths"
+result="$(policy_with '      - onThisPathAndAllPathsBelow: "allowed.txt"' "      - onThisPathAndAllPathsBelow: \"${WORK}/link-to-outside/data.txt\"" | parse_result "$PROJ" "$BASE")"
+check "and one that resolves outside every base row is written as written" "${WORK}/link-to-outside/data.txt |0" "$(field read "$result")|$(field skipped "$result")"
+printf '%s\n%s\n' "$PROJ" "${WORK}/missing" > "${BASE}/read.paths"
 mkdir -p "${WORK}/missing-parent-test"
 : > "${WORK}/missing-parent-test/f"
 # Resolved without asking that it exists, this base row would name the directory that holds the imported file.
