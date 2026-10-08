@@ -688,17 +688,17 @@ else
   fi
   stop_haproxy_child "$unres_pid"
 
-  guard_with_log -- bash -c 'for descriptor in /proc/self/fd/*; do [[ "${descriptor##*/}" -gt 2 ]] && readlink "$descriptor"; done' \
-    > "$WORK/log.fds.out" 2>&1 || true
-  if [[ "$(grep -c '^pipe:' "$WORK/log.fds.out")" == 0 ]]; then
-    ok "the command inherits no descriptor of the pipe, nor any other pipe"
-  else
-    bad "the command inherits no descriptor of the pipe" "$(cat "$WORK/log.fds.out")"
-  fi
   # Only the broker's pipe is ever written to below, found by its identity: any other descriptor a
   # step holds, a CI runner's own channel among them, must not receive a forged line.
   PIPE_ID="$(readlink "/proc/$$/fd/${broker_log}")"
   export PIPE_ID
+  guard_with_log -- bash -c 'for descriptor in /proc/self/fd/*; do readlink "$descriptor"; done' \
+    > "$WORK/log.fds.out" 2>&1 || true
+  if [[ "$(grep -cxF -- "$PIPE_ID" "$WORK/log.fds.out")" == 0 ]]; then
+    ok "the command inherits no descriptor of the broker's pipe (a CI runner's own pipes, which any step holds, are not counted)"
+  else
+    bad "the command inherits no descriptor of the broker's pipe" "$(cat "$WORK/log.fds.out")"
+  fi
   guard_with_log -- bash -c 'held=0
     for descriptor in /proc/self/fd/*; do
       if [[ "$(readlink "$descriptor")" == "$PIPE_ID" ]]; then held=$((held + 1)); echo "PHB-BROKER refuse PR 666f72676564 1.2.3.4 80" >&"${descriptor##*/}"; fi
