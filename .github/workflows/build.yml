@@ -1,8 +1,8 @@
-# Builds the images this repository can build, and tests the one it ships.
+# Builds the images this repository can build, and tests the ones it ships.
 #
-# The run-phase image is the artefact: it is where the four C products are compiled, in a
-# stage of their own, and it is what an exercise actually runs in. It is built here so
-# that the acceptance suites run against it on every change rather than by hand.
+# The run-phase images, one per language, are the artefact: each is where the four C products are
+# compiled, in a stage of their own, and it is what an exercise actually runs in. They are built
+# here so that the acceptance suites run against them on every change rather than by hand.
 #
 # The image is built and exercised in ONE job on purpose. Loading an image populates
 # the Docker daemon of that runner and no other, so a separate acceptance job would
@@ -90,12 +90,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: prune java
-            slug: prune-java
-            context: docker/prune_phase/java
-          - name: prune python
-            slug: prune-python
-            context: docker/prune_phase/python
           - name: prune orchestrate
             slug: prune-orchestrate
             context: docker/prune_phase/orchestrate
@@ -109,8 +103,8 @@ jobs:
       # only actions it owns and actions GitHub publishes, so every third-party one is
       # refused before the run starts. Docker and buildx are on the runner already.
       #
-      # The run-phase image is deliberately absent: the job below builds it and then
-      # tests that exact image, and building it here as well would prove nothing twice.
+      # The run-phase images are deliberately absent: the jobs below build them and then
+      # test those exact images, and building them here as well would prove nothing twice.
       - name: Build
         env:
           # The weekly run is the one that has to notice a moved base image or a changed
@@ -279,7 +273,7 @@ jobs:
             phobos-run-phase:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/network-cleanup-test.sh
 
-      # The protection matrix: eleven suites that hold the whole of phobos.sh to what it promises, each
+      # The protection matrix: twelve suites that hold the whole of phobos.sh to what it promises, each
       # in a step of its own so one run names every suite that broke. --memory and --pids-limit are
       # cgroup limits, not privileges, so the ordinary-container rule above still holds.
 
@@ -443,6 +437,119 @@ jobs:
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
             -v "${PWD}:/repo:ro" phobos-prune-layers:ci bash /repo/tests/integration/layer_prune_egress.sh
+
+  # The run-phase image for Python, built FROM the official Python image rather than Artemis's
+  # ls1tum/artemis-python-docker (see its Dockerfile), on native runners for both architectures as
+  # the Java image is. It is held to every suite that does not need Java: the language-neutral
+  # acceptance suites and the whole protection matrix, which replace the image's base with their
+  # own whatever language it is for. The four acceptance suites that compile Java probes or run
+  # Maven (run-tests, extra-tests, phase-test, shipped-policy-test) stay with the Java job. The layer
+  # pruner is then built on this image and prunes the fixture on it, so the pruner is proven on the
+  # image it prunes Python exercises in.
+  run-phase-python:
+    name: Build the Python run-phase image (${{ matrix.platform }}) and hold it to the language-neutral suites
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 100
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: amd64
+            runner: ubuntu-26.04
+          - platform: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assemble the build context
+        run: .github/scripts/assemble-run-phase-context.sh "${RUNNER_TEMP}/run-phase-context"
+
+      - name: Build the Python run-phase image
+        id: build
+        env:
+          FRESH: ${{ github.event_name == 'schedule' && '--pull --no-cache' || '' }}
+        run: |
+          # shellcheck disable=SC2086
+          docker build ${FRESH} \
+            -f docker/run_phase/python/Dockerfile \
+            -t phobos-run-phase-python:ci \
+            "${RUNNER_TEMP}/run-phase-context"
+
+      # The same ordinary containers as the Java job: --network none, and no --privileged, no
+      # --cap-add, no --security-opt. The cgroup limits the Java job gives the matrix are given to
+      # the acceptance suites here too, which only bounds them. One step per suite would repeat the
+      # Java job's seventeen; a loop that names every suite it runs, and fails when any one does,
+      # says the same.
+      - name: The language-neutral acceptance suites and the protection matrix
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          failed=0
+          for suite in \
+              landlock-filesystem-and-networksystem-acceptance/network-port-test.sh \
+              landlock-filesystem-and-networksystem-acceptance/bind-port-test.sh \
+              landlock-filesystem-and-networksystem-acceptance/scoping-test.sh \
+              landlock-filesystem-and-networksystem-acceptance/seccomp-networksystem-test.sh \
+              landlock-filesystem-and-networksystem-acceptance/network-cleanup-test.sh \
+              protection-matrix/filesystem.sh protection-matrix/network.sh protection-matrix/timeout.sh \
+              protection-matrix/resources.sh protection-matrix/combinations.sh protection-matrix/cli.sh \
+              protection-matrix/lifecycle.sh protection-matrix/policy-syntax.sh \
+              protection-matrix/network-edge.sh protection-matrix/filesystem-edge.sh \
+              protection-matrix/resources-edge.sh protection-matrix/reporting.sh; do
+            echo "::group::${suite}"
+            if ! docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+                phobos-run-phase-python:ci bash "/tests/integration/${suite}"; then
+              failed=1
+              echo "::error::${suite} failed"
+            fi
+            echo "::endgroup::"
+          done
+          exit "${failed}"
+
+      - name: Build the prune image on the Python run-phase image
+        id: prune-build
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase-python:ci \
+            -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers-python:ci .
+
+      - name: The prune image's observer on the Python image sees what the layers refuse, and only that
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}/tests:/tests:ro" -v "${PWD}/var/tmp/helpers:/var/tmp/helpers:ro" \
+            phobos-prune-layers-python:ci bash /tests/integration/layer_prune_observer.sh
+
+      - name: The layer pruner on the Python image derives a policy that holds in both directions
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        timeout-minutes: 50
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci bash /repo/tests/integration/layer_prune.sh
+
+      - name: The layer pruner on the Python image keeps exactly the declared hosts a build needs
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        timeout-minutes: 30
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci bash /repo/tests/integration/layer_prune_egress.sh
+
+      # The Python reference exercise, pruned as Compose's prune_python prunes it: pytest under the
+      # layers, and every stage ending in a policy rather than an abort.
+      - name: The layer pruner prunes the Python reference exercise on the Python image
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        timeout-minutes: 30
+        run: |
+          output="$(mktemp -d)"
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}/var/tmp/testing-dir:/srv/phobos-prune-exercises:ro" \
+            -v "${PWD}/var/tmp/helpers:/var/tmp/helpers:ro" -v "${output}:/var/tmp/path_sets" \
+            --entrypoint python3 phobos-prune-layers-python:ci /var/tmp/helpers/layer_prune/main.py python
+          test -s "${output}/python_python-reference.cfg"
 
   # Mutation testing installs clang and mull into a container and then runs the suite
   # once per mutant. It runs on every change like the other jobs, and a run that does

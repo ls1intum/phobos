@@ -22,9 +22,10 @@ FROM ${RUN_PHASE_IMAGE}
 
 # strace is the observer (ptrace, no privileges); python3 runs the pruner. DL3008 is ignored
 # repository-wide in .hadolint.yaml, for the reason given there.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 \
-    strace \
+# On a run-phase image that has a python3 already (the Python one), none is added beside it, so the
+# prune image differs from the image it was built on by the observer and the probe alone.
+RUN apt-get update && apt-get install -y --no-install-recommends strace \
+ && if ! command -v python3 > /dev/null; then apt-get install -y --no-install-recommends python3; fi \
  && rm -rf /var/lib/apt/lists/*
 
 RUN rm -f "${PHOBOS_HOME}"/Base*.cfg

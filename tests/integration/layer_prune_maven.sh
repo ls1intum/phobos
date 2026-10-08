@@ -152,7 +152,9 @@ logs = sorted(glob.glob("/var/tmp/layer-prune-logs/run-*-direct.log"))
 text = open(logs[0], errors="replace").read() if logs else ""
 print("ares-log", bool(re.search(r"aspectj[^\n]*:compile", text)) and "copy-ares-runtime-jars" in text)
 checks = [entry for entry in record["log"] if entry["stage"] == "containment"][0]["checks"]
-print("containment", len(checks), "refused" if all(check["refused"] or check.get("unchecked") for check in checks) else "passed")
+refused = sum(1 for check in checks if check["refused"])
+unchecked = sum(1 for check in checks if check.get("unchecked"))
+print("containment", len(checks), "refused" if refused >= 1 and refused + unchecked == len(checks) else "passed", refused, unchecked)
 under_root = {path: sections for path, sections in policy.fs.items() if path == "/root" or path.startswith("/root/")}
 not_files = sorted(path for path in under_root if not os.path.isfile(path))
 print("root-grants", len(under_root), "not-files", not_files)
@@ -174,10 +176,10 @@ PY
     "baseline 3 3" "$(grep '^baseline' <<<"${summary}")"
   check "the baseline log shows the weaving step and the copy of the Ares runtime jars" "ares-log True" \
     "$(grep '^ares-log' <<<"${summary}")"
-  if grep -q '^containment [1-9][0-9]* refused' <<<"${summary}"; then
-    ok "every containment check was refused"
+  if grep -q '^containment [1-9][0-9]* refused [1-9][0-9]* [0-9]*$' <<<"${summary}"; then
+    ok "every containment check was refused or is named as unchecked, and at least one was refused"
   else
-    bad "every containment check was refused" "${summary}"
+    bad "every containment check was refused or is named as unchecked, and at least one was refused" "${summary}"
   fi
   if grep -q "^root-grants [1-9][0-9]* not-files \['/root/.m2/repository'\]" <<<"${summary}"; then
     ok "under /root only the pinned repository is a directory grant, every other grant a single file that exists"
@@ -206,7 +208,7 @@ PY
 check_merged_and_verified() {
   [[ -f "${CFG}" ]] || { bad "the merged configuration can be checked" "no policy was written"; return; }
   if python3 "${REPO}/docker/prune_phase/orchestrate/orchestrate.py" --langs "${KEY}" --path-dir "${OUTPUT}" \
-      --core-dir "${CORE}" --helpers-dir "${HELPERS}" --skip-prune > "${WORK}/merge.log" 2>&1 \
+      --core-dir "${CORE}" --helpers-dir "${HELPERS}" > "${WORK}/merge.log" 2>&1 \
       && [[ -f "${CORE}/BaseLanguage-${KEY}.cfg" && -f "${CORE}/exercises/${KEY}_${EXERCISE}.cfg" ]]; then
     ok "the orchestrator merges the artefact into BaseLanguage-${KEY}.cfg and the exercise's own file"
   else

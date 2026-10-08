@@ -2,8 +2,8 @@
 
 An exit status is not a result here (AGENTS.md): Gradle reports NO-SOURCE and Maven skips its tests
 with status zero, so two runs agree only when the same tests ran with the same outcomes. The patterns
-are the Bubblewrap pruner's (`var/tmp/pruning/detect_minimal_fs.sh`) and Maven's two lines measured
-in A.8 of the prune-on-the-layers plan, each named once here.
+are the ones the retired Bubblewrap pruner used, Maven's two lines measured in A.8 of the
+prune-on-the-layers plan and pytest's summary for a run that collected nothing, each named once here.
 """
 
 from __future__ import annotations
@@ -25,12 +25,16 @@ SIGNAL_STATUS_BASE = 128
 DEFAULT_REPORT_GLOBS = ("build/test-results/**/*.xml", "target/surefire-reports/*.xml")
 # Lines that say no test source was compiled or no test ran although the status was zero: Gradle's
 # NO-SOURCE on a Java or Kotlin compile task or the test task, of the root project or a subproject,
-# Maven's "No tests to run." or "No tests to run!" and its "Tests are skipped.". A NO-SOURCE on
-# another task, such as processResources, is ordinary.
+# Maven's "No tests to run." or "No tests to run!" and its "Tests are skipped.", and pytest's summary
+# "no tests ran in <seconds>s", which it prints with status 5. A pytest run whose tests were all
+# deselected says "deselected" instead and is not matched: its report names no test, so the baseline
+# aborts on it as a run that ran no tests all the same. A NO-SOURCE on another task, such as
+# processResources, is ordinary.
 NO_SOURCE_PATTERNS = (
     r"> Task (?::[\w.-]+)*:(?:compileJava|compileTestJava|compileKotlin|compileTestKotlin|test) NO-SOURCE",
     r"No tests to run",
     r"Tests are skipped\.",
+    r"no tests ran in [0-9.]+s",
 )
 # Maven's line for a pinned artefact the offline local repository lacks. Only the unsandboxed
 # baseline treats it as an abort; under the layers a refused file there can surface as the same line.

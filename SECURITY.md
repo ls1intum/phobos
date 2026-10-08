@@ -23,7 +23,8 @@ rest exists to take privileges away. None of the following is a vulnerability.
   raw system call cannot step around, enforcing the `[connect]` allow-list by host and port.
   It reads the destination address of the connect, so it holds a rule that names an IP literal
   to that exact address, the name `localhost` to the loopback range (every `127.x.x.x` address and
-  `::1`), a rule that names an IP range to that network, and a rule that names a DNS hostname it cannot tie to an address there to its port
+  `::1`; an IPv4-mapped IPv6 destination such as `::ffff:127.0.0.1` counts as the IPv4 address it
+  maps), a rule that names an IP range to that network, and a rule that names a DNS hostname it cannot tie to an address there to its port
   alone. Such a hostname rule's host is enforced by the egress broker, an HAProxy the network
   layer starts automatically for such a rule and that checks the TLS host name the guard cannot
   see; the network layer refuses an exact-name rule when no resolver is given, so an instructor
@@ -60,16 +61,15 @@ rest exists to take privileges away. None of the following is a vulnerability.
   the guard keeps. A name written in two cases is resolved once. External
   egress in general is still a container started with `--network none`, and resolving needs a
   networked one, so a name in a udp rule assumes the same posture as one in a tcp rule.
-- `docker/prune_phase/` runs the discovery phase, which deliberately breaks a build over and
-  over: it hides a directory, runs the tests, and concludes from the failure that the
-  directory was needed. Its orchestrator therefore starts processes and interprets their
-  failures, and its output becomes the allow-list the sandbox later trusts. The discovery
-  phase uses Bubblewrap to hide directories; the sandbox an exercise runs in does not.
-  The layer pruner beside it (`docker/prune_phase/layers/`, `var/tmp/helpers/layer_prune/`)
-  runs the reference under the grading layers instead and records their refusals with
-  `strace`. strace and the containment probe are installed in the prune image only, never in
-  the run-phase image a submission is graded in, and the prune container needs no privilege.
-- The Dockerfiles under `docker/` extend the Artemis test images and compile the C products.
+- `docker/prune_phase/` runs the discovery phase, which deliberately runs a reference under a
+  policy that refuses too much, over and over: the layer pruner (`docker/prune_phase/layers/`,
+  `var/tmp/helpers/layer_prune/`) records the grading layers' refusals with `strace` and grants
+  what each refusal proves, and its orchestrator merges the result into the allow-list the
+  sandbox later trusts. strace and the containment probe are installed in the prune image only,
+  never in the run-phase image a submission is graded in, and the prune container needs no
+  privilege. Nothing in either phase uses Bubblewrap any more.
+- The Dockerfiles under `docker/` extend the Artemis Java test image and, for Python, the official
+  Python image, and compile the C products.
   The run-phase image needs no user namespaces, no added capabilities and no security
   options: Landlock, the connect guard and the timeout are all self-imposed by the
   unprivileged process. The container the grader starts should add `--network none` and

@@ -289,3 +289,43 @@ def test_a_seed_row_on_a_pinned_read_root_is_refused_before_any_run(scratch):
     found.pinned_roots[target] = "pinned"
     with pytest.raises(search.PruneAbort, match="pinned read root"):
         stages.check_pinned_grants(found, started)
+
+
+def test_a_path_is_below_a_seed_by_components_and_not_by_text(scratch):
+    found = pruning_for(scratch, "java.cfg")
+    found.seeded = {"/tmp": frozenset({"write"})}
+    assert stages.at_or_below_seed(found, "/tmp")
+    assert stages.at_or_below_seed(found, "/tmp/tools")
+    assert not stages.at_or_below_seed(found, "/tmp2")
+    assert not stages.at_or_below_seed(found, "/")
+    assert not stages.at_or_below_seed(pruning_for(scratch, None), "/tmp/tools")
+
+
+def test_a_directory_below_a_seeded_one_that_holds_its_rights_is_not_climbed_from(scratch):
+    found = pruning_for(scratch, "java.cfg")
+    target = str(scratch / "scratch")
+    found.pristine = generalise.Snapshot(existing=frozenset({target, target + "/sub"}),
+                                         directories=frozenset({target, target + "/sub"}), scanned=("/",))
+    found.seeded = {target: frozenset({"write", "create"})}
+    below = cfgfile.Policy(fs={target: frozenset({"write", "create"}), target + "/sub": frozenset({"write", "create"})},
+                           connect=(), bind=(), limits={})
+    assert target not in stages.snapshot_for(found, below).scanned
+    assert target + "/sub" not in stages.snapshot_for(found, below).scanned, "the hierarchy rule copies the rights down"
+    elsewhere = cfgfile.Policy(fs={target + "/sub": frozenset({"write"})}, connect=(), bind=(), limits={})
+    found.seeded = {}
+    assert target + "/sub" in stages.snapshot_for(found, elsewhere).scanned, "without a seed it is climbed from as before"
+
+
+def test_rights_a_directory_holds_only_because_the_seed_has_them_on_its_ancestor_say_so(scratch):
+    found = pruning_for(scratch, "java.cfg")
+    target = str(scratch / "scratch")
+    found.seed_name = "java.cfg"
+    found.seeded = {target: frozenset({"read", "write"})}
+    policy = cfgfile.Policy(fs={target: frozenset({"read", "write"}), target + "/tools": frozenset({"read", "write", "create"})},
+                            connect=(), bind=(), limits={})
+    comments = stages.seed_comments(found, policy).comments
+    assert comments[target].startswith(f"seed: [read], [write] on {target} come from")
+    assert comments[target + "/tools"] == (f"seed: [read], [write] on {target}/tools are the java.cfg seed's rights on "
+                                           f"{target}, copied down by the hierarchy rule")
+    unrelated = cfgfile.Policy(fs={target + "/tools": frozenset({"create"})}, connect=(), bind=(), limits={})
+    assert stages.seed_comments(found, unrelated).comments == {}, "a right the seed does not have is not blamed on it"

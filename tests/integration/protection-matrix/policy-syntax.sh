@@ -230,14 +230,33 @@ ares_accepted "a loopback network entry with a port" "net 127.0.0.1 80"
 ares_accepted "localhost on every port" "net localhost 0"
 ares_accepted "a timeout" "timeout 30000"
 # The shipped configuration determines these three from the image: the JDK the java on the PATH belongs to, the password
-# database's home of the user running the suite, and /tmp.
-ares_accepted "the shipped configuration's three placeholders" 'fs ${java.home}/lib r' 'fs ${user.home} r' 'fs ${java.io.tmpdir} r'
-run_pm --debug --config "$PM/cfg/syntax.yaml" -- "$P" cwd
-if grep -q "\${java.home} is $(dirname "$(dirname "$(readlink -f "$(command -v java)")")")" "$PM_ERR" && grep -q "\${java.io.tmpdir} is /tmp" "$PM_ERR" \
-  && grep -q "\${user.home} is $(getent passwd "$(id -u)" | cut -d: -f6)" "$PM_ERR"; then
-  ok "and each resolves to what the image and the password database say"
+# database's home of the user running the suite, and /tmp. An image without a JDK, such as the Python one, cannot determine
+# the first, and a policy that uses it is refused there, which is what the configuration is for; so the first is held to its
+# value only where java is installed, and the other two everywhere.
+if command -v java > /dev/null 2>&1; then
+  ares_accepted "the shipped configuration's three placeholders" 'fs ${java.home}/lib r' 'fs ${user.home} r' 'fs ${java.io.tmpdir} r'
+  run_pm --debug --config "$PM/cfg/syntax.yaml" -- "$P" cwd
+  if grep -q "\${java.home} is $(dirname "$(dirname "$(readlink -f "$(command -v java)")")")" "$PM_ERR" && grep -q "\${java.io.tmpdir} is /tmp" "$PM_ERR" \
+    && grep -q "\${user.home} is $(getent passwd "$(id -u)" | cut -d: -f6)" "$PM_ERR"; then
+    ok "and each resolves to what the image and the password database say"
+  else
+    bad "the shipped configuration's placeholders resolve to what the image says" "$(pm_describe)"
+  fi
 else
-  bad "the shipped configuration's placeholders resolve to what the image says" "$(pm_describe)"
+  ares_accepted "the shipped configuration's two placeholders an image without a JDK can determine" 'fs ${user.home} r' 'fs ${java.io.tmpdir} r'
+  run_pm --debug --config "$PM/cfg/syntax.yaml" -- "$P" cwd
+  if grep -q "\${java.io.tmpdir} is /tmp" "$PM_ERR" && grep -q "\${user.home} is $(getent passwd "$(id -u)" | cut -d: -f6)" "$PM_ERR"; then
+    ok "and each resolves to what the image and the password database say"
+  else
+    bad "the shipped configuration's placeholders resolve to what the image says" "$(pm_describe)"
+  fi
+  jdk_config="$(ares_cfg syntax 'fs ${java.home}/lib r')"
+  run_pm --config "$jdk_config" -- "$P" cwd
+  if ! started && (( PM_STATUS == PHB_EPOLICY )) && grep -q 'cannot be determined' "$PM_ERR"; then
+    ok "refused with ${PHB_EPOLICY}: a path that uses the JDK placeholder in an image without a JDK"
+  else
+    bad "a path that uses the JDK placeholder in an image without a JDK is refused, since it cannot be determined" "$(pm_describe)"
+  fi
 fi
 ares_refused "version 2" "PolicyVersion: 1" "PolicyVersion: 2"
 ares_refused "an unknown configuration" "$PM_ARES_CONFIGURATION" "NO_SUCH_CONFIGURATION"

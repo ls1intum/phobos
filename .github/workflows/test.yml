@@ -1,4 +1,4 @@
-# Runs the suites that need only a compiler, a shell, a Python and Bubblewrap, and no
+# Runs the suites that need only a compiler, a shell and a Python, and no
 # container, no kernel feature and no elevated permission. That is the whole point of this
 # workflow: the checks that cost seconds run on every pull request, so the ones that need
 # the run-phase image are built and argued about separately, in build.yml.
@@ -30,21 +30,16 @@ jobs:
         with:
           persist-credentials: false
 
-      # Both prune images name run_minimal_fs_all.sh as their entry point, and it in turn
-      # refuses to start unless detect_minimal_fs.sh is executable. A mode lost in a commit
-      # therefore stops the prune phase before it runs a line, and nothing else here would
-      # notice, because every suite invokes its script through `bash`.
-      #
-      # The layers under core/ are checked for the same reason. phobos.sh runs
-      # phobos-policysystem.sh and every layer as a program rather than through `bash`, and the
-      # README and CLAUDE.md tell a reader to call core/phobos.sh directly, so a mode lost
-      # here ends a run with exit 126 outside the image, which sets the modes itself.
+      # Every suite invokes its script through `bash`, so a mode lost in a commit would go
+      # unnoticed. phobos.sh runs phobos-policysystem.sh and every layer as a program rather
+      # than through `bash`, and the README and CLAUDE.md tell a reader to call core/phobos.sh
+      # directly, so a mode lost here ends a run with exit 126 outside the image, which sets
+      # the modes itself.
       # phobos-common.sh and phobos-constants.sh are absent on purpose: they are sourced,
       # never run, and a mode on them would suggest otherwise.
       - name: The entry points are executable
         run: |
-          for script in var/tmp/pruning/run_minimal_fs_all.sh var/tmp/pruning/detect_minimal_fs.sh \
-                        core/phobos.sh core/phobos-policysystem.sh core/phobos-filesystem.sh \
+          for script in core/phobos.sh core/phobos-policysystem.sh core/phobos-filesystem.sh \
                         core/phobos-networksystem.sh core/phobos-resourcesystem.sh core/phobos-timeoutsystem.sh \
                         var/tmp/helpers/layer_record/phobos-record; do
             if [ ! -x "${script}" ]; then
@@ -78,10 +73,8 @@ jobs:
           done < <(find tests -name '*.sh' -type f | sort)
           exit "${missing}"
 
-      # What the suites here need beyond the runner's own image. Bubblewrap is what the
-      # discovery phase measures with, so without it tests/integration/prune_sandbox.sh skips exactly
-      # the checks that exercise the pruner; gcc-14 is the compiler the C probes of the
-      # network suites are pinned to, and without it those suites skip themselves whole;
+      # What the suites here need beyond the runner's own image. gcc-14 is the compiler the C
+      # probes of the network suites are pinned to, and without it those suites skip themselves whole;
       # haproxy is the egress broker tests/integration/haproxy_broker.sh drives and the inbound filter
       # tests/integration/haproxy_inbound.sh drives, and openssl is the client
       # that sends it a ClientHello with a host name; that suite skips without either.
@@ -90,7 +83,7 @@ jobs:
       - name: Install what the suites need
         run: |
           sudo apt-get update -qq
-          sudo apt-get install --yes --no-install-recommends bubblewrap gcc-14 haproxy openssl
+          sudo apt-get install --yes --no-install-recommends gcc-14 haproxy openssl
 
       # Each suite reports its own passed, failed and skipped counts and exits non-zero on
       # a failure, so they are separate steps: one run then names every suite that broke
@@ -246,26 +239,6 @@ jobs:
       - name: The filesystem policy
         if: ${{ !cancelled() }}
         run: bash tests/integration/filesystem_policy.sh
-
-      # Stubs stand in for the pruner and the emitter, so this needs no bubblewrap and
-      # no exercises. It covers the two ways the prune phase can quietly produce less
-      # than it should: finishing successfully with artefacts missing, and leaving an
-      # earlier run's artefacts in place.
-      - name: What the prune phase produces
-        if: ${{ !cancelled() }}
-        run: bash tests/integration/prune_producer.sh
-
-      # The real pruner, against a fixture tree. How it classifies a build's outcome, the
-      # NO-SOURCE rule among it, is checked through a bwrap that builds no sandbox, so those
-      # checks run anywhere. The checks that need Bubblewrap itself are the ones that
-      # exercise the discovery phase as it really measures, so PHOBOS_REQUIRE_BWRAP turns
-      # their skip into a failure here: a runner that cannot build a sandbox is a broken
-      # runner, not a reason to report a pass.
-      - name: What the pruner concludes from a build
-        if: ${{ !cancelled() }}
-        env:
-          PHOBOS_REQUIRE_BWRAP: "1"
-        run: bash tests/integration/prune_sandbox.sh
 
   python:
     name: Python helpers

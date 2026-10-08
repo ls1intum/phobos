@@ -73,6 +73,16 @@ def load(name: str, directory: str, protected: Iterable[str]) -> cfgfile.Policy:
     return policy
 
 
+# The comment above a path that holds rights of a seeded ancestor only because the hierarchy rule copies them down.
+INHERITED_COMMENT = "seed: {sections} on {path} are the {name} seed's rights on {ancestor}, copied down by the hierarchy rule"
+
+
+def comment_inherited(name: str, ancestor: str, path: str, sections: Iterable[str]) -> str:
+    """The comment above a path beneath a seeded one: which seeded rights it holds, and that they are copied down."""
+    return INHERITED_COMMENT.format(sections=", ".join(f"[{section}]" for section in sorted(sections)), path=path,
+                                    name=name, ancestor=ancestor)
+
+
 def comment_for(name: str, path: str, sections: Iterable[str]) -> str:
     """The comment above a seed path: the sections of the seed that survived, and that they came from it."""
     return SEED_COMMENT.format(sections=", ".join(f"[{section}]" for section in sorted(sections)), path=path, name=name)
