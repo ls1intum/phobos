@@ -5,7 +5,7 @@ connections completed (a non-blocking connect answers EINPROGRESS and is judged 
 afterwards), which ports a process of the session held (only an explicit bind or a listen makes one),
 and the names behind the addresses (the TLS host name of the ClientHello, DNS answers, the container's
 hosts file). Rules follow plan A.8.2. Everything observed is untrusted text: a host name becomes a rule
-only when names.valid_hostname accepts it, and every comment is escaped when the policy is rendered.
+only when names.rule_hostname accepts it, and every comment is escaped when the policy is rendered.
 """
 
 from __future__ import annotations
@@ -111,6 +111,7 @@ def rules(sessions: list[NetworkNeeds], hosts: dict[str, str]) -> NetworkRules:
     needs the session's name again. Assumes the sessions were recorded in containers of one image.
     """
     merged = _merge(sessions)
+    owned = _owned(sessions)
     notes: list[str] = []
     rejected: set[str] = set()
     reached: list[Endpoint] = []
@@ -128,7 +129,7 @@ def rules(sessions: list[NetworkNeeds], hosts: dict[str, str]) -> NetworkRules:
         if endpoint.transport == "udp" and endpoint.port == DNS_PORT:
             lookups.append(endpoint)
         elif kind is not None:
-            _loopback(endpoint, kind, merged, wildcards, exact)
+            _loopback(endpoint, kind, owned, wildcards, exact)
         elif endpoint.transport == "tcp":
             rule, by_address = _external_stream(endpoint, merged, hosts, rejected)
             connect.setdefault(rule.text, rule)
@@ -158,7 +159,6 @@ def _merge(sessions: list[NetworkNeeds]) -> NetworkNeeds:
         merged.incomplete |= session.incomplete
         merged.sent |= session.sent
         merged.unsent |= session.unsent
-        merged.held |= session.held
         merged.binds |= session.binds
         merged.accepted |= session.accepted
         for destination, name in session.server_names.items():
@@ -170,10 +170,23 @@ def _merge(sessions: list[NetworkNeeds]) -> NetworkNeeds:
     return merged
 
 
-def _loopback(endpoint: Endpoint, kind: str, merged: NetworkNeeds, wildcards: dict[str, set[str]],
+def _owned(sessions: list[NetworkNeeds]) -> set[tuple[str, int, str]]:
+    """Every loopback destination (address, port, transport) that a session reached on a port it held itself.
+
+    A port one session held does not make another session's connection to the same number the
+    session's own server: that one is a service outside it.
+    """
+    owned: set[tuple[str, int, str]] = set()
+    for session in sessions:
+        owned.update((address, port, "tcp") for address, port in session.connected if ("tcp", port) in session.held)
+        owned.update((address, port, "udp") for address, port in session.sent if ("udp", port) in session.held)
+    return owned
+
+
+def _loopback(endpoint: Endpoint, kind: str, owned: set[tuple[str, int, str]], wildcards: dict[str, set[str]],
               exact: list[tuple[str, str, cfgfile.Rule]]) -> None:
     """Sorts a loopback destination into a wildcard of its transport or an exact rule with its comment."""
-    if (endpoint.transport, endpoint.port) in merged.held:
+    if (endpoint.address, endpoint.port, endpoint.transport) in owned:
         wildcards.setdefault(endpoint.transport, set()).add(kind)
         return
     rule = cfgfile.Rule(network.exact_loopback(endpoint.address, endpoint.port, endpoint.transport),
@@ -201,7 +214,7 @@ def _external_stream(endpoint: Endpoint, merged: NetworkNeeds, hosts: dict[str, 
     """The rule for an external stream destination, and whether it is by address (True) or by name (False)."""
     seen = merged.server_names.get((endpoint.address, endpoint.port))
     if seen is not None:
-        name = names.valid_hostname(seen)
+        name = names.rule_hostname(seen)
         if name is not None:
             return cfgfile.Rule(f"allow {name}:{endpoint.port}", TLS_NAME_COMMENT), False
         rejected.add(seen)
@@ -214,7 +227,7 @@ def _external_datagram(endpoint: Endpoint, merged: NetworkNeeds, hosts: dict[str
     """The rule for an external datagram destination, and whether it names a host."""
     given = merged.dns_names.get(endpoint.address) or hosts.get(endpoint.address)
     if given is not None:
-        name = names.valid_hostname(given)
+        name = names.rule_hostname(given)
         if name is not None:
             return cfgfile.Rule(f"allow {name}:{endpoint.port} udp", UDP_COMMENT), True
         rejected.add(given)
@@ -226,7 +239,7 @@ def _address_comment(address: str, merged: NetworkNeeds, hosts: dict[str, str], 
     given = merged.dns_names.get(address) or hosts.get(address)
     if given is None:
         return ADDRESS_COMMENT
-    if names.valid_hostname(given) is None:
+    if names.rule_hostname(given) is None:
         rejected.add(given)
     return f"{ADDRESS_COMMENT}; the session reached it as {given}"
 
@@ -258,13 +271,20 @@ def _text(address: str, port: int) -> str:
 
 
 class _Walk:
-    """The state of reading one session: thread groups, sockets bound without a known port, results."""
+    """The state of reading one session: thread groups, sockets bound without a known port, results.
+
+    A stream connection counts only when the session made it: `connect` returned 0, or answered
+    EINPROGRESS and a later call showed that remote end (`pending`). A connection the session accepted
+    shows a remote end too, and is never one it made. A TLS host name is read from the first payload
+    sent to a destination only, so a CONNECT to a proxy cannot name the host behind it."""
 
     def __init__(self) -> None:
         """Starts with no thread known and nothing found."""
         self.found = NetworkNeeds()
         self.groups: dict[int, int] = {}
         self.unnamed: dict[tuple[int, str], tuple[str, str]] = {}
+        self.pending: set[tuple[str, int]] = set()
+        self.payloads: set[tuple[str, int]] = set()
 
     def group(self, pid: int) -> int:
         """The thread group of a thread; a thread not seen created is its own group."""
@@ -284,7 +304,7 @@ class _Walk:
         socket_text = strace_parse.argument(call, 0) or ""
         local, remote = needs.socket_ends(socket_text)
         transport = needs.transport_of(socket_text)
-        if remote is not None and transport == "tcp":
+        if remote is not None and transport == "tcp" and _normal(remote) in self.pending:
             self.found.connected.add(_normal(remote))
         self._named(call, socket_text, local, transport)
         if call.name == "bind":
@@ -352,7 +372,11 @@ class _Walk:
             return
         destination = _normal((address, port))
         if transport == "tcp":
-            (self.found.incomplete if pending else self.found.connected).add(destination)
+            if pending:
+                self.pending.add(destination)
+                self.found.incomplete.add(destination)
+            else:
+                self.found.connected.add(destination)
         else:
             self.found.unsent.add(destination)
 
@@ -370,10 +394,11 @@ class _Walk:
                 self._sent(_normal((address, port)))
             elif remote is not None:
                 self._sent(_normal(remote))
-        elif transport == "tcp" and remote is not None:
+        elif transport == "tcp" and remote is not None and _normal(remote) not in self.payloads:
+            self.payloads.add(_normal(remote))
             hello = names.client_hello_server_name(_buffer(call))
             if hello is not None:
-                self.found.server_names.setdefault(_normal(remote), hello)
+                self.found.server_names[_normal(remote)] = hello
 
     def _sent(self, destination: tuple[str, int]) -> None:
         """Counts a datagram to the destination, which also makes a datagram connect to it count."""

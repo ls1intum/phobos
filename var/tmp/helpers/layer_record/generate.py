@@ -12,6 +12,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
 import pathlib
 import subprocess  # nosec B404
 import tempfile
@@ -35,6 +36,7 @@ SPEC_PARENT = "/var/tmp"
 EVIDENCE_EXAMPLES = 5
 # The `INCOMPLETE` header line, with the number of calls it counts.
 INCOMPLETE_LINE = "INCOMPLETE: {count} recorded calls are not mapped; see record.json"
+UNGRANTED_LINE = "INCOMPLETE: {count} accesses cannot be granted by a policy; see record.json"
 HEADER = (
     "Recorded by phobos-record, not pruned. Sessions merged: {count} ({dates}).",
     "It grants what those sessions exercised and nothing else: a code path no session took,",
@@ -43,6 +45,7 @@ HEADER = (
     "Recorded from the reference program; never record an untrusted submission.",
 )
 RESOLVER_LINE = "This policy needs --resolver (a [connect] rule names a host)."
+NOT_GRANTED_LINE = "Not granted: [{section}] {path}: {reason}"
 REFUSAL_LINE = "Grading refuses this whatever a policy grants: {description}"
 WITHHELD_LINE = ("Not granted: a move from {source} to {destination} needs [{section}] on the source, which would "
                  "overlap a write-class right; grading refuses that move")
@@ -82,6 +85,17 @@ class Recording:
     sessions: list[Session]
 
 
+@dataclasses.dataclass
+class Grants:
+    """What filesystem_grants found: the grants, the comment above each wider one, the widenings, and
+    `ungranted`, every access a session made that no grant covers, each as `{"path", "section", "reason"}`."""
+
+    grants: dict[str, frozenset[str]]
+    comments: dict[str, str]
+    widenings: list[dict]
+    ungranted: list[dict]
+
+
 class Recorded:
     """What existed before the sessions, across the snapshots of every container they ran in.
 
@@ -101,8 +115,8 @@ class Recorded:
         return all(existing.existed(path) for existing in self.existing)
 
     def is_directory(self, path: str) -> bool:
-        """Whether a snapshot lists the path as a directory."""
-        return any(listing.get(path, "").startswith("d") for listing in self.listings)
+        """Whether a snapshot lists the path as a directory; the kernel trees, never listed, are directories."""
+        return path in snapshot.DEFAULT_SKIP or any(listing.get(path, "").startswith("d") for listing in self.listings)
 
     def scanned_path(self, path: str) -> bool:
         """Whether the path lies outside the trees the snapshot never lists."""
@@ -178,13 +192,15 @@ def _measurement(session: pathlib.Path, meta: dict) -> limits.Measurement | None
     )
 
 
-def filesystem_grants(recording: Recording) -> tuple[dict[str, frozenset[str]], dict[str, str], list[dict]]:
-    """The grants every session's needs ask for, the comment above each wider one, and the widenings.
+def filesystem_grants(recording: Recording) -> Grants:
+    """The grants every session's needs ask for, the comment above each wider one, the widenings and the gaps.
 
     Per-run names are judged against the ids of every process of every session; the grants are
     compacted and normalised exactly as the layer pruner does, a move across directories gives its
     source what its destination holds (source_covers_destination), and the result is normalised again.
-    Each widening is `{"path", "sections", "observed", "observed_count", "files_beneath"}`.
+    Each widening is `{"path", "sections", "observed", "observed_count", "files_beneath", "reason"}`.
+    An access no policy can grant (a file created directly beneath a top-level directory, say, whose
+    right Phobos never places there) is returned in `ungranted` with the reason, never dropped.
     """
     everything = [need for session in recording.sessions for need in session.needs.needs]
     own_ids = frozenset().union(*(session.needs.process_ids for session in recording.sessions))
@@ -197,11 +213,47 @@ def filesystem_grants(recording: Recording) -> tuple[dict[str, frozenset[str]], 
             merged.setdefault(path, set()).update(sections)
     compacted = generalise.compact({path: frozenset(sections) for path, sections in merged.items()},
                                    generalise.DEFAULT_COMPACTION_THRESHOLD, generalise.DEFAULT_FINE_ROOTS)
-    moves = {move for session in recording.sessions for move in session.needs.moves}
+    ungranted = list(notes.reported)
+    moves = placed_moves({move for session in recording.sessions for move in session.needs.moves}, recorded, ungranted)
     covered, _ = source_covers_destination(generalise.normalise_hierarchy(compacted), moves)
     grants = generalise.normalise_hierarchy(covered)
     comments = {**notes.comments, **comments}
-    return grants, {path: text for path, text in comments.items() if path in grants}, widenings(grants, everything, recorded)
+    kept = {path: text for path, text in comments.items() if path in grants}
+    return Grants(grants=grants, comments=kept, widenings=widenings(grants, everything, recorded, kept),
+                  ungranted=ungranted)
+
+
+def placed_moves(moves: set[tuple[str, str]], recorded: Recorded, ungranted: list[dict]) -> set[tuple[str, str]]:
+    """The moves with both ends on a directory that existed before the sessions and a policy can name.
+
+    A directory a session made (a temporary one it moved a file out of) is replaced by its nearest
+    ancestor that existed, since that is where the rights it inherits are granted. A move with an end
+    that cannot be placed (the root, a directory above the specification directory, a name a policy line
+    cannot carry) is dropped and appended to `ungranted`.
+    """
+    result: set[tuple[str, str]] = set()
+    for source, destination in sorted(moves):
+        ends = (existing_ancestor(source, recorded), existing_ancestor(destination, recorded))
+        if None in ends:
+            ungranted.append({"path": f"{source} -> {destination}", "section": "restructure",
+                              "reason": "a move across directories with an end no policy can name"})
+            continue
+        result.add((ends[0], ends[1]))  # type: ignore[arg-type]
+    return result
+
+
+def existing_ancestor(path: str, recorded: Recorded) -> str | None:
+    """The path or its nearest ancestor that existed before the sessions, if a policy may name it; else None.
+
+    Never the root or a directory the specification directory lies beneath, whose write-class rights
+    phobos-policysystem.sh refuses, and never a name a policy line cannot carry.
+    """
+    candidate = path
+    while not recorded.existed(candidate) and candidate != "/":
+        candidate = os.path.dirname(candidate)
+    if candidate in generalise.SPECIFICATION_ANCESTORS or not generalise.writable(candidate):
+        return None
+    return candidate
 
 
 def source_covers_destination(grants: dict[str, frozenset[str]],
@@ -250,8 +302,9 @@ def missing_read_or_execute(grants: dict[str, frozenset[str]], recorded: Recorde
                   if sections & generalise.READ_CLASS and not recorded.existed(path))
 
 
-def widenings(grants: dict[str, frozenset[str]], everything: list[Need], recorded: Recorded) -> list[dict]:
-    """Every directory grant with the objects the sessions touched beneath it and how many entries it covers."""
+def widenings(grants: dict[str, frozenset[str]], everything: list[Need], recorded: Recorded,
+              reasons: dict[str, str]) -> list[dict]:
+    """Every directory grant with the objects the sessions touched beneath it, how many entries it covers and why."""
     observed = sorted({path for need in everything for path in need.objects})
     found = []
     for path, sections in sorted(grants.items()):
@@ -260,7 +313,7 @@ def widenings(grants: dict[str, frozenset[str]], everything: list[Need], recorde
         behind = [item for item in observed if item == path or cfgfile.is_beneath(item, path)]
         beneath = sum(1 for other in recorded.listings[0] if cfgfile.is_beneath(other, path)) if recorded.listings else 0
         found.append({"path": path, "sections": sorted(sections), "observed": behind[:EVIDENCE_EXAMPLES],
-                      "observed_count": len(behind), "files_beneath": beneath})
+                      "observed_count": len(behind), "files_beneath": beneath, "reason": reasons.get(path, "")})
     return found
 
 
@@ -316,7 +369,8 @@ def write(directory: pathlib.Path, with_limits: bool, memory_pinned: bool,
     recording = load(directory)
     if not recording.sessions:
         raise ValueError(f"{directory} holds no recorded session")
-    grants, comments, wide = filesystem_grants(recording)
+    found = filesystem_grants(recording)
+    grants = found.grants
     recorded = Recorded([session.listing for session in recording.sessions])
     absent = missing_read_or_execute(grants, recorded)
     if absent:
@@ -330,34 +384,43 @@ def write(directory: pathlib.Path, with_limits: bool, memory_pinned: bool,
     if with_limits:
         measured = [session.measurement for session in recording.sessions if session.measurement is not None]
         values, limit_header = derived_limits([session.meta for session in recording.sessions], measured, memory_pinned)
+        if measured:
+            limit_header.append(f"Limits were derived from {len(measured)} of {len(recording.sessions)} sampled sessions.")
     unsupported = [line for session in recording.sessions for line in session.needs.unsupported]
     fixed = list(dict.fromkeys(line for session in recording.sessions for line in session.needs.fixed))
-    moves = {move for session in recording.sessions for move in session.needs.moves}
+    ignored: list[dict] = []
+    moves = placed_moves({move for session in recording.sessions for move in session.needs.moves}, recorded, ignored)
     _, withheld = source_covers_destination(grants, moves)
     policy = cfgfile.Policy(
-        fs=grants, connect=network.connect, bind=network.bind, limits=values, comments=comments,
-        header=_header(recording, network.needs_resolver, limit_header, len(unsupported)),
+        fs=grants, connect=network.connect, bind=network.bind, limits=values, comments=found.comments,
+        header=_header(recording, network.needs_resolver, limit_header, len(unsupported), len(found.ungranted)),
         notes=(*(REFUSAL_LINE.format(description=line) for line in fixed),
+               *(NOT_GRANTED_LINE.format(path=item["path"], section=item["section"], reason=item["reason"])
+                 for item in found.ungranted),
                *(WITHHELD_LINE.format(source=s, destination=d, section=section) for s, d, section in withheld),
                *(f"Not granted: {note}" for note in network.notes)))
     text = cfgfile.render(policy)
     (directory / "policy.cfg").write_text(text, encoding="utf-8")
-    (directory / "record.json").write_text(json.dumps(_record(recording, grants, wide, network, values, fixed, unsupported,
+    (directory / "record.json").write_text(json.dumps(_record(recording, found, network, values, fixed, unsupported,
                                                               withheld), indent=2, sort_keys=True) + "\n", encoding="utf-8")
     status, message = gate(directory / "policy.cfg")
     if status != 0:
         print(f"phobos-record: phobos-policysystem.sh refused the generated policy (status {status}):\n{message}", flush=True)
         return EXIT_GATE
-    if unsupported:
-        print(f"phobos-record: {len(unsupported)} recorded calls are not mapped; see record.json", flush=True)
+    if unsupported or found.ungranted:
+        print(f"phobos-record: {len(unsupported)} recorded calls are not mapped and {len(found.ungranted)} accesses "
+              "cannot be granted; see record.json", flush=True)
         return EXIT_INCOMPLETE
     return 0
 
 
-def _header(recording: Recording, needs_resolver: bool, limit_header: list[str], unsupported: int) -> tuple[str, ...]:
+def _header(recording: Recording, needs_resolver: bool, limit_header: list[str], unsupported: int,
+            ungranted: int) -> tuple[str, ...]:
     """The header lines: what the file is, from how many sessions, what it does not cover, what it needs."""
     dates = sorted({str(session.meta.get("started", ""))[:10] for session in recording.sessions} - {""})
     lines = [INCOMPLETE_LINE.format(count=unsupported)] if unsupported else []
+    if ungranted:
+        lines.append(UNGRANTED_LINE.format(count=ungranted))
     first, *rest = HEADER
     lines.append(first.format(count=len(recording.sessions), dates=", ".join(dates) or "undated"))
     lines.extend(rest)
@@ -367,7 +430,7 @@ def _header(recording: Recording, needs_resolver: bool, limit_header: list[str],
     return tuple(lines)
 
 
-def _record(recording: Recording, grants: dict[str, frozenset[str]], wide: list[dict], network: endpoints.NetworkRules,
+def _record(recording: Recording, found: Grants, network: endpoints.NetworkRules,
             values: dict[str, int], fixed: list[str], unsupported: list[str],
             withheld: list[tuple[str, str, str]]) -> dict:
     """record.json: every grant with the calls behind it, the widenings, and everything left ungranted."""
@@ -378,8 +441,9 @@ def _record(recording: Recording, grants: dict[str, frozenset[str]], wide: list[
                       "interactive": session.meta.get("interactive"), "landlock_abi": session.meta.get("landlock_abi"),
                       "strace": session.meta.get("strace")} for session in recording.sessions],
         "grants": [{"path": path, "sections": sorted(sections), **_evidence(path, all_needs)}
-                   for path, sections in sorted(grants.items())],
-        "widenings": wide,
+                   for path, sections in sorted(found.grants.items())],
+        "widenings": found.widenings,
+        "ungranted": found.ungranted,
         "fixed_refusals": fixed,
         "tolerated": sorted({line for session in recording.sessions for line in session.needs.tolerated}),
         "unsupported": unsupported,

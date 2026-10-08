@@ -209,9 +209,10 @@ check_attribution_of_the_permitted_run() {
 
 # Writes into the file named by $2 what cfgfile.render makes of the policy named by $1: "permissive",
 # the permissive policy of this image's own root; "small", a policy with every filesystem section, a
-# comment, network rules and limits; "commented", the same with a header, trailing notes, rule comments
-# and a comment rule, some holding what would end a line if written unescaped; or "subset", a nested strict subset, which render must refuse,
-# in which case it writes "refused" instead. Assumes the helpers are mounted at ${HELPERS}.
+# comment, network rules and limits; "commented", the same with a header, trailing notes, rule
+# comments and a comment rule, some holding what would end a line if written unescaped; or "subset", a
+# nested strict subset, which render must refuse, in which case it writes "refused" instead. Assumes the
+# helpers are mounted at ${HELPERS}.
 rendered_policy() {
   HELPERS="${HELPERS}" python3 - "$1" >"$2" 2>"$2.err" <<'PY'
 import os
@@ -262,6 +263,10 @@ check_rendered_policies_meet_the_parser() {
     "${PHOBOS_HOME}/phobos.sh" --config "${WORK}/${name}.cfg" -- /bin/true >"${WORK}/${name}-run.log" 2>&1
     check "a command runs under the ${name} policy through phobos.sh" "0" "$?"
   done
+  check "what would end a line in the commented policy's comments is escaped: it has exactly the sections it was given" \
+    "[bind] [connect] [create] [create-ipc] [create-symlink] [delete] [execute] [read] [restructure] [write]" \
+    "$(grep '^\[' "${WORK}/commented.cfg" | sort | tr '\n' ' ' | sed 's/ $//')"
+  check "and holds no carriage return or line separator" 0 "$(grep -c -e $'\r' -e $'\xe2\x80\xa8' "${WORK}/commented.cfg")"
   rendered_policy subset "${WORK}/subset.out"
   check "render refuses a nested strict subset" "refused" "$(cat "${WORK}/subset.out")"
   printf '[read]\n/usr\n/usr/bin\n\n[execute]\n/usr\n' >"${WORK}/subset.cfg"

@@ -80,6 +80,7 @@ def test_a_read_of_a_path_the_session_created_is_never_written_as_that_path(tmp_
     lines = ['16 openat(AT_FDCWD</opt/w>, "/opt/w/cache/x", O_WRONLY|O_CREAT, 0666) = 3</opt/w/cache/x>',
              '16 openat(AT_FDCWD</opt/w>, "/opt/w/cache/x", O_RDONLY) = 3</opt/w/cache/x>']
     _, policy, _ = generated(tmp_path, lines, listing=listing_of(directories=("/opt", "/opt/w")))
+    assert policy.fs
     assert all(path in ("/opt/w", "/opt/w/cache") for path in policy.fs)
     assert "/opt/w/cache/x" not in policy.fs
 
@@ -140,13 +141,42 @@ def test_no_read_or_execute_row_names_a_path_absent_before_the_sessions():
     assert generate.missing_read_or_execute(grants, recorded) == ["/opt/w/new-file"]
 
 
-def test_a_cross_directory_move_is_recorded_and_the_source_gets_the_destinations_sections(tmp_path):
+def test_a_cross_directory_move_gives_the_source_what_only_the_destination_held(tmp_path):
     lines = ['16 openat(AT_FDCWD</opt/w>, "/opt/w/in.txt", O_RDONLY) = 3</opt/w/in.txt>',
              '16 renameat2(AT_FDCWD</opt/w>, "/srv/s/a", AT_FDCWD</opt/w>, "/opt/w/b", 0) = 0']
-    _, policy, _ = generated(tmp_path, lines, listing=listing_of("/srv/s/a", "/opt/w/in.txt", directories=("/srv", "/srv/s", "/opt", "/opt/w")))
-    assert "restructure" in policy.fs["/srv/s"]
+    _, policy, _ = generated(tmp_path, lines, listing=listing_of("/srv/s/a", "/opt/w/in.txt",
+                                                                 directories=("/srv", "/srv/s", "/opt", "/opt/w")))
+    assert {"restructure", "delete", "read"} <= policy.fs["/srv/s"]
     assert "restructure" in policy.fs["/opt/w"]
-    assert "delete" in policy.fs["/srv/s"]
+
+
+def test_a_move_out_of_a_directory_the_session_made_is_placed_on_the_ancestor_that_existed(tmp_path):
+    lines = ['16 mkdir("/srv/data/tmpab12", 0777) = 0',
+             '16 renameat2(AT_FDCWD</opt/w>, "/srv/data/tmpab12/out.bin", AT_FDCWD</opt/w>, "/opt/w/out.bin", 0) = 0']
+    status, policy, _ = generated(tmp_path, lines, listing=listing_of(directories=("/srv", "/srv/data", "/opt", "/opt/w")))
+    assert set(policy.fs) == {"/srv/data", "/opt/w"}
+    assert "restructure" in policy.fs["/srv/data"]
+    assert status == 0
+
+
+def test_a_file_created_directly_beneath_a_top_level_directory_is_reported_and_the_result_is_incomplete(tmp_path):
+    lines = ['16 openat(AT_FDCWD</opt/w>, "/srv/tmpab12", O_RDWR|O_CREAT|O_EXCL, 0600) = 3</srv/tmpab12>']
+    root = recording_directory(tmp_path, lines, listing=listing_of(directories=("/srv", "/opt", "/opt/w")))
+    assert generate.write(root, False, False, accepting) == generate.EXIT_INCOMPLETE
+    text = (root / "policy.cfg").read_text(encoding="utf-8")
+    assert "INCOMPLETE: 2 accesses cannot be granted" in text
+    assert "# Not granted: [write] /srv/tmpab12" in text
+    ungranted = json.loads((root / "record.json").read_text(encoding="utf-8"))["ungranted"]
+    assert [item["path"] for item in ungranted] == ["/srv/tmpab12", "/srv/tmpab12"]
+
+
+def test_a_per_run_grant_on_proc_is_listed_among_the_widenings(tmp_path):
+    lines = ["16 clone(child_stack=NULL, flags=SIGCHLD) = 17",
+             '16 openat(AT_FDCWD</opt/w>, "/proc/17/status", O_RDONLY) = 3</proc/17/status>']
+    root = recording_directory(tmp_path, lines, listing=listing_of(directories=("/opt", "/opt/w")))
+    generate.write(root, False, False, accepting)
+    widening = json.loads((root / "record.json").read_text(encoding="utf-8"))["widenings"]
+    assert any(item["path"] == "/proc" and "per-run name" in item["reason"] for item in widening)
 
 
 def test_an_unsupported_call_makes_generate_say_incomplete(tmp_path):

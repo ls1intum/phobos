@@ -60,7 +60,7 @@ start_server() {
     -v "${HERE}/record-network-server/serve.py:/serve.py:ro" \
     --entrypoint python3 "${PRUNE_IMAGE}" /serve.py > /dev/null || return 1
   local waited=0
-  until docker logs "${SERVER}" 2>&1 | grep -q '^serving '; do
+  until grep -q '^serving ' <<<"$(docker logs "${SERVER}" 2>&1)"; do
     sleep 1
     waited=$((waited + 1))
     if (( waited > 30 )); then
@@ -74,7 +74,8 @@ start_server() {
 docker network create --internal "${NETWORK}" > /dev/null || { echo "cannot create the network ${NETWORK}" >&2; exit 1; }
 docker volume create "${VOLUME}" > /dev/null || { echo "cannot create the volume ${VOLUME}" >&2; exit 1; }
 start_server || { bad "the stand-in server starts"; finish; exit 1; }
-ok "the stand-in server runs on a network with no route out, at ${SERVER_IP}"
+check "the network has no route out" true "$(docker network inspect -f '{{.Internal}}' "${NETWORK}")"
+ok "the stand-in server runs at ${SERVER_IP}"
 
 in_network "${RECORDER}" record --name net --script "${SCRIPT}" -- "${SESSION[@]}" < /dev/null > "${WORK}/record.out" 2>&1
 check "the HTTPS session is recorded with Python's own status" 0 "$?"
@@ -139,7 +140,7 @@ forbidden() {
   answer="$(in_network sh -c 'mkdir -p /var/tmp/testing-dir; exec "$@"' sh /var/tmp/opt/core/phobos.sh \
     --resolver "${SERVER_IP}" --config /var/tmp/recordings/net/policy.cfg -- \
     python3 -c "import socket; socket.create_connection(('${target}', 8443), timeout=3)" 2>&1 < /dev/null)"
-  if grep -q 'Permission denied' <<<"${answer}"; then
+  if grep -q 'PermissionError: \[Errno 13\]' <<<"${answer}"; then
     ok "${title}"
   else
     bad "${title}" "${answer}"

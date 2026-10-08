@@ -276,3 +276,56 @@ def test_a_loopback_resolver_is_a_lookup_like_any_other_and_not_an_exact_loopbac
                      "16 send(5<UDP:[10.0.0.2:40000->127.0.0.11:53]>, \"q\", 1, 0) = 1")
     assert "allow 127.0.0.11:53 udp" not in texts(rules.connect)
     assert any(text.startswith("# not granted: allow 127.0.0.11:53 udp") for text in texts(rules.connect))
+
+
+def test_a_connection_the_session_accepted_is_never_one_it_made():
+    peer = inet("172.17.0.1", 51000)
+    rules = rules_of(f"16 accept4(3<TCP:[0.0.0.0:5000]>, {peer}, [16], SOCK_CLOEXEC) = 4<TCP:[172.17.0.2:5000->172.17.0.1:51000]>",
+                     "16 write(4<TCP:[172.17.0.2:5000->172.17.0.1:51000]>, \"HTTP/1.1 200 OK\", 15) = 15",
+                     "16 setsockopt(4<TCP:[172.17.0.2:5000->172.17.0.1:51000]>, SOL_TCP, TCP_NODELAY, [1], 4) = 0")
+    assert rules.connect == ()
+    assert any(note.startswith("[accept] not generated") for note in rules.notes)
+
+
+def test_a_loopback_client_the_session_accepted_gets_no_exact_rule_for_its_ephemeral_port():
+    peer = inet("127.0.0.1", 51000)
+    rules = rules_of(f"16 accept4(3<TCP:[127.0.0.1:5000]>, {peer}, [16], SOCK_CLOEXEC) = 4<TCP:[127.0.0.1:5000->127.0.0.1:51000]>",
+                     "16 write(4<TCP:[127.0.0.1:5000->127.0.0.1:51000]>, \"x\", 1) = 1")
+    assert rules.connect == ()
+
+
+def test_a_port_one_session_held_does_not_own_another_sessions_connection_to_the_same_number():
+    first = observed(f"16 bind(3<TCP:[1]>, {inet('127.0.0.1', 8080)}, 16) = 0")
+    second = observed(f"17 connect(4<TCP:[2]>, {inet('127.0.0.1', 8080)}, 16) = 0")
+    rules = endpoints.rules([first, second], {})
+    assert texts(rules.connect) == ("allow 127.0.0.1:8080",)
+    assert "must exist at grading time" in rules.connect[0].comment
+
+
+def test_a_hello_after_a_connect_to_a_proxy_does_not_name_the_host_behind_it():
+    rules = rules_of(f"16 connect(3<TCP:[1]>, {inet('198.51.100.9', 3128)}, 16) = 0",
+                     "16 write(3<TCP:[10.0.0.2:40000->198.51.100.9:3128]>, \"CONNECT example.org:443 HTTP/1.1\\r\\n\\r\\n\", 34) = 34",
+                     f"16 write(3<TCP:[10.0.0.2:40000->198.51.100.9:3128]>, {hello_argument('example.org')}, 517) = 517")
+    assert texts(rules.connect) == ("allow 198.51.100.9:3128",)
+
+
+@pytest.mark.parametrize("name", ["localhost", "api.localhost", "0x7f.0x0.0x0.0x1", "2130706433"])
+def test_a_server_name_that_means_the_loopback_or_an_address_shapes_no_rule(name):
+    rules = rules_of(f"16 connect(3<TCP:[1]>, {inet('192.0.2.7', 443)}, 16) = 0",
+                     f"16 write(3<TCP:[10.0.0.2:40000->192.0.2.7:443]>, {hello_argument(name)}, 517) = 517")
+    assert texts(rules.connect) == ("allow 192.0.2.7:443",)
+
+
+def test_a_port_bound_by_a_parent_and_named_by_its_child_after_a_fork_is_held():
+    rules = rules_of(f"16 bind(3<TCP:[1]>, {inet('127.0.0.1', 0)}, 16) = 0",
+                     "16 clone(child_stack=NULL, flags=SIGCHLD) = 17",
+                     "17 listen(3<TCP:[127.0.0.1:40623]>, 128) = 0",
+                     f"18 connect(4<TCP:[2]>, {inet('127.0.0.1', 40623)}, 16) = 0")
+    assert texts(rules.connect) == ("allow 127.0.0.1:*",)
+
+
+def test_a_datagram_sent_through_a_message_call_names_its_destination():
+    data = quoted(b"u")
+    rules = rules_of(f"16 sendmsg(5<UDP:[3]>, {{msg_name={inet('198.51.100.5', 123)}, msg_namelen=16, "
+                     f"msg_iov=[{{iov_base={data}, iov_len=1}}], msg_iovlen=1}}, 0) = 1")
+    assert texts(rules.connect) == ("allow 198.51.100.5:123 udp",)

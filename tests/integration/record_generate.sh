@@ -22,7 +22,8 @@
 #              session, with the missing row as the regression
 #   limits     a new container: a sampled batch session and generate --limits write the limits that a
 #              batch session allows, and none that it does not
-#   limitscheck a new container: the batch session replays under those limits
+#   limitscheck a new container: the batch session replays under those limits (the check replays without a
+#              timeout, so the timeout is only shown to be derived) and the derived descriptor limit binds
 #
 # Runs inside the prune image with tests/ at /tests, var/tmp/helpers at /var/tmp/helpers and core/ at
 # /repo-core, all read-only, the fixture exercise at /srv/phobos-record-exercise and a volume shared by
@@ -113,6 +114,18 @@ has_line() {
   fi
 }
 
+# Reports whether the given file holds the given string as one whole line.
+has_whole_line() {
+  local title="$1"
+  local needle="$2"
+  local file="$3"
+  if grep -qxF -- "${needle}" "${file}"; then
+    ok "${title}"
+  else
+    bad "${title}" "$(head -c 1500 "${file}")"
+  fi
+}
+
 # Reports that the given file does not hold the given fixed string.
 lacks_line() {
   local title="$1"
@@ -143,10 +156,15 @@ phase_record() {
   local policy="${RECORDING}/policy.cfg"
   has_line "the header says it was recorded and not pruned" "# Recorded by phobos-record, not pruned. Sessions merged: 1" "${policy}"
   has_line "the header says never to record an untrusted submission" "never record an untrusted submission" "${policy}"
-  has_line "the loopback server and its client become the loopback wildcard" "allow 127.0.0.1:*" "${policy}"
-  has_line "the datagram pair becomes the loopback wildcard for udp" "allow 127.0.0.1:* udp" "${policy}"
-  has_line "the kernel's choice of port becomes allow 0" "allow 0" "${policy}"
-  has_line "a file of a fine-grained root stays that file" "/etc/hostname" "${policy}"
+  has_whole_line "the loopback server and its client become the loopback wildcard" "allow 127.0.0.1:*" "${policy}"
+  has_whole_line "the datagram pair becomes the loopback wildcard for udp" "allow 127.0.0.1:* udp" "${policy}"
+  has_whole_line "the kernel's choice of port becomes allow 0" "allow 0" "${policy}"
+  has_whole_line "a file of a fine-grained root stays that file" "/etc/hostname" "${policy}"
+  if grep -qxF "/etc" "${policy}"; then
+    bad "and the root it lies in is not granted whole" "/etc is a line of the policy"
+  else
+    ok "and the root it lies in is not granted whole"
+  fi
   lacks_line "the per-session directory is not named by its process id" "cache/" "${policy}"
   lacks_line "the temporary file's random name is not in the policy" "/var/tmp/testing-dir/tmp" "${policy}"
   has_line "the process entries become one per-run grant" "per-run name" "${policy}"
@@ -163,12 +181,23 @@ PYTHON
   check "record.json is complete and lists the calls behind every grant" 0 "$?"
   local base="/repo-core/config/BaseLanguage-java.cfg"
   local before
-  before="$(sha256sum "${base}")"
+  before="$(sha256sum "${RECORDING}/policy.cfg" "${RECORDING}/record.json")"
   recorder diff diff --name gen --policy "${base}"
   check "diff answers 0" 0 "$(status_of diff)"
-  has_line "diff names a need the Java base does not grant" "Needed by a session, not granted by the policy:" "${OUT}/diff.out"
-  has_line "diff names a row the Java base grants and the session never used" "[create-ipc] /root/.gradle" "${OUT}/diff.out"
-  check "diff changed nothing" "${before}" "$(sha256sum "${base}")"
+  has_line "diff names at least one need the Java base does not grant" "Needed by a session, not granted by the policy: " "${OUT}/diff.out"
+  lacks_line "and that count is not zero" "Needed by a session, not granted by the policy: 0" "${OUT}/diff.out"
+  lacks_line "diff names at least one row the base grants and no session used, so the count is not zero" \
+    "Granted by the policy, used by no session: 0" "${OUT}/diff.out"
+  python3 - "${OUT}/diff.out" <<'PYTHON'
+import sys
+
+text = open(sys.argv[1]).read()
+unused = text.split("Granted by the policy, used by no session")[1].split("Granted by the policy, covered")[0]
+assert "[create-ipc] /root/.gradle" in unused, unused[:600]
+PYTHON
+  check "the Gradle row of the Java base is listed as unused, in the list of unused rows" 0 "$?"
+  check "diff changed neither the policy nor the record" "${before}" \
+    "$(sha256sum "${RECORDING}/policy.cfg" "${RECORDING}/record.json")"
 }
 
 # Phase replay: a new container with the recording's starting state.
@@ -187,6 +216,7 @@ phase_replay() {
   { cat "${RECORDING}/policy.cfg"; printf '\n[read]\n/var/tmp/testing-dir/never-existed\n'; } > "${OUT}/never.cfg"
   "${PHOBOS_HOME}/phobos-policysystem.sh" --spec-dir "${spec}" --config "${OUT}/never.cfg" > "${OUT}/never.out" 2>&1
   check "the parser refuses a [read] of a path that never existed, so the gate would have caught it" 11 "$?"
+  has_line "and says that it does not exist" "does not exist on this system" "${OUT}/never.out"
   rm -rf "${spec}"
 }
 
@@ -196,8 +226,12 @@ phase_contain() {
   cp -a /srv/phobos-record-exercise/. /var/tmp/testing-dir/
   echo secret > /srv/phobos-record-canary/secret
   echo secret > /root/phobos-record-canary
+  echo secret > /etc/phobos-record-canary
   under_policy cat /root/phobos-record-canary > "${OUT}/canary-root"
   has_line "a canary in a fine-grained root is refused" "Permission denied" "${OUT}/canary-root"
+  under_policy cat /etc/phobos-record-canary > "${OUT}/canary-etc"
+  has_line "a neighbour of a file the session read in a fine-grained root is refused: the root is not granted whole" \
+    "Permission denied" "${OUT}/canary-etc"
   under_policy cat /srv/phobos-record-canary/secret > "${OUT}/canary-srv"
   has_line "a canary outside every recorded directory is refused" "Permission denied" "${OUT}/canary-srv"
   under_policy sh -c 'echo x > /usr/share/doc/phobos-record-probe' > "${OUT}/doc-write"
@@ -205,10 +239,12 @@ phase_contain() {
   under_policy cat /etc/hostname > "${OUT}/hostname"
   lacks_line "the file the session read is still readable" "Permission denied" "${OUT}/hostname"
   has_line "and its content is printed" "status=0" "${OUT}/hostname"
+  under_policy python3 -c 'import socket; print("OK-" "PY")' > "${OUT}/python"
+  has_line "Python starts under the policy, so the two refusals below are the sandbox's" "OK-PY" "${OUT}/python"
   under_policy python3 -c 'import socket; socket.create_connection(("10.0.0.1", 80), timeout=2)' > "${OUT}/connect"
-  has_line "a connection to an address the session never reached is refused" "Permission denied" "${OUT}/connect"
+  has_line "a connection to an address the session never reached is refused" "PermissionError: [Errno 13]" "${OUT}/connect"
   under_policy python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 8080))' > "${OUT}/bind"
-  has_line "a bind to a port the session never asked for is refused" "Permission denied" "${OUT}/bind"
+  has_line "a bind to a port the session never asked for is refused" "PermissionError: [Errno 13]" "${OUT}/bind"
 }
 
 # Phase second: a second session in a container of its own, then generate over both.
@@ -243,10 +279,12 @@ phase_narrow() {
   cp /var/tmp/recordings/gen-first-policy.cfg "${RECORDING}/policy.cfg"
   recorder narrow check --name gen --script "${FIXTURE}/merge.script" -- "${SESSION[@]}"
   check "the first session's policy fails the check of the second session" 1 "$(status_of narrow)"
-  if newest_findings "${RECORDING}" | grep -q '^regressions .*passwd'; then
+  local findings
+  findings="$(newest_findings "${RECORDING}")"
+  if grep -q '^regressions .*passwd' <<<"${findings}"; then
     ok "the regression names the refused read of /etc/passwd"
   else
-    bad "the regression names the refused read of /etc/passwd" "$(newest_findings "${RECORDING}")"
+    bad "the regression names the refused read of /etc/passwd" "${findings}"
   fi
 }
 
@@ -264,11 +302,18 @@ phase_limits() {
   has_line "the header says why mem_mb was not derived" "no mem_mb derived" "${policy}"
 }
 
-# Phase limitscheck: the batch session replays under the derived limits.
+# Phase limitscheck: the batch session replays under the derived limits, which bind. The check itself
+# replays without a timeout, so what is shown here for the timeout is only that it was derived.
 phase_limitscheck() {
   recorder limitscheck check --name lim -- "${BATCH[@]}"
-  check "the batch session replays under its derived limits" 0 "$(status_of limitscheck)"
+  check "the batch session replays under its derived limits, but for the timeout" 0 "$(status_of limitscheck)"
   check "no regression is found under the limits" 0 "$(newest_check "${LIMITED}" regressions)"
+  local nofile
+  nofile="$(sed -n 's/^nofile=//p' "${LIMITED}/policy.cfg")"
+  mkdir -p /var/tmp/testing-dir
+  cp -a /srv/phobos-record-exercise/. /var/tmp/testing-dir/
+  "${PHOBOS_HOME}/phobos.sh" --config "${LIMITED}/policy.cfg" -- sh -c 'ulimit -n' > "${OUT}/ulimit" 2>&1
+  check "the derived nofile binds: the command's descriptor limit is the derived one" "${nofile}" "$(tail -1 "${OUT}/ulimit")"
 }
 
 case "${PHASE}" in

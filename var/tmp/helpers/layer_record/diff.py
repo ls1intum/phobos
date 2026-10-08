@@ -15,7 +15,9 @@ from layer_prune import cfgfile, network
 
 from layer_record import endpoints, generate
 
-LOOPBACK_WILDCARDS = ("allow 127.0.0.1:*", "allow [::1]", "allow localhost")
+# The loopback wildcards and the address families each covers.
+LOOPBACK_WILDCARDS = {"allow 127.0.0.1:*": frozenset({"inet"}), "allow [::1]": frozenset({"inet6"}),
+                      "allow localhost": frozenset({"inet", "inet6"})}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -33,7 +35,8 @@ def compare(recordings: list[generate.Recording], policy: cfgfile.Policy) -> Rep
     A filesystem need is covered when the rights of every rule at or above its path (Landlock unions
     them) hold the rights of its section, with the policy's own paths and the needs' paths resolved
     through symbolic links, so both spellings of a link fold. A network rule is covered when the same
-    rule, or a loopback wildcard of its transport, is in the policy.
+    rule, or a loopback wildcard of its transport and address family, is in the policy; only exact rules
+    and the loopback wildcards are matched, so a range or a wildcard host is never called unused.
     """
     sessions = [session for recording in recordings for session in recording.sessions]
     folded = _folded(policy)
@@ -54,8 +57,8 @@ def compare(recordings: list[generate.Recording], policy: cfgfile.Policy) -> Rep
     granted = {*policy.connect, *policy.bind}
     missing.extend(f"[{_section_of(rule, network_rules)}] {rule}" for rule in generated
                    if not _admitted(rule, granted))
-    unused.extend(f"[connect] {rule}" for rule in policy.connect if not _requested(rule, generated))
-    unused.extend(f"[bind] {rule}" for rule in policy.bind if rule not in generated)
+    unused.extend(f"[connect] {rule}" for rule in policy.connect if _comparable(rule) and not _requested(rule, generated))
+    unused.extend(f"[bind] {rule}" for rule in policy.bind if _comparable(rule) and rule not in generated)
     return Report(missing=sorted(set(missing)), unused=unused, covered_by_ancestor=covered)
 
 
@@ -97,9 +100,10 @@ def _admitted(rule: str, granted: set[str]) -> bool:
         return True
     marker = " udp" if rule.endswith(" udp") else ""
     body = rule.removesuffix(marker)
-    if network.loopback_kind(_host(body)) is None:
+    kind = network.loopback_kind(_host(body))
+    if kind is None:
         return False
-    return any(wildcard + marker in granted for wildcard in LOOPBACK_WILDCARDS)
+    return any(kind in families and wildcard + marker in granted for wildcard, families in LOOPBACK_WILDCARDS.items())
 
 
 def _host(rule: str) -> str:
@@ -108,6 +112,16 @@ def _host(rule: str) -> str:
     if text.startswith("["):
         return text[1:text.index("]")]
     return text.rsplit(":", 1)[0] if ":" in text else text
+
+
+def _comparable(rule: str) -> bool:
+    """Whether a rule can be compared with a recorded endpoint: an exact address or name and port, or a loopback wildcard.
+
+    A range (`192.0.2.0/24:80`), a wildcard host or a wildcard port is not compared, so it is never
+    reported as unused.
+    """
+    bare = rule.removesuffix(" udp")
+    return bare in LOOPBACK_WILDCARDS or not (bare.endswith(":*") or any(mark in _host(bare) for mark in "/*"))
 
 
 def _requested(rule: str, generated: list[str]) -> bool:
