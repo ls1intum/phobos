@@ -83,6 +83,8 @@ static const char *errno_name(int number) {
     case EBADF: return "EBADF";
     case ENOSYS: return "ENOSYS";
     case ECONNREFUSED: return "ECONNREFUSED";
+    case ECONNRESET: return "ECONNRESET";
+    case ECONNABORTED: return "ECONNABORTED";
     case EADDRINUSE: return "EADDRINUSE";
     case EADDRNOTAVAIL: return "EADDRNOTAVAIL";
     case ENETUNREACH: return "ENETUNREACH";

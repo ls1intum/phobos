@@ -58,8 +58,11 @@ OPTIONS
   --project-root <dir>        The directory a relative path and \${PROJECT_ROOT} in an Ares 2
                               policy are resolved against: the one the build tool starts
                               the test JVM in. It must be an absolute path to an existing
-                              directory. Without it, the last --chdir of the tail flags is
-                              used, and with neither such a path is refused.
+                              directory, and the real path of a project directory: not "/",
+                              and not reached through a symbolic link. Without it, the last
+                              --chdir of the tail flags is used, held to the same rule where
+                              an imported path needs it, and with neither such a path is
+                              refused.
   --tail-flags-file <file>    The tail flags, applied last
                               (default: "${HERE}/TailPhobos.cfg").
   --debug, -d                 Print the effective specification on stderr, one line per file.
@@ -169,10 +172,15 @@ done
 # is and refused by the import only where a path needs it. A --project-root that was given
 # empty, as an unset variable in a grading script gives it, is refused rather than taken for
 # none, and so is one with a ".." segment, which would name the root differently for a relative
-# path than for ${PROJECT_ROOT}.
+# path than for ${PROJECT_ROOT}, one that is "/" and one that reaches its directory through a
+# symbolic link (unreal_project_root_reason).
 if (( project_root_given )); then
   if [[ "$project_root_option" != /* || ! -d "$project_root_option" || "/${project_root_option}/" == */../* ]]; then
     report "Policy invalid: --project-root ${project_root_option@Q} is not an absolute path to an existing directory without a '..' segment. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  if project_root_reason="$(unreal_project_root_reason "$project_root_option")"; then
+    report "Policy invalid: --project-root ${project_root_option@Q} must be the real path of a project directory: ${project_root_reason}. (PHB-EPOLICY)"
     exit "${PHB_EPOLICY}"
   fi
   project_root="$project_root_option"
