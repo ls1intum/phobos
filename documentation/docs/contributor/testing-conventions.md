@@ -13,23 +13,23 @@ workflow summary.
 :::
 
 There is no build system. The shell runs as it is and the C is compiled inside the image, so
-the suites under `tests/` are the checks.
+the suites under `protecter/test/` and `pruner/test/` are the checks.
 
 ## One harness, six families
 
-Every suite sources `tests/harness.sh`, which owns `ok`, `bad`, `skip`, `check`, the three
+Every suite sources `protecter/test/harness.sh`, which owns `ok`, `bad`, `skip`, `check`, the three
 counters and `finish`. A suite keeps everything else of its own: its shell options, its
 fixtures and its cleanup trap. Each reports its own passed, failed and skipped counts and exits
 non-zero on a failure.
 
 | Family | Where | What it needs | Run by |
 | --- | --- | --- | --- |
-| Integration suites | `tests/integration/*.sh` | a shell, `gcc-14`, `haproxy`, `openssl` | the `Shell suites` job of `test.yml`, in continuous integration (CI) |
-| Shell unit suites | `tests/unit/<core component>/*.sh` | a shell | the `Shell suites` job of `test.yml` |
-| Python suites | `tests/python/` | pytest | the `Python helpers` job of `test.yml` |
-| C unit suites | `tests/unit/phobos-landlock-filesystem-and-networksystem/`, `tests/unit/phobos-seccomp-networksystem/`, `tests/unit/phobos-seccomp-filesystem/` | `gcc-14`, no kernel feature | the `unit` job of `build.yml` |
-| Acceptance suites | `tests/integration/landlock-filesystem-and-networksystem-acceptance/` | the run-phase image, an ordinary container | the groups of the `run-phase` job of `build.yml`, on amd64 and arm64 |
-| Protection matrix | `tests/integration/protection-matrix/` | the run-phase image, an ordinary container | the groups of the `run-phase` job of `build.yml`, on amd64 and arm64 |
+| Integration suites | `protecter/test/integration/*.sh` | a shell, `gcc-14`, `haproxy`, `openssl` | the `Shell suites` job of `test.yml`, in continuous integration (CI) |
+| Shell unit suites | `protecter/test/unit/<core component>/*.sh` | a shell | the `Shell suites` job of `test.yml` |
+| Python suites | `pruner/test/python/` | pytest | the `Python helpers` job of `test.yml` |
+| C unit suites | `protecter/test/unit/phobos-landlock-filesystem-and-networksystem/`, `protecter/test/unit/phobos-seccomp-networksystem/`, `protecter/test/unit/phobos-seccomp-filesystem/` | `gcc-14`, no kernel feature | the `unit` job of `build.yml` |
+| Acceptance suites | `protecter/test/integration/landlock-filesystem-and-networksystem-acceptance/` | the run-phase image, an ordinary container | the groups of the `run-phase` job of `build.yml`, on amd64 and arm64 |
+| Protection matrix | `protecter/test/integration/protection-matrix/` | the run-phase image, an ordinary container | the groups of the `run-phase` job of `build.yml`, on amd64 and arm64 |
 
 The `run-phase` job is a matrix of parallel groups on each architecture: `acceptance`, `matrix-a`,
 `matrix-b`, `recorder-and-egress` and `pruner`. A group is a slice of the suites, so one slow
@@ -51,22 +51,27 @@ them, in an ordinary container:
 - `record_networked.sh`, which runs the recorder against a stand-in server on a Docker network
   with no route out and replays the generated host name rule through the egress broker
 
+Two suites cover `phobos-cli.sh`. `phobos_cli.sh` needs no Docker. It reads the commands a dry run prints
+and answers with a stand-in `docker`. That holds the option contract and the dispatch of `run`, `prune`,
+`record` and `build`. The same suite pins the claim that nothing the script builds gives a container a privilege.
+`phobos_cli_docker.sh` starts real containers in the `matrix-b` group of the `run-phase` job and inspects them.
+
 The Python suites cover the modules of both pruners too, from a recorded `strace` log and
-captured packets under `tests/python/fixtures/`.
+captured packets under `pruner/test/python/fixtures/`.
 
 Each shell suite is a CI step of its own, so one run names every suite that broke rather than
-the first alone. `tests/README.md` is the table of every suite, what it proves and what makes it
-skip. `harness_self_test.sh` runs first as a step of its own. A step named "Every suite is started
-by a workflow" fails when a `*.sh` file under `tests/` is named in no workflow, apart from
+the first alone. `protecter/test/README.md` and `pruner/test/README.md` are the tables of every suite, what it
+proves and what makes it skip. `harness_self_test.sh` runs first as a step of its own. A step named "Every suite is started
+by a workflow" fails when a `*.sh` file under `protecter/test/` or `pruner/test/` is named in no workflow, apart from
 `harness.sh`, `lib.sh`, `run-all.sh` and `policy-redundancy-probe.sh`. It matches on the file
 name, so a suite that nobody wired in cannot sit green by never running. A second step checks
-that the entry points of `core/` and `var/tmp/pruning/` are executable. Some integration suites
+that the entry points of `protecter/src/` and the recorder's `pruner/src/layer_record/phobos-record` are executable. Some integration suites
 skip without `haproxy` or `openssl`, and `seccomp_networksystem.sh` skips without the kernel's
 seccomp user notification.
 
 ## A skipped check is not a passing one
 
-Where a suite can skip, its row in `tests/README.md` says what makes it skip and what turns
+Where a suite can skip, its row in the suite tables says what makes it skip and what turns
 that skip into a failure. The example that carries the principle:
 
 - `timeout_escalation.sh` skips where GNU `timeout` or a compiler is absent. A probe that does
@@ -83,9 +88,9 @@ Two of them carry a coverage gate:
 
 | Suite | Gate |
 | --- | --- |
-| `tests/unit/phobos-seccomp-networksystem/seccomp_networksystem_run.sh` | every line, with `--coverage` |
-| `tests/unit/phobos-seccomp-filesystem/seccomp_filesystem_run.sh` | every line of the report-only supervisor's sources, with `--coverage`, and its quoting held to bash's own over a corpus of names |
-| `tests/unit/phobos-landlock-filesystem-and-networksystem/run.sh` | none. `mutation.sh` in the same folder reports a mutation score for it instead, because the coverage runtime disturbs the calls the suite interposes |
+| `protecter/test/unit/phobos-seccomp-networksystem/seccomp_networksystem_run.sh` | every line, with `--coverage` |
+| `protecter/test/unit/phobos-seccomp-filesystem/seccomp_filesystem_run.sh` | every line of the report-only supervisor's sources, with `--coverage`, and its quoting held to bash's own over a corpus of names |
+| `protecter/test/unit/phobos-landlock-filesystem-and-networksystem/run.sh` | none. `mutation.sh` in the same folder reports a mutation score for it instead, because the coverage runtime disturbs the calls the suite interposes |
 
 The mutation score answers a different question from coverage: coverage says a line ran, and
 mutation shows whether a test notices when a line is wrong. The `mutation` job of
@@ -114,7 +119,7 @@ compiled programs are position independent with full RELRO.
 ## The protection matrix
 
 The acceptance suites measure the shipped policy. The matrix under
-`tests/integration/protection-matrix/` holds `phobos.sh` itself to its promises, layer by layer
+`protecter/test/integration/protection-matrix/` holds `phobos.sh` itself to its promises, layer by layer
 and combined. It has eleven suites (`filesystem`, `network`, `timeout`, `resources`,
 `combinations`, `cli`, `lifecycle`, `policy-syntax`, `network-edge`, `filesystem-edge` and
 `resources-edge`), each a step of the `run-phase` job in an ordinary container with
@@ -145,14 +150,14 @@ A change to the sandbox needs two tests, not one:
 - the permitted case still works, which says the sandbox is usable;
 - the nearest forbidden neighbour is still denied, which says the boundary held.
 
-Either alone passes for the wrong reason. `tests/integration/filesystem_policy.sh` is the worked example:
+Either alone passes for the wrong reason. `protecter/test/integration/filesystem_policy.sh` is the worked example:
 it pins that a nested entry narrower than its ancestor is refused **and** that a merely
 different one is allowed, because a change that tightened the first would silently break the
 second.
 
 ## The probes are not suites
 
-Two scripts under `tests/` report for themselves and gate no pull request:
+Two scripts under `protecter/test/` and `pruner/test/` report for themselves and gate no pull request:
 
 - `runner-capability-probe.sh` answers what a machine can do, and is run by
   `runner-capabilities.yml` on request. Each assert mode answers 0 for yes, 1 for no and 3 for
@@ -177,6 +182,7 @@ Two scripts under `tests/` report for themselves and gate no pull request:
 
 ## Further reading
 
-- [`tests/README.md`](https://github.com/ls1intum/phobos/blob/main/tests/README.md): every
+- [`protecter/test/README.md`](https://github.com/ls1intum/phobos/blob/main/protecter/test/README.md) and
+  [`pruner/test/README.md`](https://github.com/ls1intum/phobos/blob/main/pruner/test/README.md): every
   suite, one row each
 - [How can you contribute](how-can-you-contribute.md): the lint gate beside these suites

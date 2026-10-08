@@ -50,11 +50,11 @@ jobs:
           sudo apt-get install --yes --no-install-recommends gcc-14
 
       - name: Run the unit tests
-        run: bash tests/unit/phobos-landlock-filesystem-and-networksystem/run.sh
+        run: bash protecter/test/unit/phobos-landlock-filesystem-and-networksystem/run.sh
 
       - name: Run the connect guard unit tests
         if: ${{ !cancelled() }}
-        run: bash tests/unit/phobos-seccomp-networksystem/seccomp_networksystem_run.sh
+        run: bash protecter/test/unit/phobos-seccomp-networksystem/seccomp_networksystem_run.sh
 
       # The guard installs a real seccomp filter and forks only when run for real; the unit
       # suite wraps every syscall and fork instead, so it needs no kernel, and its interposed
@@ -63,24 +63,24 @@ jobs:
       # states.
       - name: Every line of the connect guard ran
         if: ${{ !cancelled() }}
-        run: bash tests/unit/phobos-seccomp-networksystem/seccomp_networksystem_run.sh --coverage
+        run: bash protecter/test/unit/phobos-seccomp-networksystem/seccomp_networksystem_run.sh --coverage
 
       # The denial reporter's sources are held to the same line gate as the guard, and its
       # quoting to bash's own over a corpus of names.
       - name: Run the denial reporter unit tests
         if: ${{ !cancelled() }}
-        run: bash tests/unit/phobos-seccomp-filesystem/seccomp_filesystem_run.sh
+        run: bash protecter/test/unit/phobos-seccomp-filesystem/seccomp_filesystem_run.sh
 
       - name: Every line of the denial reporter ran
         if: ${{ !cancelled() }}
-        run: bash tests/unit/phobos-seccomp-filesystem/seccomp_filesystem_run.sh --coverage
+        run: bash protecter/test/unit/phobos-seccomp-filesystem/seccomp_filesystem_run.sh --coverage
 
       # No coverage step, deliberately. The suite interposes open and close, which is
       # also how the gcov runtime writes its .gcda files, so an instrumented run has
       # gcov's own diagnostics landing on stderr. That breaks the test asserting that a
       # run which goes through says nothing, and it means the figures come from a
       # perturbed run in the first place.
-      # tests/unit/phobos-landlock-filesystem-and-networksystem/mutation.sh is the stronger
+      # protecter/test/unit/phobos-landlock-filesystem-and-networksystem/mutation.sh is the stronger
       # measure of this suite and runs as the mutation job below.
 
   images:
@@ -188,13 +188,13 @@ jobs:
       - name: The five guarantees
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/run-tests.sh
 
       - name: Inheritance, non-root and the control probe
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/extra-tests.sh
 
       # Its own step because it is the one suite that resolves Maven plugins, and a
@@ -203,16 +203,16 @@ jobs:
       - name: Tightening and widening rights across phases
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/phase-test.sh
 
       # The one suite that runs the shipped policy an exercise actually gets, rather than a
       # tight test policy, so a regression that breaks an ordinary run under it, or widens it,
-      # fails here. The image bakes core/config/BaseLanguage-java.cfg, so this exercises it.
+      # fails here. The image bakes protecter/src/config/BaseLanguage-java.cfg, so this exercises it.
       - name: The shipped policy runs an exercise both ways
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/shipped-policy-test.sh
 
@@ -222,8 +222,8 @@ jobs:
       - name: The Maven base runs the Maven reference exercise under every Maven configuration
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
-            -v "${PWD}/var/tmp/testing-dir/java-maven/maven-reference:/exercise:ro" \
+          docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
+            -v "${PWD}/exercises/java-maven/maven-reference:/exercise:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/maven-policy-test.sh
 
@@ -233,8 +233,8 @@ jobs:
       - name: The shipped Java base runs the Gradle reference exercise both ways
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
-          docker run --rm --network none --memory 6g -v "${PWD}/tests:/tests:ro" \
-            -v "${PWD}/var/tmp/testing-dir/java/gradle-reference:/exercise:ro" \
+          docker run --rm --network none --memory 6g -v "${PWD}/protecter/test:/tests:ro" \
+            -v "${PWD}/exercises/java/gradle-reference:/exercise:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/gradle-policy-test.sh
 
@@ -243,7 +243,7 @@ jobs:
       - name: The network port rule holds against a raw-syscall bypass
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/network-port-test.sh
 
@@ -253,7 +253,7 @@ jobs:
       - name: The Landlock bind-port rule holds against a raw-syscall bind
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/bind-port-test.sh
 
@@ -264,7 +264,7 @@ jobs:
       - name: A sandboxed process cannot reach out of the sandbox with a signal
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/scoping-test.sh
 
       # The connect guard the image compiled installs its seccomp user-notification filter under
@@ -274,7 +274,7 @@ jobs:
       - name: The connect guard enforces the allow-list in the run-phase image
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/seccomp-networksystem-test.sh
 
@@ -285,7 +285,7 @@ jobs:
       - name: The network layer leaves nothing behind in the run-phase image
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/network-cleanup-test.sh
 
@@ -299,7 +299,7 @@ jobs:
       - name: The filesystem layer holds, right by right, and its documented limits stay as documented
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-a' }}
         run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/filesystem.sh
 
@@ -309,7 +309,7 @@ jobs:
       - name: The network layer holds for TCP, UDP, bind, listen, accept and host names
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-a' }}
         run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/network.sh
 
@@ -318,7 +318,7 @@ jobs:
       - name: The timeout layer ends a run and everything it started
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-a' }}
         run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/timeout.sh
 
@@ -328,7 +328,7 @@ jobs:
       - name: The resource layer sets, enforces and inherits every limit
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
         run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/resources.sh
 
@@ -337,7 +337,7 @@ jobs:
       - name: Every combination of the four layers holds exactly where each is on
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
         run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/combinations.sh
 
@@ -346,7 +346,7 @@ jobs:
       - name: The command line and odd policy files behave as the manual says
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-a' }}
         run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/cli.sh
 
@@ -355,7 +355,7 @@ jobs:
       - name: A run leaves nothing behind, whichever way it ends
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
         run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/lifecycle.sh
 
@@ -364,7 +364,7 @@ jobs:
       - name: Every shape of a policy line is judged as the parser should
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
         run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/policy-syntax.sh
 
@@ -374,7 +374,7 @@ jobs:
       - name: The network layer holds at the edges of ranges, ports and socket kinds
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
         run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/network-edge.sh
 
@@ -383,7 +383,7 @@ jobs:
       - name: The filesystem layer holds against links, dot-dot, magic links and swaps
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/filesystem-edge.sh
 
@@ -391,7 +391,7 @@ jobs:
       - name: Each resource limit holds through the call that meets it
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/resources-edge.sh
 
@@ -400,14 +400,23 @@ jobs:
       - name: The reporter reports each blocked action and changes no outcome
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/reporting.sh
+
+      # The repository's command line on the image this job just built, with a real Docker: the file the
+      # policy does not name stays refused and the one a configuration names is readable, the container
+      # it starts has the limits and none of the privileges, the status and the signals of the command
+      # reach the caller, an Ares 2 policy of the Maven reference exercise passes through the staged
+      # copy and the translated project root, and Compose accepts what prune and record build.
+      - name: The repository's command line starts an ordinary container and the sandbox holds in it
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
+        run: bash protecter/test/integration/phobos_cli_docker.sh phobos-run-phase:ci
 
       # The prune image is the run-phase image this job just built plus strace, python3 and the
       # protection matrix's probe, with a base that grants nothing. It is built on top of that exact
       # image, so the layer pruner is held to the layers this job has just proven. Built from the
-      # repository root, since the probe's source lives under tests/.
+      # repository root, since the probe's source lives under protecter/test/.
       - name: Build the prune image on the run-phase image
         id: prune-build
         if: >-
@@ -424,8 +433,9 @@ jobs:
         if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder-and-egress' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}/tests:/tests:ro" -v "${PWD}/var/tmp/helpers:/var/tmp/helpers:ro" \
-            phobos-prune-layers:ci bash /tests/integration/layer_prune_observer.sh
+            -v "${PWD}/protecter/test:/repo/protecter/test:ro" -v "${PWD}/pruner/test:/repo/pruner/test:ro" \
+            -v "${PWD}/pruner/src:/var/tmp/helpers:ro" \
+            phobos-prune-layers:ci bash /repo/pruner/test/integration/layer_prune_observer.sh
 
       # The recording pruner, in the prune image just built: its refusals (record_safety.sh), a real
       # terminal with Ctrl+C, Ctrl+Z and fg (record_interactive.sh), its replay check in both
@@ -436,7 +446,7 @@ jobs:
       - name: The recording pruner records with the terminal passed through and replays under the layers
         if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder-and-egress' }}
         timeout-minutes: 40
-        run: bash tests/integration/record_host.sh phobos-prune-layers:ci phobos-run-phase:ci
+        run: bash pruner/test/integration/record_host.sh phobos-prune-layers:ci phobos-run-phase:ci
 
       # The recording pruner on a host name: a stand-in server on a Docker network with no route out
       # serves TLS and DNS for api.phobos.test; the recorded session's policy names the host from the
@@ -445,7 +455,7 @@ jobs:
       - name: The recording pruner writes a host name rule and replays it through the egress broker
         if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder-and-egress' }}
         timeout-minutes: 15
-        run: bash tests/integration/record_networked.sh phobos-prune-layers:ci
+        run: bash pruner/test/integration/record_networked.sh phobos-prune-layers:ci
 
       # The whole pipeline on the fixture exercise: the derived policy passes the build with every
       # layer on, refuses what the build did not need, bounds each limit, and every wrong-reason
@@ -456,7 +466,7 @@ jobs:
         timeout-minutes: 50
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}:/repo:ro" phobos-prune-layers:ci bash /repo/tests/integration/layer_prune.sh
+            -v "${PWD}:/repo:ro" phobos-prune-layers:ci bash /repo/pruner/test/integration/layer_prune.sh
 
       # Declared hosts: of two the fixture declares, the one it needs keeps its rule and the other is
       # dropped. A stand-in resolver and a TLS server on loopback stand in for the external host, so
@@ -466,7 +476,7 @@ jobs:
         timeout-minutes: 30
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}:/repo:ro" phobos-prune-layers:ci bash /repo/tests/integration/layer_prune_egress.sh
+            -v "${PWD}:/repo:ro" phobos-prune-layers:ci bash /repo/pruner/test/integration/layer_prune_egress.sh
 
   # The run-phase image for Python, built FROM the official Python image rather than Artemis's
   # ls1tum/artemis-python-docker (see its Dockerfile), on native runners for both architectures as
@@ -532,7 +542,7 @@ jobs:
               protection-matrix/filesystem.sh \
               protection-matrix/cli.sh; do
             echo "::group::${suite}"
-            if ! docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+            if ! docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
                 phobos-run-phase-python:ci bash "/tests/integration/${suite}"; then
               failed=1
               echo "::error::${suite} failed"
@@ -554,7 +564,7 @@ jobs:
               protection-matrix/resources.sh \
               protection-matrix/resources-edge.sh; do
             echo "::group::${suite}"
-            if ! docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+            if ! docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
                 phobos-run-phase-python:ci bash "/tests/integration/${suite}"; then
               failed=1
               echo "::error::${suite} failed"
@@ -566,7 +576,7 @@ jobs:
       - name: The reporter reports each blocked action on the Python image and changes no outcome
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'egress' }}
         run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase-python:ci bash /tests/integration/protection-matrix/reporting.sh
 
       # The Python reference exercise under the Python base the image ships, which the layer pruner
@@ -576,8 +586,8 @@ jobs:
       - name: The shipped Python base runs the Python reference exercise both ways
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'suites-a' }}
         run: |
-          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
-            -v "${PWD}/var/tmp/testing-dir/python/python-reference:/exercise:ro" \
+          docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
+            -v "${PWD}/exercises/python/python-reference:/exercise:ro" \
             phobos-run-phase-python:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/python-policy-test.sh
 
@@ -594,22 +604,23 @@ jobs:
         if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner-a' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}/tests:/tests:ro" -v "${PWD}/var/tmp/helpers:/var/tmp/helpers:ro" \
-            phobos-prune-layers-python:ci bash /tests/integration/layer_prune_observer.sh
+            -v "${PWD}/protecter/test:/repo/protecter/test:ro" -v "${PWD}/pruner/test:/repo/pruner/test:ro" \
+            -v "${PWD}/pruner/src:/var/tmp/helpers:ro" \
+            phobos-prune-layers-python:ci bash /repo/pruner/test/integration/layer_prune_observer.sh
 
       - name: The layer pruner on the Python image derives a policy that holds in both directions
         if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner-a' }}
         timeout-minutes: 50
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci bash /repo/tests/integration/layer_prune.sh
+            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci bash /repo/pruner/test/integration/layer_prune.sh
 
       - name: The layer pruner on the Python image keeps exactly the declared hosts a build needs
         if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'egress' }}
         timeout-minutes: 30
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci bash /repo/tests/integration/layer_prune_egress.sh
+            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci bash /repo/pruner/test/integration/layer_prune_egress.sh
 
       # The Python reference exercise, pruned as Compose's prune_python prunes it: pytest under the
       # layers, and every stage ending in a policy rather than an abort.
@@ -619,8 +630,8 @@ jobs:
         run: |
           output="$(mktemp -d)"
           docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}/var/tmp/testing-dir:/srv/phobos-prune-exercises:ro" \
-            -v "${PWD}/var/tmp/helpers:/var/tmp/helpers:ro" -v "${output}:/var/tmp/path_sets" \
+            -v "${PWD}/exercises:/srv/phobos-prune-exercises:ro" \
+            -v "${PWD}/pruner/src:/var/tmp/helpers:ro" -v "${output}:/var/tmp/path_sets" \
             --entrypoint python3 phobos-prune-layers-python:ci /var/tmp/helpers/layer_prune/main.py python
           test -s "${output}/python_python-reference.cfg"
 
@@ -641,4 +652,4 @@ jobs:
           persist-credentials: false
 
       - name: Run mutation testing
-        run: bash tests/unit/phobos-landlock-filesystem-and-networksystem/mutation.sh
+        run: bash protecter/test/unit/phobos-landlock-filesystem-and-networksystem/mutation.sh

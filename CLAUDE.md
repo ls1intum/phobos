@@ -60,9 +60,9 @@ environment, offline, and grading itself only applies a fixed configuration.
 - Docusaurus, Node 24 and pnpm for the documentation site under `documentation/`, tested with Playwright
 
 The filesystem layer is enforced by Landlock, an unprivileged Linux kernel sandbox, applied
-by `phobos-landlock-filesystem-and-networksystem` (the C program under `core/`). The run phase needs no privileges, no
+by `phobos-landlock-filesystem-and-networksystem` (the C program under `protecter/src/`). The run phase needs no privileges, no
 capabilities and no container flags. The prune runs the layer pruner
-(`var/tmp/helpers/layer_prune/`, in `docker/prune_phase/layers/`), which measures under the
+(`pruner/src/layer_prune/`, in `docker/prune_phase/layers/`), which measures under the
 grading layers themselves, observing their refusals with `strace`; README.md, "The layer
 pruner", says how to run it. Nothing uses Bubblewrap any more.
 
@@ -73,7 +73,7 @@ There is no build system. The shell runs as it is, and the C is compiled inside 
 Both of these run **inside the run-phase image**, where `PHOBOS_HOME` is `/var/tmp/opt/core`. The
 shipped base policy is the `Base*.cfg` the image put beside `phobos-policysystem.sh`, so it is applied
 without being named; `--config` is for an exercise configuration on top of it. A bare checkout keeps
-those files in `core/config/` rather than beside `phobos-policysystem.sh`, so a run from one is refused
+those files in `protecter/src/config/` rather than beside `phobos-policysystem.sh`, so a run from one is refused
 with `PHB-EPOLICY` rather than run unconfined.
 
 ```
@@ -101,9 +101,24 @@ and dropping what is not absolute from `TMPDIR`, `GCONV_PATH`, `LOCPATH`, `NLSPA
 `HOSTALIASES` and `TZDIR`, before it runs any program, because the current directory may be the
 submission's tree. The command sees the cleaned environment, so it is named by its path
 (`./gradlew`), and a `PATH` with no absolute entry is refused with `PHB-ERUNTIME`. Every script
-under `core/` begins with `#!/bin/bash`, so bash itself is never looked up through `PATH`
+under `protecter/src/` begins with `#!/bin/bash`, so bash itself is never looked up through `PATH`
 (AGENTS.md states the rule). What no script can clean, `BASH_ENV` and the loader's `LD_*`, is an
 integration requirement in SECURITY.md.
+
+### The command line
+
+```
+# On a host: build the image, run a command in an ordinary container with limits, prune and record
+./phobos-cli.sh build java
+./phobos-cli.sh run --exercise ./my-exercise --config exercise.cfg -- ./gradlew test
+./phobos-cli.sh prune python        # one Compose service, rebuilt first; "prune all" runs the seven jobs in order
+./phobos-cli.sh record generate --name tool
+./phobos-cli.sh --dry-run run --exercise ./my-exercise -- true    # print the commands, start nothing
+```
+
+Inside an image the same `run`, `prune` and `record` start `phobos.sh` and the helpers of the pruners
+directly. `run` refuses every `--no-*` switch and every `--*-bin` override in both places; to debug with a
+layer off, call `phobos.sh` directly.
 
 ### The linters, which are the gate
 
@@ -122,12 +137,12 @@ find . -name '*.sh'  -type f -print0 | xargs -0 shellcheck -x -S warning
 ( failed=0; while IFS= read -r f; do gcc-14 -std=gnu23 -fsyntax-only -Wall -Wextra -Werror -fanalyzer "$f" || failed=1; done < <(find . -name '*.c' -type f); exit "$failed" )
 find . -name '*.c'   -type f -print0 | xargs -0 cppcheck --std=c23 --enable=warning --quiet --error-exitcode=1
 ruff check --no-cache .
-bandit --recursive --ini .bandit --severity-level medium docker/prune_phase/orchestrate var/tmp/helpers
+bandit --recursive --ini .bandit --severity-level medium docker/prune_phase/orchestrate pruner/src
 yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 actionlint
 ec --no-color                      # editorconfig-checker, configured by .editorconfig-checker.json
-awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print FILENAME":"FNR; e=1}} {p=$0} END{exit e}' core/*.sh core/phobos-tools-*/*.sh
+awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print FILENAME":"FNR; e=1}} {p=$0} END{exit e}' protecter/src/*.sh protecter/src/phobos-tools-*/*.sh
 ```
 
 One of those is narrower than it looks: `bandit` runs over exactly two directories, not the
@@ -149,14 +164,14 @@ docker compose -f docker-compose.yaml up --build        # the prune environments
 docker compose -f docker/run_phase/java/docker-compose.yaml up --build
 docker build -f docker/run_phase/java/Dockerfile -t phobos-run-phase:ci build/run-phase-context
 # an acceptance suite, in an ordinary container: no --privileged, no --cap-add, no --security-opt
-docker run --rm --network none -v "$PWD/tests:/tests:ro" phobos-run-phase:ci \
+docker run --rm --network none -v "$PWD/protecter/test:/tests:ro" phobos-run-phase:ci \
   bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/run-tests.sh
 docker compose -f docker/run_phase/python/docker-compose.yaml up --build
 ```
 
 Each prune container works independently on its language and writes its result into the
-shared `var/tmp/path_sets` directory; nothing passes between containers except through
-`var/tmp`. Each language's prune needs its run-phase image (`phobos-run-phase-java`,
+shared `build/pruner/path_sets` directory; nothing passes between containers except through
+`build/pruner`. Each language's prune needs its run-phase image (`phobos-run-phase-java`,
 `phobos-run-phase-python`) built first, and `verify_java` and `verify_python` re-run the
 exercises under the merged configuration at the end.
 
@@ -170,54 +185,61 @@ outside is `--network none` and cgroup limits, which Phobos cannot set for itsel
 ## Project structure
 
 ```
-core/                      the sandbox itself
-  phobos.sh                entry point: parses the configuration, applies the layers
-  phobos-policysystem.sh   turns the base and exercise configuration into a run's specification
-  phobos-filesystem.sh     the filesystem layer, reads the path sets and applies Landlock
-  phobos-networksystem.sh  the network layer, runs the connect guard and the egress/inbound HAProxy
-  phobos-timeoutsystem.sh  the timeout layer, which applies the group lock when a timeout is set
-  phobos-resourcesystem.sh the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
-  phobos-landlock-filesystem-and-networksystem/  its *.c/.h: the C program that applies the Landlock policy, then exec's
-  phobos-seccomp-networksystem/  its *.c/.h: the connect guard, supervises connect() and enforces [connect] by host and port; with the network layer on it is also the run's one reporting supervisor
-  phobos-seccomp-timeoutsystem/  its *.c: the group lock, a seccomp filter refusing setsid and setpgid, then exec's
-  phobos-seccomp-filesystem/     its *.c/.h: the denial reporter (wording, counts, the mirror of Landlock) and, as its main, the report-only supervisor that runs when the network layer is off; the connect guard links the rest
-  phobos-tools-common/     sourced by every layer through phobos-common.sh, which sources the rest here but phobos-environment.sh, and the per-subsystem helpers
-    phobos-environment.sh  sourced first by every entry point: PATH and the other lookup variables made safe before anything is looked up
-    phobos-common.sh       the shared entry the layers source; it sources the others
-    phobos-constants.sh    the numbers the scripts share, named once, the exit statuses among them
-    phobos-log.sh          reporting, and wording the resource limit that ended a run
-    phobos-paths.sh        the two canonical forms a path is compared in
-    phobos-time.sh         the timeout contract: how a value is spelled and compared
-    phobos-spec-dir.sh     the specification directory and its lifetime
-    phobos-signals.sh      passing a caller's signal on to the command a layer waits for
-  phobos-tools-policysystem/
-    phobos-policy-parse.sh one cfg in, the parsed state and the specification files out
-    phobos-policy-yaml.sh  a strict subset of YAML in, flat records with line numbers out
-    phobos-language-configuration.sh  a programming language configuration in, its bases, placeholder values and [connect] rows out
-    phobos-policy-ares.sh  an Ares 2 security policy in, the same parsed state a cfg gives out
-  phobos-tools-filesystem/
-    phobos-rights.sh       a parsed policy to the --rights= arguments phobos-landlock-filesystem-and-networksystem takes
-  phobos-tools-networksystem/
-    phobos-haproxy.sh      the egress broker and inbound filter: turns [connect]/[accept] into an haproxy.cfg
-    phobos-network-args.sh [connect] and [bind] to the TCP and UDP port rules Landlock enforces
-  config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
-    language-configurations/  one file per Ares 2 programming language configuration: its bases, placeholders and [connect] rows
+protecter/                 the sandbox and the tests that hold it
+  src/                     the sandbox itself, the part that is shipped in the run-phase image
+    phobos.sh                entry point: parses the configuration, applies the layers
+    phobos-policysystem.sh   turns the base and exercise configuration into a run's specification
+    phobos-filesystem.sh     the filesystem layer, reads the path sets and applies Landlock
+    phobos-networksystem.sh  the network layer, runs the connect guard and the egress/inbound HAProxy
+    phobos-timeoutsystem.sh  the timeout layer, which applies the group lock when a timeout is set
+    phobos-resourcesystem.sh the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
+    phobos-landlock-filesystem-and-networksystem/  its *.c/.h: the C program that applies the Landlock policy, then exec's
+    phobos-seccomp-networksystem/  its *.c/.h: the connect guard, supervises connect() and enforces [connect] by host and port; with the network layer on it is also the run's one reporting supervisor
+    phobos-seccomp-timeoutsystem/  its *.c: the group lock, a seccomp filter refusing setsid and setpgid, then exec's
+    phobos-seccomp-filesystem/     its *.c/.h: the denial reporter (wording, counts, the mirror of Landlock) and, as its main, the report-only supervisor that runs when the network layer is off; the connect guard links the rest
+    phobos-tools-common/     sourced by every layer through phobos-common.sh, which sources the rest here but phobos-environment.sh, and the per-subsystem helpers
+      phobos-environment.sh  sourced first by every entry point: PATH and the other lookup variables made safe before anything is looked up
+      phobos-common.sh       the shared entry the layers source; it sources the others
+      phobos-constants.sh    the numbers the scripts share, named once, the exit statuses among them
+      phobos-log.sh          reporting, and wording the resource limit that ended a run
+      phobos-paths.sh        the two canonical forms a path is compared in
+      phobos-time.sh         the timeout contract: how a value is spelled and compared
+      phobos-spec-dir.sh     the specification directory and its lifetime
+      phobos-signals.sh      passing a caller's signal on to the command a layer waits for
+    phobos-tools-policysystem/
+      phobos-policy-parse.sh one cfg in, the parsed state and the specification files out
+      phobos-policy-yaml.sh  a strict subset of YAML in, flat records with line numbers out
+      phobos-language-configuration.sh  a programming language configuration in, its bases, placeholder values and [connect] rows out
+      phobos-policy-ares.sh  an Ares 2 security policy in, the same parsed state a cfg gives out
+    phobos-tools-filesystem/
+      phobos-rights.sh       a parsed policy to the --rights= arguments phobos-landlock-filesystem-and-networksystem takes
+    phobos-tools-networksystem/
+      phobos-haproxy.sh      the egress broker and inbound filter: turns [connect]/[accept] into an haproxy.cfg
+      phobos-network-args.sh [connect] and [bind] to the TCP and UDP port rules Landlock enforces
+    config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
+      language-configurations/  one file per Ares 2 programming language configuration: its bases, placeholders and [connect] rows
+  test/                    unit/ (C and shell units), integration/ (shell suites, the acceptance suites and
+                           protection-matrix/), harness.sh, harness_self_test.sh and a policy probe
+pruner/                    the pruners, which discover what a policy needs
+  src/                     layer_prune/: the layer pruner (observe, attribute, grow, minimise, limits, verify, write);
+                           layer_record/: the recording pruner (record a session unsandboxed, generate a policy, replay
+                           it, compare it; prune image only)
+  test/                    integration/ (the pruner suites and their fixtures), python/, and the runner probes
 docker/prune_phase/        the layer pruner's image and the orchestrator's
   layers/                  the layer pruner's image: the run-phase image, strace, the probe, an empty base
 docker/run_phase/          the images an exercise actually runs in, one per language (java/, python/)
-tests/                     unit/ (C and shell units), integration/ (shell suites, the acceptance suites and
-                           protection-matrix/), python/, and two probes
+exercises/                 the reference exercises: the pruners' input and the protecter's acceptance fixtures
+phobos-cli.sh              one command line for phobos.sh, the layer pruner, the recording pruner and the image build; on a host it
+                           starts Docker, in an image it starts what the image holds, and it refuses every switch that turns a layer off
 documentation/             the Docusaurus site, with its own gate
-var/tmp/                   prune inputs, helpers and example outputs
-  helpers/layer_prune/     the layer pruner: observe, attribute, grow, minimise, limits, verify, write
-  helpers/layer_record/    the recording pruner: record a session unsandboxed, generate a policy, replay it, compare it (prune image only)
+build/                     generated and ignored: the assembled image context, and pruner/ with path sets, recordings and the merged config
 ```
 
 ## Coding conventions
 
 - One variable or function declaration per line, in every language.
 - British English in all prose, comments and messages.
-- Every function in the core shell scripts (`core/*.sh` and `core/phobos-tools-*/*.sh`) says what it does and what it assumes about its environment.
+- Every function in the shell scripts of the protecter (`protecter/src/*.sh` and `protecter/src/phobos-tools-*/*.sh`) says what it does and what it assumes about its environment.
   AGENTS.md states this in full.
 - Shell is POSIX where it can be and bash where it must be; say which at the top of a file.
 - A `shellcheck` directive carries a comment on the line above saying why the finding is

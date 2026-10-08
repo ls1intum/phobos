@@ -51,7 +51,7 @@ shellcheck -x -S warning $(find . -name '*.sh' -type f)
 gcc -fsyntax-only -Wall -Wextra -Werror -fanalyzer <file>.c
 cppcheck --enable=warning --quiet --error-exitcode=1 <file>.c
 ruff check --no-cache .
-bandit --recursive --ini .bandit --severity-level medium docker/prune_phase/orchestrate var/tmp/helpers
+bandit --recursive --ini .bandit --severity-level medium docker/prune_phase/orchestrate pruner/src
 yamllint --strict .
 hadolint --config .hadolint.yaml < <Dockerfile>
 actionlint
@@ -74,7 +74,7 @@ pull request, not only in a commit message.
    what must still be blocked and how you confirmed it is.
 4. **Do not commit the compiled C products.** `phobos-landlock-filesystem-and-networksystem`,
    the connect guard, the timeout's group lock and the report-only supervisor
-   `phobos-seccomp-filesystem` are built from the source under `core/`, once per architecture,
+   `phobos-seccomp-filesystem` are built from the source under `protecter/src/`, once per architecture,
    inside the run-phase image, and
    CI checks the copies the image ships are hardened. If you change the source, say so; the
    command to rebuild and check the image locally is in AGENTS.md.

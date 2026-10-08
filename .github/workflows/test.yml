@@ -32,16 +32,17 @@ jobs:
 
       # Every suite invokes its script through `bash`, so a mode lost in a commit would go
       # unnoticed. phobos.sh runs phobos-policysystem.sh and every layer as a program rather
-      # than through `bash`, and the README and CLAUDE.md tell a reader to call core/phobos.sh
+      # than through `bash`, and the README and CLAUDE.md tell a reader to call protecter/src/phobos.sh
       # directly, so a mode lost here ends a run with exit 126 outside the image, which sets
       # the modes itself.
       # phobos-common.sh and phobos-constants.sh are absent on purpose: they are sourced,
       # never run, and a mode on them would suggest otherwise.
       - name: The entry points are executable
         run: |
-          for script in core/phobos.sh core/phobos-policysystem.sh core/phobos-filesystem.sh \
-                        core/phobos-networksystem.sh core/phobos-resourcesystem.sh core/phobos-timeoutsystem.sh \
-                        var/tmp/helpers/layer_record/phobos-record; do
+          for script in protecter/src/phobos.sh protecter/src/phobos-policysystem.sh \
+                        protecter/src/phobos-filesystem.sh protecter/src/phobos-networksystem.sh \
+                        protecter/src/phobos-resourcesystem.sh protecter/src/phobos-timeoutsystem.sh \
+                        pruner/src/layer_record/phobos-record phobos-cli.sh; do
             if [ ! -x "${script}" ]; then
               echo "::error file=${script}::not executable, so it cannot be started as a program"
               exit 1
@@ -49,8 +50,8 @@ jobs:
           done
 
       # A suite that no workflow starts passes nothing and fails nothing, and it reads like
-      # coverage in the tree, so tests/integration/haproxy_inbound.sh sat unrun for a long time.
-      # Every shell file under tests/ has to be named in a workflow, except the ones that are
+      # coverage in the tree, so protecter/test/integration/haproxy_inbound.sh sat unrun for a long time.
+      # Every shell file under protecter/test/ and pruner/test/ has to be named in a workflow, except the ones that are
       # not suites: the reporting helper and the matrix library that suites source, the
       # matrix's run-all.sh, which is for running them by hand, and the redundancy probe, a
       # diagnostic that takes arguments.
@@ -70,13 +71,13 @@ jobs:
               echo "::error file=${suite}::no workflow starts this suite, so it runs nowhere"
               missing=1
             fi
-          done < <(find tests -name '*.sh' -type f | sort)
+          done < <(find protecter/test pruner/test -name '*.sh' -type f | sort)
           exit "${missing}"
 
       # What the suites here need beyond the runner's own image. gcc-14 is the compiler the C
       # probes of the network suites are pinned to, and without it those suites skip themselves whole;
-      # haproxy is the egress broker tests/integration/haproxy_broker.sh drives and the inbound filter
-      # tests/integration/haproxy_inbound.sh drives, and openssl is the client
+      # haproxy is the egress broker protecter/test/integration/haproxy_broker.sh drives and the inbound filter
+      # protecter/test/integration/haproxy_inbound.sh drives, and openssl is the client
       # that sends it a ClientHello with a host name; that suite skips without either.
       # A skip reads as a pass in the workflow's summary, so they are installed rather
       # than left to the image.
@@ -92,43 +93,52 @@ jobs:
       # a failure wrongly does not announce itself, it makes a suite green.
       - name: The suites' own reporting
         if: ${{ !cancelled() }}
-        run: bash tests/harness_self_test.sh
+        run: bash protecter/test/harness_self_test.sh
 
       # What every layer waits through: a signal sent to the layer reaches the command, the status is
       # the command's own, standard input stays the command's and the layer's own traps come back.
       - name: A layer passes a caller's signals on to its command
         if: ${{ !cancelled() }}
-        run: bash tests/unit/phobos-tools-common/signals.sh
+        run: bash protecter/test/unit/phobos-tools-common/signals.sh
 
       - name: The timeout contract
         if: ${{ !cancelled() }}
-        run: bash tests/unit/phobos-tools-common/timeout_units.sh
+        run: bash protecter/test/unit/phobos-tools-common/timeout_units.sh
 
       - name: The timeout stops a command that ignores SIGTERM
         if: ${{ !cancelled() }}
-        run: bash tests/integration/timeout_escalation.sh
+        run: bash protecter/test/integration/timeout_escalation.sh
 
       - name: The timeout's group lock refuses setsid and setpgid
         if: ${{ !cancelled() }}
-        run: bash tests/integration/seccomp_timeoutsystem.sh
+        run: bash protecter/test/integration/seccomp_timeoutsystem.sh
 
       - name: Each layer runs on its own from a config
         if: ${{ !cancelled() }}
-        run: bash tests/integration/standalone_layers.sh
+        run: bash protecter/test/integration/standalone_layers.sh
 
       - name: The command-line contract
         if: ${{ !cancelled() }}
-        run: bash tests/integration/cli_flags.sh
+        run: bash protecter/test/integration/cli_flags.sh
+
+      # The command line of the repository, phobos-cli.sh: the options it accepts and the ones it refuses
+      # in both places, the commands it builds for run, prune, record and build, and that nothing it
+      # builds can give a container more than the policy says. It starts no container: it reads the
+      # commands a dry run prints and answers a stand-in docker.
+      - name: The repository's command line starts nothing it should refuse
+        if: ${{ !cancelled() }}
+        run: bash protecter/test/integration/phobos_cli.sh
+
       # No entry point finds a program through a relative or empty PATH entry, which names the
       # current directory, and the submission's tree when a grader starts Phobos there.
       - name: No entry point looks a program up in the current directory
         if: ${{ !cancelled() }}
-        run: bash tests/integration/startup_environment.sh
+        run: bash protecter/test/integration/startup_environment.sh
       # Every temporary file of a run lies in its own specification directory, out of the reach of
       # the command of a concurrent run, and never in TMPDIR, or /tmp when it is unset.
       - name: A run's temporary files stay in its specification directory
         if: ${{ !cancelled() }}
-        run: bash tests/integration/scratch_location.sh
+        run: bash protecter/test/integration/scratch_location.sh
 
       # How the network allow-list becomes Landlock TCP-port rules: a concrete port is
       # enforced, a loopback host with no port is tolerated, a non-loopback host with no
@@ -136,100 +146,101 @@ jobs:
       # to enforce it. No sandbox needed.
       - name: The network policy
         if: ${{ !cancelled() }}
-        run: bash tests/unit/phobos-tools-networksystem/network_policy.sh
+        run: bash protecter/test/unit/phobos-tools-networksystem/network_policy.sh
 
       # Which spellings of an address, a range and a port a [connect] line may use: each right one
       # is accepted and each almost-right one refused, since the guard would read it as a host name
       # and open its port to every address.
       - name: The spellings of an address in a connect rule
         if: ${{ !cancelled() }}
-        run: bash tests/unit/phobos-tools-policysystem/address_literals.sh
+        run: bash protecter/test/unit/phobos-tools-policysystem/address_literals.sh
 
       # Which YAML an Ares 2 policy may be written in: every construct of the subset is read into
       # the exact records, and every construct two YAML readers could read differently is refused
       # with its line rather than read one way.
       - name: The YAML subset a policy may be written in
         if: ${{ !cancelled() }}
-        run: bash tests/unit/phobos-tools-policysystem/yaml_subset.sh
+        run: bash protecter/test/unit/phobos-tools-policysystem/yaml_subset.sh
 
       # A programming language configuration is the one place a language enters Phobos: the loader
       # takes its two sections and three primitives and refuses everything else with file and line,
-      # and no code under core/ outside core/config/ names a language configuration or its placeholders.
+      # and no code under protecter/src/ outside protecter/src/config/ names a language
+      # configuration or its placeholders.
       - name: The programming language configurations
         if: ${{ !cancelled() }}
-        run: bash tests/unit/phobos-tools-policysystem/language_configuration.sh
+        run: bash protecter/test/unit/phobos-tools-policysystem/language_configuration.sh
 
       - name: No programming language in the code
         if: ${{ !cancelled() }}
-        run: bash tests/unit/phobos-tools-policysystem/no_language_in_code.sh
+        run: bash protecter/test/unit/phobos-tools-policysystem/no_language_in_code.sh
 
       # The configurations the image ships, read by the real loader: each names exactly the base of
       # its build tool, the Maven base is never folded by a run without an Ares 2 policy, and it
       # grants no [execute] on a directory that can be written.
       - name: The shipped programming language configurations
         if: ${{ !cancelled() }}
-        run: bash tests/unit/phobos-tools-policysystem/shipped_language_configurations.sh
+        run: bash protecter/test/unit/phobos-tools-policysystem/shipped_language_configurations.sh
 
       # How an Ares 2 policy becomes the parsed state a .cfg gives: every field the import maps is
       # mapped as the documentation says, and every element whose translation would widen or narrow
       # the sandbox without saying so is refused with its line.
       - name: The Ares 2 policy import
         if: ${{ !cancelled() }}
-        run: bash tests/unit/phobos-tools-policysystem/ares_policy.sh
+        run: bash protecter/test/unit/phobos-tools-policysystem/ares_policy.sh
 
       # The policy program given an Ares 2 policy: base selection by the programming language
       # configuration, the additive fold beside a .cfg, the project root and the covered-entry skip.
       - name: The policy program with an Ares 2 policy
         if: ${{ !cancelled() }}
-        run: bash tests/integration/ares_policy_program.sh
+        run: bash protecter/test/integration/ares_policy_program.sh
 
       - name: The connect guard enforces the allow-list by host and port
         if: ${{ !cancelled() }}
-        run: bash tests/integration/seccomp_networksystem.sh
+        run: bash protecter/test/integration/seccomp_networksystem.sh
 
       - name: The allow-list becomes an egress-broker config
         if: ${{ !cancelled() }}
-        run: bash tests/unit/phobos-tools-networksystem/haproxy_conf.sh
+        run: bash protecter/test/unit/phobos-tools-networksystem/haproxy_conf.sh
 
       - name: The egress broker enforces the allow-list by TLS host name
         if: ${{ !cancelled() }}
-        run: bash tests/integration/haproxy_broker.sh
+        run: bash protecter/test/integration/haproxy_broker.sh
 
       - name: The inbound filter admits only the sources an [accept] rule names
         if: ${{ !cancelled() }}
-        run: bash tests/integration/haproxy_inbound.sh
+        run: bash protecter/test/integration/haproxy_inbound.sh
 
       # The lines a run adds to a hosts file carry its tag and leave with its specification
       # directory, under a lock and in place. A scratch hosts file, so no root is needed.
       - name: A run's hosts-file lines are removed with it
         if: ${{ !cancelled() }}
-        run: bash tests/unit/phobos-tools-common/hosts_entries.sh
+        run: bash protecter/test/unit/phobos-tools-common/hosts_entries.sh
 
       # The [limits] resource keys are parsed and, when applied, set the process's rlimits,
       # the in-process line against a fork bomb, a runaway allocation or a disk-filling file.
       - name: The resource limits
         if: ${{ !cancelled() }}
-        run: bash tests/integration/resource_limits.sh
+        run: bash protecter/test/integration/resource_limits.sh
 
       # The filesystem layer's denial report, both directions, and that neither the report nor
       # the helpers behind it ever cost the command its output or its exit status.
       - name: The denial report
         if: ${{ !cancelled() }}
-        run: bash tests/integration/denial_report.sh
+        run: bash protecter/test/integration/denial_report.sh
 
       - name: The timeout and resource-limit merge
         if: ${{ !cancelled() }}
-        run: bash tests/integration/limit_merge.sh
+        run: bash protecter/test/integration/limit_merge.sh
 
       - name: The policy program
         if: ${{ !cancelled() }}
-        run: bash tests/integration/policy_program.sh
+        run: bash protecter/test/integration/policy_program.sh
 
       # A configuration that is wrong has to end the run with a message that says what and where, and no
       # bash error or raw byte may reach the terminal in its place.
       - name: A malformed configuration is refused with a message that says what and where
         if: ${{ !cancelled() }}
-        run: bash tests/integration/malformed_cfg.sh
+        run: bash protecter/test/integration/malformed_cfg.sh
 
       # The rights hierarchy decides which policies are refused before a command runs, and
       # nothing measured it until this suite: a nested entry narrower than its ancestor is
@@ -238,7 +249,7 @@ jobs:
       # fewer rights.
       - name: The filesystem policy
         if: ${{ !cancelled() }}
-        run: bash tests/integration/filesystem_policy.sh
+        run: bash protecter/test/integration/filesystem_policy.sh
 
   python:
     name: Python helpers
@@ -258,4 +269,4 @@ jobs:
       # These two helpers turn a pruning run into the allow-list a sandbox is then built
       # from, so a defect in either is a defect in a security policy.
       - name: Run the helper tests
-        run: python -m pytest tests/python -q
+        run: python -m pytest pruner/test/python -q

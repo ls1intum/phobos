@@ -41,7 +41,7 @@ jobs:
           persist-credentials: false
 
       - name: Survey
-        run: bash tests/runner-capability-probe.sh --report
+        run: bash pruner/test/runner-capability-probe.sh --report
 
       # A capability this repository does not yet use being absent is a fact to record, not
       # a broken run, so "no" is a green dispatch. A probe that could not reach a verdict
@@ -111,7 +111,7 @@ jobs:
           sudo apt-get install --yes --no-install-recommends "${QEMU_PACKAGE}"
 
       - name: Survey
-        run: bash tests/runner-capability-probe.sh --report
+        run: bash pruner/test/runner-capability-probe.sh --report
 
       - name: Assert that a guest boots under KVM
         id: kvm

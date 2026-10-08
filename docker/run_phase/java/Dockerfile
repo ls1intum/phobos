@@ -107,7 +107,7 @@ RUN printf '%s  %s\n' 238e777fcddd7e34f9708186085def2abd6e08e658505b38718d79d74c
 # binutils supplies the readelf the build-time hardening check below runs over the four compiled
 # binaries. haproxy is the egress broker: the connect guard hands an allowed connection to it,
 # and it enforces the allow-list by the TLS host name the guard cannot see;
-# tests/integration/haproxy_broker.sh exercises that path inside this image.
+# protecter/test/integration/haproxy_broker.sh exercises that path inside this image.
 FROM ls1tum/artemis-maven-template:java25-1@sha256:b8393cc0fd728e1645e63380e8470443a691cedf5aaa7b1b86fd33250141de3b
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -161,10 +161,12 @@ RUN readelf -h ${PHOBOS_HOME}/phobos-landlock-filesystem-and-networksystem > /tm
  && grep -q 'Type:[[:space:]]*DYN' /tmp/reporter-header.txt \
  && grep -q 'BIND_NOW' /tmp/reporter-dynamic.txt \
  && rm -f /tmp/wrapper-header.txt /tmp/wrapper-dynamic.txt /tmp/guard-header.txt /tmp/guard-dynamic.txt /tmp/lock-header.txt /tmp/lock-dynamic.txt /tmp/reporter-header.txt /tmp/reporter-dynamic.txt
-# The six entry points, and not the helpers under phobos-tools-*, which are only ever sourced: a
-# mode on those would say they can be run, which is what the check in test.yml states they cannot.
+# The six entry points and the command line that starts them, and not the helpers under phobos-tools-*,
+# which are only ever sourced: a mode on those would say they can be run, which is what the check in
+# test.yml states they cannot.
 RUN chmod +x ${PHOBOS_HOME}/phobos.sh ${PHOBOS_HOME}/phobos-policysystem.sh \
       ${PHOBOS_HOME}/phobos-filesystem.sh ${PHOBOS_HOME}/phobos-networksystem.sh \
       ${PHOBOS_HOME}/phobos-resourcesystem.sh ${PHOBOS_HOME}/phobos-timeoutsystem.sh \
+      ${PHOBOS_HOME}/phobos-cli.sh \
  && ln -sf phobos.sh ${PHOBOS_HOME}/phobos
 ENV PATH=${PHOBOS_HOME}:$PATH

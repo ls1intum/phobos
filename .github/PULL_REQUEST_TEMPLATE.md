@@ -228,7 +228,7 @@
 ## 5. Test case coverage regarding this PR
 
 <!--
-  Phobos is tested by the suites under tests/. List every suite this pull request adds
+  Phobos is tested by the suites under protecter/test/ and pruner/test/. List every suite this pull request adds
   or changes, and every suite that covers the behaviour it changes, with the result of
   the run you actually did.
 
@@ -256,7 +256,7 @@
 ## Breaking changes and migration
 
 <!--
-  Phobos is consumed as a container image plus the scripts under core/, so state
+  Phobos is consumed as a container image plus the scripts under protecter/src/, so state
   explicitly whether this changes any of:
   - the configuration file format, its sections or the meaning of an existing key
   - the command line of phobos.sh or of the layer scripts
@@ -299,7 +299,7 @@ No breaking changes or migration.
 - [ ] Tests were added or updated for the behaviour changed here, in both directions: the forbidden case stays denied and the permitted case still works.
 - [ ] Any weakening of the sandbox boundary is stated explicitly above, including what it now permits that it did not permit before.
 - [ ] The change was exercised in a container started without `--privileged`, `--cap-add` or `--security-opt`, or the manual says why that was not possible.
-- [ ] Documentation (`README.md`, the comments in `core/`) was updated where the change is user-facing.
+- [ ] Documentation (`README.md`, the comments in `protecter/src/`) was updated where the change is user-facing.
 - [ ] CI is green, or every remaining failure is explained above.
 - [ ] No secrets, tokens or absolute local paths are contained in the diff.
 

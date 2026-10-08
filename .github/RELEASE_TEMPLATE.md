@@ -111,7 +111,7 @@
 ## Breaking changes and migration
 
 <!--
-  Phobos is consumed as a container image plus the scripts under core/, so state
+  Phobos is consumed as a container image plus the scripts under protecter/src/, so state
   explicitly whether this release changes any of:
   - the configuration file format, its sections or the meaning of an existing key
   - the command line of phobos.sh or of the layer scripts

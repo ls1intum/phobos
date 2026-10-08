@@ -13,9 +13,9 @@ x-prune-layers: &prune_layers
   mem_limit: 3g
   pids_limit: 1024
   volumes:
-    - ./var/tmp/testing-dir:/srv/phobos-prune-exercises:ro
-    - ./var/tmp/helpers:/var/tmp/helpers:ro
-    - ./var/tmp/path_sets:/var/tmp/path_sets
+    - ./exercises:/srv/phobos-prune-exercises:ro
+    - ./pruner/src:/var/tmp/helpers:ro
+    - ./build/pruner/path_sets:/var/tmp/path_sets
 
 # The same, built on the Python run-phase image.
 x-prune-layers-python: &prune_layers_python
@@ -29,10 +29,10 @@ x-prune-layers-python: &prune_layers_python
 
 # What the verification of the merged base mounts besides: the orchestrator's output, read-only.
 x-verify-volumes: &verify_volumes
-  - ./var/tmp/testing-dir:/srv/phobos-prune-exercises:ro
-  - ./var/tmp/helpers:/var/tmp/helpers:ro
-  - ./var/tmp/path_sets:/var/tmp/path_sets
-  - ./var/tmp/opt/core/config:/srv/phobos-merged:ro
+  - ./exercises:/srv/phobos-prune-exercises:ro
+  - ./pruner/src:/var/tmp/helpers:ro
+  - ./build/pruner/path_sets:/var/tmp/path_sets
+  - ./build/pruner/config:/srv/phobos-merged:ro
 
 services:
   # Every language is pruned on the grading layers themselves (docker/prune_phase/layers, README
@@ -53,7 +53,7 @@ services:
   # No privilege, capability or security option: strace traces only the recorder's own children.
   # The image is built from the repository root, since its Dockerfile copies files by their
   # repository paths, on the run-phase image docker/run_phase/java/docker-compose.yaml builds. The
-  # recordings are written as root under ./var/tmp/recordings, so removing one may need sudo; without
+  # recordings are written as root under ./build/pruner/recordings, so removing one may need sudo; without
   # RECORD_EXERCISE an empty directory there stands in for the exercise.
   record: &record
     profiles: ["record"]
@@ -68,15 +68,15 @@ services:
     tty: true
     network_mode: none
     volumes:
-      - ./var/tmp/helpers:/var/tmp/helpers:ro
-      - ${RECORD_EXERCISE:-./var/tmp/recordings/.no-exercise}:/srv/phobos-record-exercise:ro
-      - ./var/tmp/recordings:/var/tmp/recordings
+      - ./pruner/src:/var/tmp/helpers:ro
+      - ${RECORD_EXERCISE:-./build/pruner/recordings/.no-exercise}:/srv/phobos-record-exercise:ro
+      - ./build/pruner/recordings:/var/tmp/recordings
 
   record_networked:
     <<: *record
     network_mode: bridge
 
-  # The Maven reference exercise (var/tmp/testing-dir/java-maven) is pruned under its own key, in the
+  # The Maven reference exercise (exercises/java-maven) is pruned under its own key, in the
   # same image as Gradle's, with the same mounts and no network, no privilege and no capability, and the
   # manifest of the pre-loaded repository mounted read-only: the exercise's prune.json declares that
   # repository as a pinned read root, and the pruner checks it against this file before any run
@@ -86,9 +86,9 @@ services:
     network_mode: none
     # The base's three mounts again, since a merge replaces a list instead of extending it.
     volumes:
-      - ./var/tmp/testing-dir:/srv/phobos-prune-exercises:ro
-      - ./var/tmp/helpers:/var/tmp/helpers:ro
-      - ./var/tmp/path_sets:/var/tmp/path_sets
+      - ./exercises:/srv/phobos-prune-exercises:ro
+      - ./pruner/src:/var/tmp/helpers:ro
+      - ./build/pruner/path_sets:/var/tmp/path_sets
       - ./docker/run_phase/java/maven-repository.sha256:/srv/phobos-manifest/maven-repository.sha256:ro
     command: ["--stage", "all", "java-maven"]
 
@@ -97,7 +97,7 @@ services:
     network_mode: none
     command: ["--stage", "all", "python"]
 
-  # Opt-in, for the Java exercises under var/tmp/testing-dir/java-egress whose prune.json declares
+  # Opt-in, for the Java exercises under exercises/java-egress whose prune.json declares
   # hosts (A.6.5): unlike the other layer-pruner services it has a network, and it keeps or drops
   # declared rules but never adds one. The project's own network gives the container Docker's
   # resolver at 127.0.0.11, which the egress broker resolves the declared names through. Its
@@ -112,9 +112,9 @@ services:
   orchestrate:
     build: docker/prune_phase/orchestrate
     volumes:
-      - type: bind
-        source: ./var/tmp
-        target: /var/tmp
+      - ./pruner/src:/var/tmp/helpers:ro
+      - ./build/pruner/path_sets:/var/tmp/path_sets
+      - ./build/pruner/config:/var/tmp/opt/core/config
     depends_on:
       prune_python:
         condition: service_completed_successfully

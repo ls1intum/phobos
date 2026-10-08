@@ -13,7 +13,7 @@
 *.o
 *.a
 
-# Python. The prune orchestrator and the helpers under var/tmp are run directly.
+# Python. The prune orchestrator and the helpers under pruner/src are run directly.
 __pycache__/
 *.py[cod]
 .venv/
@@ -22,9 +22,9 @@ venv/
 .ruff_cache/
 
 # Output of a prune run. The path sets that are meant to be kept are committed under
-# core/config; everything a run drops beside them is scratch.
-/var/tmp/path_sets/
+# protecter/src/config; everything a run drops beside them is scratch.
+/build/pruner/path_sets/
 
 # Sessions of the recording pruner (phobos-record), written by its compose services. A recording
 # describes one instructor's sessions and is reviewed before its policy is kept anywhere.
-/var/tmp/recordings/
+/build/pruner/recordings/

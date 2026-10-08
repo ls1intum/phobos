@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Assembles the build context the run-phase image expects.
 #
-# The Dockerfile copies the layer scripts flat (*.sh), the phobos-tools-* helper folders whole,
+# The Dockerfile copies the layer scripts flat (*.sh, phobos-cli.sh among them), the
+# phobos-tools-* helper folders whole,
 # the four C source folders whole (phobos-landlock-filesystem-and-networksystem,
 # phobos-seccomp-networksystem, phobos-seccomp-filesystem and phobos-seccomp-timeoutsystem) for its
 # build stage, config/*.cfg and the folder config/language-configurations/, and, for the two stages that
@@ -45,16 +46,19 @@ if [[ -e "${DESTINATION}" ]]; then
 fi
 
 mkdir -p "${DESTINATION}/config"
-cp "${REPOSITORY}"/core/*.sh "${DESTINATION}/"
+cp "${REPOSITORY}"/protecter/src/*.sh "${DESTINATION}/"
+# The command line that starts phobos.sh and the pruners lives at the root of the repository and is shipped
+# beside the layer scripts, so that an image can start what it holds through it.
+cp "${REPOSITORY}/phobos-cli.sh" "${DESTINATION}/"
 # The per-subsystem and shared helpers keep their folders, which the layer scripts source by
 # name, so the context mirrors the repository layout.
-cp -R "${REPOSITORY}"/core/phobos-tools-* "${DESTINATION}/"
+cp -R "${REPOSITORY}"/protecter/src/phobos-tools-* "${DESTINATION}/"
 for source_folder in phobos-landlock-filesystem-and-networksystem phobos-seccomp-networksystem \
                      phobos-seccomp-filesystem phobos-seccomp-timeoutsystem; do
-  cp -R "${REPOSITORY}/core/${source_folder}" "${DESTINATION}/"
+  cp -R "${REPOSITORY}/protecter/src/${source_folder}" "${DESTINATION}/"
 done
-cp "${REPOSITORY}"/core/config/*.cfg "${DESTINATION}/config/"
-cp -R "${REPOSITORY}"/core/config/language-configurations "${DESTINATION}/config/"
+cp "${REPOSITORY}"/protecter/src/config/*.cfg "${DESTINATION}/config/"
+cp -R "${REPOSITORY}"/protecter/src/config/language-configurations "${DESTINATION}/config/"
 # The two reference exercises and what pins the dependencies they resolve, in folders of their own so
 # that the flat *.sh copy of the layer scripts does not take pin-repository.sh with it. The exercises
 # stay in their stages; only the repositories those stages produce enter the image.
@@ -62,8 +66,8 @@ mkdir -p "${DESTINATION}/pin" "${DESTINATION}/exercises/java-maven" "${DESTINATI
 cp "${REPOSITORY}"/docker/run_phase/java/pin-repository.sh "${DESTINATION}/pin/"
 cp "${REPOSITORY}"/docker/run_phase/java/maven-repository.sha256 "${DESTINATION}/pin/"
 cp "${REPOSITORY}"/docker/run_phase/java/gradle-repository.sha256 "${DESTINATION}/pin/"
-cp -R "${REPOSITORY}"/var/tmp/testing-dir/java-maven/maven-reference "${DESTINATION}/exercises/java-maven/"
-cp -R "${REPOSITORY}"/var/tmp/testing-dir/java/gradle-reference "${DESTINATION}/exercises/java/"
+cp -R "${REPOSITORY}"/exercises/java-maven/maven-reference "${DESTINATION}/exercises/java-maven/"
+cp -R "${REPOSITORY}"/exercises/java/gradle-reference "${DESTINATION}/exercises/java/"
 
 touch "${DESTINATION}/${MARKER}"
 

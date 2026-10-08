@@ -1,0 +1,45 @@
+┌─────────────────────────────┐
+│ host: ./build/pruner        │  ← the only channel between the containers
+│   path_sets/                │
+│   config/                   │
+│                             │
+│ (./exercises and            │
+│  ./pruner/src, read-only)   │
+└──────────────┬──────────────┘
+               │
+       ┌───────┴──────────────┐
+┌──────▼───────────┐   ┌──────▼───────────┐
+│ prune_python     │   │ prune_java       │
+│ layer pruner on  │   │ layer pruner on  │
+│ the Python image │   │ the Java image   │
+└──────────────────┘   └──────────────────┘
+               │
+┌──────────────▼──────────────┐
+│ orchestrate                 │  starts once both have finished successfully
+└──────────────┬──────────────┘
+               │
+┌──────────────▼──────────────┐
+│ verify_java, verify_python  │  run each exercise under the merged pair
+└─────────────────────────────┘
+
+    prune_java_egress, under the egress profile, is the one layer-pruner service with a network:
+    it keeps or drops the hosts an exercise declared, and the orchestrator does not merge its output.
+
+
+    The orchestrator mounts exactly what it uses: the helpers read-only at /var/tmp/helpers,
+    path_sets read-write at /var/tmp/path_sets and the merged config read-write at
+    /var/tmp/opt/core/config. The layer pruner's containers mount only what they need: the
+    exercises and the helpers read-only and path_sets read-write, and the verify_* containers the
+    merged config read-only.
+
+    Each prune container (the layer pruner, on that language's run-phase image) writes one
+    <lang>_<exercise>.cfg and its .json record per exercise into path_sets.
+
+    The orchestrate service then holds every artefact to its record, merges each language's
+    exercises into BaseLanguage-<lang>.cfg (no [limits]), writes each exercise's limits (and
+    whatever the base lacks, which for a union base is nothing) to exercises/<lang>_<exercise>.cfg, and writes BasePhobos.cfg and TailPhobos.cfg into
+    opt/core/config. The verify_java and verify_python services then run every exercise under
+    that base and its exercise file and write path_sets/verify/. Copying the result into
+    protecter/src/config is a reviewed step of its own.
+
+No docker cp and nothing over a network: the shared bind mount is the only channel between them.

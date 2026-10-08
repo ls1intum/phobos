@@ -39,7 +39,7 @@
   "packageRules": [
     {
       "matchFileNames": [
-        "var/tmp/testing-dir/java/gradle-reference/gradle/wrapper/gradle-wrapper.properties"
+        "exercises/java/gradle-reference/gradle/wrapper/gradle-wrapper.properties"
       ],
       "enabled": false
     }

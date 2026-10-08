@@ -48,6 +48,13 @@ Run the container with cgroup limits (`--memory`, `--pids-limit`, `--cpus`, and 
 `--tmpfs` for scratch) and whatever network isolation the deployment needs. Those are the outer
 wall Phobos relies on and cannot set for itself.
 
+`phobos-cli.sh` at the root of the repository is one command line for all of it. On a host it
+builds the image (`./phobos-cli.sh build java`), runs a command in an ordinary container with
+those limits and no network (`./phobos-cli.sh run --exercise ./my-exercise -- ./gradlew test`), and
+starts the layer pruner and the recording pruner (`prune`, `record`). Inside an image it starts
+what the image holds. It refuses every switch that turns a layer off; `phobos.sh` stays the entry
+point for grading.
+
 ## Documentation
 
 📖 **<https://ls1intum.github.io/phobos/>**

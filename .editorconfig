@@ -40,7 +40,7 @@ indent_size = 4
 end_of_line = lf
 indent_size = 4
 
-# The path sets and the tail flags are read line by line by core/phobos-filesystem.sh with
+# The path sets and the tail flags are read line by line by protecter/src/phobos-filesystem.sh with
 # `while IFS= read -r`. A carriage return would end up inside a path: a read or execute path
 # would then name nothing and be dropped, and a write path would be created under the wrong
 # name, so the run would lose access it was granted. LF here is load-bearing, not cosmetic.

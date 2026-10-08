@@ -36,7 +36,7 @@ intention.
 - The acceptance suites must run in an ordinary container with no `--privileged`, no
   `--cap-add` and no `--security-opt`. A suite that needs any of those is measuring a
   different sandbox from the one an exercise gets.
-- A shell script under `core/` begins with `#!/bin/bash`, and Phobos starts bash itself only
+- A shell script under `protecter/src/` begins with `#!/bin/bash`, and Phobos starts bash itself only
   as `/bin/bash`. `#!/usr/bin/env bash` or a bare `bash` looks the interpreter up through the
   caller's `PATH` before any sandbox exists, which the current directory, the submission's
   tree, can then decide.
@@ -74,13 +74,13 @@ so in the pull request body and proves both directions.
 What those entries do **not** do is make an arbitrary narrower subpath acceptable. They
 preserve acceptance for exercise configurations that name exactly the paths they name, and
 nothing else; a config naming some other path beneath a wider rule with fewer rights is still
-refused. `tests/integration/filesystem_policy.sh` pins both directions of this, and
-`tests/policy-redundancy-probe.sh` reports which entries of a policy are in this position,
+refused. `protecter/test/integration/filesystem_policy.sh` pins both directions of this, and
+`protecter/test/policy-redundancy-probe.sh` reports which entries of a policy are in this position,
 which is worth reading when judging a freshly pruned one.
 
 ## Allow-list files are read line by line, so line endings are load-bearing
 
-`core/phobos-filesystem.sh` reads the path sets with `while IFS= read -r p` and turns each
+`protecter/src/phobos-filesystem.sh` reads the path sets with `while IFS= read -r p` and turns each
 line into a Landlock rule. A carriage return at the end of a line becomes part of the path:
 a read or execute path then names nothing that exists and is dropped, and a write path is
 created under the wrong name, so the run silently loses access the policy granted.
@@ -125,7 +125,7 @@ being written into the allow-list as a dependency.
 
 None of the C products is committed. `phobos-landlock-filesystem-and-networksystem`, the
 connect guard, the timeout's group lock and the report-only supervisor
-`phobos-seccomp-filesystem` are built from the source under `core/`, once per architecture,
+`phobos-seccomp-filesystem` are built from the source under `protecter/src/`, once per architecture,
 inside the run-phase image. `.gitattributes` marks `*.so` binary so that a stray shared object
 is never normalised, though none is shipped.
 
@@ -215,7 +215,7 @@ The checker is a single-file Java program, run through the source-code launcher 
 newer, so it needs no build step and adds no language to the repository. Beside the release
 checker it is the only Java of Phobos itself, which is why the CodeQL workflow analyses
 `java-kotlin`: the checker reads a pull request body that an outsider writes verbatim, and
-CodeQL's manual build compiles it. The two reference exercises under `var/tmp/testing-dir/` are
+CodeQL's manual build compiles it. The two reference exercises under `exercises/` are
 Java too, but they are inputs, built in the run-phase image's stages and by the prune phase, not
 code of the sandbox.
 
@@ -289,7 +289,7 @@ it is for, in the comment syntax the file has.
 **Rule:**
 
 - One field, variable or function declaration per line, in every language.
-- Every function in the core shell scripts (`core/*.sh` and `core/phobos-tools-*/*.sh`)
+- Every function in the core shell scripts (`protecter/src/*.sh` and `protecter/src/phobos-tools-*/*.sh`)
   carries a comment saying what it does and what it assumes about the environment it runs in.
   A sandbox wrapper that assumes a mount, a capability or an environment variable and does not
   say so is a trap for the next reader.

@@ -110,7 +110,7 @@ jobs:
       # sandbox allow-list, so the security lint is not optional here.
       - name: Run bandit
         run: bandit --recursive --ini .bandit --severity-level medium
-             docker/prune_phase/orchestrate var/tmp/helpers
+             docker/prune_phase/orchestrate pruner/src
 
   yaml:
     name: YAML (yamllint)
@@ -219,7 +219,7 @@ jobs:
                  }
                }
                { previous = $0 }
-               END { exit undocumented }' core/*.sh core/phobos-tools-*/*.sh
+               END { exit undocumented }' protecter/src/*.sh protecter/src/phobos-tools-*/*.sh
 
   # One check for a branch rule to require, rather than seven.
   #
