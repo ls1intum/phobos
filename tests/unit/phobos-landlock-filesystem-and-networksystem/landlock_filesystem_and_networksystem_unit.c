@@ -72,6 +72,7 @@ struct syscall_record {
     uint64_t port_rule_port[RECORDED_RULE_LIMIT];
     int rule_ruleset_descriptor;
     int restricted_ruleset_descriptor;
+    unsigned int restricted_flags;
     size_t opened_path_count;
     char opened_path[RECORDED_RULE_LIMIT][RECORDED_PATH_LENGTH];
     char entered_directory[RECORDED_PATH_LENGTH];
@@ -219,8 +220,9 @@ static long mock_add_rule(int ruleset_descriptor, int rule_type, const void *rul
     return 0;
 }
 
-static long mock_restrict_self(int ruleset_descriptor) {
+static long mock_restrict_self(int ruleset_descriptor, unsigned int flags) {
     record->restricted_ruleset_descriptor = ruleset_descriptor;
+    record->restricted_flags = flags;
     record->restricted_at = ++record->sequence;
     if (fail_restrict) {
         errno = EPERM;
@@ -271,7 +273,9 @@ long __wrap_syscall(long number, ...) {
         const void *rule_attributes = va_arg(arguments, const void *);
         result = mock_add_rule(ruleset_descriptor, rule_type, rule_attributes);
     } else if (number == SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF) {
-        result = mock_restrict_self(va_arg(arguments, int));
+        int restricted_descriptor = va_arg(arguments, int);
+        unsigned int restrict_flags = va_arg(arguments, unsigned int);
+        result = mock_restrict_self(restricted_descriptor, restrict_flags);
     } else if (number == SYS_seccomp) {
         unsigned int operation = va_arg(arguments, unsigned int);
         unsigned int flags = va_arg(arguments, unsigned int);
@@ -1827,6 +1831,41 @@ static void test_report_marker(void) {
               && options.mark_reported_domain);
 }
 
+/* The audit logging of the command's own refusals, which only a flag of landlock_restrict_self
+ * switches on. The variable asks for it, only the value 1 counts, and a kernel without the flag is
+ * never handed it; the restriction itself is made the same way in every case. */
+static void test_log_new_exec_flag(void) {
+    printf("\nThe audit log of the command's refusals\n");
+    char *plain[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=r", "/usr", "--", "/bin/true", NULL};
+    unsetenv(LOG_NEW_EXEC_VARIABLE);
+    mock_landlock_version = 8;
+    expect_exit("without the variable the restriction runs", 0, plain);
+    check("without the variable no flag is passed", record->restricted_flags == 0);
+
+    setenv(LOG_NEW_EXEC_VARIABLE, "1", 1);
+    mock_landlock_version = 8;
+    expect_exit("with the variable the restriction runs", 0, plain);
+    check("with the variable the log flag is passed", record->restricted_flags == RESTRICT_SELF_LOG_NEW_EXEC_ON);
+    check("the restriction is still made on the ruleset", record->restricted_ruleset_descriptor == FAKE_RULESET_DESCRIPTOR);
+
+    mock_landlock_version = FIRST_VERSION_WITH_LOG_FLAGS;
+    expect_exit("the first version with the flag runs", 0, plain);
+    check("the first version with the flag is passed it", record->restricted_flags == RESTRICT_SELF_LOG_NEW_EXEC_ON);
+
+    mock_landlock_version = FIRST_VERSION_WITH_LOG_FLAGS - 1;
+    expect_exit("a version below the flag runs", 0, plain);
+    check("a version below the flag is never passed it", record->restricted_flags == 0);
+
+    const char *others[] = {"0", "true", "", "11", NULL};
+    for (int index = 0; others[index] != NULL; index++) {
+        setenv(LOG_NEW_EXEC_VARIABLE, others[index], 1);
+        mock_landlock_version = 8;
+        expect_exit("another value runs", 0, plain);
+        check("another value passes no flag", record->restricted_flags == 0);
+    }
+    unsetenv(LOG_NEW_EXEC_VARIABLE);
+}
+
 int main(void) {
     record = mmap(NULL, sizeof(*record), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (record == MAP_FAILED) {
@@ -1859,6 +1898,7 @@ int main(void) {
     test_model_of_the_ruleset();
     test_model_of_bind();
     test_report_marker();
+    test_log_new_exec_flag();
     printf("\n%d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }

@@ -199,7 +199,7 @@ int main(int argument_count, char *arguments[]) {
     add_port_rules(ruleset_descriptor, &options);
     add_ephemeral_bind_rules(ruleset_descriptor, &options, handled_network);
     enter_working_directory(&options);
-    apply_restriction(ruleset_descriptor);
+    apply_restriction(ruleset_descriptor, restrict_self_flags(landlock_version));
     if (options.mark_reported_domain) {
         install_report_marker();
     }

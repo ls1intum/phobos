@@ -10,6 +10,14 @@ anything is merged. The configuration files are read and written with `layer_pru
 found through --helpers-dir, pinned by tests to the format the shell parser reads. It prunes
 nothing itself: each language is pruned in its own container first.
 
+Beside an exercise's .cfg it may find the KVM run's `<lang>_<exercise>.abi10.json` and, where that run
+added UDP bind rows, `<lang>_<exercise>.abi10.cfg` (A.6.9). Each is held to the record, which names
+the SHA-256 of the .cfg it verified and of the sidecar, and a sidecar that holds anything but
+`[bind] allow <port> udp` is refused. The rows are written to `Abi10-<lang>.cfg` and
+`exercises/<lang>_<exercise>.abi10.cfg`, never into the base: the enforcer refuses a UDP bind rule that
+names a port on a kernel below Landlock version 10, so a base that held one would stop every run of
+the language there. Without sidecars nothing changes.
+
 The merge errs wide on purpose: an exercise is graded with what every
 other exercise of its language needed, and so with their [connect] and [bind] rules too, which is
 why the layer pruner's opt-in `java-egress` output, where declared hosts are kept, is never merged
@@ -30,6 +38,8 @@ refuses the merge.
   already grant along its ancestors. The base is the union of every exercise of the language, so
   it already holds all of the exercise's own entries and, in practice, this file carries only the
   [limits]. It is passed with --config on top of the base.
+* **Abi10-<lang>.cfg** and **exercises/<lang>_<exercise>.abi10.cfg** - only where a KVM run added
+  UDP bind rows: for a host with Landlock version 10, passed with --config on top of the base.
 * **TailPhobos.cfg**            - the runtime chdir, the only tail option the
   phobos-landlock-filesystem-and-networksystem runtime accepts, given by --runtime-chdir.
 
@@ -53,6 +63,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 import textwrap
 from collections.abc import Iterable, Sequence
@@ -71,6 +82,16 @@ RESET = '\033[0m'
 LAYER_RECORD_SCHEMA = 2
 # The name ending of the record the layer pruner writes for an exercise it aborted.
 ABORTED_SUFFIX = '.aborted.json'
+# The name endings of what the KVM run writes beside an exercise's .cfg and .json (main.py
+# --kernel-observer audit): its record, and the UDP bind rows it added, if it added any.
+ABI10_RECORD_SUFFIX = '.abi10.json'
+ABI10_CFG_SUFFIX = '.abi10.cfg'
+# The schema version of the KVM run's record, the Landlock version its kernel must have offered, and the
+# one kind of rule a sidecar may hold: a UDP bind on a port from 1 to 65535, in ASCII digits.
+ABI10_RECORD_SCHEMA = 1
+ABI10_LANDLOCK_VERSION = 10
+UDP_BIND_ROW = re.compile(r'allow ([1-9][0-9]{0,4}) udp', re.ASCII)
+PORT_MAXIMUM = 65535
 # The artefact the retired Bubblewrap pruner wrote, which nothing reads any more.
 RETIRED_SUFFIX = '.paths'
 
@@ -138,10 +159,80 @@ def use_policy_helpers(helpers_dir: Path) -> None:
 def exercise_stems(lang: str, path_dir: Path, suffix: str) -> set[str]:
     """The names, without *suffix*, of this language's per-exercise artefacts ending in it.
 
-    The record of an exercise the layer pruner aborted shares the name shape and is not one.
+    The record of an exercise the layer pruner aborted, and what the KVM run wrote beside an
+    exercise, share the name shape and are not exercises.
     """
     return {path.name.removesuffix(suffix) for path in path_dir.glob(f'{lang}_*{suffix}')
-            if not path.name.endswith(ABORTED_SUFFIX)}
+            if not path.name.endswith((ABORTED_SUFFIX, ABI10_RECORD_SUFFIX, ABI10_CFG_SUFFIX))}
+
+
+def abi10_stems(lang: str, path_dir: Path) -> set[str]:
+    """The names of the exercises of this language that have a KVM record or sidecar beside them."""
+    return ({path.name.removesuffix(ABI10_RECORD_SUFFIX) for path in path_dir.glob(f'{lang}_*{ABI10_RECORD_SUFFIX}')}
+            | {path.name.removesuffix(ABI10_CFG_SUFFIX) for path in path_dir.glob(f'{lang}_*{ABI10_CFG_SUFFIX}')})
+
+
+def abi10_record_problem(lang: str, exercise: str, path_dir: Path) -> str | None:
+    """Why the KVM run's record does not vouch for the .cfg and the sidecar beside it, or None when it does.
+
+    The record names the SHA-256 of the .cfg it verified and of the sidecar it wrote, or null where it
+    wrote none. A record of another exercise or schema, one with a mismatch of the audit cross-check,
+    one that did not verify, a .cfg changed since, and a sidecar that is not the one the record names
+    each refuse the merge, since the rows would come from a run that is not about this policy.
+    """
+    record_file = path_dir / f'{exercise}{ABI10_RECORD_SUFFIX}'
+    sidecar = path_dir / f'{exercise}{ABI10_CFG_SUFFIX}'
+    cfg_file = path_dir / f'{exercise}.cfg'
+    if not cfg_file.exists():
+        return f'{record_file.name} has no {cfg_file.name} beside it'
+    if not record_file.exists():
+        return f'{sidecar.name} has no {record_file.name} beside it'
+    try:
+        record = json.loads(record_file.read_text())
+    except ValueError as exc:
+        return f'{record_file.name} is not readable as JSON: {exc}'
+    if not isinstance(record, dict) or record.get('schema_version') != ABI10_RECORD_SCHEMA:
+        return f'{record_file.name} is not a KVM record of schema version {ABI10_RECORD_SCHEMA}'
+    if record.get('key') != lang or f'{lang}_{record.get("exercise")}' != exercise:
+        return f'{record_file.name} records {record.get("key")}/{record.get("exercise")}, not {exercise}'
+    if not record.get('verified') or record.get('mismatches'):
+        return f'{record_file.name} records a KVM run that did not verify the policy'
+    if record.get('verified_cfg_sha256') != hashlib.sha256(cfg_file.read_bytes()).hexdigest():
+        return f'{record_file.name} verified another {cfg_file.name} than the one beside it: its SHA-256 differs'
+    if not isinstance(record.get('landlock_abi'), int) or record['landlock_abi'] < ABI10_LANDLOCK_VERSION:
+        return f'{record_file.name} records a kernel below Landlock version {ABI10_LANDLOCK_VERSION}'
+    wanted = record.get('abi10_cfg_sha256')
+    if wanted is None:
+        return f'{sidecar.name} is beside a record that wrote no sidecar' if sidecar.exists() else None
+    if not sidecar.exists():
+        return f'{record_file.name} wrote {sidecar.name}, which is missing'
+    if wanted != hashlib.sha256(sidecar.read_bytes()).hexdigest():
+        return f'{sidecar.name} is not the file {record_file.name} records: its SHA-256 differs'
+    return None
+
+
+def abi10_rows(exercise: str, path_dir: Path) -> tuple[str, ...]:
+    """The UDP bind rows of an exercise's sidecar, or none; ValueError when it holds anything else.
+
+    Only `[bind] allow <port> udp` is ever taken from a KVM run, so a sidecar that holds another
+    section or another kind of rule, a port of 0 or above 65535 or one not written in plain ASCII
+    digits, is refused whatever its hash says. The sidecar is read once and the bytes parsed are the
+    bytes the record's hash is checked against.
+    """
+    from layer_prune import cfgfile
+    sidecar = path_dir / f'{exercise}{ABI10_CFG_SUFFIX}'
+    if not sidecar.exists():
+        return ()
+    content = sidecar.read_bytes()
+    record = json.loads((path_dir / f'{exercise}{ABI10_RECORD_SUFFIX}').read_text())
+    if record.get('abi10_cfg_sha256') != hashlib.sha256(content).hexdigest():
+        raise ValueError(f'{sidecar.name} is not the file {sidecar.stem}.json records: its SHA-256 differs')
+    policy = cfgfile.read_policy(content.decode())
+    ports = [UDP_BIND_ROW.fullmatch(rule) for rule in policy.bind]
+    if policy.fs or policy.connect or policy.limits or any(
+            matched is None or int(matched.group(1)) > PORT_MAXIMUM for matched in ports):
+        raise ValueError(f'{sidecar.name} holds more than UDP bind rows')
+    return policy.bind
 
 
 def cfg_record_disagreement(lang: str, exercise: str, cfg_file: Path, record_file: Path) -> str | None:
@@ -178,6 +269,15 @@ def cfg_artefact_disagreements(lang: str, path_dir: Path) -> list[str]:
                                           path_dir / f'{exercise}.json')
         if problem is not None:
             problems.append(problem)
+    for exercise in sorted(abi10_stems(lang, path_dir)):
+        problem = abi10_record_problem(lang, exercise, path_dir)
+        if problem is not None:
+            problems.append(problem)
+        else:
+            try:
+                abi10_rows(exercise, path_dir)
+            except ValueError as exc:
+                problems.append(str(exc))
     return problems
 
 
@@ -383,6 +483,30 @@ def exercise_policies(lang_data: dict[str, LanguagePolicy], layout: Layout) -> d
             for lang, language in lang_data.items() for name, policy in language.exercises.items()}
 
 
+def abi10_policies(lang_data: dict[str, LanguagePolicy], layout: Layout) -> dict[Path, Policy]:
+    """The UDP bind rows the KVM run added, by file: Abi10-<lang>.cfg and exercises/<lang>_<exercise>.abi10.cfg.
+
+    They are written beside the base and never into it. A UDP bind rule that names a port is refused by
+    the enforcer on a kernel below Landlock version 10, so a base that held one would stop every run of
+    that language on such a kernel; these files are for a host known to have version 10, passed with
+    --config on top of the base. Neither name starts with Base, so phobos-policysystem.sh never applies
+    them on its own.
+    """
+    from layer_prune import cfgfile
+    policies: dict[Path, Policy] = {}
+    for lang, language in lang_data.items():
+        rows = {name: abi10_rows(f'{lang}_{name}', layout.path_dir) for name in language.exercises}
+        union = tuple(dict.fromkeys(row for exercise_rows in rows.values() for row in exercise_rows))
+        if not union:
+            continue
+        policies[layout.core_dir / f'Abi10-{lang}.cfg'] = cfgfile.Policy(fs={}, connect=(), bind=union, limits={})
+        for name, exercise_rows in rows.items():
+            if exercise_rows:
+                policies[layout.core_dir / 'exercises' / f'{lang}_{name}.abi10.cfg'] = cfgfile.Policy(
+                    fs={}, connect=(), bind=exercise_rows, limits={})
+    return policies
+
+
 def write_policies(policies: dict[Path, Policy], langs: Iterable[str], layout: Layout) -> None:
     """Renders every policy, and only once all of them render, writes them.
 
@@ -396,6 +520,7 @@ def write_policies(policies: dict[Path, Policy], langs: Iterable[str], layout: L
     exercises_dir = layout.core_dir / 'exercises'
     exercises_dir.mkdir(exist_ok=True)
     for lang in langs:
+        (layout.core_dir / f'Abi10-{lang}.cfg').unlink(missing_ok=True)
         for stale in exercises_dir.glob(f'{lang}_*.cfg'):
             stale.unlink()
     for destination, text in texts.items():
@@ -449,9 +574,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print('        Refusing to merge a base that would make a writable tree executable.')
         return 1
 
-    policies = {**cross_language_policies(lang_data, layout), **language_policies(lang_data, layout),
-                **exercise_policies(lang_data, layout)}
     try:
+        policies = {**cross_language_policies(lang_data, layout), **language_policies(lang_data, layout),
+                    **exercise_policies(lang_data, layout), **abi10_policies(lang_data, layout)}
         write_policies(policies, langs, layout)
     except ValueError as refusal:
         print(f'{RED}[error]{RESET} a merged policy cannot be written: {refusal}')

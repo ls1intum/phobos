@@ -118,6 +118,15 @@ echo "== magic links under /proc =="
 run_pm --config "$c_proc" -- "$P" read "/proc/self/root${PM}/none/secret.txt"
 if op_failed_with open $DENIED_ERRNOS; then ok "the root seen through /proc does not reach a file outside every tree"; else bad "/proc/self/root does not reach a forbidden file" "$(pm_describe)"; fi
 reads "and it reaches a granted file as the same path would" "$c_proc" "READ-OK" -- "$P" read "/proc/self/root${PM}/ro/data.txt"
+
+echo
+echo "== the audit log of the command's own refusals =="
+# Asking the enforcer to log what the command is refused (PHOBOS_LANDLOCK_LOG_NEW_EXEC=1) only adds audit
+# records, so the sandbox must hold exactly as without it: a granted file is read and a forbidden one is not.
+export PHOBOS_LANDLOCK_LOG_NEW_EXEC=1
+reads "with the log of the command's refusals asked for, a granted file is still read" "$c_ro" "READ-OK" -- "$P" read "$PM/ro/data.txt"
+denies_read "and a file outside every tree is still refused" "$c_ro" -- "$P" read "$PM/none/secret.txt"
+unset PHOBOS_LANDLOCK_LOG_NEW_EXEC
 run_pm --config "$c_ro" -- "$P" read /proc/self/status
 if op_failed_with open $DENIED_ERRNOS; then ok "without a grant /proc is closed"; else bad "without a grant /proc is closed" "$(pm_describe)"; fi
 ( exec 7< "$PM/none/secret.txt"; run_pm --config "$c_proc" -- "$P" read /proc/self/fd/7 )

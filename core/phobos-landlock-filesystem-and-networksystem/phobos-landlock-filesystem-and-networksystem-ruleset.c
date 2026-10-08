@@ -193,13 +193,26 @@ void add_port_rule(int ruleset_descriptor, uint64_t port, uint64_t allowed_acces
     log_verbose("allow %s %s/%llu", what, protocol, (unsigned long long)port);
 }
 
+unsigned int restrict_self_flags(int landlock_version) {
+    const char *requested = getenv(LOG_NEW_EXEC_VARIABLE);
+    if (requested == NULL || strcmp(requested, "1") != 0) {
+        return 0;
+    }
+    if (landlock_version < FIRST_VERSION_WITH_LOG_FLAGS) {
+        log_verbose("%s is set, but Landlock version %d cannot log the command's refusals", LOG_NEW_EXEC_VARIABLE,
+                    landlock_version);
+        return 0;
+    }
+    return RESTRICT_SELF_LOG_NEW_EXEC_ON;
+}
+
 /* Sets no_new_privs first, because Landlock requires it and it also closes the
  * setuid route out of the sandbox. */
-void apply_restriction(int ruleset_descriptor) {
+void apply_restriction(int ruleset_descriptor, unsigned int flags) {
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
         exit_with_system_error("prctl(PR_SET_NO_NEW_PRIVS)");
     }
-    if (syscall(SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF, ruleset_descriptor, 0) != 0) {
+    if (syscall(SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF, ruleset_descriptor, flags) != 0) {
         exit_with_system_error("landlock_restrict_self");
     }
     close(ruleset_descriptor);

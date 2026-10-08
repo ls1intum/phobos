@@ -1,0 +1,18 @@
+[    1.381916] audit: type=1423 audit(1791373582.204:4): domain=1bf4c9339 blockers=fs.read_file path="/etc/hostname" dev="vda" ino=177
+[    1.381921] audit: type=1424 audit(1791373582.204:4): domain=1bf4c9339 status=allocated mode=enforcing pid=451 uid=0 exe="/var/tmp/opt/core/phobos-landlock-filesystem-and-networksystem" comm="phobos-landlock"
+[    1.396457] audit: type=1424 audit(1791373582.219:5): domain=1bf4c9339 status=deallocated denials=1
+[    4.916872] audit: type=1423 audit(1791373585.740:6): domain=1bf4c9343 blockers=fs.read_file path="/etc/phobos-kvm-sentinel" dev="vda" ino=241
+[    4.916878] audit: type=1424 audit(1791373585.740:6): domain=1bf4c9343 status=allocated mode=enforcing pid=818 uid=0 exe="/var/tmp/opt/core/phobos-landlock-filesystem-and-networksystem" comm="phobos-landlock"
+[    4.934754] audit: type=1424 audit(1791373585.758:7): domain=1bf4c9343 status=deallocated denials=1
+[    5.439276] audit: type=1423 audit(1791373586.262:8): domain=1bf4c934b blockers=fs.read_file path="/etc/hostname" dev="vda" ino=177
+[    5.439281] audit: type=1424 audit(1791373586.262:8): domain=1bf4c934b status=allocated mode=enforcing pid=1177 uid=0 exe="/var/tmp/opt/core/phobos-landlock-filesystem-and-networksystem" comm="phobos-landlock"
+[    5.463753] audit: type=1424 audit(1791373586.287:9): domain=1bf4c934b status=deallocated denials=1
+[    5.963313] audit: type=1423 audit(1791373586.786:10): domain=1bf4c9358 blockers=fs.read_file path="/etc/phobos-kvm-sentinel" dev="vda" ino=241
+[    5.963318] audit: type=1424 audit(1791373586.786:10): domain=1bf4c9358 status=allocated mode=enforcing pid=1536 uid=0 exe="/var/tmp/opt/core/phobos-landlock-filesystem-and-networksystem" comm="phobos-landlock"
+[    5.998807] audit: type=1424 audit(1791373586.822:11): domain=1bf4c9358 status=deallocated denials=1
+[    6.685411] audit: type=1423 audit(1791373587.508:12): domain=1bf4c936b blockers=fs.read_file path="/etc/phobos-kvm-sentinel" dev="vda" ino=241
+[    6.685417] audit: type=1424 audit(1791373587.508:12): domain=1bf4c936b status=allocated mode=enforcing pid=1934 uid=0 exe="/var/tmp/opt/core/phobos-landlock-filesystem-and-networksystem" comm="phobos-landlock"
+[    6.708757] audit: type=1424 audit(1791373587.532:13): domain=1bf4c936b status=deallocated denials=1
+[    8.976793] audit: type=1423 audit(1791373589.800:14): domain=1bf4c9371 blockers=fs.execute,fs.read_file path="/usr/bin/bash" dev="vda" ino=11831
+[    8.976799] audit: type=1424 audit(1791373589.800:14): domain=1bf4c9371 status=allocated mode=enforcing pid=2603 uid=0 exe="/var/tmp/opt/core/phobos-landlock-filesystem-and-networksystem" comm="phobos-landlock"
+[    9.014746] audit: type=1424 audit(1791373589.838:15): domain=1bf4c9371 status=deallocated denials=1
