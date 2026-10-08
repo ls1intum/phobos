@@ -114,8 +114,11 @@ run_pm --config "$c_v6" -- "$P" tcp6 ::1 "$PORT_A"
 if op_failed_with connect6 ECONNREFUSED; then ok "an allowed IPv6 destination passes the guard (nothing listens there, so the target refuses, not the sandbox)"; else bad "an allowed IPv6 destination passes the guard" "$(pm_describe)"; fi
 run_pm --config "$c_v6" -- "$P" tcp6 ::1 "$PORT_B"
 if op_failed_with connect6 $DENIED_ERRNOS; then ok "an IPv6 destination on another port is refused by the sandbox"; else bad "an IPv6 destination on another port is refused" "$(pm_describe)"; fi
-run_pm --config "$c_tcp" -- "$P" tcp6 ::ffff:127.0.0.1 "$PORT_A"
-if op_failed_with connect6 $DENIED_ERRNOS; then ok "an IPv4-mapped IPv6 spelling of an allowed IPv4 address is refused, never read as the allowed one"; else bad "an IPv4-mapped IPv6 spelling is refused" "$(pm_describe)"; fi
+allow_case "an IPv4-mapped IPv6 spelling of an allowed IPv4 address is the same endpoint, so it connects and the server answers" "$c_tcp" connect6 -- "$P" tcp6 ::ffff:127.0.0.1 "$PORT_A"
+deny_case "but not on another port" net "$c_tcp" connect6 "$DENIED_ERRNOS" -- "$P" tcp6 ::ffff:127.0.0.1 "$PORT_B"
+deny_case "and not another loopback address in the mapped spelling" net "$c_tcp" connect6 "$DENIED_ERRNOS" -- "$P" tcp6 ::ffff:127.0.0.2 "$PORT_A"
+run_pm --config "$c_tcp" -- "$P" tcp6 ::ffff:10.0.0.1 "$PORT_A"
+if op_failed_with connect6 $DENIED_ERRNOS; then ok "and not an address outside loopback in the mapped spelling"; else bad "and not an address outside loopback in the mapped spelling" "$(pm_describe)"; fi
 run_pm --config "$c_tcp" -- "$P" unixconnect "$PM/work/no-such.sock"
 if op_failed_with connect_unix $DENIED_ERRNOS; then ok "a UNIX-domain connect is refused by the guard, before the kernel could say the path is absent"; else bad "a UNIX-domain connect is refused by the guard" "$(pm_describe)"; fi
 run_pm --no-networksystem-restriction --config "$c_tcp" -- "$P" unixconnect "$PM/work/no-such.sock"
