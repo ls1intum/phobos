@@ -38,7 +38,7 @@ For general background on contributing to open source, see the
 ## Prerequisites
 
 Phobos runs on Linux, because it depends on Landlock and on seccomp user-notification in the
-run phase and on Bubblewrap in the discovery phase. Docker is the supported way to work on it from
+run phase, and in the discovery phase, which runs on the same layers. Docker is the supported way to work on it from
 another operating system; the Compose file in the repository root brings up one container
 per language environment.
 

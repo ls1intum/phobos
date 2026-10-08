@@ -212,13 +212,13 @@ gap_case "a tail flags file that does not exist is ignored, so the minimum versi
 printf -- '--chdir %s\n' "$PM/ro" > "$PM/chdir.flags"
 run_pm --tail-flags-file "$PM/chdir.flags" --config "$c_ro" -- "$P" cwd
 if grep -q "^CWD $PM/ro\$" "$PM_OUT"; then ok "a tail flag --chdir moves the command's working directory"; else bad "--chdir in the tail flags" "$(pm_describe)"; fi
-mv "${PHOBOS_HOME}/BaseLanguage-java.cfg" "$PM/base.moved"
+mv "${PM_BASE}" "$PM/base.moved"
 run_pm --config "$c_ro" -- "$P" cwd
 no_base_status="$PM_STATUS"
 no_base_started="$(grep -c '^START' "$PM_OUT")"
 no_base_message="$(grep -c 'no Base\*.cfg' "$PM_ERR")"
 run_pm --no-restriction -- "$P" cwd
-mv "$PM/base.moved" "${PHOBOS_HOME}/BaseLanguage-java.cfg"
+mv "$PM/base.moved" "${PM_BASE}"
 if [[ "$no_base_status" == "$PHB_EPOLICY" && "$no_base_started" == 0 && "$no_base_message" -ge 1 ]]; then ok "with no base policy the run is refused rather than run unconfined"; else bad "with no base policy the run is refused" "status ${no_base_status}, started ${no_base_started}"; fi
 if grep -q '^START' "$PM_OUT" && (( PM_STATUS == 0 )); then ok "--no-restriction needs no base policy, which is what makes it the escape hatch it says it is"; else bad "--no-restriction without a base policy" "$(pm_describe)"; fi
 

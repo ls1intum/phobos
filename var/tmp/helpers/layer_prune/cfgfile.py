@@ -62,8 +62,10 @@ DIGITS = re.compile(r"[0-9]+")
 # The top-level directories the permissive policy never grants writing on: the pseudo filesystems,
 # /var (whose child /var/tmp holds the run's specification) and /run (which holds the candidate).
 NEVER_WRITABLE_TOP_LEVEL = frozenset({"/var", "/proc", "/sys", "/dev", "/run"})
-# The exercise's working directory, where the build writes.
+# The exercise's working directory, where the build writes, and the directory phobos.sh puts a run's
+# specification directory in by default.
 TESTING_DIR = "/var/tmp/testing-dir"
+SPEC_PARENT = "/var/tmp"
 # The loopback and port-0 rules the permissive policy holds, so no stage starts narrower than a
 # build on its own machine.
 PERMISSIVE_CONNECT = ("allow 127.0.0.1:*", "allow [::1]", "allow localhost")

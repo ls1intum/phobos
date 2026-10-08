@@ -26,8 +26,8 @@ therefore mounts `tests/` rather than
 
 ## Host suites, run by the `Shell suites` job of `test.yml`
 
-These need a shell, a compiler, a Python and Bubblewrap. No container, no kernel feature
-and no elevated permission.
+These need a shell, a compiler and a Python. No container, no kernel feature and no elevated
+permission.
 
 | Suite | What it proves | Skips when |
 | --- | --- | --- |
@@ -55,11 +55,9 @@ and no elevated permission.
 | `haproxy_inbound.sh` | the inbound filter in front of a listener admits only the source addresses an `[accept]` rule names, rejects every other, admits no one for a service with no source, and frees its public port when it stops | a C compiler or `haproxy` is absent |
 | `hosts_entries.sh` | the lines a run adds to a hosts file carry its tag and are removed with its specification directory, in place and under a lock, leaving other runs' and the image's lines byte for byte; a failed removal keeps the directory for an outer layer | never |
 | `denial_report.sh` | the denial report, both directions, and that neither it nor its helpers cost the command its output or its exit status | never |
-| `prune_producer.sh` | what the prune phase produces: a run that finishes with artefacts missing, and one that leaves an earlier run's artefacts in place, both stop the merge | never |
 | `layer_prune_observer.sh` | run in the prune image: its base grants nothing and is accepted, strace sees a Landlock refusal inside the shipped chain while a granted read works, the parser and attribution turn the record into exactly that denial, and every policy the renderer writes is accepted by the parser while the strict subset it refuses is refused by `phobos.sh` too | never |
 | `layer_prune.sh` | run in the prune image: the layer pruner prunes the fixture under `layer-prune-fixture/` end to end; the derived policy passes the fixture's build with every layer on, grants its `/proc/self/status` read as a per-run name, refuses what the build did not need (an unneeded file, an optional one, a prefix sibling, a write into what was read, `10.0.0.1:80`, port 8080), bounds each limit below its default with every containment check refused; the orchestrator merges the result, the fixture passes under the merged base and its own file, and a `.cfg` its record does not vouch for stops the merge; a flaky reference, NO-SOURCE, a needed `setsid`, a needed external host and a failure no refusal explains each abort without a policy | never; the nproc containment check is recorded unchecked as root, which the kernel exempts |
 | `layer_prune_egress.sh` | run in the prune image, `--network none`: of two hosts the fixture declares, the one it needs keeps its rule and the other is dropped, with a stand-in resolver and TLS server on loopback; under the derived policy the egress broker closes a connect to the dropped host on the kept rule's port, the guard refuses it on any other port with `EACCES`, naming it in the ClientHello towards the kept host's address gets no answer, and a build that also needs an undeclared host aborts without a policy | never |
-| `prune_sandbox.sh` | the real pruner against a fixture tree: how it reads a build's outcome, and that its sandbox hides what it says it hides | Bubblewrap cannot create a user namespace. `PHOBOS_REQUIRE_BWRAP=1`, which CI sets, turns that skip into a failure |
 | `harness_self_test.sh` | the reporting every other suite depends on: a failure is recorded and the suite carries on, `bad` does not end a suite running under `set -e`, the exit status and the printed summary agree, and a skip is counted apart from a pass | never |
 | `runner-capability-probe.sh` | not a suite: it answers what a machine can do, and is run by `runner-capabilities.yml` on request, on each hosted runner image for the KVM question. It reports for itself rather than through the harness, because its statuses are its own | it is a diagnostic; the assert modes answer 0, 1 or 3. `--assert-kvm` needs QEMU and a readable kernel image, and `--assert-ptrace` needs gcc with a static libc and docker; each says indeterminate without them |
 | `policy-redundancy-probe.sh` | not a suite and not in CI: it names the entries of a policy that grant Landlock nothing an ancestor already grants, for reading a freshly pruned policy. Those entries are not dead, so it reports and never fails; `AGENTS.md` says what they do. Run it where the policy is applied, since it resolves symbolic links | it is a diagnostic; it answers 0 unless it was called wrongly |
@@ -67,14 +65,13 @@ and no elevated permission.
 ## Python suites, run by the `Python helpers` job of `test.yml`
 
 The second job of the same workflow installs pytest and runs `python -m pytest tests/python`.
-It needs no container, no Bubblewrap and no compiler: the pruning entry point is replaced by a
-shell stub, so these drive the helpers alone.
+It needs no container and no compiler: the artefacts are written as the layer pruner writes them,
+and the runs are replaced by stand-ins, so these drive the helpers alone.
 
 | Suite | What it proves | Skips when |
 | --- | --- | --- |
-| `python/test_orchestrate.py` | every way a language can drop out of a prune stops the merge rather than shrinking it: a language that fails, one that produces nothing, one whose artefacts disagree with the record written beside them, an aborted exercise, artefacts of both producers, and an `[execute]` that would join a write; what the merge writes (union, limits, exercise files). It drives the orchestrator as a subprocess, which is what keeps the entry point honest | never |
-| `python/test_orchestrate_helpers.py` | the orchestrator's parts, which a subprocess test cannot reach on their own: that importing it does no work, how it reads a path set and judges a pair of artefacts, that every language really is pruned at the same time, and that the layout and the arguments reach each worker unchanged | never |
-| `python/test_make_lang_sets.py` | the union never drops a path a run asked for, the intersection never keeps one a run did not, an earlier run's own output is never folded back in as a fresh result, and no input at all stops rather than writing an empty policy | never |
+| `python/test_orchestrate.py` | every way a language can drop out stops the merge rather than shrinking it: a language without artefacts or with an empty policy, an aborted exercise, a `.cfg` its record does not vouch for, a partial prune, a left-over path set; what the merge writes: the exact union, each exercise's own file, a union that would put execute beside a write refused. It drives the orchestrator as a subprocess, which is what keeps the entry point honest | never |
+| `python/test_orchestrate_helpers.py` | the orchestrator's parts, which a subprocess test cannot reach on their own: that importing it does no work, the layout, the union and intersection across languages, what every exercise needed, and the execute conflicts | never |
 
 ## Unit suites, run by `build.yml`
 
@@ -129,11 +126,21 @@ the kernel lacks, a missing tool or too few processor cores.
 | `filesystem-edge.sh` | links, dot-dot, magic links, rights on files and the root, odd names, a link swapped while it is opened |
 | `resources-edge.sh` | each limit met through the call that meets it, and the limits Phobos does not set |
 
+## The Python run-phase image, run by the `run-phase-python` job of `build.yml`
+
+The Python run-phase image (`docker/run_phase/python/`) is held to every suite above that needs no
+Java: `network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`, `seccomp-networksystem-test.sh`,
+`network-cleanup-test.sh` and the whole protection matrix, in one looped step that names each suite and
+fails when any one does. The four acceptance suites that compile Java probes or run Maven
+(`run-tests.sh`, `extra-tests.sh`, `phase-test.sh`, `shipped-policy-test.sh`) stay with the Java job.
+The prune image is then built on the Python image and runs `layer_prune_observer.sh`, `layer_prune.sh`
+and `layer_prune_egress.sh` there, and prunes `var/tmp/testing-dir/python/python-reference`, which has
+to end in a policy.
+
 ## The environment variables the suites read
 
 | Variable | Read by | Meaning |
 | --- | --- | --- |
-| `PHOBOS_REQUIRE_BWRAP` | `prune_sandbox.sh` | any non-empty value turns a Bubblewrap skip into a failure |
 | `COMPILER` | the unit runners | the compiler to build the C under test with; `gcc-14` by default |
 | `COVERAGE_TOOL` | the unit runners | the gcov that matches that compiler; `gcov-14` by default |
 | `PHOBOS_HOME` | the acceptance suites | where Phobos is installed in the image; `/var/tmp/opt/core` by default |

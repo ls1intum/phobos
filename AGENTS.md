@@ -98,10 +98,10 @@ created under the wrong name, so the run silently loses access the policy grante
 
 ## A prune run that fails for the wrong reason is worse than one that fails
 
-The discovery phase decides what a submission is allowed to reach by hiding a directory and
-observing whether the tests still pass. It therefore reads a test failure as "this was
-needed". Anything that fails a run for an unrelated reason gets written into the allow-list
-as a dependency.
+The discovery phase decides what a submission is allowed to reach by running the reference
+under the grading layers and granting what each refusal it records proves. A failure it can
+pin on a refusal becomes a grant; anything that fails a run for an unrelated reason risks
+being written into the allow-list as a dependency.
 
 **Rule:**
 
@@ -155,6 +155,9 @@ docker login                 # to the registry the tag below names
 docker buildx build --platform linux/amd64,linux/arm64 \
   -f docker/run_phase/java/Dockerfile -t <namespace>/phobos:latest --push "$CTX"
 ```
+
+The Python run-phase image is published the same way from `docker/run_phase/python/Dockerfile`,
+under a tag of its own (for example `<namespace>/phobos-python:latest`).
 
 `buildx --push` builds both architectures and pushes one multi-arch manifest, so a `docker pull`
 selects the puller's architecture. The per-architecture acceptance suites ran natively in CI;
