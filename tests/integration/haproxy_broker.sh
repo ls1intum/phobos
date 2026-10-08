@@ -695,15 +695,21 @@ else
   else
     bad "the command inherits no descriptor of the pipe" "$(cat "$WORK/log.fds.out")"
   fi
-  guard_with_log -- bash -c 'for descriptor in $(seq 3 1023); do echo "PHB-BROKER refuse PR 666f72676564 1.2.3.4 80" >&"$descriptor"; done' \
-    > "$WORK/log.forge.out" 2>&1 || true
-  if [[ "$(grep -c "the Host 'forged'" "$WORK/log.forge.out")" == 0 ]]; then
-    ok "a command that writes a forged broker line to every descriptor it holds produces no line"
+  # Only the broker's pipe is ever written to below, found by its identity: any other descriptor a
+  # step holds, a CI runner's own channel among them, must not receive a forged line.
+  PIPE_ID="$(readlink "/proc/$$/fd/${broker_log}")"
+  export PIPE_ID
+  guard_with_log -- bash -c 'held=0
+    for descriptor in /proc/self/fd/*; do
+      if [[ "$(readlink "$descriptor")" == "$PIPE_ID" ]]; then held=$((held + 1)); echo "PHB-BROKER refuse PR 666f72676564 1.2.3.4 80" >&"${descriptor##*/}"; fi
+    done; echo "held=$held"' > "$WORK/log.forge.out" 2>&1 || true
+  if [[ "$(grep -c "the Host 'forged'" "$WORK/log.forge.out")" == 0 ]] && grep -qx 'held=0' "$WORK/log.forge.out"; then
+    ok "a command holds no descriptor of the pipe, so it can write a forged broker line to none"
   else
-    bad "a command that writes a forged broker line to every descriptor it holds produces no line" "$(cat "$WORK/log.forge.out")"
+    bad "a command holds no descriptor of the pipe, so it can write a forged broker line to none" "$(cat "$WORK/log.forge.out")"
   fi
   guard_with_log -- bash -c 'for descriptor in /proc/$PPID/fd/*; do
-      if [[ "$(readlink "$descriptor")" == pipe:* ]]; then echo "PHB-BROKER refuse PR 666f72676564 1.2.3.4 80" > "$descriptor" 2>/dev/null; fi
+      if [[ "$(readlink "$descriptor")" == "$PIPE_ID" ]]; then echo "PHB-BROKER refuse PR 666f72676564 1.2.3.4 80" > "$descriptor" 2>/dev/null; fi
     done; sleep 0.5' > "$WORK/log.reach.out" 2>&1 || true
   if [[ "$(grep -c "the Host 'forged'" "$WORK/log.reach.out")" -ge 1 ]]; then
     ok "the limit the manual states: with no Landlock domain at all a command can reach the pipe through the guard's /proc entry and forge a line"
