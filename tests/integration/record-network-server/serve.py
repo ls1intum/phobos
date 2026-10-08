@@ -62,6 +62,7 @@ def serve_plain() -> None:
 def serve_tls(certificate: str, key: str) -> None:
     """Answers every TLS connection on the TLS port with the same short response."""
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(certificate, key)
     listener = socket.create_server(("0.0.0.0", TLS_PORT))
     while True:
