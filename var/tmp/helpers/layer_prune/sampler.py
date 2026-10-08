@@ -92,9 +92,22 @@ def task_count(proc: pathlib.Path, pid: int) -> int:
     return 0
 
 
-def sample_once(proc: pathlib.Path, root: int, ticks: int, moment: float, include_root: bool) -> list[dict]:
-    """One sample of every process in the tree, each with the tree's task count at that moment."""
-    pids = [pid for pid in descendants(proc, root) if include_root or pid != root]
+def command_name(proc: pathlib.Path, pid: int) -> str:
+    """The name the kernel gives a process (its comm), empty where /proc no longer shows it."""
+    with contextlib.suppress(OSError):
+        return (proc / str(pid) / "comm").read_text().strip()
+    return ""
+
+
+def sample_once(proc: pathlib.Path, root: int, ticks: int, moment: float, include_root: bool,
+                exclude: frozenset[str] = frozenset()) -> list[dict]:
+    """One sample of every process in the tree, each with the tree's task count at that moment.
+
+    A process whose comm is in `exclude` is left out (the recorder leaves out the tracer it runs beside
+    the program), and so are its threads from the task count.
+    """
+    pids = [pid for pid in descendants(proc, root) if (include_root or pid != root)
+            and (not exclude or command_name(proc, pid) not in exclude)]
     tasks = sum(task_count(proc, pid) for pid in pids)
     return [{"time": moment, "pid": pid, "vm_peak_mb": vm_peak_mb(proc, pid), "cpu_seconds": cpu_seconds(proc, pid, ticks),
              "highest_descriptor": highest_descriptor(proc, pid), "tasks": tasks} for pid in pids]
@@ -108,10 +121,11 @@ class Sampler:
     """
 
     def __init__(self, root_pid: int, interval: float = DEFAULT_INTERVAL_SECONDS, proc: str = "/proc",
-                 include_root: bool = True) -> None:
-        """Prepares the sampler; nothing is read until start."""
+                 include_root: bool = True, exclude: frozenset[str] = frozenset()) -> None:
+        """Prepares the sampler; nothing is read until start. `exclude` names processes (by comm) to leave out."""
         self.root_pid = root_pid
         self.include_root = include_root
+        self.exclude = exclude
         self.interval = interval
         self.proc = pathlib.Path(proc)
         self.ticks = os.sysconf("SC_CLK_TCK")
@@ -124,7 +138,7 @@ class Sampler:
         started = time.monotonic()
         while not self.stopping.is_set():
             self.samples.extend(sample_once(self.proc, self.root_pid, self.ticks, time.monotonic() - started,
-                                            self.include_root))
+                                            self.include_root, self.exclude))
             self.stopping.wait(self.interval)
 
     def start(self) -> None:
