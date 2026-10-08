@@ -187,3 +187,33 @@ def test_the_ephemeral_port_of_a_client_socket_is_not_a_server():
          'inet_pton(AF_INET6, "::", &sin6_addr), sin6_scope_id=0}, [28]) = 0'),
     ]
     assert network.bound_ports(strace_parse.parse_trace(lines)) == frozenset({("AF_INET6", 43000, "tcp")})
+
+
+def test_without_udp_port_support_an_exact_loopback_udp_rule_is_reported_and_not_granted():
+    decision = network.network_rules([connect("127.0.0.53", 53, "udp")], frozenset(), (), udp_ports=False)
+    assert decision.connect == ()
+    assert decision.reported and "needs Landlock version 10" in decision.reported[0]
+
+
+def test_with_udp_port_support_the_same_denial_is_granted_exactly():
+    decision = network.network_rules([connect("127.0.0.53", 53, "udp")], frozenset(), ())
+    assert decision.connect == ("allow 127.0.0.53:53 udp",)
+
+
+def test_without_udp_port_support_a_udp_wildcard_for_a_port_the_run_held_is_still_granted():
+    decision = network.network_rules([connect("127.0.0.1", 40000, "udp")], frozenset({("AF_INET", 40000, "udp")}), (),
+                                     udp_ports=False)
+    assert decision.connect == ("allow 127.0.0.1:* udp",)
+
+
+def test_without_udp_port_support_an_explicit_udp_bind_is_reported_and_port_zero_is_not():
+    decision = network.network_rules([bind(5000, "udp", "127.0.0.1"), bind(0, "udp")], frozenset(), (), udp_ports=False)
+    assert decision.bind == ("allow 0 udp",)
+    assert any("needs Landlock version 10" in item for item in decision.reported)
+
+
+def test_without_udp_port_support_tcp_rules_are_unchanged():
+    decision = network.network_rules([connect("127.0.0.1", 5432, "tcp"), bind(8080, "tcp", "127.0.0.1")], frozenset(), (),
+                                     udp_ports=False)
+    assert decision.connect == ("allow 127.0.0.1:5432",)
+    assert decision.bind == ("allow 8080",)

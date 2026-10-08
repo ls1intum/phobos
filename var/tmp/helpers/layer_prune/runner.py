@@ -126,7 +126,8 @@ class RunResult:
 @dataclasses.dataclass(frozen=True)
 class Environment:
     """Where the runner finds Phobos and strace, where it runs, how long a run may take, and what no
-    cleaning between runs may remove besides its own directories (`kept`, the artefacts' directory)."""
+    cleaning between runs may remove besides its own directories (`kept`, the artefacts' directory), and
+    the Landlock version of the kernel it runs on (the default assumes one that handles UDP ports)."""
 
     phobos_home: str = PHOBOS_HOME
     strace: str = "strace"
@@ -137,6 +138,7 @@ class Environment:
     run_seconds: int = DEFAULT_RUN_SECONDS
     resolver: str | None = None
     kept: tuple[str, ...] = ()
+    landlock_version: int = 10
 
 
 RUN_NUMBERS = itertools.count(1)
