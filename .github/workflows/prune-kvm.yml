@@ -108,7 +108,7 @@ jobs:
         run: docker save phobos-prune-layers:ci | gzip -1 > "${RUNNER_TEMP}/prune-image.tar.gz"
 
       - name: Keep the prune image
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: prune-image
           path: ${{ runner.temp }}/prune-image.tar.gz
@@ -117,7 +117,7 @@ jobs:
 
       - name: Keep the artefacts of the default prune
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: default-prune
           path: ${{ runner.temp }}/path_sets
@@ -185,7 +185,7 @@ jobs:
       # Kept even when the run failed, since the records and the console are what explain it.
       - name: Keep the artefacts of the guest
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kvm-${{ matrix.runner }}
           path: |
@@ -196,7 +196,7 @@ jobs:
 
       - name: Keep the kernel configuration
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kernel-config-${{ matrix.runner }}
           path: ${{ runner.temp }}/kernel/config
@@ -244,7 +244,7 @@ jobs:
 
       - name: Keep the merged base
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: merged-base
           path: ${{ runner.temp }}/core
