@@ -101,6 +101,7 @@ WRAPS=(
   -Wl,--wrap=recv
   -Wl,--wrap=getrandom
   -Wl,--wrap=read
+  -Wl,--wrap=reporter_task_in_domain
   -Wl,--wrap=query_landlock_version
   -Wl,--wrap=continue_supported
   -Wl,--wrap=group_lock_present

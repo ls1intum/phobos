@@ -44,6 +44,13 @@ bool reporter_handles(const struct seccomp_notif *request);
 void reporter_service(int notify_descriptor, const struct seccomp_notif *request,
                       struct seccomp_notif_resp *response);
 
+/* Whether the task that made this call is inside the filesystem domain: the filesystem model is
+ * armed and the task carries more seccomp filters than at arming, which only the tasks the enforcer
+ * ran its command in do. The layers' own helpers, which run under the supervisor's filter before the
+ * domain exists, are not. A line about an action of "the program" is worded only for a task that is.
+ * Answers false before the filesystem model is armed, which is the safe direction: no line. */
+bool reporter_task_in_domain(int notify_descriptor, const struct seccomp_notif *request);
+
 /* Gives the reporter the guard's socket table, so a bind can be judged by its transport; the
  * report-only supervisor gives none and judges UNIX paths only. */
 void reporter_use_socket_types(socket_type_lookup lookup);

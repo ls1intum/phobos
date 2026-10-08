@@ -335,7 +335,12 @@ bool connect_on_behalf(int notify_descriptor, struct seccomp_notif_resp *respons
 }
 
 /* Decide one trapped connect: read the destination from the child, confirm the notification is
- * still valid so the read belongs to this call, and refuse a family this guard does not carry.
+ * still valid so the read belongs to this call, and refuse a family this guard does not carry. A
+ * refused connect to a UNIX socket is worded only for a task of the filesystem domain, the command
+ * and what it started: every layer's shell runs under this guard's filter before the domain exists
+ * and asks the name service cache for the user at start-up, a connect the guard refuses, and worded
+ * it would blame the program for Phobos's own helpers. With the filesystem layer off there is no
+ * domain, and no such line is worded.
  * The socket's provenance is then resolved before the allow-list check, because the transport is
  * part of the decision: a stream socket is TCP and a datagram socket is UDP, and the allow-list
  * holds each transport apart, so a UDP-only rule must not admit a TCP connection to the same host
@@ -368,7 +373,7 @@ static void service_connect(int notify_descriptor, struct seccomp_notif *request
     struct destination where = read_destination(&storage);
     if (where.family != AF_INET && where.family != AF_INET6) {
         log_verbose("refusing connect of family %d, which this guard does not carry", where.family);
-        if (where.family == AF_UNIX) {
+        if (where.family == AF_UNIX && reporter_task_in_domain(notify_descriptor, request)) {
             report_refused_socket_file(&storage, length);
         }
         answer(notify_descriptor, response, request->id, 0, -EACCES);

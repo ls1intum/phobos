@@ -189,6 +189,7 @@ struct behaviour {
     int landlock_version;
     int continue_supported_answer;
     int group_lock_answer;
+    int in_domain;              /* whether the reporter says the calling task is in the filesystem domain */
     int preflight_calls;
     /* SECCOMP_GET_NOTIF_SIZES (via syscall) */
     int notif_sizes_result;
@@ -477,6 +478,12 @@ int __wrap_query_landlock_version(void) {
 bool __wrap_continue_supported(void) {
     bx->preflight_calls++;
     return bx->continue_supported_answer != 0;
+}
+
+bool __wrap_reporter_task_in_domain(int notify_descriptor, const struct seccomp_notif *request) {
+    (void)notify_descriptor;
+    (void)request;
+    return bx->in_domain != 0;
 }
 
 bool __wrap_group_lock_present(void) {
@@ -4636,12 +4643,24 @@ static void test_guard_refusals_are_reported(void) {
     reset_behaviour();
     bx->notif_recv_family = AF_UNIX;
     bx->process_vm_readv_result = 1;
+    bx->in_domain = 1;
     strcpy(bx->unix_path, "/run/dev.sock");
     capture_stderr_begin();
     service_once();
     out = capture_stderr_end();
-    check("a connect to a UNIX socket path is refused and names the socket file",
+    check("a connect to a UNIX socket path by a task of the domain is refused and names the socket file",
           bx->last_answer_error == -EACCES && holds_line(out, "connect to the Socket File '/run/dev.sock'"));
+
+    reset_behaviour();
+    bx->notif_recv_family = AF_UNIX;
+    bx->process_vm_readv_result = 1;
+    strcpy(bx->unix_path, "/var/run/nscd/socket");
+    capture_stderr_begin();
+    service_once();
+    out = capture_stderr_end();
+    check("the same connect by a helper beside the domain, a layer's shell asking the name service cache, is refused "
+          "all the same and worded for nobody",
+          bx->last_answer_error == -EACCES && count_report_lines(out) == 0);
 
     reset_behaviour();
     bx->notif_recv_nr = __NR_socket;

@@ -2805,6 +2805,16 @@ static void test_arming_and_membership(void) {
               && script->responses_sent == sent_before + 3 && script->sends_interrupted == 0);
     check("every answer of the run was CONTINUE with error and value 0",
           script->responses_sent > 0 && script->every_response_continued);
+    struct seccomp_notif asking = notification_of(native_call(__NR_connect, 0, 0, 0, 0, 0));
+    fake_filters(MARKED_FILTERS);
+    check("a task of the domain is asked to be in it",
+          reporter_task_in_domain(FAKE_NOTIFY_DESCRIPTOR, &asking));
+    fake_filters(ARMED_FILTERS);
+    check("a helper beside the domain, with the count recorded at arming, is not",
+          !reporter_task_in_domain(FAKE_NOTIFY_DESCRIPTOR, &asking));
+    start_reporter();
+    check("and before the filesystem model is armed no task is",
+          !reporter_task_in_domain(FAKE_NOTIFY_DESCRIPTOR, &asking));
 }
 
 static void test_arming_in_order(void) {
