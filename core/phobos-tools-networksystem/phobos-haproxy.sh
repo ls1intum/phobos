@@ -417,6 +417,7 @@ haproxy_allow_rules() {
     fi
     printf '    tcp-request content do-resolve(txn.hostip,phobosdns,ipv4) req.ssl_sni if %s\n' "$condition"
     printf '    tcp-request content set-dst var(txn.hostip) if %s { var(txn.hostip) -m found }\n' "$condition"
+    printf '    tcp-request content set-var(txn.marker) str(PHB-BROKER-UNRESOLVED) if %s !{ var(txn.hostip) -m found }\n' "$condition"
     printf '    tcp-request content reject if %s !{ var(txn.hostip) -m found }\n' "$condition"
     conditions+=("$condition")
   done < <(printf '%s\n' "${!names_by_port[@]}" | sort)
@@ -529,6 +530,8 @@ emit_broker_resolvers() {
 # normally is not logged. The name is kept in a variable while the ClientHello is inspected,
 # because HAProxy cannot read the request buffer when the line is written, at the end of the
 # connection; a connection that sent no name logs a dash.
+# A host name a rule allows that the broker could not resolve is refused too, but not by the policy,
+# so its line carries the marker PHB-BROKER-UNRESOLVED instead, which the guard does not word.
 # A wildcard host name ends the run before anything is written, so a half-written config never
 # stands for a refusal. Assumes phobos-common.sh was sourced and that it is called plainly, so
 # the refusal ends the run.
@@ -554,7 +557,7 @@ build_haproxy_conf() {
     printf 'frontend broker\n'
     if [[ -n "$log_descriptor" ]]; then
       printf '    option dontlog-normal\n'
-      printf '    log-format "PHB-BROKER %%b %%ts %%[var(txn.sni),hex] %%[dst] %%[dst_port]"\n'
+      printf '    log-format "%%[var(txn.marker)] %%b %%ts %%[var(txn.sni),hex] %%[dst] %%[dst_port]"\n'
     fi
     printf '    bind %s accept-proxy\n' "$listen"
     printf '    tcp-request inspect-delay 5s\n'
@@ -562,6 +565,7 @@ build_haproxy_conf() {
     printf '    tcp-request content set-dst-port dst_port\n'
     if [[ -n "$log_descriptor" ]]; then
       printf '    tcp-request content set-var(txn.sni) req.ssl_sni\n'
+      printf '    tcp-request content set-var(txn.marker) str(PHB-BROKER)\n'
     fi
     haproxy_allow_rules "$rules"
     printf 'backend to_dst\n'

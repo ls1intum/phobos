@@ -598,6 +598,19 @@ if [[ -w /etc/hosts ]]; then
     ok "once the run has ended, the broker the layer started is gone"
   fi
   [[ ! -e "$spec_e2e" ]] && ok "and so is the run's specification directory" || bad "and so is the run's specification directory" "$(ls -A "$spec_e2e")"
+  spec_e2e2="$WORK/spec-e2e2"
+  mkdir -p "$spec_e2e2"
+  mark_owned_spec_dir "$spec_e2e2"
+  printf 'allowed.example %s\n' "$UPORT" > "$spec_e2e2/net.rules"
+  "${CORE}/phobos-networksystem.sh" --connect-guard-bin "$WORK/guard" --landlock-bin "$WORK/phobos-landlock-filesystem-and-networksystem" \
+    --resolver "127.0.0.1:${DNSPORT}" "$spec_e2e2" -- \
+    timeout 4 openssl s_client -connect "allowed.example:${UPORT}" -servername forbidden.example -quiet < /dev/null \
+    > "$WORK/e2e.refused.out" 2>&1 || true
+  if [[ "$(grep -cF "illegally connect to the Host 'forbidden.example' on Port ${UPORT}" "$WORK/e2e.refused.out")" == 1 ]]; then
+    ok "through the network layer, a ClientHello for a host no rule names is refused and the guard words it once, from the pipe the layer opened"
+  else
+    bad "through the network layer, a refused host name is worded once" "$(tail -4 "$WORK/e2e.refused.out")"
+  fi
 else
   skip "the network layer maps the name end to end" "/etc/hosts is not writable here"
 fi
@@ -655,7 +668,27 @@ else
     bad "a plain connection to an address no rule names prints one line naming the endpoint" "$(cat "$WORK/log.client.out")"
   fi
 
-  guard_with_log -- bash -c 'for descriptor in /proc/self/fd/*; do readlink "$descriptor"; done' \
+  # A host a rule names whose address the broker cannot resolve is refused too, but not by the policy, so it
+  # is not worded as a blocked connection. The log shows its name field empty, which the guard ignores.
+  spec_unres="$WORK/spec-unres"
+  mkdir -p "$spec_unres"
+  printf 'allowed.example %s\n' "$UPORT" > "$spec_unres/net.rules"
+  unres_endpoint=""
+  unres_pid=""
+  start_egress_broker "$spec_unres" "$spec_unres/net.rules" "$haproxy_bin" "127.0.0.1:9" unres_endpoint unres_pid "$broker_log"
+  rm -f "$WORK/real.marker"
+  "$WORK/guard" --rules "$spec_unres/net.rules" --broker "$unres_endpoint" --broker-log-fd "$broker_log" -- \
+    timeout 8 openssl s_client -connect "${REAL_IP}:${UPORT}" -servername allowed.example -quiet \
+    < /dev/null > "$WORK/log.unres.out" 2>&1 || true
+  sleep 0.6
+  if [[ ! -f "$WORK/real.marker" && "$(grep -cE 'illegally connect to the (Host|Endpoint)' "$WORK/log.unres.out")" == 0 ]]; then
+    ok "an allowed host name the broker cannot resolve is refused without a line that blames the policy"
+  else
+    bad "an allowed host name the broker cannot resolve is refused without a line that blames the policy" "$(cat "$WORK/log.unres.out")"
+  fi
+  stop_haproxy_child "$unres_pid"
+
+  guard_with_log -- bash -c 'for descriptor in /proc/self/fd/*; do [[ "${descriptor##*/}" -gt 2 ]] && readlink "$descriptor"; done' \
     > "$WORK/log.fds.out" 2>&1 || true
   if [[ "$(grep -c '^pipe:' "$WORK/log.fds.out")" == 0 ]]; then
     ok "the command inherits no descriptor of the pipe, nor any other pipe"
@@ -673,9 +706,9 @@ else
       if [[ "$(readlink "$descriptor")" == pipe:* ]]; then echo "PHB-BROKER refuse PR 666f72676564 1.2.3.4 80" > "$descriptor" 2>/dev/null; fi
     done; sleep 0.5' > "$WORK/log.reach.out" 2>&1 || true
   if [[ "$(grep -c "the Host 'forged'" "$WORK/log.reach.out")" -ge 1 ]]; then
-    ok "the limit the manual states: with no filesystem layer a command can reach the pipe through the guard's /proc entry and forge a line"
+    ok "the limit the manual states: with no Landlock domain at all a command can reach the pipe through the guard's /proc entry and forge a line"
   else
-    bad "the limit the manual states: with no filesystem layer a command can forge a line through /proc" "the forged line did not print; $(cat "$WORK/log.reach.out")"
+    bad "the limit the manual states: with no Landlock domain at all a command can forge a line through /proc" "the forged line did not print; $(cat "$WORK/log.reach.out")"
   fi
   ls "$spec_log" "$spec_log/${PHB_SPEC_SCRATCH}" > "$WORK/log.listing" 2>&1
   if ! grep -qE 'broker[-.]?log[^.]|\.pipe|\.fifo' "$WORK/log.listing" && [[ -z "$(find "$spec_log" -type p)" ]]; then

@@ -209,8 +209,12 @@ refused_and_reported() {
 }
 refused_and_reported "a write of /proc/self/coredump_filter" "coredump_filter" 'echo 1 > /proc/self/coredump_filter'
 refused_and_reported "a read of /proc/mounts" "mounts" 'head -c 1 /proc/mounts'
-refused_and_reported "a read of /proc/net/if_inet6" "if_inet6" 'head -c 1 /proc/net/if_inet6'
-refused_and_reported "a read of another process's /proc/<pid>/stat" "/stat" 'head -c 1 /proc/1/stat'
+if [[ -e /proc/net/if_inet6 ]]; then
+  refused_and_reported "a read of /proc/net/if_inet6" "if_inet6" 'head -c 1 /proc/net/if_inet6'
+else
+  skip "a read of /proc/net/if_inet6" "this kernel has no IPv6, so the file does not exist"
+fi
+refused_and_reported "a read of another process's /proc/<pid>/stat" "/proc/1/stat" 'head -c 1 /proc/1/stat'
 refused_and_reported "a read of /proc/self/fd" "/fd" 'ls /proc/self/fd'
 if [[ -e /dev/tty ]]; then
   refused_and_reported "a write of /dev/tty" "tty" 'echo x > /dev/tty'

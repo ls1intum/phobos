@@ -98,8 +98,9 @@ WHAT IT REPORTS
   egress broker logs each TLS host name it refuses to an anonymous pipe that only it and the guard
   hold, and the guard words those too. When the run ends, one line, Phobos Security Summary,
   counts what was blocked per layer. Every line is evidence for a person reading the log, not
-  proof, because the command writes to the same stderr; and with the filesystem layer off a
-  command running as the same user can reach the pipe through /proc and forge a broker line.
+  proof, because the command writes to the same stderr; and a command that could open the
+  guard's descriptor through /proc could forge a broker line (no path names the pipe, and in the
+  measured runs under phobos.sh it could not, but the kernel's rules for /proc decide that).
   Reporting never changes an outcome. When the kernel cannot support it, a notice says what goes
   unreported and why, and the run is enforced all the same.
 

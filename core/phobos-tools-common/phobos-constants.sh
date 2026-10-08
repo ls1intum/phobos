@@ -45,6 +45,11 @@ PHB_STATUS_SIGXFSZ=153
 PHB_CLOCK_TICKS_PER_SECOND=100
 PHB_STAT_CUTIME_INDEX=13
 PHB_STAT_CSTIME_INDEX=14
+# How far below the limit the waited-for children's time may be and still count as having reached it.
+# The kernel ends a process when its tick-sampled processor time reaches the limit, while /proc reports
+# the precise run time, split into user and system time and truncated twice, so a process killed at the
+# limit shows up to a scheduler tick or two less. A tenth of a second covers that at every tick rate.
+PHB_CPU_LIMIT_SLACK_TICKS=10
 
 # What a run is bounded by when no cfg names a value. They are a fallback, never a cap: a cfg
 # that names a larger value wins, and a cfg that names zero switches that limit off and wins

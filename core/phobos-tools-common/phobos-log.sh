@@ -44,7 +44,7 @@ waited_children_cpu_ticks() {
   local stat=""
   local -a fields=()
   REPLY=0
-  read -r -d '' stat < "/proc/${BASHPID}/stat" || true
+  read -r -d '' stat 2> /dev/null < "/proc/${BASHPID}/stat" || true
   stat="${stat##*) }"
   read -r -a fields <<< "$stat"
   REPLY=$(( ${fields[PHB_STAT_CUTIME_INDEX]:-0} + ${fields[PHB_STAT_CSTIME_INDEX]:-0} ))
@@ -56,7 +56,10 @@ waited_children_cpu_ticks() {
 # hard limit to the same value, so the kernel ends the command with SIGKILL, 137, at the limit, as
 # it ends one that a timeout or the out-of-memory killer stopped. So it is worded for 137, and for a
 # 152 that only a command lowering its own soft limit can cause, only when the processes this shell
-# waited for used at least the limit in processor time, which the command did if the limit ended it.
+# waited for used the limit in processor time (PHB_CPU_LIMIT_SLACK_TICKS short of it counts), which
+# the command did if the limit ended it. That is necessary and not sufficient: the limit is per process
+# and the sum is over the whole tree, so a tree of processes that together used the limit and was then
+# stopped some other way (the out-of-memory killer, an outside kill) gets the line wrongly.
 # Takes the status, the CPU limit in seconds and the file size limit in megabytes, either empty when
 # not set. A command that exits with 153 by itself gets the file size line, which a shell cannot
 # tell apart from the signal; the process, open file and memory limits are not detectable from a
@@ -73,7 +76,7 @@ report_resource_limit_hit() {
     return 0
   fi
   waited_children_cpu_ticks
-  if (( REPLY >= 10#$cpu * PHB_CLOCK_TICKS_PER_SECOND )); then
+  if (( REPLY + PHB_CPU_LIMIT_SLACK_TICKS >= 10#$cpu * PHB_CLOCK_TICKS_PER_SECOND )); then
     report "Phobos Security Error: the program tried to illegally exceed the CPU Time Limit of $(( 10#$cpu )) seconds but was blocked by Phobos."
   fi
 }

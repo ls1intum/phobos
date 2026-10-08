@@ -216,11 +216,13 @@ What a line proves is limited, and is meant for the person reading a log:
 - The command writes to the same standard error, so it can print a line that looks the same. The
   counts in the summary are Phobos's own decisions; the lines are text.
 - The egress broker reports the TLS host names it refuses through an anonymous pipe that only
-  HAProxy and the connect guard hold, so no path names it and no policy can grant the command access.
-  With the filesystem layer on, Landlock also keeps the command from the guard's `/proc` entries;
-  with it off (`-nfr`), a command running as the same user can open the guard's descriptor through
-  `/proc/<pid>/fd` and write a forged broker line, which changes what is printed and what the
-  network count says, and nothing the broker allows or refuses.
+  HAProxy, the connect guard and the network layer's own shell hold, so no path names it and no
+  policy can grant the command access. A command that could open the guard's descriptor through
+  `/proc/<pid>/fd` could write a forged broker line, which changes what is printed and what the
+  network count says, and nothing the broker allows or refuses. Against the bare guard, with no
+  Landlock domain at all, it can. Under `phobos.sh` it could not in the measured runs, with every
+  layer on and with `-nfr`, but what stops it is the kernel's own access rule for another process's
+  `/proc` entries, not something Phobos enforces, so nothing here relies on it.
 - A connect to a UNIX socket is worded only for the command and what it started. Every layer's shell
   asks the name service cache for the user at start-up and is refused by the guard too; those are
   Phobos's own helpers, not the program, and are not worded. With the filesystem layer off there is

@@ -4246,6 +4246,14 @@ static void test_broker_log_lines(void) {
     check("a line with too few fields, too many or another marker prints nothing", count_report_lines(out) == 0);
 
     reset_behaviour();
+    capture_stderr_begin();
+    const char unresolved[] = "PHB-BROKER-UNRESOLVED broker PR 616c6c6f7765642e6578616d706c65 1.2.3.4 443";
+    handle_broker_log_line(unresolved, strlen(unresolved));
+    out = capture_stderr_end();
+    check("a refusal under the marker the broker writes when it cannot resolve an allowed host prints nothing",
+          count_report_lines(out) == 0);
+
+    reset_behaviour();
     char overlong[BROKER_LOG_LINE_MAXIMUM + 8];
     memset(overlong, 'a', sizeof(overlong));
     capture_stderr_begin();

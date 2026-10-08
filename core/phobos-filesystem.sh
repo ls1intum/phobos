@@ -84,10 +84,13 @@ WHAT IT REPORTS
   the kernel cannot support it, a notice names what goes unreported and why, and the run is
   enforced all the same.
 
-  When the command ends with the status of a CPU or file size limit it was given (152 for
-  SIGXCPU, 153 for SIGXFSZ), the layer prints the matching line, "... exceed the CPU Time Limit
-  of N seconds ..." or "... exceed the File Size Limit of N MB ...". A command that ends with
-  152 or 153 by itself gets the same line, which a shell cannot tell apart from the signal. At
+  When the command ends with the status of a file size limit it was given (153 for SIGXFSZ), or
+  with 137 or 152 after the processes it started used the CPU time limit it was given, the layer
+  prints the matching line, "... exceed the File Size Limit of N MB ..." or "... exceed the CPU
+  Time Limit of N seconds ...". The CPU limit ends a command with SIGKILL, 137, which a shell
+  cannot tell from an outside kill; the CPU time used decides, and a tree of processes that
+  together used the limit and was stopped some other way gets the line wrongly. A command that
+  ends with 153 by itself gets the file size line, which a shell cannot tell from the signal. At
   the end of a run that blocked anything, the reporter prints one "Phobos Security Summary"
   line that counts per layer what it decided, never the words in the command's own output.
   None of this is a status: the command's own exit status is passed through unchanged, unless
@@ -181,8 +184,8 @@ mkdir -p "$PHOBOS_SCRATCH"
 # group-kills this layer, where the timeout layer removes the specification instead.
 trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 
-# This layer runs the command as a child and waits on it, so its stderr can be watched for
-# denials. An outer timeout (phobos-timeoutsystem.sh) group-kills on expiry and escalates to SIGKILL
+# This layer runs the command as a child and waits on it, so it can word the limit that ended it
+# afterwards. An outer timeout (phobos-timeoutsystem.sh) group-kills on expiry and escalates to SIGKILL
 # only while GNU timeout's own child is still alive, so this layer ignores SIGTERM and stays
 # until the command it waits on is gone. While it waits, run_forwarding_signals passes a SIGTERM,
 # SIGHUP, SIGINT or SIGQUIT it receives on to the command, which has the default disposition, so a
