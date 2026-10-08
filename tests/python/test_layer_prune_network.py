@@ -133,11 +133,22 @@ def test_another_loopback_address_gets_a_wildcard_of_its_own():
     assert decision.connect == ("allow 127.0.0.2:*",)
 
 
-def test_an_ipv4_mapped_loopback_destination_is_reported_not_granted():
+def test_an_ipv4_mapped_loopback_destination_is_granted_as_the_ipv4_endpoint_it_maps():
     decision = network.network_rules([connect("::ffff:127.0.0.1", 43521, "tcp")], frozenset({("AF_INET6", 43521, "tcp")}), ())
-    assert decision.connect == ()
+    assert decision.connect == ("allow 127.0.0.1:*",)
     assert decision.refused_external == ()
-    assert "IPv4-mapped" in decision.reported[0]
+
+
+def test_an_ipv4_mapped_loopback_destination_nothing_bound_is_granted_exactly_as_ipv4():
+    decision = network.network_rules([connect("::ffff:127.0.0.1", 43521, "tcp")], frozenset(), ())
+    assert decision.connect == ("allow 127.0.0.1:43521",)
+    assert "no process of the run bound that port" in decision.reported[0]
+
+
+def test_an_ipv4_mapped_external_destination_is_refused_not_granted():
+    decision = network.network_rules([connect("::ffff:10.0.0.1", 80, "tcp")], frozenset(), ())
+    assert decision.connect == ()
+    assert decision.refused_external == ("::ffff:10.0.0.1:80 tcp",)
 
 
 def test_a_dual_stack_server_matches_an_ipv4_client_by_port_and_transport():

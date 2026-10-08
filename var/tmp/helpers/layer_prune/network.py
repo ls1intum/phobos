@@ -126,8 +126,8 @@ def decide_connect(denial: Denial, bound: frozenset[tuple[str, int, str]], colle
     """Sorts one refused connect or datagram: an external refusal, a loopback wildcard or exact rule, or a report.
 
     A server is recognised by port and transport alone, so a dual-stack server bound to :: matches a
-    client that connects over IPv4. An IPv4-mapped loopback destination is reported: the guard holds
-    ::1 and localhost to their own spellings, so no rule could grant it.
+    client that connects over IPv4. An IPv4-mapped loopback destination is the IPv4 endpoint it maps,
+    as the guard judges it, so it is sorted as that address.
     """
     if denial.address is None or denial.port is None:
         return
@@ -140,8 +140,7 @@ def decide_connect(denial: Denial, bound: frozenset[tuple[str, int, str]], colle
         collected.reported.append(f"loopback {destination}: the socket's transport is unknown; not granted")
         return
     if kind == "mapped":
-        collected.reported.append(f"loopback {destination}: an IPv4-mapped address no rule can name; not granted")
-        return
+        denial = dataclasses.replace(denial, address=str(ipaddress.ip_address(denial.address).ipv4_mapped))
     if any(port == denial.port and transport == denial.transport for _, port, transport in bound):
         collected.wildcards.add((denial.address, denial.transport))
         return

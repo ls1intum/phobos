@@ -1,10 +1,10 @@
 """Checks the audit observer: records read as denials, the cross-check with strace, and the ABI 10 rows.
 
-fixtures/audit/captured.txt holds the lines a KVM guest on Linux 7.2.9 printed in run 37614084135 of
-prune-kvm.yml: filesystem records of refused reads and an execute, and the domain records beside them.
-fixtures/audit/records.txt is written in the same layout and adds what no run has produced yet (network
-records, a path in hex, a damaged line); it is to be replaced by captured lines as runs produce them. What these
-tests pin is this module's reading of that layout, in both directions: an agreeing pair passes, a
+fixtures/audit/captured.txt holds the lines a KVM guest on Linux 7.2.9 printed in runs 37614084135 and
+37618195887 of prune-kvm.yml: filesystem records of refused reads and an execute, the UDP bind of the
+fixture, and the domain records beside them. fixtures/audit/records.txt is written in the same layout and
+adds what no run has produced yet (a TCP connect record, a path in hex, a damaged line); it is to be
+replaced by captured lines as runs produce them. What these tests pin is this module's reading of that layout, in both directions: an agreeing pair passes, a
 mismatched one is reported.
 """
 
@@ -165,3 +165,5 @@ def test_the_records_a_real_guest_printed_are_read_as_the_refusals_they_are():
     assert audit.sections_of(execute) == {"execute", "read"}
     agreeing = audit.cross_check([strace_denial("/usr/bin/bash", "execute", "read")], audit.denials(records))
     assert agreeing["mismatches"] == []
+    bind = next(item for item in records if item.blockers == ("net.bind_udp",))
+    assert bind.port == 5000

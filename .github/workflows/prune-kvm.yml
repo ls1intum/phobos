@@ -39,18 +39,6 @@ on:
         options:
           - fixture
           - reference
-  # Temporary. GitHub can dispatch only a workflow the default branch already holds, so until this file
-  # is on main a push to the branch it is written on starts a run of the fixture. Remove it when the pull
-  # request is rebased onto main.
-  push:
-    branches: [ "feature/prune-kvm-observer" ]
-    paths:
-      - ".github/workflows/prune-kvm.yml"
-      - ".github/scripts/*kvm*"
-      - ".github/scripts/stage-prune-inputs.sh"
-      - "var/tmp/helpers/layer_prune/**"
-      - "core/phobos-landlock-filesystem-and-networksystem/**"
-      - "tests/integration/kvm_fixture_result.sh"
 
 permissions: {}
 
