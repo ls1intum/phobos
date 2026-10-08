@@ -89,7 +89,7 @@ services:
       - ./exercises:/srv/phobos-prune-exercises:ro
       - ./pruner/src:/var/tmp/helpers:ro
       - ./build/pruner/path_sets:/var/tmp/path_sets
-      - ./docker/protecter/java/maven-repository.sha256:/srv/phobos-manifest/maven-repository.sha256:ro
+      - ./protecter/image/maven-repository.sha256:/srv/phobos-manifest/maven-repository.sha256:ro
     command: ["--stage", "all", "java-maven"]
 
   prune_python:
@@ -110,7 +110,9 @@ services:
     command: ["--resolver", "127.0.0.11", "--output-dir", "/var/tmp/path_sets/egress", "java-egress"]
 
   orchestrate:
-    build: docker/pruner/orchestrate
+    build:
+      context: .
+      dockerfile: docker/pruner/orchestrate/Dockerfile
     volumes:
       - ./pruner/src:/var/tmp/helpers:ro
       - ./build/pruner/path_sets:/var/tmp/path_sets

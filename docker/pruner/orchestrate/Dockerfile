@@ -2,7 +2,7 @@ FROM python:3.14-slim@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab
 
 WORKDIR /workspace
 
-# The build context is this directory, which holds orchestrate.py.
-COPY ./orchestrate.py .
+# The build context is the repository root, where orchestrate.py lives under pruner/src/orchestrate.
+COPY pruner/src/orchestrate/orchestrate.py .
 
 ENTRYPOINT ["python3", "orchestrate.py"]

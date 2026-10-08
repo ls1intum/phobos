@@ -95,7 +95,8 @@ jobs:
         include:
           - name: prune orchestrate
             slug: prune-orchestrate
-            context: docker/pruner/orchestrate
+            context: .
+            dockerfile: docker/pruner/orchestrate/Dockerfile
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -115,14 +116,15 @@ jobs:
           # that. --no-cache reruns the layers, --pull re-resolves the base image;
           # neither does the other's half.
           FRESH: ${{ github.event_name == 'schedule' && '--pull --no-cache' || '' }}
-          # Through the environment rather than interpolated into the command. These two
+          # Through the environment rather than interpolated into the command. These three
           # values come from the matrix above and are safe, but a run block that pastes
           # an expression into a shell is the shape to avoid having anywhere.
           IMAGE_SLUG: ${{ matrix.slug }}
           BUILD_CONTEXT: ${{ matrix.context }}
+          BUILD_DOCKERFILE: ${{ matrix.dockerfile }}
         run: |
           # shellcheck disable=SC2086
-          docker build ${FRESH} -t "phobos-${IMAGE_SLUG}:ci" "${BUILD_CONTEXT}"
+          docker build ${FRESH} -f "${BUILD_DOCKERFILE}" -t "phobos-${IMAGE_SLUG}:ci" "${BUILD_CONTEXT}"
 
   # Built and tested once per architecture on a native runner, never under emulation:
   # Landlock and the seccomp user-notification the acceptance suites rest on are absent or

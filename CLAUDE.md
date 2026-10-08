@@ -137,7 +137,7 @@ find . -name '*.sh'  -type f -print0 | xargs -0 shellcheck -x -S warning
 ( failed=0; while IFS= read -r f; do gcc-14 -std=gnu23 -fsyntax-only -Wall -Wextra -Werror -fanalyzer "$f" || failed=1; done < <(find . -name '*.c' -type f); exit "$failed" )
 find . -name '*.c'   -type f -print0 | xargs -0 cppcheck --std=c23 --enable=warning --quiet --error-exitcode=1
 ruff check --no-cache .
-bandit --recursive --ini .bandit --severity-level medium docker/pruner/orchestrate pruner/src
+bandit --recursive --ini .bandit --severity-level medium pruner/src
 yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 actionlint
@@ -218,15 +218,19 @@ protecter/                 the sandbox and the tests that hold it
       phobos-network-args.sh [connect] and [bind] to the TCP and UDP port rules Landlock enforces
     config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
       language-configurations/  one file per Ares 2 programming language configuration: its bases, placeholders and [connect] rows
+  image/                   what the run-phase image build pins: pin-repository.sh and the Maven and Gradle repository manifests
   test/                    unit/ (C and shell units), integration/ (shell suites, the acceptance suites and
                            protection-matrix/), harness.sh, harness_self_test.sh and a policy probe
 pruner/                    the pruners, which discover what a policy needs
   src/                     layer_prune/: the layer pruner (observe, attribute, grow, minimise, limits, verify, write);
                            layer_record/: the recording pruner (record a session unsandboxed, generate a policy, replay
                            it, compare it; prune image only)
+  src/orchestrate/         the orchestrator: merges the pruned exercise policies into the shipped bases
+  config/                  what the prune image carries: BasePrune.cfg, which grants nothing, and the language seeds
   test/                    integration/ (the pruner suites and their fixtures), python/, and the runner probes
 docker/pruner/             the layer pruner's image and the orchestrator's
   layers/                  the layer pruner's image: the run-phase image, strace, the probe, an empty base
+  orchestrate/             the orchestrator's image
 docker/protecter/          the images an exercise actually runs in, one per language (java/, python/)
 exercises/                 the reference exercises: the pruners' input and the protecter's acceptance fixtures
 phobos-cli.sh              one command line for phobos.sh, the layer pruner, the recording pruner and the image build; on a host it

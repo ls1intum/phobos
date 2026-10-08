@@ -136,7 +136,7 @@ the same image as the Gradle one, by the Compose service `prune_java_maven`. The
 `verify_java_maven` verifies it.
 
 The image holds the dependencies Maven resolves, pre-loaded and held to
-`docker/protecter/java/maven-repository.sha256`, and `pruner/test/integration/layer_prune_maven.sh`
+`protecter/image/maven-repository.sha256`, and `pruner/test/integration/layer_prune_maven.sh`
 re-hashes every file the manifest lists before it prunes. Maven offline stops at the first
 dependency file it cannot read, so granting that repository file by file would take one prune
 round per file. Inside a fine-grained root such as `/root` a grant is otherwise always file by
@@ -162,7 +162,7 @@ adopt in a pull request of its own that lists every widening.
 
 The build writes scratch files with random names in `/tmp` (Ares, Surefire), which the pruner never
 grants from a refusal. The exercise's `prune.json` therefore names a seed, `"seed": "java.cfg"`,
-a file beside the prune image's Dockerfile (`docker/pruner/layers/seeds/java.cfg`) that
+a file kept under `pruner/config/seeds/` and copied into the prune image (`java.cfg`) that
 starts the first policy with `[read]`, `[write]`, `[create]` and `[delete]` on `/tmp`. The
 minimisation drops a row the build does not need, and one comment above the path names the seeded
 rows that stayed. Language-specific rows live only in such a file, never in the pruner or in
@@ -242,7 +242,7 @@ docker compose -f docker-compose.yaml up --build
 ```
 
 Each container writes a complete `<lang>_<exercise>.cfg` and its record per exercise.
-`docker/pruner/orchestrate/orchestrate.py` then merges them. It holds each `.cfg` to the
+`pruner/src/orchestrate/orchestrate.py` then merges them. It holds each `.cfg` to the
 SHA-256 its record carries before it merges anything. A language that failed, one that
 produced nothing, and one whose `.cfg` its record does not vouch for each stop the merge rather
 than shrinking it. An aborted exercise stops the merge as well.

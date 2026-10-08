@@ -84,7 +84,7 @@ find . -name '*.sh'  -type f -print0 | xargs -0 shellcheck -x -S warning
 ( failed=0; while IFS= read -r f; do gcc-14 -std=gnu23 -fsyntax-only -Wall -Wextra -Werror -fanalyzer "$f" || failed=1; done < <(find . -name '*.c' -type f); exit "$failed" )
 find . -name '*.c'   -type f -print0 | xargs -0 cppcheck --std=c23 --enable=warning --quiet --error-exitcode=1
 ruff check --no-cache .
-bandit --recursive --ini .bandit --severity-level medium docker/pruner/orchestrate pruner/src
+bandit --recursive --ini .bandit --severity-level medium pruner/src
 yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 actionlint
