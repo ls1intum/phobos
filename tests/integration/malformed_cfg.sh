@@ -237,6 +237,13 @@ refused "[limits] with a key that is no limit" "$(cfg_text '[limits]\ncolour=5\n
 refused "[limits] with a value that is not a number" "$(cfg_text '[limits]\nnproc=abc\n')" "must be a non-negative whole number" "line 2"
 refused "[limits] with a timeout in the wrong spelling" "$(cfg_text '[limits]\ntimeout=5.5\n')" "exactly three decimals" "line 2"
 accepted "a loopback rule without a port beside a rule with one, which the guard alone then enforces" "$(cfg_text '[connect]\nallow 127.0.0.1:*\nallow 1.2.3.4:80\n')"
+for line in 'allow localhost' 'allow 127.0.0.1' 'allow 127.9.9.9' 'allow 127.0.0.1/32' 'allow [::1]' 'allow ::1' 'allow 0:0:0:0:0:0:0:1' 'allow [::ffff:127.0.0.1]' 'allow localhost udp'; do
+  accepted "a rule that names a single loopback address and no port: ${line}" "$(cfg_text '[connect]\n%s\n' "$line")"
+done
+for line in 'allow 127.0.0.1/1' 'allow 127.0.0.0/8' 'allow 127.0.0.1/31' 'allow 127.evil.example' 'allow 127.evil.example udp' 'allow 128.0.0.1' 'allow [::ffff:128.0.0.1]' 'allow [::1/64]' 'allow example.org' 'allow *'; do
+  refused "a rule that names ${line#allow } and no port, which is not a single loopback address" "$(cfg_text '[connect]\n%s\n' "$line")" "and no port, and only loopback may name no port" "line 2"
+done
+accepted "a range that starts like loopback with a concrete port" "$(cfg_text '[connect]\nallow 127.0.0.1/1:8080\nallow 127.evil.example:443\n')"
 
 echo
 echo "== an Ares 2 policy that is not the text it should be =="

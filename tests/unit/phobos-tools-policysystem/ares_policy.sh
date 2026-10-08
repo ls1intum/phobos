@@ -164,7 +164,7 @@ if [[ "$summary" == *"no timeout imported"* ]]; then ok "and says so"; else bad 
 
 echo "== the network mapping =="
 for case in "localhost|80|allow localhost:80" "localhost|0|allow localhost" "127.0.0.1|0|allow 127.0.0.1:*" "10.0.0.1|53|allow 10.0.0.1:53" \
-  "::1|443|allow [::1]:443" "::1|0|allow [::1]" "::ffff:127.0.0.1|8080|allow [::ffff:127.0.0.1]:8080" "127.0.0.2|0|allow 127.0.0.2:*" \
+  "::1|443|allow [::1]:443" "::1|0|allow [::1]" "::ffff:127.0.0.1|8080|allow [::ffff:127.0.0.1]:8080" "127.0.0.2|0|allow 127.0.0.2:*" "::ffff:127.0.0.1|0|allow [::ffff:127.0.0.1]" \
   "example.org|443|allow example.org:443" "*|443|allow *:443"; do
   host="${case%%|*}"
   rest="${case#*|}"
@@ -174,7 +174,7 @@ for case in "localhost|80|allow localhost:80" "localhost|0|allow localhost" "127
   check "ares_network_rule_line ${host} ${port}" "${rest#*|}" "$( (ares_network_rule_line "$host" "$port" && printf '%s' "$ares_rule") 2>&1)"
 done
 for case in "example.org|0|name the port" "*|0|name the port" "10.0.0.1|0|name the port" "2001:db8::1|0|name the port" \
-  "::ffff:127.0.0.1|0|name the port" "example.org.|443|drop the dot" "exa mple.org|443|neither" "-x.org|443|neither"; do
+  "::ffff:128.0.0.1|0|name the port" "example.org.|443|drop the dot" "exa mple.org|443|neither" "-x.org|443|neither"; do
   host="${case%%|*}"
   rest="${case#*|}"
   port="${rest%%|*}"
