@@ -164,14 +164,36 @@ a file beside the prune image's Dockerfile (`docker/prune_phase/layers/seeds/jav
 starts the first policy with `[read]`, `[write]`, `[create]` and `[delete]` on `/tmp`. The
 minimisation drops a row the build does not need, and one comment above the path names the seeded
 rows that stayed. Language-specific rows live only in such a file, never in the pruner or in
-`core/`. The Gradle reference exercise names the same seed, but no Gradle prune has run on the
-layers since the move to the Java Development Kit (JDK) 25, so that is unobserved.
+`core/`. The Gradle reference exercise names the same seed, because Ares and Surefire
+write scratch files with random names to `/tmp` too.
 
 Without the Compose setup, the manual workflow `prune-maven.yml` builds both images on amd64 and
 arm64 and runs `tests/integration/layer_prune_maven.sh` in an ordinary container. That prunes,
 merges and verifies the exercise. It shows four wrong reasons aborting: no tests, a version the
 repository lacks, a manifest that does not match, and no seed named. The policy, its record and
 the merged base stay as workflow artefacts.
+
+### The shipped Java and Python bases
+
+`core/config/BaseLanguage-java.cfg` is the prune of the Gradle reference exercise on the
+Java Development Kit (JDK) 25. It joins an x86_64 run on GitHub's runners and an aarch64 run,
+plus twelve machine files a Java Virtual Machine (JVM) reads. Ten under `/proc` and `/sys` are there
+because the denial reporting decided to grant them. The other two are the random devices, and
+`/dev/urandom` stays from the previous base, although the reference exercise never draws on it.
+Two Landlock version 10 guests verified it. They asked for the row `[bind] allow 0 udp`, which
+stays in a sidecar and outside the base. The exercise passes under the
+base in continuous integration (CI), and grading refuses a code path the exercise never takes.
+
+The merge adopted one deliberate widening. The base grants write, create and delete on the whole of
+`/var/tmp/testing-dir`, the directory grading runs the exercise in, where the old base named single
+paths beneath it. The old base's `/etc` entry is gone.
+
+`core/config/BaseLanguage-python.cfg` is the same kind of result for the Python reference exercise
+on the Python run-phase image. It joins an x86_64 and an aarch64 run, the exercise passes under it in
+CI, and grading refuses a code path the exercise never takes.
+
+Both bases are only as good as their reference exercise. An exercise that needs a path the
+reference never touched fails until its own exercise configuration grants that path.
 
 ### The KVM run, a second observer on x86
 
@@ -266,28 +288,100 @@ measures under the grading layers, so the two phases do not differ.
 
 ## The recording pruner
 
-The recording pruner lives in `var/tmp/helpers/layer_record/`. It records the reference program of
-an exercise while a person uses it, with the terminal passed through, so the paths the program
-touches and the endpoints it reaches become known without a scripted workload. Only
-`phobos-record` in the prune image starts it. Nothing under `core/` names it, and the run-phase
-image does not hold it. While it records, the program runs with no sandbox at all, so use it for
-the instructor's reference program and never for an untrusted one.
+The layer pruner needs a reference that runs on its own. For a program that a person uses, a tool
+clicked through or a REPL typed into, there is the recording pruner, `phobos-record`
+(`var/tmp/helpers/layer_record/`). It blocks nothing: the program runs with no sandbox at all under
+`strace`, with the terminal passed through, and every successful call lands in the recording.
+Several sessions can be recorded into one recording and merged.
 
-`phobos-record record` writes a session under `/var/tmp/recordings/<name>`.
-`phobos-record check` replays that session under `phobos.sh` with the recording's policy, in a new
-container, and fails on every refusal of something the recording did. The check refuses to run in
-the container that recorded, or in one whose starting state differs, unless you give
-`--same-container`.
+:::danger[Only for the instructor's own reference program]
+While it records, the program is not sandboxed. Never record an untrusted submission. `--help`
+says so first, and so does the header of every policy it writes. Only the prune image starts the
+recorder: the run-phase image holds no `strace` and refuses it, and nothing under `core/` names it. It refuses the grading options and a command whose words name a file of the layers,
+though a wrapper script that starts them is not caught.
+:::
 
-Five modules sit around them:
+### The four commands
 
+```bash
+RECORD_EXERCISE=<exercise directory> docker compose --profile record run --rm record \
+  record --name tool --script /var/tmp/recordings/session.script -- python3 -q
+docker compose --profile record run --rm record generate --name tool [--limits] [--memory-pinned]
+docker compose --profile record run --rm record check --name tool \
+  --script /var/tmp/recordings/session.script -- python3 -q
+docker compose --profile record run --rm record diff --name tool --policy /var/tmp/recordings/Base.cfg
+```
+
+Each recording lands under `./var/tmp/recordings/<name>` on the host, which the service
+mounts at `/var/tmp/recordings`. A script and a policy to compare with go there too, because the
+container sees nothing else of the host but the exercise (`RECORD_EXERCISE`, mounted read-only at
+`/srv/phobos-record-exercise`) and the helpers. Each `run` is a new container, which `check`
+needs.
+
+- `record` copies the exercise into the working directory grading uses (the `--chdir` of
+  `TailPhobos.cfg`), lists every path that exists before the first session of a container, and
+  runs the program there. Without `--script` the terminal is yours. With it, the session comes
+  from a file (`send`, `expect`, `key`, `idle`, `sleep`). `--sample` samples the processes too, for
+  limits.
+- `generate` turns every session into `policy.cfg` and `record.json` beside them.
+- `check` replays a session under `phobos.sh` with the generated policy, in a new container. It
+  fails on every call that succeeded while recording and now meets a refusal, and on a replay that did
+  not run the session. It verifies that the container starts in the state the recording started in,
+  and says which kind of container it ran in. It refuses to run in the container that recorded, or
+  in one whose starting state differs, unless you give `--same-container`.
+- `diff` lists what a policy lacks for the sessions and what it grants that no session used. It
+  changes nothing, and it marks a base entry that an ancestor already covers and never calls it
+  unused (see `AGENTS.md`).
+
+### What `generate` writes
+
+It uses the layer pruner's own generalisation: fine-grained roots file by file, per-run names on
+their smallest stable directory, and a created file on the nearest directory that existed before.
+The header says how many sessions the policy covers.
+
+- A `[read]` or `[execute]` row never names a path a session created.
+- A file a session created directly in a top-level directory such as `/root` cannot be granted,
+  because a grant is never widened to a top-level directory. `check` reports its creation as a
+  regression. Give the program a home in the working directory, as the suites do with `HOME`.
+- Loopback servers become the loopback wildcard.
+- A host the program reached through Transport Layer Security (TLS) becomes `allow <name>:<port>`, taken from the ClientHello's
+  host name. The policy then needs `--resolver`, and the header says so. The lookup of the
+  resolver itself is a comment, never a rule.
+- Anything else is held by address with a comment. A datagram connect that sent nothing and a
+  connection that never completed are left out and listed.
+- A move between directories gives its source the destination's sections, because Landlock
+  refuses it otherwise. `[execute]` is the exception, since it never sits beside a write-class
+  right, so the policy lists such a move instead.
+- What grading refuses whatever a policy grants (a connection to a UNIX socket, `setsid`, a device
+  `ioctl`, `io_uring`) stays a comment at the end of the policy, never a grant.
+- `--limits` derives `[limits]` from the sampled sessions. `--memory-pinned` asserts that the
+  program pins its address space, so that `generate` derives `mem_mb` too.
+
+`record.json` lists every grant with the first calls behind it, every widening with the reason,
+and every access no policy can grant.
+
+### Exit statuses and what the policy does not cover
+
+| Status | Meaning |
+| --- | --- |
+| 4 | a `[read]` or `[execute]` row names a path that did not exist before the sessions |
+| 5 | `phobos-policysystem.sh` refuses the generated policy |
+| 6 | a recorded call was not mapped, or an access cannot be granted by any policy; the header says `INCOMPLETE` |
+
+The policy covers what the sessions did and nothing else: a code path no session took is denied at
+grading. That errs towards a smaller sandbox, so the cost of a missed path is a refusal you can
+see, not a hole.
+
+### The modules
+
+- `observe.py` runs the program under `strace` and writes the raw record.
 - `guard.py` refuses to start where grading could be meant.
 - `snapshot.py` lists a container's starting state.
 - `pty_script.py` types scripted terminal sessions.
 - `names.py` recovers the host names a session sent or received.
+- `endpoints.py` turns the connections of a session into endpoints.
 - `needs.py` maps each call to the sections of a policy.
-
-The recorder does not turn a recording into a policy yet.
+- `generate.py`, `check.py` and `diff.py` are the three commands that follow `record`.
 
 ## Further reading
 

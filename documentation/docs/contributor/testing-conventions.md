@@ -28,16 +28,28 @@ non-zero on a failure.
 | Shell unit suites | `tests/unit/<core component>/*.sh` | a shell | the `Shell suites` job of `test.yml` |
 | Python suites | `tests/python/` | pytest | the `Python helpers` job of `test.yml` |
 | C unit suites | `tests/unit/phobos-landlock-filesystem-and-networksystem/`, `tests/unit/phobos-seccomp-networksystem/`, `tests/unit/phobos-seccomp-filesystem/` | `gcc-14`, no kernel feature | the `unit` job of `build.yml` |
-| Acceptance suites | `tests/integration/landlock-filesystem-and-networksystem-acceptance/` | the run-phase image, an ordinary container | the `run-phase` job of `build.yml`, on amd64 and arm64 |
-| Protection matrix | `tests/integration/protection-matrix/` | the run-phase image, an ordinary container | the `run-phase` job of `build.yml`, on amd64 and arm64 |
+| Acceptance suites | `tests/integration/landlock-filesystem-and-networksystem-acceptance/` | the run-phase image, an ordinary container | the groups of the `run-phase` job of `build.yml`, on amd64 and arm64 |
+| Protection matrix | `tests/integration/protection-matrix/` | the run-phase image, an ordinary container | the groups of the `run-phase` job of `build.yml`, on amd64 and arm64 |
 
-Four integration suites run elsewhere. They need the prune image that the `run-phase` job of
-`build.yml` builds on the run-phase image, so that job runs them, in an ordinary container:
+The `run-phase` job is a matrix of parallel groups on each architecture: `acceptance`, `matrix-a`,
+`matrix-b`, `recorder-and-egress` and `pruner`. A group is a slice of the suites, so one slow
+suite no longer makes every run wait for the sum of all of them. The Python run-phase image has
+its own job with the groups `suites-a`, `suites-b`, `pruner-a` and `egress`. It holds that image to
+every suite that needs no Java, while the acceptance suites that compile Java probes or run Maven
+stay with the Java image. On the free plan GitHub runs at most 20 jobs at once, so every new group
+counts against that limit.
+
+Some integration suites run elsewhere. They need the prune image that the `run-phase` job of
+`build.yml` builds on the run-phase image, so the `pruner` and `recorder-and-egress` groups run
+them, in an ordinary container:
 
 - `layer_prune_observer.sh`
 - `layer_prune.sh`, the whole layer pruner on its fixture exercise, in both directions
 - `layer_prune_egress.sh`, the declared hosts
-- `record_host.sh`, which starts the recording pruner's own suites
+- `record_host.sh`, which starts the recording pruner's own suites: `record_safety.sh`,
+  `record_interactive.sh`, `record_replay.sh` and `record_generate.sh`
+- `record_networked.sh`, which runs the recorder against a stand-in server on a Docker network
+  with no route out and replays the generated host name rule through the egress broker
 
 The Python suites cover the modules of both pruners too, from a recorded `strace` log and
 captured packets under `tests/python/fixtures/`.

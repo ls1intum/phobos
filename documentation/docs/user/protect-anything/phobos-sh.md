@@ -50,8 +50,10 @@ heap in `gradlew`. Otherwise Gradle forks a daemon, and the timeout's group lock
 The Python image is built from `docker/run_phase/python/docker-compose.yaml` in the same way.
 It starts from the official Python image, not from Artemis's `ls1tum/artemis-python-docker`,
 whose release is too old for the C products, so an Artemis Python exercise graded under Phobos
-must select this image. Its shipped `BaseLanguage-python.cfg` still names the paths of the old
-Artemis image, so a Python base has to be pruned for the new image before it grades.
+must select this image. Its shipped `BaseLanguage-python.cfg` is the layer pruner's result for
+the Python reference exercise on this image, joined from an x86_64 and an aarch64 run. The
+exercise passes under it in continuous integration (CI), and grading refuses a code path that
+exercise never takes.
 
 ## Running a command
 
