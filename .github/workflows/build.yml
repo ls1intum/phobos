@@ -227,6 +227,17 @@ jobs:
             phobos-run-phase:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/maven-policy-test.sh
 
+      # The Gradle reference exercise under the Java base the image ships, which the layer pruner derived
+      # from this very exercise: Artemis's own offline build passes, and a canary, a write beside the
+      # working directory and an unnamed address are refused. Without it a stale base would go unnoticed.
+      - name: The shipped Java base runs the Gradle reference exercise both ways
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
+        run: |
+          docker run --rm --network none --memory 6g -v "${PWD}/tests:/tests:ro" \
+            -v "${PWD}/var/tmp/testing-dir/java/gradle-reference:/exercise:ro" \
+            phobos-run-phase:ci \
+            bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/gradle-policy-test.sh
+
       # The kernel-enforced network boundary holds against a raw connect() syscall, which is
       # what makes concrete Landlock ports the network boundary alongside the connect guard.
       - name: The network port rule holds against a raw-syscall bypass

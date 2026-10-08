@@ -106,6 +106,7 @@ run them by hand.
 | `phase-test.sh` | rights tightened and widened across four phases, and the trap of an unrestricted final phase |
 | `shipped-policy-test.sh` | the policy the image actually ships runs a real build; a JVM prints no line for the eleven start-up files the Java base grants file by file, each is readable, a neighbour of each is still refused and reported, and the six refusals the base leaves in place are still refused and reported |
 | `maven-policy-test.sh` | the Maven reference exercise passes under the Maven base for each of the four `JAVA_USING_MAVEN_*` configurations, a file the base does not name is refused, and a run with no Ares 2 policy never folds the Maven base |
+| `gradle-policy-test.sh` | the Gradle reference exercise passes offline under the Java base the Java image ships (both test cases and the JUnit report), and a canary outside the base's directories, a write beside the working directory and a connection to an unnamed address are refused | never |
 | `python-policy-test.sh` | the Python reference exercise passes under the Python base the Python image ships (compileall, then pytest with its JUnit report), and a canary outside the base's directories, a write beside the working directory and a connection to an unnamed address are refused | never |
 | `network-port-test.sh` | a raw `connect()` syscall is still refused by Landlock's port rule |
 | `scoping-test.sh` | Landlock scoping: a sandboxed process can neither signal a process outside its domain nor reach an abstract UNIX socket there |
