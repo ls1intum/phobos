@@ -265,6 +265,8 @@ struct behaviour {
     socklen_t last_sendto_name_length;
     uint16_t last_sendto_port;
     int fcntl_getfl_value;
+    int fcntl_setfd_value;      /* the argument of the last F_SETFD */
+    int fcntl_setfl_value;      /* the argument of the last F_SETFL */
     int last_connect_descriptor;
     int writev_fail_at;         /* the 1-based write-back that fails, and every one after it; 0 never */
     int writev_short;           /* when not zero, a write-back that reports fewer bytes than asked */
@@ -744,6 +746,13 @@ int __wrap_socket(int domain, int type, int protocol) {
 int __wrap_fcntl(int fd, int command, ...) {
     (void)fd;
     bx->fcntl_calls++;
+    if (command == F_SETFD || command == F_SETFL) {
+        va_list arguments;
+        va_start(arguments, command);
+        int value = va_arg(arguments, int);
+        va_end(arguments);
+        *(command == F_SETFD ? &bx->fcntl_setfd_value : &bx->fcntl_setfl_value) = value;
+    }
     if (bx->fcntl_fails || (bx->fcntl_fail_at != 0 && bx->fcntl_calls == bx->fcntl_fail_at)) {
         errno = EINVAL;
         return -1;
@@ -4078,6 +4087,12 @@ static void test_reporting_options(void) {
     check("an empty --broker-log-fd is a usage error", run_main(empty_fd) == EXIT_CODE_USAGE);
     char *trailing_fd[] = { "guard", "--broker-log-fd", "3x", "--", "cmd", NULL };
     check("a --broker-log-fd with trailing text is a usage error", run_main(trailing_fd) == EXIT_CODE_USAGE);
+    char *blank_fd[] = { "guard", "--broker-log-fd", " 7", "--", "cmd", NULL };
+    check("a --broker-log-fd with leading blank is a usage error", run_main(blank_fd) == EXIT_CODE_USAGE);
+    char *plus_fd[] = { "guard", "--broker-log-fd", "+7", "--", "cmd", NULL };
+    check("a --broker-log-fd with a plus sign is a usage error", run_main(plus_fd) == EXIT_CODE_USAGE);
+    char *stream_fd[] = { "guard", "--broker-log-fd", "2", "--", "cmd", NULL };
+    check("a --broker-log-fd naming a standard stream is a usage error", run_main(stream_fd) == EXIT_CODE_USAGE);
     char *negative_fd[] = { "guard", "--broker-log-fd", "-1", "--", "cmd", NULL };
     check("a negative --broker-log-fd is a usage error", run_main(negative_fd) == EXIT_CODE_USAGE);
     char *huge_fd[] = { "guard", "--broker-log-fd", "99999999999", "--", "cmd", NULL };
@@ -4309,6 +4324,9 @@ static void test_broker_log_pipe(void) {
     check("nor is one that is not open", !adopt_broker_log(-1));
     reset_behaviour();
     check("a pipe is adopted", adopt_broker_log(pipe_ends[0]) && bx->fcntl_calls == 4);
+    check("the adopted pipe is close-on-exec, so the command never inherits the writable end",
+          (bx->fcntl_setfd_value & FD_CLOEXEC) != 0);
+    check("and non-blocking, so a full pipe never stops the guard", (bx->fcntl_setfl_value & O_NONBLOCK) != 0);
     for (int failing = 1; failing <= 4; failing++) {
         reset_behaviour();
         bx->fcntl_fail_at = failing;
@@ -4810,14 +4828,21 @@ static void test_supervisor_answers_the_three_kinds_of_trap(void) {
 
     reset_behaviour();
     bx->notif_recv_nr = __NR_connect;
-    bx->notif_recv_arch = FOREIGN_AUDIT_ARCH;
-    bx->notif_recv_family = AF_INET;
-    bx->notif_recv_port = 443;
-    bx->process_vm_readv_result = 1;
+    arrange_refused_connect(443, FD_TYPE_STREAM);
     remember_rule("127.0.0.1", "443", false);
     service_once();
-    check("a foreign-ABI call whose number equals connect is refused and never reaches the connect path",
-          bx->last_answer_error == -EACCES && bx->connect_calls == 0 && bx->addfd_calls == 0);
+    check("the same connect under the native ABI is allowed: the foreign case below has nothing but its ABI to be refused for",
+          bx->last_answer_error == 0 && bx->connect_calls == 1);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_connect;
+    bx->notif_recv_arch = FOREIGN_AUDIT_ARCH;
+    arrange_refused_connect(443, FD_TYPE_STREAM);
+    remember_rule("127.0.0.1", "443", false);
+    service_once();
+    check("a foreign-ABI call whose number equals an allowed connect is refused and never reaches the connect path",
+          bx->answers == 1 && bx->last_answer_error == -EACCES && bx->last_answer_flags == 0
+          && bx->connect_calls == 0 && bx->addfd_calls == 0);
 
     reset_behaviour();
     record_socket_type(CREATED_TCP_INODE, FD_TYPE_STREAM);

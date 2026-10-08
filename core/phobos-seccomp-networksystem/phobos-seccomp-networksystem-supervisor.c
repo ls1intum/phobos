@@ -616,7 +616,7 @@ void supervise(int notify_descriptor) {
         if (watch[1].revents & POLLIN) {
             drain_broker_log(broker_log_descriptor);
         }
-        if (watch[1].revents & (POLLERR | POLLNVAL)) {
+        if (watch[1].revents & (POLLERR | POLLNVAL | POLLHUP)) {
             broker_log_descriptor = -1;
         }
         if (watch[0].revents & POLLIN) {
