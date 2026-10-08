@@ -264,8 +264,8 @@ check_rendered_policies_meet_the_parser() {
     check "a command runs under the ${name} policy through phobos.sh" "0" "$?"
   done
   check "what would end a line in the commented policy's comments is escaped: it has exactly the sections it was given" \
-    "[bind] [connect] [create] [create-ipc] [create-symlink] [delete] [execute] [read] [restructure] [write]" \
-    "$(grep '^\[' "${WORK}/commented.cfg" | sort | tr '\n' ' ' | sed 's/ $//')"
+    "[bind] [connect] [create-ipc] [create-symlink] [create] [delete] [execute] [read] [restructure] [write]" \
+    "$(grep '^\[' "${WORK}/commented.cfg" | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
   check "and holds no carriage return or line separator" 0 "$(grep -c -e $'\r' -e $'\xe2\x80\xa8' "${WORK}/commented.cfg")"
   rendered_policy subset "${WORK}/subset.out"
   check "render refuses a nested strict subset" "refused" "$(cat "${WORK}/subset.out")"
