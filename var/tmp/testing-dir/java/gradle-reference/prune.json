@@ -1,0 +1,1 @@
+{"report_globs": ["build/test-results/test/*.xml"], "declared_hosts": [], "heap_pinned": true, "seed": "java.cfg"}

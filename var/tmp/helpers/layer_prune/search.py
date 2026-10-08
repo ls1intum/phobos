@@ -133,4 +133,4 @@ def grow(run: Callable[[cfgfile.Policy], Any], seed: cfgfile.Policy, reference: 
                 return policy
             raise PruneAbort("failed without an attributable denial", {"verdict": dataclasses.asdict(result.verdict)})
         policy = with_grants(policy, grants)
-    raise PruneAbort("did not converge within the grow budget", {"rounds": rounds})
+    raise PruneAbort("did not converge within the grow budget", {"rounds": rounds, "grants": len(policy.fs)})

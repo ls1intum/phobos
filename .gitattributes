@@ -8,8 +8,10 @@
 * text=auto eol=lf
 
 # Binary files, so that Git never applies text conversion to them. Phobos keeps no compiled
-# artefact in version control (the four C products are built per architecture inside the image),
-# but a stray one must never be normalised.
+# artefact of its own in version control (the four C products are built per architecture inside the
+# image), but a stray one must never be normalised. The one deliberate exception is the Gradle wrapper
+# jar of the Gradle reference exercise, a fixture taken from Artemis's template, whose checksum the
+# image build holds to the one Gradle publishes.
 *.so       binary
 *.png      binary
 *.jpg      binary
@@ -20,6 +22,7 @@
 *.tgz      binary
 *.zip      binary
 *.7z       binary
+*.jar      binary
 
 # Not exported in an archive.
 .gitattributes export-ignore
