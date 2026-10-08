@@ -20,14 +20,26 @@ static void write_trap(struct sock_filter *at, unsigned int number) {
     at[1] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF);
 }
 
-size_t append_report_traps(struct sock_filter *instructions, size_t room) {
-    if (room < REPORT_TRAPPED_CALL_COUNT * TRAP_LENGTH) {
+/* Writes one trap for each of count calls, or none when they do not fit in room. Answers the number
+ * of instructions written. */
+static size_t append_traps(struct sock_filter *instructions, size_t room, const int *calls,
+                           size_t count) {
+    if (room < count * TRAP_LENGTH) {
         return 0;
     }
-    for (size_t index = 0; index < REPORT_TRAPPED_CALL_COUNT; index++) {
-        write_trap(&instructions[index * TRAP_LENGTH], (unsigned int)REPORT_TRAPPED_CALLS[index]);
+    for (size_t index = 0; index < count; index++) {
+        write_trap(&instructions[index * TRAP_LENGTH], (unsigned int)calls[index]);
     }
-    return REPORT_TRAPPED_CALL_COUNT * TRAP_LENGTH;
+    return count * TRAP_LENGTH;
+}
+
+size_t append_report_traps(struct sock_filter *instructions, size_t room) {
+    return append_traps(instructions, room, REPORT_TRAPPED_CALLS, REPORT_TRAPPED_CALL_COUNT);
+}
+
+size_t append_network_report_traps(struct sock_filter *instructions, size_t room) {
+    return append_traps(instructions, room, REPORT_NETWORK_TRAPPED_CALLS,
+                        REPORT_NETWORK_TRAPPED_CALL_COUNT);
 }
 
 /* Appends the refusal traps: an x32 number, where the ABI has one, setsid and setpgid. */

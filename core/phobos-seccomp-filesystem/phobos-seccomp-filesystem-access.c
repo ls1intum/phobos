@@ -43,6 +43,13 @@ const int REPORT_TRAPPED_CALLS[] = {
 };
 const size_t REPORT_TRAPPED_CALL_COUNT = sizeof(REPORT_TRAPPED_CALLS) / sizeof(REPORT_TRAPPED_CALLS[0]);
 
+const int REPORT_NETWORK_TRAPPED_CALLS[] = {
+    __NR_bind,
+    SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF,
+};
+const size_t REPORT_NETWORK_TRAPPED_CALL_COUNT =
+    sizeof(REPORT_NETWORK_TRAPPED_CALLS) / sizeof(REPORT_NETWORK_TRAPPED_CALLS[0]);
+
 /* Names one object of the request. */
 static void name_object(struct access_request *request, size_t index, uint64_t directory,
                         uint64_t name_address) {

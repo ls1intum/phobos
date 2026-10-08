@@ -54,6 +54,15 @@
 #include "../../../core/phobos-seccomp-networksystem/phobos-seccomp-networksystem-destination.h"
 #include "../../../core/phobos-seccomp-networksystem/phobos-seccomp-networksystem-held-sockets.h"
 #include "../../../core/phobos-seccomp-networksystem/phobos-seccomp-networksystem-socket-types.h"
+#include "../../../core/phobos-seccomp-networksystem/phobos-seccomp-networksystem-report.h"
+#include "../../../core/phobos-seccomp-networksystem/phobos-seccomp-networksystem-broker-log.h"
+#include "../../../core/phobos-seccomp-filesystem/phobos-seccomp-filesystem-access.h"
+#include "../../../core/phobos-seccomp-filesystem/phobos-seccomp-filesystem-message.h"
+#include "../../../core/phobos-seccomp-filesystem/phobos-seccomp-filesystem-refusals.h"
+
+/* The reporter's header is not included here: it reaches the enforcer's options header, whose
+ * parse_arguments is not the guard's. Its reset function is declared by hand instead. */
+void reset_reporter_for_tests(void);
 
 #include <linux/filter.h>
 #include <linux/seccomp.h>
@@ -87,6 +96,9 @@ static constexpr size_t FAKE_DATAGRAM_LENGTH = 16;              /* the length of
 static constexpr uint16_t FAKE_DNS_ID = 0xBEEF;                 /* what the wrapped getrandom hands out, so a case knows the id */
 static constexpr size_t DNS_TEST_HEADER = 12;                   /* the length of a DNS message's header */
 static constexpr size_t DNS_TEST_OPT_RECORD = 11;               /* the EDNS0 record the query ends with */
+
+/* The Landlock version the wrapped query reports unless a case says otherwise. */
+static constexpr int FAKE_LANDLOCK_VERSION = 8;
 
 /* The exit status the wrapped execvp ends the child with, in place of a successful exec. */
 static constexpr int EXEC_STAND_IN_EXIT_STATUS = 200;
@@ -151,7 +163,7 @@ static constexpr size_t READLINK_TEXT_LENGTH = 64;
 
 /* Room for the filter the child installs, so a case can run it against a seccomp_data of its
  * own. Generous: a filter longer than this is a filter nobody meant to write. */
-static constexpr size_t CAPTURED_FILTER_LENGTH = 64;
+static constexpr size_t CAPTURED_FILTER_LENGTH = 192;
 
 /* An audit architecture the build's own syscall numbers do not belong to, used to ask the
  * filter what it does with a call arriving under a foreign ABI. */
@@ -173,6 +185,11 @@ struct behaviour {
     struct sock_filter installed_filter2[CAPTURED_FILTER_LENGTH];
     unsigned short installed_filter2_length;
     long sendmsg_lockout_result;
+    /* what the denial reporter's preflight answers, and what it was asked */
+    int landlock_version;
+    int continue_supported_answer;
+    int group_lock_answer;
+    int preflight_calls;
     /* SECCOMP_GET_NOTIF_SIZES (via syscall) */
     int notif_sizes_result;
     int notif_sizes_small;
@@ -195,6 +212,7 @@ struct behaviour {
     /* the notification descriptor traffic */
     int notif_recv_result;
     int notif_recv_nr;
+    uint32_t notif_recv_arch;   /* when not zero, the architecture the notification claims */
     int notif_socket_domain;
     int notif_socket_type;
     int notif_socket_protocol;
@@ -220,6 +238,11 @@ struct behaviour {
     int readlink_kind;
     unsigned long long readlink_inode;
     int fcntl_fails;
+    int fcntl_calls;
+    int fcntl_fail_at;          /* the 1-based fcntl call that fails; 0 never */
+    int read_eintr_once;
+    short broker_revents;       /* what the next supervise poll reports for the broker pipe */
+    char unix_path[32];         /* when not empty, the path a faked UNIX address names */
     /* the listen the supervisor runs itself, and the socket address it reads first */
     int notif_listen_backlog;
     int listen_result;
@@ -350,6 +373,12 @@ static void reset_behaviour(void) {
     bx->sendto_length = FAKE_DATAGRAM_LENGTH;
     bx->dns_count_override = -1;
     bx->dns_poke_offset = -1;
+    bx->landlock_version = FAKE_LANDLOCK_VERSION;
+    bx->continue_supported_answer = 1;
+    reporting_reset_for_tests();
+    broker_log_reset_for_tests();
+    reset_report_for_tests();
+    reset_reporter_for_tests();
 }
 
 /* ------------------------------------------------------------------- wraps */
@@ -437,6 +466,22 @@ int __wrap_socketpair(int domain, int type, int protocol, int pair[2]) {
     pair[0] = FAKE_SOCKETPAIR_FIRST_END;
     pair[1] = FAKE_SOCKETPAIR_SECOND_END;
     return 0;
+}
+
+/* The three checks the guard makes before it forks, answered by the case instead of the kernel. */
+int __wrap_query_landlock_version(void) {
+    bx->preflight_calls++;
+    return bx->landlock_version;
+}
+
+bool __wrap_continue_supported(void) {
+    bx->preflight_calls++;
+    return bx->continue_supported_answer != 0;
+}
+
+bool __wrap_group_lock_present(void) {
+    bx->preflight_calls++;
+    return bx->group_lock_answer != 0;
 }
 
 int __wrap_getrlimit(int resource, struct rlimit *limit) {
@@ -660,6 +705,10 @@ ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned l
         struct sockaddr_un *un = (struct sockaddr_un *)&storage;
         un->sun_family = AF_UNIX;
         length = sizeof(*un);
+        if (bx->unix_path[0] != '\0') {
+            strncpy(un->sun_path, bx->unix_path, sizeof(un->sun_path) - 1);
+            length = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + strlen(bx->unix_path) + 1);
+        }
     } else {
         struct sockaddr_in *v4 = (struct sockaddr_in *)&storage;
         v4->sin_family = AF_INET;
@@ -687,11 +736,23 @@ int __wrap_socket(int domain, int type, int protocol) {
 
 int __wrap_fcntl(int fd, int command, ...) {
     (void)fd;
-    if (bx->fcntl_fails) {
+    bx->fcntl_calls++;
+    if (bx->fcntl_fails || (bx->fcntl_fail_at != 0 && bx->fcntl_calls == bx->fcntl_fail_at)) {
         errno = EINVAL;
         return -1;
     }
     return command == F_GETFL ? bx->fcntl_getfl_value : 0;
+}
+
+/* Passes every read through, except that one can be interrupted first, for the broker pipe's reader. */
+ssize_t __real_read(int fd, void *buffer, size_t count);
+ssize_t __wrap_read(int fd, void *buffer, size_t count) {
+    if (bx != NULL && bx->read_eintr_once) {
+        bx->read_eintr_once = 0;
+        errno = EINTR;
+        return -1;
+    }
+    return __real_read(fd, buffer, count);
 }
 
 int __wrap_listen(int fd, int backlog) {
@@ -1129,6 +1190,8 @@ ssize_t __wrap_getrandom(void *buffer, size_t length, unsigned int flags) {
  * service, an EINTR to exercise the retry, or a poll error, then a hangup that ends
  * the loop. */
 static int supervise_loop_poll(struct pollfd *fds) {
+    fds[1].revents = bx->broker_revents;
+    bx->broker_revents = 0;
     if (bx->supervise_poll_eintr_once) {
         bx->supervise_poll_eintr_once = 0;
         errno = EINTR;
@@ -1214,6 +1277,7 @@ int __wrap_ioctl(int fd, unsigned long request, ...) {
         req->id = FAKE_NOTIFICATION_ID;
         req->pid = FAKE_COMMAND_PID;
         req->data.nr = bx->notif_recv_nr;
+        req->data.arch = bx->notif_recv_arch != 0 ? bx->notif_recv_arch : GUARD_NATIVE_AUDIT_ARCH;
         uint64_t address_length = bx->notif_recv_family == AF_INET6 ? sizeof(struct sockaddr_in6)
                                                                     : sizeof(struct sockaddr_in);
         req->data.args[0] = bx->notif_recv_target_fd;
@@ -3711,7 +3775,8 @@ static void test_broker_handoff(void) {
 }
 
 static void test_egress_filter(void) {
-    constexpr uint32_t deny = SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA);
+    constexpr uint32_t deny = SECCOMP_RET_USER_NOTIF;
+    constexpr uint32_t lockout_deny = SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA);
     install_filter_for_inspection();
     check("the child hands the kernel a filter at all", bx->installed_filter_length > 0);
 
@@ -3760,7 +3825,7 @@ static void test_egress_filter(void) {
               == SECCOMP_RET_USER_NOTIF);
 
     check("the lockout filter denies sendmsg on the bootstrap descriptor",
-          lockout_answer(__NR_sendmsg, FAKE_BOOTSTRAP_DESCRIPTOR) == deny);
+          lockout_answer(__NR_sendmsg, FAKE_BOOTSTRAP_DESCRIPTOR) == lockout_deny);
     check("the lockout filter leaves the trap in force on any other descriptor",
           lockout_answer(__NR_sendmsg, FAKE_BOOTSTRAP_DESCRIPTOR + 1) == SECCOMP_RET_ALLOW);
     check("the lockout filter reads the descriptor as two words, so a high word is not the bootstrap one",
@@ -3770,7 +3835,7 @@ static void test_egress_filter(void) {
           lockout_answer(__NR_read, 0) == SECCOMP_RET_ALLOW);
 
     check("the two filters compose to a refusal on the bootstrap descriptor",
-          combined_answer(__NR_sendmsg, FAKE_BOOTSTRAP_DESCRIPTOR) == deny);
+          combined_answer(__NR_sendmsg, FAKE_BOOTSTRAP_DESCRIPTOR) == lockout_deny);
     check("the two filters compose to a trap on any other descriptor",
           combined_answer(__NR_sendmsg, FAKE_BOOTSTRAP_DESCRIPTOR + 1) == SECCOMP_RET_USER_NOTIF);
 
@@ -3915,6 +3980,837 @@ static void test_parent_paths(void) {
 /* Runs every case. stdout is line-buffered so a forked test-child never inherits a
  * partial buffer and re-emits it on exit, which would otherwise print every line several
  * times when stdout is a pipe rather than a terminal, as it is under CI. */
+/* ------------------------------------------------------- the denial reporting */
+
+/* Everything written to standard error between capture_stderr_begin and capture_stderr_end. */
+static char captured_text[32768];
+static int capture_file = -1;
+static int capture_saved = -1;
+
+int __real_dup2(int old_descriptor, int new_descriptor);
+
+static void capture_stderr_begin(void) {
+    char name[] = "/tmp/phobos-guard-unit-XXXXXX";
+    fflush(stderr);
+    capture_file = mkstemp(name);
+    unlink(name);
+    capture_saved = dup(STDERR_FILENO);
+    __real_dup2(capture_file, STDERR_FILENO);
+}
+
+static const char *capture_stderr_end(void) {
+    fflush(stderr);
+    __real_dup2(capture_saved, STDERR_FILENO);
+    close(capture_saved);
+    lseek(capture_file, 0, SEEK_SET);
+    ssize_t count = __real_read(capture_file, captured_text, sizeof(captured_text) - 1);
+    captured_text[count < 0 ? 0 : count] = '\0';
+    close(capture_file);
+    return captured_text;
+}
+
+/* The words every line starts and ends with, so a case writes only what lies between them. */
+#define LINE_START "Phobos Security Error: the program tried to illegally "
+#define LINE_END " but was blocked by Phobos.\n"
+
+/* Whether the text holds exactly this line. */
+static bool holds_line(const char *text, const char *middle) {
+    char line[1024];
+    snprintf(line, sizeof(line), LINE_START "%s" LINE_END, middle);
+    return strstr(text, line) != NULL;
+}
+
+/* How many lines of the report the text holds. */
+static int count_report_lines(const char *text) {
+    int lines = 0;
+    for (const char *at = strstr(text, "Phobos Security Error"); at != NULL;
+         at = strstr(at + 1, "Phobos Security Error")) {
+        lines++;
+    }
+    return lines;
+}
+
+/* A socket address in the form the guard reads: IPv4 or IPv6, as text and a port. */
+static struct sockaddr_storage address_of(const char *text, uint16_t port) {
+    struct sockaddr_storage storage;
+    memset(&storage, 0, sizeof(storage));
+    struct sockaddr_in *v4 = (struct sockaddr_in *)&storage;
+    struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&storage;
+    if (inet_pton(AF_INET, text, &v4->sin_addr) == 1) {
+        v4->sin_family = AF_INET;
+        v4->sin_port = htons(port);
+    } else {
+        inet_pton(AF_INET6, text, &v6->sin6_addr);
+        v6->sin6_family = AF_INET6;
+        v6->sin6_port = htons(port);
+    }
+    return storage;
+}
+
+static void test_reporting_options(void) {
+    struct guard_options parsed;
+    char *all[] = { "guard", "--landlock-bin", "/x/enforcer", "--report-filesystem", "--group-lock-above",
+                    "--broker-log-fd", "7", "--", "cmd", NULL };
+    parse_arguments(9, all, &parsed);
+    check("the reporter's four options are read",
+          strcmp(parsed.landlock_bin, "/x/enforcer") == 0 && parsed.report_filesystem
+              && parsed.group_lock_above && parsed.broker_log_descriptor == 7);
+    char *plain[] = { "guard", "--", "cmd", NULL };
+    parse_arguments(3, plain, &parsed);
+    check("and none of them is on unless it is given",
+          parsed.landlock_bin == NULL && !parsed.report_filesystem && !parsed.group_lock_above
+              && parsed.broker_log_descriptor == NO_BROKER_LOG);
+
+    char *dangling_bin[] = { "guard", "--landlock-bin", NULL };
+    check("a --landlock-bin with no value is a usage error", run_main(dangling_bin) == EXIT_CODE_USAGE);
+    char *dangling_fd[] = { "guard", "--broker-log-fd", NULL };
+    check("a --broker-log-fd with no value is a usage error", run_main(dangling_fd) == EXIT_CODE_USAGE);
+    char *word_fd[] = { "guard", "--broker-log-fd", "abc", "--", "cmd", NULL };
+    check("a --broker-log-fd that is not a number is a usage error", run_main(word_fd) == EXIT_CODE_USAGE);
+    char *empty_fd[] = { "guard", "--broker-log-fd", "", "--", "cmd", NULL };
+    check("an empty --broker-log-fd is a usage error", run_main(empty_fd) == EXIT_CODE_USAGE);
+    char *trailing_fd[] = { "guard", "--broker-log-fd", "3x", "--", "cmd", NULL };
+    check("a --broker-log-fd with trailing text is a usage error", run_main(trailing_fd) == EXIT_CODE_USAGE);
+    char *negative_fd[] = { "guard", "--broker-log-fd", "-1", "--", "cmd", NULL };
+    check("a negative --broker-log-fd is a usage error", run_main(negative_fd) == EXIT_CODE_USAGE);
+    char *huge_fd[] = { "guard", "--broker-log-fd", "99999999999", "--", "cmd", NULL };
+    check("a --broker-log-fd beyond an int is a usage error", run_main(huge_fd) == EXIT_CODE_USAGE);
+}
+
+static void test_report_module(void) {
+    reset_behaviour();
+    struct sockaddr_storage v4 = address_of("93.184.216.34", 443);
+    struct destination where = read_destination(&v4);
+    capture_stderr_begin();
+    report_refused_endpoint("connect to", &where, false);
+    report_refused_endpoint("connect to", &where, false);
+    report_refused_endpoint("send to", &where, true);
+    const char *out = capture_stderr_end();
+    check("a refused stream destination is one line naming the endpoint over TCP, once",
+          holds_line(out, "connect to the Endpoint 93.184.216.34:443 over TCP") && count_report_lines(out) == 2);
+    check("and a refused datagram destination names it over UDP",
+          holds_line(out, "send to the Endpoint 93.184.216.34:443 over UDP"));
+
+    reset_behaviour();
+    struct sockaddr_storage v6 = address_of("2001:db8::1", 53);
+    where = read_destination(&v6);
+    capture_stderr_begin();
+    report_refused_endpoint("send to", &where, true);
+    out = capture_stderr_end();
+    check("an IPv6 endpoint is bracketed", holds_line(out, "send to the Endpoint [2001:db8::1]:53 over UDP"));
+
+    reset_behaviour();
+    struct sockaddr_storage unix_address;
+    memset(&unix_address, 0, sizeof(unix_address));
+    struct sockaddr_un *un = (struct sockaddr_un *)&unix_address;
+    un->sun_family = AF_UNIX;
+    strcpy(un->sun_path, "/run/x.sock");
+    capture_stderr_begin();
+    report_refused_socket_file(&unix_address, (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 12));
+    out = capture_stderr_end();
+    check("a refused UNIX connect names the socket file by its path",
+          holds_line(out, "connect to the Socket File '/run/x.sock'"));
+
+    reset_behaviour();
+    memset(un->sun_path, 0, sizeof(un->sun_path));
+    strcpy(un->sun_path + 1, "abstract");
+    capture_stderr_begin();
+    report_refused_socket_file(&unix_address, (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 10));
+    report_refused_socket_file(&unix_address, (socklen_t)offsetof(struct sockaddr_un, sun_path));
+    out = capture_stderr_end();
+    check("an abstract name, which is no file, and an address with no path are not reported",
+          count_report_lines(out) == 0);
+
+    reset_behaviour();
+    memset(un->sun_path, 'a', sizeof(un->sun_path));
+    capture_stderr_begin();
+    report_refused_socket_file(&unix_address, sizeof(struct sockaddr_un));
+    out = capture_stderr_end();
+    check("a path that fills the whole address, with no NUL, is cut at its length and reported",
+          count_report_lines(out) == 1 && strstr(out, "the Socket File 'aaaaaaaa") != NULL);
+
+    reset_behaviour();
+    capture_stderr_begin();
+    report_refused_socket_kind(AF_INET, SOCK_RAW | SOCK_CLOEXEC);
+    report_refused_socket_kind(AF_PACKET, SOCK_DGRAM);
+    report_refused_socket_kind(AF_INET6, SOCK_DGRAM);
+    report_refused_socket_kind(AF_UNIX, SOCK_RAW);
+    report_refused_socket_kind(AF_PACKET, SOCK_STREAM);
+    out = capture_stderr_end();
+    check("a raw socket is named by its kind, its domain and its type",
+          holds_line(out, "open the Socket Type raw (AF_INET, SOCK_RAW)"));
+    check("a packet socket is named by its domain",
+          holds_line(out, "open the Socket Type packet (AF_PACKET, SOCK_DGRAM)"));
+    check("an ICMP socket is the refused kind that is neither", holds_line(out, "open the Socket Type icmp (AF_INET6, SOCK_DGRAM)"));
+    check("a domain or type the report does not name is written as a number",
+          holds_line(out, "open the Socket Type raw (domain 1, SOCK_RAW)")
+              && holds_line(out, "open the Socket Type packet (AF_PACKET, type 1)"));
+
+    reset_behaviour();
+    capture_stderr_begin();
+    report_refused_listen();
+    out = capture_stderr_end();
+    check("a refused listen on a socket bound to no port names the port the kernel would choose",
+          holds_line(out, "listen on the Port chosen by the kernel over TCP"));
+}
+
+/* A broker log line for the case: the backend, the termination state, the host name or "-", the
+ * address and the port. */
+static void broker_line(const char *backend, const char *state, const char *host_hex, const char *address,
+                        const char *port) {
+    char line[1024];
+    snprintf(line, sizeof(line), "PHB-BROKER %s %s %s %s %s", backend, state, host_hex, address, port);
+    handle_broker_log_line(line, strlen(line));
+}
+
+static void test_broker_log_lines(void) {
+    reset_behaviour();
+    capture_stderr_begin();
+    broker_line("refuse", "PR", "6578616d706c652e6f7267", "93.184.216.34", "443");
+    const char *out = capture_stderr_end();
+    check("a refused host name is reported with the port, its hex in either case",
+          holds_line(out, "connect to the Host 'example.org' on Port 443"));
+
+    reset_behaviour();
+    capture_stderr_begin();
+    broker_line("refuse", "PR", "6576696C0A6E616D65", "10.0.0.1", "443");
+    out = capture_stderr_end();
+    check("a control byte in a host name is quoted, never printed", strstr(out, "the Host $'evil\\nname' on Port 443") != NULL);
+
+    reset_behaviour();
+    capture_stderr_begin();
+    broker_line("refuse", "PR", "-", "93.184.216.34", "443");
+    broker_line("refuse", "PR", "-", "2001:db8::1", "8443");
+    out = capture_stderr_end();
+    check("a refusal with no host name names the endpoint the guard handed over",
+          holds_line(out, "connect to the Endpoint 93.184.216.34:443 over TCP")
+              && holds_line(out, "connect to the Endpoint [2001:db8::1]:8443 over TCP"));
+
+    reset_behaviour();
+    capture_stderr_begin();
+    broker_line("to_ip", "PR", "6578616D706C652E6F7267", "93.184.216.34", "443");
+    out = capture_stderr_end();
+    check("a termination state that starts with PR is a refusal whatever the backend",
+          holds_line(out, "connect to the Host 'example.org' on Port 443"));
+
+    reset_behaviour();
+    capture_stderr_begin();
+    broker_line("to_dst", "SC", "6578616D706C652E6F7267", "93.184.216.34", "443");
+    broker_line("refuse", "PR", "zz", "93.184.216.34", "443");
+    broker_line("refuse", "PR", "6578616D706C65", "93.184.216.34", "0");
+    broker_line("refuse", "PR", "6578616D706C65", "93.184.216.34", "65536");
+    broker_line("refuse", "PR", "6578616D706C65", "93.184.216.34", "12x");
+    broker_line("refuse", "PR", "6578616D706C65", "93.184.216.34", "");
+    broker_line("refuse", "PR", "6578616D706C65", "93.184.216.34", "123456");
+    broker_line("refuse", "PR", "6578616", "93.184.216.34", "443");
+    broker_line("refuse", "PR", "", "93.184.216.34", "443");
+    broker_line("refuse", "PR", "6500", "93.184.216.34", "443");
+    broker_line("refuse", "PR", "-", "not-an-address", "443");
+    out = capture_stderr_end();
+    check("a connection the broker allowed, and every malformed line, print nothing", count_report_lines(out) == 0);
+    reset_behaviour();
+    capture_stderr_begin();
+    broker_line("refuse", "PR", "6578616D706C65", "not-an-address", "443");
+    out = capture_stderr_end();
+    check("a host name is reported whatever the address beside it, which a host line never prints",
+          holds_line(out, "connect to the Host 'example' on Port 443"));
+
+    reset_behaviour();
+    capture_stderr_begin();
+    handle_broker_log_line("PHB-BROKER refuse PR zz 1.2.3.4", 31);
+    handle_broker_log_line("PHB-BROKER refuse PR - 1.2.3.4 443 extra", 40);
+    handle_broker_log_line("OTHER refuse PR - 1.2.3.4 443", 29);
+    out = capture_stderr_end();
+    check("a line with too few fields, too many or another marker prints nothing", count_report_lines(out) == 0);
+
+    reset_behaviour();
+    char overlong[BROKER_LOG_LINE_MAXIMUM + 8];
+    memset(overlong, 'a', sizeof(overlong));
+    capture_stderr_begin();
+    handle_broker_log_line(overlong, sizeof(overlong));
+    out = capture_stderr_end();
+    check("a line longer than the limit is ignored", count_report_lines(out) == 0);
+
+    reset_behaviour();
+    char longest_host[2 * 253 + 1];
+    memset(longest_host, '6', sizeof(longest_host) - 1);
+    longest_host[sizeof(longest_host) - 1] = '\0';
+    capture_stderr_begin();
+    broker_line("refuse", "PR", longest_host, "1.2.3.4", "443");
+    out = capture_stderr_end();
+    check("a host name of the longest length a host name has is reported", count_report_lines(out) == 1);
+    char too_long_host[2 * 254 + 1];
+    memset(too_long_host, '6', sizeof(too_long_host) - 1);
+    too_long_host[sizeof(too_long_host) - 1] = '\0';
+    reset_behaviour();
+    capture_stderr_begin();
+    broker_line("refuse", "PR", too_long_host, "1.2.3.4", "443");
+    out = capture_stderr_end();
+    check("and one byte more is not", count_report_lines(out) == 0);
+}
+
+static void test_broker_log_pipe(void) {
+    int pipe_ends[2];
+    reset_behaviour();
+    check("a pipe can be made for the broker log, read without blocking as the guard reads it",
+          pipe2(pipe_ends, O_NONBLOCK) == 0);
+    const char first_half[] = "PHB-BROKER refuse PR 6578616D706C65";
+    const char second_half[] = "2E6F7267 93.184.216.34 443\n";
+    capture_stderr_begin();
+    check("a half line is written", write(pipe_ends[1], first_half, strlen(first_half)) > 0);
+    drain_broker_log(pipe_ends[0]);
+    const char *out = capture_stderr_end();
+    check("a line that is not complete yet prints nothing", count_report_lines(out) == 0);
+    capture_stderr_begin();
+    check("the rest of the line is written", write(pipe_ends[1], second_half, strlen(second_half)) > 0);
+    drain_broker_log(pipe_ends[0]);
+    out = capture_stderr_end();
+    check("and the line is reported once it is whole",
+          holds_line(out, "connect to the Host 'example.org' on Port 443"));
+
+    char big[1100];
+    memset(big, 'a', sizeof(big) - 1);
+    big[sizeof(big) - 1] = '\n';
+    const char valid[] = "PHB-BROKER refuse PR - 10.0.0.9 443\n";
+    capture_stderr_begin();
+    check("an overlong line is written", write(pipe_ends[1], big, sizeof(big)) > 0);
+    check("and a valid one after it", write(pipe_ends[1], valid, strlen(valid)) > 0);
+    drain_broker_log(pipe_ends[0]);
+    out = capture_stderr_end();
+    check("an overlong line is dropped whole and the valid one after it is reported",
+          count_report_lines(out) == 1 && holds_line(out, "connect to the Endpoint 10.0.0.9:443 over TCP"));
+
+    capture_stderr_begin();
+    check("an overlong line without its newline is written", write(pipe_ends[1], big, sizeof(big) - 1) > 0);
+    drain_broker_log(pipe_ends[0]);
+    check("and its newline later", write(pipe_ends[1], "\n", 1) > 0);
+    drain_broker_log(pipe_ends[0]);
+    out = capture_stderr_end();
+    check("the rest of a dropped line is dropped too", count_report_lines(out) == 0);
+
+    capture_stderr_begin();
+    const char exact[] = "PHB-BROKER refuse PR - 10.0.0.8 443\n";
+    check("a line is written for an interrupted read", write(pipe_ends[1], exact, strlen(exact)) > 0);
+    bx->read_eintr_once = 1;
+    drain_broker_log(pipe_ends[0]);
+    out = capture_stderr_end();
+    check("a read that a signal interrupts is made again", holds_line(out, "connect to the Endpoint 10.0.0.8:443 over TCP"));
+
+    int null_device = open("/dev/null", O_RDONLY);
+    reset_behaviour();
+    check("a descriptor that is not a pipe is not adopted", !adopt_broker_log(null_device));
+    check("nor is one that is not open", !adopt_broker_log(-1));
+    reset_behaviour();
+    check("a pipe is adopted", adopt_broker_log(pipe_ends[0]) && bx->fcntl_calls == 4);
+    for (int failing = 1; failing <= 4; failing++) {
+        reset_behaviour();
+        bx->fcntl_fail_at = failing;
+        check("a pipe is not adopted when one of the four fcntl calls fails", !adopt_broker_log(pipe_ends[0]));
+    }
+    close(null_device);
+    close(pipe_ends[0]);
+    close(pipe_ends[1]);
+}
+
+/* The answer of the first filter an installed program holds to a call number, under the native ABI. */
+static uint32_t built_answer(const struct sock_filter *program, unsigned short length, int number) {
+    return run_captured_filter(program, length, GUARD_NATIVE_AUDIT_ARCH, number, 0);
+}
+
+static void test_filter_modes(void) {
+    struct sock_filter none[GUARD_FILTER_MAXIMUM];
+    struct sock_filter network[GUARD_FILTER_MAXIMUM];
+    struct sock_filter filesystem[GUARD_FILTER_MAXIMUM];
+    size_t none_length = build_connect_filter(none, FAKE_BOOTSTRAP_DESCRIPTOR, GUARD_REPORT_NONE);
+    size_t network_length = build_connect_filter(network, FAKE_BOOTSTRAP_DESCRIPTOR, GUARD_REPORT_NETWORK);
+    size_t filesystem_length = build_connect_filter(filesystem, FAKE_BOOTSTRAP_DESCRIPTOR, GUARD_REPORT_FILESYSTEM);
+    check("the network mode adds one trap, two instructions, for each of bind and the arming call",
+          network_length == none_length + 2 * REPORT_NETWORK_TRAPPED_CALL_COUNT);
+    check("the filesystem mode adds one trap for each call the reporter watches",
+          filesystem_length == none_length + 2 * REPORT_TRAPPED_CALL_COUNT);
+    check("and the longest of them fits in the room for a filter", filesystem_length < GUARD_FILTER_MAXIMUM);
+
+    bool network_differs_only_on_its_set = true;
+    bool filesystem_differs_only_on_its_set = true;
+    bool network_traps_are_notifications = true;
+    for (int number = 0; number < 600; number++) {
+        uint32_t base = built_answer(none, (unsigned short)none_length, number);
+        bool in_network = false;
+        for (size_t index = 0; index < REPORT_NETWORK_TRAPPED_CALL_COUNT; index++) {
+            in_network = in_network || REPORT_NETWORK_TRAPPED_CALLS[index] == number;
+        }
+        bool in_filesystem = false;
+        for (size_t index = 0; index < REPORT_TRAPPED_CALL_COUNT; index++) {
+            in_filesystem = in_filesystem || REPORT_TRAPPED_CALLS[index] == number;
+        }
+        uint32_t network_answer = built_answer(network, (unsigned short)network_length, number);
+        uint32_t filesystem_answer = built_answer(filesystem, (unsigned short)filesystem_length, number);
+        network_differs_only_on_its_set = network_differs_only_on_its_set
+            && ((network_answer != base) == (in_network && base != SECCOMP_RET_USER_NOTIF));
+        filesystem_differs_only_on_its_set = filesystem_differs_only_on_its_set
+            && ((filesystem_answer != base) == (in_filesystem && base != SECCOMP_RET_USER_NOTIF));
+        if (in_network) {
+            network_traps_are_notifications = network_traps_are_notifications && network_answer == SECCOMP_RET_USER_NOTIF;
+        }
+    }
+    check("the network mode answers differently from none on those two calls only", network_differs_only_on_its_set);
+    check("the filesystem mode answers differently from none on the reporter's calls only",
+          filesystem_differs_only_on_its_set);
+    check("and each call it adds is handed to the supervisor", network_traps_are_notifications);
+    check("bind is trapped in the network mode and allowed with no mode",
+          built_answer(network, (unsigned short)network_length, __NR_bind) == SECCOMP_RET_USER_NOTIF
+              && built_answer(none, (unsigned short)none_length, __NR_bind) == SECCOMP_RET_ALLOW);
+    check("openat is trapped in the filesystem mode only",
+          built_answer(filesystem, (unsigned short)filesystem_length, __NR_openat) == SECCOMP_RET_USER_NOTIF
+              && built_answer(network, (unsigned short)network_length, __NR_openat) == SECCOMP_RET_ALLOW);
+
+    bool disjoint = true;
+    const int enforced[] = { __NR_socket, __NR_connect, __NR_listen, __NR_sendto, __NR_sendmsg, __NR_sendmmsg };
+    for (size_t index = 0; index < REPORT_TRAPPED_CALL_COUNT; index++) {
+        struct seccomp_data data;
+        memset(&data, 0, sizeof(data));
+        data.arch = GUARD_NATIVE_AUDIT_ARCH;
+        data.nr = REPORT_TRAPPED_CALLS[index];
+        disjoint = disjoint && !is_filter_refusal(&data);
+        for (size_t other = 0; other < sizeof(enforced) / sizeof(enforced[0]); other++) {
+            disjoint = disjoint && REPORT_TRAPPED_CALLS[index] != enforced[other];
+        }
+    }
+    check("the observation traps name no call the guard enforces and none a filter refuses", disjoint);
+    for (int mode = GUARD_REPORT_NONE; mode <= GUARD_REPORT_FILESYSTEM; mode++) {
+        struct sock_filter program[GUARD_FILTER_MAXIMUM];
+        size_t length = build_connect_filter(program, FAKE_BOOTSTRAP_DESCRIPTOR, (enum guard_report_mode)mode);
+        check("in every mode a foreign ABI, the x32 bit, io_uring, setsid and setpgid are handed to the supervisor to refuse",
+              run_captured_filter(program, (unsigned short)length, FOREIGN_AUDIT_ARCH, __NR_read, 0) == SECCOMP_RET_USER_NOTIF
+                  && built_answer(program, (unsigned short)length, __NR_io_uring_setup) == SECCOMP_RET_USER_NOTIF
+                  && built_answer(program, (unsigned short)length, __NR_io_uring_enter) == SECCOMP_RET_USER_NOTIF
+                  && built_answer(program, (unsigned short)length, __NR_io_uring_register) == SECCOMP_RET_USER_NOTIF
+                  && built_answer(program, (unsigned short)length, __NR_setsid) == SECCOMP_RET_USER_NOTIF
+                  && built_answer(program, (unsigned short)length, __NR_setpgid) == SECCOMP_RET_USER_NOTIF
+#ifdef __X32_SYSCALL_BIT
+                  && built_answer(program, (unsigned short)length, __X32_SYSCALL_BIT | __NR_read) == SECCOMP_RET_USER_NOTIF
+#endif
+          );
+    }
+}
+
+/* Runs main with the reporter's options and the answers the preflight should give, and returns the
+ * text it wrote to standard error. */
+static const char *run_main_reporting(char *const argv[]) {
+    capture_stderr_begin();
+    (void)run_main(argv);
+    return capture_stderr_end();
+}
+
+static void test_report_modes_in_main(void) {
+    char *network_argv[] = { "guard", "--landlock-bin", "/x/enforcer", "--", "cmd", NULL };
+    char *filesystem_argv[] = { "guard", "--landlock-bin", "/x/enforcer", "--report-filesystem", "--", "cmd", NULL };
+    char *plain_argv[] = { "guard", "--", "cmd", NULL };
+    struct sock_filter none[GUARD_FILTER_MAXIMUM];
+    size_t none_length = build_connect_filter(none, FAKE_BOOTSTRAP_DESCRIPTOR, GUARD_REPORT_NONE);
+
+    reset_behaviour();
+    bx->fork_result = 0;
+    bx->execvp_returns = 1;
+    (void)run_main_reporting(plain_argv);
+    check("a guard that was not told the enforcer asks nothing of the kernel and keeps its old filter",
+          bx->preflight_calls == 0 && bx->installed_filter_length == none_length);
+
+    reset_behaviour();
+    bx->fork_result = 0;
+    bx->execvp_returns = 1;
+    (void)run_main_reporting(network_argv);
+    check("told the enforcer, it reports bind ports",
+          bx->installed_filter_length == none_length + 2 * REPORT_NETWORK_TRAPPED_CALL_COUNT);
+
+    reset_behaviour();
+    bx->fork_result = 0;
+    bx->execvp_returns = 1;
+    (void)run_main_reporting(filesystem_argv);
+    check("and with --report-filesystem the filesystem calls as well",
+          bx->installed_filter_length == none_length + 2 * REPORT_TRAPPED_CALL_COUNT);
+
+    reset_behaviour();
+    bx->fork_result = 0;
+    bx->execvp_returns = 1;
+    bx->landlock_version = -1;
+    const char *out = run_main_reporting(filesystem_argv);
+    check("a kernel without Landlock keeps the old filter and says what goes unreported",
+          bx->installed_filter_length == none_length
+              && strstr(out, "Phobos: filesystem denials and bind ports are not reported in this run, "
+                             "because this kernel has no Landlock.\n") != NULL);
+
+    reset_behaviour();
+    bx->fork_result = 0;
+    bx->execvp_returns = 1;
+    bx->continue_supported_answer = 0;
+    out = run_main_reporting(network_argv);
+    check("a kernel that cannot continue a supervised call keeps the old filter, and the notice says bind ports only",
+          bx->installed_filter_length == none_length
+              && strstr(out, "Phobos: bind ports are not reported in this run, because this kernel cannot "
+                             "continue a supervised call.\n") != NULL);
+}
+
+/* The decision itself, driven in this process, where its notices and its three answers are counted. */
+static void test_report_mode_decision(void) {
+    struct guard_options options;
+    memset(&options, 0, sizeof(options));
+    reset_behaviour();
+    check("with no enforcer named the decision is none and asks the kernel nothing",
+          decide_report_mode(&options, FAKE_LANDLOCK_VERSION) == GUARD_REPORT_NONE && bx->preflight_calls == 0);
+    options.landlock_bin = "/x/enforcer";
+    capture_stderr_begin();
+    enum guard_report_mode without_landlock = decide_report_mode(&options, -1);
+    enum guard_report_mode version_zero = decide_report_mode(&options, 0);
+    const char *out = capture_stderr_end();
+    check("a kernel with no Landlock, or none to speak of, decides none and says bind ports are lost",
+          without_landlock == GUARD_REPORT_NONE && version_zero == GUARD_REPORT_NONE
+              && strstr(out, "Phobos: bind ports are not reported in this run, because this kernel has no Landlock.\n")
+                     != NULL);
+    bx->continue_supported_answer = 0;
+    options.report_filesystem = true;
+    capture_stderr_begin();
+    enum guard_report_mode cannot_continue = decide_report_mode(&options, FAKE_LANDLOCK_VERSION);
+    out = capture_stderr_end();
+    check("a kernel that cannot continue a call decides none and says the filesystem denials are lost too",
+          cannot_continue == GUARD_REPORT_NONE
+              && strstr(out, "Phobos: filesystem denials and bind ports are not reported in this run, because this "
+                             "kernel cannot continue a supervised call.\n") != NULL);
+    bx->continue_supported_answer = 1;
+    enum guard_report_mode with_filesystem = decide_report_mode(&options, FAKE_LANDLOCK_VERSION);
+    options.report_filesystem = false;
+    enum guard_report_mode network_only = decide_report_mode(&options, FAKE_LANDLOCK_VERSION);
+    check("otherwise it is the filesystem mode with --report-filesystem and the network mode without",
+          with_filesystem == GUARD_REPORT_FILESYSTEM && network_only == GUARD_REPORT_NETWORK);
+}
+
+static void test_refusals_and_attribution_in_main(void) {
+    char *with_lock[] = { "guard", "--landlock-bin", "/x/enforcer", "--group-lock-above", "--", "cmd", NULL };
+    char *without_flag[] = { "guard", "--landlock-bin", "/x/enforcer", "--", "cmd", NULL };
+
+    reset_behaviour();
+    bx->fork_result = FAKE_CHILD_PID;
+    bx->group_lock_answer = 1;
+    bx->supervise_services = 1;
+    bx->notif_recv_nr = __NR_setsid;
+    const char *out = run_main_reporting(with_lock);
+    check("setsid, refused while the group lock is above and was found, is one line and counts for the timeout layer",
+          holds_line(out, "leave the Session")
+              && strstr(out, "Phobos blocked 1 action of the program, 0 in the filesystem layer, 0 in the network "
+                             "layer and 1 in the timeout layer; 1 was shown above, 0 repeats and 0 beyond the limit "
+                             "of 100 lines were not. (PHB-EDENY)\n") != NULL
+              && bx->last_answer_error == -EACCES && bx->last_answer_flags == 0);
+
+    reset_behaviour();
+    bx->fork_result = FAKE_CHILD_PID;
+    bx->group_lock_answer = 1;
+    bx->supervise_services = 1;
+    bx->notif_recv_nr = __NR_setsid;
+    out = run_main_reporting(without_flag);
+    check("the same without the flag from the layers counts for the network layer, whatever the probe found",
+          strstr(out, "0 in the filesystem layer, 1 in the network layer and 0 in the timeout layer") != NULL);
+
+    reset_behaviour();
+    bx->fork_result = FAKE_CHILD_PID;
+    bx->group_lock_answer = 0;
+    bx->supervise_services = 1;
+    bx->notif_recv_nr = __NR_setpgid;
+    out = run_main_reporting(with_lock);
+    check("and with the flag but no signature found it counts for the network layer too",
+          holds_line(out, "leave the Process Group")
+              && strstr(out, "0 in the filesystem layer, 1 in the network layer and 0 in the timeout layer") != NULL);
+
+    reset_behaviour();
+    bx->fork_result = FAKE_CHILD_PID;
+    bx->group_lock_answer = 1;
+    bx->supervise_services = 1;
+    bx->notif_recv_nr = __NR_io_uring_setup;
+    out = run_main_reporting(with_lock);
+    check("io_uring is the network layer's even with the group lock above",
+          holds_line(out, "use the Kernel Interface io_uring")
+              && strstr(out, "0 in the filesystem layer, 1 in the network layer and 0 in the timeout layer") != NULL);
+
+    reset_behaviour();
+    bx->fork_result = FAKE_CHILD_PID;
+    bx->group_lock_answer = 1;
+    bx->supervise_services = 1;
+    bx->notif_recv_nr = __NR_read;
+    bx->notif_recv_arch = AUDIT_ARCH_I386;
+    out = run_main_reporting(with_lock);
+    char i386_line[96];
+    snprintf(i386_line, sizeof(i386_line), "use the Kernel Interface i386 system call %d", __NR_read);
+    check("a call through the i386 ABI is refused and counted for the timeout layer",
+          holds_line(out, i386_line)
+              && strstr(out, "0 in the filesystem layer, 0 in the network layer and 1 in the timeout layer") != NULL);
+
+    reset_behaviour();
+    bx->fork_result = FAKE_CHILD_PID;
+    bx->supervise_services = 1;
+    bx->notif_recv_nr = __NR_getpid;
+    out = run_main_reporting(without_flag);
+    check("a run that blocked nothing the guard reports prints no summary", strstr(out, "Phobos Security Summary") == NULL);
+}
+
+static void test_broker_pipe_in_main(void) {
+    int pipe_ends[2];
+    char descriptor_text[16];
+    reset_behaviour();
+    check("a pipe can be made for the main case", pipe2(pipe_ends, O_NONBLOCK) == 0);
+    snprintf(descriptor_text, sizeof(descriptor_text), "%d", pipe_ends[0]);
+    char *argv[] = { "guard", "--broker-log-fd", descriptor_text, "--", "cmd", NULL };
+    const char line[] = "PHB-BROKER refuse PR 6578616D706C652E6F7267 93.184.216.34 443\n";
+    check("a broker line is written", write(pipe_ends[1], line, strlen(line)) > 0);
+    bx->fork_result = FAKE_CHILD_PID;
+    bx->broker_revents = POLLIN;
+    const char *out = run_main_reporting(argv);
+    check("the guard reads the broker's pipe beside the notifications and reports the refusal",
+          holds_line(out, "connect to the Host 'example.org' on Port 443")
+              && strstr(out, "0 in the filesystem layer, 1 in the network layer") != NULL);
+
+    reset_behaviour();
+    check("a broker line for the final drain is written", write(pipe_ends[1], line, strlen(line)) > 0);
+    bx->fork_result = FAKE_CHILD_PID;
+    out = run_main_reporting(argv);
+    check("a line that arrives as the command ends is still read once supervision is over",
+          holds_line(out, "connect to the Host 'example.org' on Port 443"));
+
+    reset_behaviour();
+    check("a broker line for the failing pipe is written", write(pipe_ends[1], line, strlen(line)) > 0);
+    bx->fork_result = FAKE_CHILD_PID;
+    bx->broker_revents = POLLERR;
+    out = run_main_reporting(argv);
+    check("a pipe that fails is let go of and is not read again", count_report_lines(out) == 0);
+
+    int null_device = open("/dev/null", O_RDONLY);
+    snprintf(descriptor_text, sizeof(descriptor_text), "%d", null_device);
+    reset_behaviour();
+    bx->fork_result = FAKE_CHILD_PID;
+    char *bad_argv[] = { "guard", "--broker-log-fd", descriptor_text, "--", "cmd", NULL };
+    capture_stderr_begin();
+    int code = run_main(bad_argv);
+    out = capture_stderr_end();
+    check("a broker log descriptor that is not a pipe refuses the run rather than lose the refusals",
+          code == EXIT_CODE_SETUP_ERROR && strstr(out, "is not an open pipe this guard can read") != NULL);
+    close(null_device);
+    close(pipe_ends[0]);
+    close(pipe_ends[1]);
+}
+
+/* Points the next notification at a refused stream connect to 127.0.0.1:port on a recorded socket. */
+static void arrange_refused_connect(uint16_t port, uint8_t kind) {
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = port;
+    bx->notif_recv_target_fd = 6;
+    bx->process_vm_readv_result = 1;
+    bx->readlink_inode = TRACKED_STREAM_INODE;
+    record_socket_type(TRACKED_STREAM_INODE, kind);
+    remember_rule("127.0.0.2", "443", false);
+}
+
+static void test_guard_refusals_are_reported(void) {
+    reset_behaviour();
+    arrange_refused_connect(443, FD_TYPE_STREAM);
+    capture_stderr_begin();
+    service_once();
+    const char *out = capture_stderr_end();
+    check("a refused stream connect keeps its EACCES and prints one line",
+          bx->last_answer_error == -EACCES && holds_line(out, "connect to the Endpoint 127.0.0.1:443 over TCP"));
+
+    reset_behaviour();
+    arrange_refused_connect(443, FD_TYPE_DGRAM);
+    capture_stderr_begin();
+    service_once();
+    out = capture_stderr_end();
+    check("a refused datagram connect is a send to the endpoint over UDP",
+          bx->last_answer_error == -EACCES && holds_line(out, "send to the Endpoint 127.0.0.1:443 over UDP"));
+
+    reset_behaviour();
+    arrange_refused_connect(443, FD_TYPE_STREAM);
+    remember_rule("127.0.0.1", "443", false);
+    capture_stderr_begin();
+    service_once();
+    out = capture_stderr_end();
+    check("an allowed connect keeps its result and prints nothing",
+          bx->last_answer_error == 0 && count_report_lines(out) == 0);
+
+    reset_behaviour();
+    bx->notif_recv_family = AF_UNIX;
+    bx->process_vm_readv_result = 1;
+    strcpy(bx->unix_path, "/run/dev.sock");
+    capture_stderr_begin();
+    service_once();
+    out = capture_stderr_end();
+    check("a connect to a UNIX socket path is refused and names the socket file",
+          bx->last_answer_error == -EACCES && holds_line(out, "connect to the Socket File '/run/dev.sock'"));
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_INET;
+    bx->notif_socket_type = SOCK_RAW;
+    capture_stderr_begin();
+    service_once();
+    out = capture_stderr_end();
+    check("a raw socket is refused and named", bx->last_answer_error == -EACCES
+              && holds_line(out, "open the Socket Type raw (AF_INET, SOCK_RAW)"));
+
+    reset_behaviour();
+    arrange_listen(HELD_UNBOUND_INODE);
+    hold_socket(HELD_UNBOUND_INODE, HELD_DESCRIPTOR);
+    bx->getsockname_family = AF_INET;
+    bx->getsockname_port = 0;
+    capture_stderr_begin();
+    service_once();
+    out = capture_stderr_end();
+    check("a listen on a socket bound to no port is refused and named",
+          bx->last_answer_error == -EACCES && holds_line(out, "listen on the Port chosen by the kernel over TCP"));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 9999);
+    capture_stderr_begin();
+    service_once();
+    out = capture_stderr_end();
+    check("a datagram to a destination the list does not name is refused and named",
+          bx->last_answer_error == -EACCES && holds_line(out, "send to the Endpoint 127.0.0.1:9999 over UDP"));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->getsockname_port = 0;
+    capture_stderr_begin();
+    service_once();
+    out = capture_stderr_end();
+    check("a datagram on a socket bound to no port is refused, naming the destination",
+          bx->last_answer_error == -EACCES && holds_line(out, "send to the Endpoint 127.0.0.1:53 over UDP"));
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_recv_family = 0;
+    bx->getsockname_port = 0;
+    capture_stderr_begin();
+    service_once();
+    out = capture_stderr_end();
+    check("and one that names no destination is refused without a line, there being nothing to name",
+          bx->last_answer_error == -EACCES && count_report_lines(out) == 0);
+
+    reset_behaviour();
+    arrange_held_datagram(__NR_connect);
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 53;
+    bx->getsockname_port = 0;
+    remember_rule("127.0.0.1", "53", true);
+    capture_stderr_begin();
+    service_once();
+    out = capture_stderr_end();
+    check("a datagram connect on a socket bound to no port is refused, naming the destination",
+          bx->last_answer_error == -EACCES && holds_line(out, "send to the Endpoint 127.0.0.1:53 over UDP"));
+}
+
+static void test_guard_refusals_that_stay_quiet(void) {
+    reset_behaviour();
+    bx->notif_recv_family = AF_INET;
+    bx->process_vm_readv_result = -1;
+    capture_stderr_begin();
+    service_once();
+    const char *out = capture_stderr_end();
+    check("an address that cannot be read is refused without a line, it names no object",
+          bx->last_answer_error == -EACCES && count_report_lines(out) == 0);
+
+    reset_behaviour();
+    arrange_refused_connect(443, FD_TYPE_UNKNOWN);
+    capture_stderr_begin();
+    service_once();
+    out = capture_stderr_end();
+    check("a connect on a socket the guard never saw is refused without a line",
+          bx->last_answer_error == -EACCES && count_report_lines(out) == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->notif_send_flags = MSG_FASTOPEN;
+    capture_stderr_begin();
+    service_once();
+    out = capture_stderr_end();
+    check("a send with MSG_FASTOPEN keeps its EACCES and prints no line, no destination was judged",
+          bx->last_answer_error == -EACCES && count_report_lines(out) == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendmsg, 53);
+    bx->message_control = 1;
+    capture_stderr_begin();
+    service_once();
+    out = capture_stderr_end();
+    check("a send with ancillary data is refused without a line",
+          bx->last_answer_error == -EACCES && count_report_lines(out) == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->readlink_kind = READLINK_PIPE;
+    capture_stderr_begin();
+    service_once();
+    out = capture_stderr_end();
+    check("a send on a descriptor that is no socket is refused without a line",
+          bx->last_answer_error == -EACCES && count_report_lines(out) == 0);
+
+    reset_behaviour();
+    arrange_datagram_send(__NR_sendto, 53);
+    bx->sendto_result = -1;
+    bx->sendto_errno = ECONNREFUSED;
+    capture_stderr_begin();
+    service_once();
+    out = capture_stderr_end();
+    check("an onward error, the destination's own answer, is passed on without a line",
+          bx->last_answer_error == -ECONNREFUSED && count_report_lines(out) == 0);
+}
+
+static void test_supervisor_answers_the_three_kinds_of_trap(void) {
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_openat;
+    service_once();
+    check("an observation trap is answered with CONTINUE, error 0 and value 0, and nothing else",
+          bx->answers == 1 && bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE
+              && bx->last_answer_error == 0 && bx->last_answer_val == 0);
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_bind;
+    service_once();
+    check("so is a bind", bx->answers == 1 && bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+    reset_behaviour();
+    bx->notif_recv_nr = REPORT_NETWORK_TRAPPED_CALLS[1];
+    service_once();
+    check("and the arming call", bx->answers == 1 && bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+
+    bool every_refusal_is_eacces_and_never_continued = true;
+    const int refused[] = { __NR_io_uring_setup, __NR_io_uring_enter, __NR_io_uring_register, __NR_setsid, __NR_setpgid };
+    for (size_t index = 0; index < sizeof(refused) / sizeof(refused[0]); index++) {
+        reset_behaviour();
+        bx->notif_recv_nr = refused[index];
+        service_once();
+        every_refusal_is_eacces_and_never_continued = every_refusal_is_eacces_and_never_continued
+            && bx->answers == 1 && bx->last_answer_error == -EACCES && bx->last_answer_val == 0
+            && bx->last_answer_flags == 0;
+    }
+    check("every call the filter refuses outright is answered with exactly EACCES, and never continued",
+          every_refusal_is_eacces_and_never_continued);
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_connect;
+    bx->notif_recv_arch = FOREIGN_AUDIT_ARCH;
+    bx->notif_recv_family = AF_INET;
+    bx->notif_recv_port = 443;
+    bx->process_vm_readv_result = 1;
+    remember_rule("127.0.0.1", "443", false);
+    service_once();
+    check("a foreign-ABI call whose number equals connect is refused and never reaches the connect path",
+          bx->last_answer_error == -EACCES && bx->connect_calls == 0 && bx->addfd_calls == 0);
+
+    reset_behaviour();
+    record_socket_type(CREATED_TCP_INODE, FD_TYPE_STREAM);
+    record_socket_type(CREATED_UDP_INODE, FD_TYPE_DGRAM);
+    bx->readlink_inode = CREATED_TCP_INODE;
+    check("the transport of a bind is the type the guard recorded: stream", tracked_socket_type(FAKE_COMMAND_PID, 6) == SOCK_STREAM);
+    bx->readlink_inode = CREATED_UDP_INODE;
+    check("datagram", tracked_socket_type(FAKE_COMMAND_PID, 6) == SOCK_DGRAM);
+    bx->readlink_inode = NEVER_HELD_INODE;
+    check("and unknown for a socket it never saw", tracked_socket_type(FAKE_COMMAND_PID, 6) == -1);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     bx = mmap(NULL, sizeof(*bx), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
@@ -3948,6 +4844,18 @@ int main(void) {
     test_egress_filter();
     test_child_setup_failures();
     test_parent_paths();
+    test_reporting_options();
+    test_report_module();
+    test_broker_log_lines();
+    test_broker_log_pipe();
+    test_filter_modes();
+    test_report_modes_in_main();
+    test_report_mode_decision();
+    test_refusals_and_attribution_in_main();
+    test_broker_pipe_in_main();
+    test_guard_refusals_are_reported();
+    test_guard_refusals_that_stay_quiet();
+    test_supervisor_answers_the_three_kinds_of_trap();
 
     printf("\n%d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;

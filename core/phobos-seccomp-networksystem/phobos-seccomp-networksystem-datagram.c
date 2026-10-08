@@ -4,6 +4,7 @@
 #include "phobos-seccomp-networksystem-destination.h"
 #include "phobos-seccomp-networksystem-diagnostics.h"
 #include "phobos-seccomp-networksystem-held-sockets.h"
+#include "phobos-seccomp-networksystem-report.h"
 #include "phobos-seccomp-networksystem-rules.h"
 #include "phobos-seccomp-networksystem-seccomp-compat.h"
 #include "phobos-seccomp-networksystem-socket-types.h"
@@ -150,6 +151,17 @@ static int64_t send_datagram(int descriptor, const void *data, size_t length, un
     return send_without_blocking(descriptor, data, length, effective, destination, name_length);
 }
 
+/* Reports a datagram refused because its socket is bound to no port the policy lets the kernel
+ * choose, as a send to the destination the command named. A send that named none has no object to
+ * report, and stays a --verbose line. */
+static void report_refused_unbound_send(const struct sockaddr_storage *name, socklen_t name_length) {
+    if (name_length == 0) {
+        return;
+    }
+    struct destination where = read_destination(name);
+    report_refused_endpoint("send to", &where, true);
+}
+
 /* Reads the destination the command named, or leaves no name at all when it named none: a null
  * pointer or a length of zero, which the kernel also takes for a send on a connected socket.
  * Answers 0, or a negative errno: EINVAL for a length no socket address has, and EACCES where the
@@ -179,6 +191,7 @@ static bool destination_permitted(const struct sockaddr_storage *name) {
         char endpoint[ENDPOINT_TEXT_SIZE];
         format_endpoint(&where, endpoint, sizeof(endpoint));
         log_verbose("refusing a datagram to a destination the allow-list does not name: %s", endpoint);
+        report_refused_endpoint("send to", &where, true);
         return false;
     }
     return true;
@@ -233,6 +246,7 @@ static int64_t deliver(const struct send_context *context, int held, uintptr_t n
     if (!source_port_permitted(held)) {
         log_verbose("refusing a datagram on a socket bound to no port, which the policy does "
                     "not allow the kernel to bind");
+        report_refused_unbound_send(&name, name_length);
         return -EACCES;
     }
     size_t total;
@@ -440,6 +454,7 @@ void service_datagram_connect(int notify_descriptor, struct seccomp_notif_resp *
     if (!source_port_permitted(held)) {
         log_verbose("refusing a datagram connect on a socket bound to no port, which the policy "
                     "does not allow the kernel to bind");
+        report_refused_unbound_send(address, length);
         answer(notify_descriptor, response, id, 0, -EACCES);
         return;
     }

@@ -3191,6 +3191,12 @@ static void test_the_filter(void) {
           append_report_traps(program, REPORT_TRAPPED_CALL_COUNT) == 0);
     check("every trap is one comparison and one answer",
           append_report_traps(program, REPORT_FILTER_MAXIMUM) == 2 * REPORT_TRAPPED_CALL_COUNT);
+    check("the network traps are not written into too small a room",
+          append_network_report_traps(program, REPORT_NETWORK_TRAPPED_CALL_COUNT) == 0);
+    check("the network traps are one comparison and one answer for bind and the arming call",
+          append_network_report_traps(program, REPORT_FILTER_MAXIMUM) == 4
+              && REPORT_NETWORK_TRAPPED_CALL_COUNT == 2
+              && REPORT_NETWORK_TRAPPED_CALLS[0] == __NR_bind);
     struct sock_filter unknown[] = {BPF_STMT(BPF_LD | BPF_B | BPF_ABS, 0)};
     struct seccomp_data data = native_call(0, 0, 0, 0, 0, 0);
     check("the interpreter refuses an instruction it does not know, and a program with no answer",
@@ -3613,6 +3619,11 @@ static void test_supervisor_parent(void) {
           script->responses_sent == 2 && refused_exactly(&script->last_response,
                                                          FAKE_NOTIFICATION_ID + 1));
     check("and reported the refusal", strstr(captured_text, "leave the Session") != NULL);
+    check("and closed the run with one summary of what it counted, before the drainer is started",
+          strstr(captured_text, "Phobos Security Summary: Phobos blocked 1 action of the program, 0 in the "
+                                "filesystem layer, 0 in the network layer and 1 in the timeout layer; 1 was "
+                                "shown above, 0 repeats and 0 beyond the limit of 100 lines were not. "
+                                "(PHB-EDENY)\n") != NULL);
     check("and handed what is left to a drainer", script->fork_next == 2);
     script_supervisor();
     script->reaped_status = 3 << 8;
