@@ -208,7 +208,7 @@ PY
 check_merged_and_verified() {
   [[ -f "${CFG}" ]] || { bad "the merged configuration can be checked" "no policy was written"; return; }
   if python3 "${REPO}/docker/prune_phase/orchestrate/orchestrate.py" --langs "${KEY}" --path-dir "${OUTPUT}" \
-      --core-dir "${CORE}" --helpers-dir "${HELPERS}" --skip-prune > "${WORK}/merge.log" 2>&1 \
+      --core-dir "${CORE}" --helpers-dir "${HELPERS}" > "${WORK}/merge.log" 2>&1 \
       && [[ -f "${CORE}/BaseLanguage-${KEY}.cfg" && -f "${CORE}/exercises/${KEY}_${EXERCISE}.cfg" ]]; then
     ok "the orchestrator merges the artefact into BaseLanguage-${KEY}.cfg and the exercise's own file"
   else

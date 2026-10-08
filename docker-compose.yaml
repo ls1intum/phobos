@@ -1,5 +1,7 @@
 # What every service of the layer pruner shares. The network is set per service: none for the prune
-# and its verification, and the project's own network for the opt-in egress service only.
+# and its verification, and the project's own network for the opt-in egress service only. Each
+# language's prune image is built on that language's run-phase image, so an exercise is pruned in
+# the image it is graded in: docker/run_phase/<language>/docker-compose.yaml builds it.
 x-prune-layers: &prune_layers
   build:
     context: .
@@ -15,20 +17,29 @@ x-prune-layers: &prune_layers
     - ./var/tmp/helpers:/var/tmp/helpers:ro
     - ./var/tmp/path_sets:/var/tmp/path_sets
 
-services:
-  prune_python:
-    build: docker/prune_phase/python
-    volumes:
-      - type: bind
-        source: ./var/tmp
-        target: /var/tmp
-    command: ["--verbose", "--cache-dir", "/home/sandboxuser/.cache/pip", "python"]
+# The same, built on the Python run-phase image.
+x-prune-layers-python: &prune_layers_python
+  <<: *prune_layers
+  build:
+    context: .
+    dockerfile: docker/prune_phase/layers/Dockerfile
+    args:
+      RUN_PHASE_IMAGE: ${RUN_PHASE_IMAGE_PYTHON:-phobos-run-phase-python}
+  image: phobos-prune-layers-python
 
-  # Java is pruned on the grading layers themselves (docker/prune_phase/layers, README "The layer
-  # pruner"). The image is built on the run-phase image docker/run_phase/java/docker-compose.yaml
-  # builds. The exercises are mounted read-only and only the artefacts' directory is writable, since
-  # every run replaces /var/tmp/testing-dir with a fresh copy of the exercise (A.6.1). No network, no
-  # privilege and no capability: strace traces only the pruner's own children.
+# What the verification of the merged base mounts besides: the orchestrator's output, read-only.
+x-verify-volumes: &verify_volumes
+  - ./var/tmp/testing-dir:/srv/phobos-prune-exercises:ro
+  - ./var/tmp/helpers:/var/tmp/helpers:ro
+  - ./var/tmp/path_sets:/var/tmp/path_sets
+  - ./var/tmp/opt/core/config:/srv/phobos-merged:ro
+
+services:
+  # Every language is pruned on the grading layers themselves (docker/prune_phase/layers, README
+  # "The layer pruner"). The exercises are mounted read-only and only the artefacts' directory is
+  # writable, since every run replaces /var/tmp/testing-dir with a fresh copy of the exercise
+  # (A.6.1). No network, no privilege and no capability: strace traces only the pruner's own
+  # children.
   prune_java:
     <<: *prune_layers
     network_mode: none
@@ -81,6 +92,11 @@ services:
       - ./docker/run_phase/java/maven-repository.sha256:/srv/phobos-manifest/maven-repository.sha256:ro
     command: ["--stage", "all", "java-maven"]
 
+  prune_python:
+    <<: *prune_layers_python
+    network_mode: none
+    command: ["--stage", "all", "python"]
+
   # Opt-in, for the Java exercises under var/tmp/testing-dir/java-egress whose prune.json declares
   # hosts (A.6.5): unlike the other layer-pruner services it has a network, and it keeps or drops
   # declared rules but never adds one. The project's own network gives the container Docker's
@@ -106,23 +122,15 @@ services:
         condition: service_completed_successfully
       prune_java_maven:
         condition: service_completed_successfully
-    command:
-      [
-        "--langs", "python,java,java-maven",
-        "--path-dir", "/var/tmp/path_sets", "--skip-prune"
-      ]
+    command: ["--langs", "python,java,java-maven", "--path-dir", "/var/tmp/path_sets"]
 
-  # Runs every Java exercise once more under what grading will apply: the merged
-  # BaseLanguage-java.cfg and the exercise's own file under exercises/, as the orchestrator wrote them.
-  # Its records go to path_sets/verify/; it changes no artefact of the prune.
+  # Run every exercise once more under what grading will apply: the merged BaseLanguage-<language>.cfg
+  # and the exercise's own file under exercises/, as the orchestrator wrote them. Their records go to
+  # path_sets/verify/; they change no artefact of the prune.
   verify_java:
     <<: *prune_layers
     network_mode: none
-    volumes:
-      - ./var/tmp/testing-dir:/srv/phobos-prune-exercises:ro
-      - ./var/tmp/helpers:/var/tmp/helpers:ro
-      - ./var/tmp/path_sets:/var/tmp/path_sets
-      - ./var/tmp/opt/core/config:/srv/phobos-merged:ro
+    volumes: *verify_volumes
     depends_on:
       orchestrate:
         condition: service_completed_successfully
@@ -132,12 +140,17 @@ services:
   verify_java_maven:
     <<: *prune_layers
     network_mode: none
-    volumes:
-      - ./var/tmp/testing-dir:/srv/phobos-prune-exercises:ro
-      - ./var/tmp/helpers:/var/tmp/helpers:ro
-      - ./var/tmp/path_sets:/var/tmp/path_sets
-      - ./var/tmp/opt/core/config:/srv/phobos-merged:ro
+    volumes: *verify_volumes
     depends_on:
       orchestrate:
         condition: service_completed_successfully
     command: ["--verify", "/srv/phobos-merged", "java-maven"]
+
+  verify_python:
+    <<: *prune_layers_python
+    network_mode: none
+    volumes: *verify_volumes
+    depends_on:
+      orchestrate:
+        condition: service_completed_successfully
+    command: ["--verify", "/srv/phobos-merged", "python"]

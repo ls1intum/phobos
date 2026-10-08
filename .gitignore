@@ -24,7 +24,6 @@ venv/
 # Output of a prune run. The path sets that are meant to be kept are committed under
 # core/config; everything a run drops beside them is scratch.
 /var/tmp/path_sets/
-/var/tmp/pruning/*.log
 
 # Sessions of the recording pruner (phobos-record), written by its compose services. A recording
 # describes one instructor's sessions and is reviewed before its policy is kept anywhere.

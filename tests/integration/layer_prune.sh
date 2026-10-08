@@ -200,7 +200,7 @@ check_merged_and_verified() {
   [[ -f "${CFG}" ]] || { bad "the merged configuration can be checked" "no policy was written"; return; }
   local core="${WORK}/core"
   if python3 "${REPO}/docker/prune_phase/orchestrate/orchestrate.py" --langs java --path-dir "${OUTPUT}" \
-      --core-dir "${core}" --helpers-dir "${HELPERS}" --skip-prune >"${WORK}/merge.log" 2>&1 \
+      --core-dir "${core}" --helpers-dir "${HELPERS}" >"${WORK}/merge.log" 2>&1 \
       && [[ -f "${core}/BaseLanguage-java.cfg" ]] && ! grep -q '^\[limits\]' "${core}/BaseLanguage-java.cfg" \
       && grep -q '^\[limits\]' "${core}/exercises/java_fixture.cfg"; then
     ok "the orchestrator merges the artefacts into a base without limits and the exercise's own file with them"
@@ -230,7 +230,7 @@ check_merged_and_verified() {
   cp -r "${OUTPUT}" "${tampered}"
   printf '[read]\n/\n' >> "${tampered}/java_fixture.cfg"
   if python3 "${REPO}/docker/prune_phase/orchestrate/orchestrate.py" --langs java --path-dir "${tampered}" \
-      --core-dir "${WORK}/core-tampered" --helpers-dir "${HELPERS}" --skip-prune >"${WORK}/tampered.log" 2>&1; then
+      --core-dir "${WORK}/core-tampered" --helpers-dir "${HELPERS}" >"${WORK}/tampered.log" 2>&1; then
     bad "a .cfg its record does not vouch for stops the merge" "the orchestrator merged it"
   elif grep -q 'its SHA-256 differs' "${WORK}/tampered.log"; then
     ok "a .cfg its record does not vouch for stops the merge"

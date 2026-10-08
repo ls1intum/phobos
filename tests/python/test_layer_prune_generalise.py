@@ -462,3 +462,20 @@ def test_an_execute_already_on_the_file_is_left_alone_without_a_comment():
     grants, notes = generalise.grants_and_notes([execute("/home/u/bin/tool"), create("/home/u/bin/new")], snapshot, FINE)
     assert grants == {"/home/u/bin/tool": frozenset({"execute"}), "/home/u/bin": frozenset({"create"})}
     assert notes.comments == {}
+
+
+@pytest.mark.parametrize("directory", ["/var/tmp", "/var"])
+def test_a_creation_in_a_directory_phobos_s_specification_lies_beneath_is_reported_not_granted(directory):
+    tree = snapshot_with(directories=("/var", "/var/tmp", "/tmp"))
+    grants, notes = generalise.grants_and_notes([create(directory), create("/tmp")], tree, FINE)
+    assert grants == {"/tmp": frozenset({"create"})}
+    assert [(item["path"], item["section"]) for item in notes.reported] == [(directory, "create")]
+
+
+def test_writing_beneath_the_specification_s_parent_or_reading_it_is_still_granted():
+    tree = snapshot_with(directories=("/var", "/var/tmp", "/var/tmp/testing-dir"))
+    grants, notes = generalise.grants_and_notes([create("/var/tmp/testing-dir"), read("/var/tmp"), create("/")],
+                                                tree, FINE)
+    assert grants == {"/var/tmp/testing-dir": frozenset({"create"}), "/var/tmp": frozenset({"read"})}
+    assert [(item["path"], item["section"]) for item in notes.reported] == [("/", "create")]
+    assert generalise.SPECIFICATION_ANCESTORS == ("/var/tmp", "/var", "/")
