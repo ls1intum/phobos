@@ -193,9 +193,9 @@ import sys
 
 text = open(sys.argv[1]).read()
 unused = text.split("Granted by the policy, used by no session")[1].split("Granted by the policy, covered")[0]
-assert "[create-ipc] /root/.gradle" in unused, unused[:600]
+assert "[read] /usr/share/maven/conf" in unused, unused[:600]
 PYTHON
-  check "the Gradle row of the Java base is listed as unused, in the list of unused rows" 0 "$?"
+  check "a row of the Java base the session never used is listed among the unused rows" 0 "$?"
   check "diff changed neither the policy nor the record" "${before}" \
     "$(sha256sum "${RECORDING}/policy.cfg" "${RECORDING}/record.json")"
 }

@@ -231,7 +231,7 @@ jobs:
       # from this very exercise: Artemis's own offline build passes, and a canary, a write beside the
       # working directory and an unnamed address are refused. Without it a stale base would go unnoticed.
       - name: The shipped Java base runs the Gradle reference exercise both ways
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
           docker run --rm --network none --memory 6g -v "${PWD}/tests:/tests:ro" \
             -v "${PWD}/var/tmp/testing-dir/java/gradle-reference:/exercise:ro" \
