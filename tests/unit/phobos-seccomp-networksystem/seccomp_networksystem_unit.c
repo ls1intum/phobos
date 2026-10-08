@@ -304,6 +304,12 @@ struct behaviour {
     int connect_calls;
     int recorded_child_status;
     int waitpid_eintr_once;
+    int waitpid_echild;
+    int notif_send_eintr;
+    /* sigaction on SIGCHLD: how often the default was taken (with the old one kept) and how
+     * often a kept disposition was given back */
+    int child_signal_taken;
+    int child_signal_restored;
     int calloc_fails;
     /* signal and kill: the handlers the supervisor installed, and what they then sent */
     void (*signal_handler[SIGNAL_SLOTS])(int);
@@ -474,6 +480,18 @@ void (*__wrap_signal(int signum, void (*handler)(int)))(int) {
     return NULL;
 }
 
+/* Records each change of SIGCHLD's disposition, then makes it: giving it the default while keeping
+ * the old one is the supervisor taking it over, and setting one without keeping is giving it back. */
+int __real_sigaction(int signum, const struct sigaction *action, struct sigaction *old);
+int __wrap_sigaction(int signum, const struct sigaction *action, struct sigaction *old) {
+    if (signum == SIGCHLD && action != NULL && old != NULL && action->sa_handler == SIG_DFL) {
+        bx->child_signal_taken++;
+    } else if (signum == SIGCHLD && action != NULL && old == NULL) {
+        bx->child_signal_restored++;
+    }
+    return __real_sigaction(signum, action, old);
+}
+
 int __wrap_kill(pid_t pid, int signum) {
     bx->kill_calls++;
     bx->last_kill_pid = (int)pid;
@@ -505,6 +523,10 @@ pid_t __wrap_waitpid(pid_t pid, int *status, int options) {
     if (bx->waitpid_eintr_once) {
         bx->waitpid_eintr_once = 0;
         errno = EINTR;
+        return -1;
+    }
+    if (bx->waitpid_echild) {
+        errno = ECHILD;
         return -1;
     }
     if (status != NULL) {
@@ -1244,6 +1266,11 @@ int __wrap_ioctl(int fd, unsigned long request, ...) {
         bx->last_answer_val = resp->val;
         bx->last_answer_flags = resp->flags;
         bx->answers++;
+        if (bx->notif_send_eintr > 0) {
+            bx->notif_send_eintr--;
+            errno = EINTR;
+            return -1;
+        }
         if (bx->notif_send_result != 0) {
             errno = bx->notif_send_result == FAKE_FAILS_TARGET_GONE ? ENOENT : EPIPE;
             return -1;
@@ -1463,6 +1490,84 @@ static bool permits_v6(const char *ip, uint16_t port) {
     return connection_permitted(AF_INET6, &address, port, false);
 }
 
+static bool permits_mapped_udp(const char *ip, uint16_t port) {
+    struct in6_addr address;
+    inet_pton(AF_INET6, ip, &address);
+    return connection_permitted(AF_INET6, &address, port, true);
+}
+
+/* An IPv4-mapped destination is the IPv4 endpoint it maps, so the rules that name that endpoint cover it
+ * and no rule covers more through it. Both directions: what a loopback or IPv4 literal rule admits as
+ * IPv4 it admits mapped, on the same ports, and a mapped destination outside what a rule names stays
+ * refused, as does one on another port or another transport. */
+static void test_mapped_ipv4_destinations(void) {
+    reset_behaviour();
+    remember_rule("localhost", "*", false);
+    check("localhost admits ::ffff:127.0.0.1 on any port", permits_v6("::ffff:127.0.0.1", 12345));
+    check("localhost admits ::ffff:127.9.9.9, as it admits 127.9.9.9", permits_v6("::ffff:127.9.9.9", 12345) && permits_v4("127.9.9.9", 12345));
+    check("localhost still refuses ::ffff:10.0.0.1", !permits_v6("::ffff:10.0.0.1", 12345));
+    check("localhost still refuses ::ffff:8.8.8.8, as it refuses 8.8.8.8", !permits_v6("::ffff:8.8.8.8", 12345) && !permits_v4("8.8.8.8", 12345));
+    check("localhost still admits ::1 and refuses an IPv6 destination that only ends like loopback",
+          permits_v6("::1", 1) && !permits_v6("2001:db8::7f00:1", 1));
+
+    /* Only the mapped spelling is the IPv4 endpoint. Every other IPv6 address that carries 7f00:1 in its last
+     * 32 bits is another destination and stays refused: the IPv4-compatible and SIIT forms, NAT64, a
+     * documentation prefix, and addresses that match the mapped prefix only in part. */
+    static const char *const lookalikes[] = {
+        "::7f00:1", "::ffff:0:7f00:1", "64:ff9b::7f00:1", "2001:db8::ffff:7f00:1", "1::ffff:7f00:1",
+        "0:0:0:1:0:ffff:7f00:1", "0:0:0:0:1:ffff:7f00:1", "fe80::ffff:7f00:1", "100::ffff:7f00:1",
+    };
+    for (size_t index = 0; index < sizeof(lookalikes) / sizeof(lookalikes[0]); index++) {
+        reset_behaviour();
+        remember_rule("localhost", "*", false);
+        remember_rule("127.0.0.1", "*", false);
+        remember_rule("localhost", "*", true);
+        remember_rule("127.0.0.1", "*", true);
+        check("a look-alike of the mapped loopback is refused over TCP and UDP",
+              !permits_v6(lookalikes[index], 80) && !permits_mapped_udp(lookalikes[index], 80));
+    }
+
+    reset_behaviour();
+    remember_rule("127.0.0.1", "*", false);
+    check("an IPv4 literal on any port admits its mapped spelling", permits_v6("::ffff:127.0.0.1", 40000));
+    check("an IPv4 literal refuses another address in the mapped spelling", !permits_v6("::ffff:127.0.0.2", 40000));
+    check("an IPv4 literal refuses a mapped address of another block", !permits_v6("::ffff:10.0.0.1", 40000));
+
+    reset_behaviour();
+    remember_rule("127.0.0.1", "80", false);
+    check("an IPv4 literal with a port admits the mapped spelling on that port", permits_v6("::ffff:127.0.0.1", 80));
+    check("and refuses the mapped spelling on a port no rule names", !permits_v6("::ffff:127.0.0.1", 81));
+    check("and the same mapped destination over UDP, which no rule names", !permits_mapped_udp("::ffff:127.0.0.1", 80));
+
+    reset_behaviour();
+    remember_rule("127.0.0.1", "80", true);
+    check("a UDP rule admits the mapped spelling over UDP", permits_mapped_udp("::ffff:127.0.0.1", 80));
+    check("and not over TCP", !permits_v6("::ffff:127.0.0.1", 80));
+
+    reset_behaviour();
+    remember_rule("::ffff:127.0.0.1", "80", false);
+    check("an IPv6 literal that is a mapped address still admits that address", permits_v6("::ffff:127.0.0.1", 80));
+    check("and still does not admit the IPv4 spelling it was not written for", !permits_v4("127.0.0.1", 80));
+
+    reset_behaviour();
+    remember_rule("::ffff:10.0.0.0/104", "80", false);
+    check("a mapped range still admits a mapped address inside it", permits_v6("::ffff:10.1.2.3", 80));
+    check("and refuses a mapped address outside it", !permits_v6("::ffff:11.1.2.3", 80));
+
+    reset_behaviour();
+    remember_rule("*", "443", false);
+    check("a wildcard host still rests on the port for a mapped destination", permits_v6("::ffff:8.8.8.8", 443) && !permits_v6("::ffff:8.8.8.8", 80));
+
+    reset_behaviour();
+    remember_rule("example.com", "8080", false);
+    check("a host name rule still rests on its port for a mapped destination", permits_v6("::ffff:9.9.9.9", 8080) && !permits_v6("::ffff:9.9.9.9", 80));
+
+    struct in6_addr unspecified_mapped;
+    inet_pton(AF_INET6, "::ffff:0.0.0.0", &unspecified_mapped);
+    check("a mapped address is loopback exactly when the IPv4 address is", address_is_loopback(AF_INET6, &(struct in6_addr){ .s6_addr = { [10] = 0xff, [11] = 0xff, [12] = 127, [15] = 1 } })
+          && !address_is_loopback(AF_INET6, &unspecified_mapped));
+}
+
 static void test_connect_ranges(void) {
     reset_behaviour();
     remember_rule("104.16.0.0/12", "443", false);
@@ -1560,12 +1665,86 @@ static void test_address_and_destination(void) {
     check("a non-INET destination carries no address", where.address == NULL);
 }
 
+/* format_endpoint writes each family as the guard's log line needs it, cuts short safely and
+ * never writes past the size it was given. */
+static void test_format_endpoint(void) {
+    char text[ENDPOINT_TEXT_SIZE];
+    struct in_addr v4;
+    inet_pton(AF_INET, "203.0.113.7", &v4);
+    struct destination where = { .family = AF_INET, .address = &v4, .port = 443 };
+    size_t length = format_endpoint(&where, text, sizeof(text));
+    check("an IPv4 endpoint is address colon port", strcmp(text, "203.0.113.7:443") == 0 && length == strlen(text));
+
+    struct in6_addr v6;
+    inet_pton(AF_INET6, "2001:db8::1", &v6);
+    where = (struct destination){ .family = AF_INET6, .address = &v6, .port = 443 };
+    format_endpoint(&where, text, sizeof(text));
+    check("an IPv6 endpoint is bracketed", strcmp(text, "[2001:db8::1]:443") == 0);
+
+    inet_pton(AF_INET6, "::ffff:203.0.113.7", &v6);
+    format_endpoint(&where, text, sizeof(text));
+    check("an IPv4-mapped endpoint keeps the IPv6 spelling in brackets", strcmp(text, "[::ffff:203.0.113.7]:443") == 0);
+
+    inet_pton(AF_INET6, "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", &v6);
+    where.port = 65535;
+    length = format_endpoint(&where, text, sizeof(text));
+    check("the longest IPv6 endpoint fits ENDPOINT_TEXT_SIZE whole",
+          strcmp(text, "[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535") == 0 && length < sizeof(text));
+
+    where = (struct destination){ .family = AF_UNIX, .address = nullptr, .port = 0 };
+    format_endpoint(&where, text, sizeof(text));
+    check("another family is named by its number", strcmp(text, "family 1") == 0);
+
+    where = (struct destination){ .family = AF_INET, .address = nullptr, .port = 80 };
+    format_endpoint(&where, text, sizeof(text));
+    check("an IPv4 destination without an address is named by its family", strcmp(text, "family 2") == 0);
+
+    char small[6];
+    memset(small, 'x', sizeof(small));
+    where = (struct destination){ .family = AF_INET, .address = &v4, .port = 443 };
+    length = format_endpoint(&where, small, sizeof(small));
+    check("a short buffer is cut short and terminated", strcmp(small, "203.0") == 0 && length == 5);
+
+    char untouched = 'x';
+    check("a zero size writes nothing and answers zero",
+          format_endpoint(&where, &untouched, 0) == 0 && untouched == 'x');
+}
+
 static void test_exit_code_mapping(void) {
     int status = 0;
     check("a clean exit maps to its code", exit_code_from_status((7 << WAIT_STATUS_EXIT_CODE_SHIFT)) == 7);
     status = SIGKILL;
     check("a signal maps to 128 plus the signal", exit_code_from_status(status) == SIGNAL_EXIT_CODE_BASE + SIGKILL);
     check("an unusual status maps to the setup error", exit_code_from_status(WAIT_STATUS_STOPPED) == EXIT_CODE_SETUP_ERROR);
+}
+
+/* The disposition SIGCHLD has right now in this process. */
+static void (*child_signal_handler(void))(int) {
+    struct sigaction current;
+    sigaction(SIGCHLD, NULL, &current);
+    return current.sa_handler;
+}
+
+/* Sets SIGCHLD's disposition with sigaction, since signal() is faked in this suite. */
+static void set_child_signal_handler(void (*handler)(int)) {
+    struct sigaction wanted;
+    memset(&wanted, 0, sizeof(wanted));
+    wanted.sa_handler = handler;
+    sigemptyset(&wanted.sa_mask);
+    sigaction(SIGCHLD, &wanted, NULL);
+}
+
+static void test_child_signal_disposition(void) {
+    struct sigaction inherited;
+    set_child_signal_handler(SIG_IGN);
+    take_default_child_signal(&inherited);
+    check("an inherited ignored SIGCHLD is given its default in the supervisor, so its child is not "
+          "reaped by the kernel",
+          child_signal_handler() == SIG_DFL && inherited.sa_handler == SIG_IGN);
+    restore_child_signal(&inherited);
+    check("and the child gets the disposition its caller gave back before it becomes the command",
+          child_signal_handler() == SIG_IGN);
+    set_child_signal_handler(SIG_DFL);
 }
 
 /* Logs once quiet, which returns without writing, and once verbose, which writes and so
@@ -3219,6 +3398,28 @@ static void test_connect_on_behalf_paths(void) {
     answer(FAKE_NOTIFY_DESCRIPTOR, &response, 1, 0, -EACCES);
     set_verbose(false);
     check("a send error is logged", bx->answers == 1);
+
+    reset_behaviour();
+    bx->notif_send_eintr = 2;
+    answer(FAKE_NOTIFY_DESCRIPTOR, &response, 1, 0, -EACCES);
+    check("an answer a signal interrupts is sent again until it is delivered",
+          bx->answers == 3 && bx->notif_send_eintr == 0 && bx->last_answer_error == -EACCES
+              && bx->last_answer_flags == 0);
+
+    reset_behaviour();
+    memset(&response, 0, sizeof(response));
+    response.error = -EACCES;
+    bx->notif_send_eintr = 1;
+    bool refusal_sent = send_notification_response(FAKE_NOTIFY_DESCRIPTOR, &response);
+    check("the shared send sends a refusal exactly as given, never adding the continue flag",
+          refusal_sent && bx->answers == 2 && bx->last_answer_flags == 0
+              && bx->last_answer_error == -EACCES && response.flags == 0);
+    reset_behaviour();
+    response.flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
+    response.error = 0;
+    bool continue_sent = send_notification_response(FAKE_NOTIFY_DESCRIPTOR, &response);
+    check("and a continue exactly as given",
+          continue_sent && bx->last_answer_flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
 }
 
 static void test_read_peer_address_edges(void) {
@@ -3682,6 +3883,31 @@ static void test_parent_paths(void) {
 
     reset_behaviour();
     bx->fork_result = FAKE_CHILD_PID;
+    bx->waitpid_echild = 1;
+    check("a status that cannot be read ends the run with PHB-ESTATUS, never with 0",
+          run_main(argv) == EXIT_CODE_STATUS_UNREAD);
+
+    reset_behaviour();
+    bx->fork_result = FAKE_CHILD_PID;
+    (void)run_main(argv);
+    check("the supervisor takes SIGCHLD's default before it forks, and gives nothing back itself",
+          bx->child_signal_taken == 1 && bx->child_signal_restored == 0);
+
+    reset_behaviour();
+    bx->fork_result = 0;
+    (void)run_main(argv);
+    check("and the child gives back the disposition it inherited before it becomes the command",
+          bx->child_signal_taken == 1 && bx->child_signal_restored == 1);
+
+    reset_behaviour();
+    bx->fork_result = FAKE_CHILD_PID;
+    bx->recvmsg_result = -1;
+    bx->waitpid_echild = 1;
+    check("and a run refused before supervision with an unread status still ends refused",
+          run_main(argv) == EXIT_CODE_SETUP_ERROR);
+
+    reset_behaviour();
+    bx->fork_result = FAKE_CHILD_PID;
     check("the supervisor takes SIGTERM, SIGHUP, SIGINT and SIGQUIT, passes each on to the command while it exists and to no one once it is reaped",
           signals_taken_and_passed_on(argv) == SIGNALS_PASSED_ON);
 }
@@ -3700,9 +3926,12 @@ int main(void) {
 
     test_rule_parsing();
     test_policy_matching();
+    test_mapped_ipv4_destinations();
     test_connect_ranges();
     test_address_and_destination();
+    test_format_endpoint();
     test_exit_code_mapping();
+    test_child_signal_disposition();
     test_verbose_logging();
     test_read_peer_address_edges();
     test_receive_descriptor();

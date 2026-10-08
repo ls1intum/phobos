@@ -51,7 +51,7 @@ echo "== the manual and usage errors =="
 run_pm --help
 if (( PM_STATUS == 0 )) && grep -q '^USAGE' "$PM_OUT" && [[ ! -s "$PM_ERR" ]]; then ok "--help prints the manual on standard output and ends with status 0"; else bad "--help" "$(pm_describe)"; fi
 manual_complete=1
-for word in "--no-timeoutsystem-restriction" "--no-networksystem-restriction" "--no-resourcesystem-restriction" "--no-filesystem-restriction" "--no-restriction" "--config" "--debug" "--landlock-bin" "--connect-guard-bin" "--pgroup-lock-bin" "--timeout-bin" "--haproxy-bin" "--resolver" "--tail-flags-file" "--spec-parent" "PHB-EPOLICY" "PHB-ETIMEOUT" "PHB-ERUNTIME"; do
+for word in "--no-timeoutsystem-restriction" "--no-networksystem-restriction" "--no-resourcesystem-restriction" "--no-filesystem-restriction" "--no-restriction" "--config" "--debug" "--landlock-bin" "--connect-guard-bin" "--pgroup-lock-bin" "--timeout-bin" "--haproxy-bin" "--resolver" "--tail-flags-file" "--spec-parent" "PHB-EPOLICY" "PHB-ETIMEOUT" "PHB-ERUNTIME" "PHB-ESTATUS"; do
   grep -q -- "$word" "$PM_OUT" || { manual_complete=0; bad "the manual names ${word}" "it does not"; }
 done
 if (( manual_complete )); then ok "and the manual names every option and every exit status"; fi

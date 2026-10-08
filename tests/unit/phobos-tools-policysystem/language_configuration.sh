@@ -15,6 +15,10 @@ CORE="${HERE}/../../../core"
 source "${CORE}/phobos-tools-common/phobos-common.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+# The scratch directory the parse helpers make their files in, which a layer sets beneath its
+# specification directory; the helpers refuse to run without one.
+export PHOBOS_SCRATCH="$WORK/scratch"
+mkdir -p "$PHOBOS_SCRATCH"
 
 HOME_DIR="${WORK}/home"
 CONFIGURATIONS="${HOME_DIR}/language-configurations"
@@ -88,7 +92,7 @@ if language_configuration_exists "../home/language-configurations/GOOD_CONFIGURA
 
 echo "== refused =="
 for case in \
-  '[base]\nBaseLanguage-x.cfg\n[connect]\nallow localhost udp|unknown section' \
+  '[base]\nBaseLanguage-x.cfg\n[bind]\nallow 0|unknown section' \
   'BaseLanguage-x.cfg|before any [section]' \
   '[base]\nBaseLanguage-x.cfg\n[placeholders]\na = guess x|unknown primitive' \
   '[base]\nBaseLanguage-x.cfg\n[placeholders]\na = command-ancestor missingtool 2|found no command' \
@@ -178,6 +182,36 @@ if (( status == PHB_EPOLICY )) && [[ "$result" == *"is not the name of a program
 else
   bad "a configuration name that is not a name is refused" "status ${PHB_EPOLICY}" "${status}|${result}"
 fi
+
+echo "== the [connect] section =="
+# Loads a configuration with the [connect] lines given and prints the rows it holds, or
+# "<status>|<message>" when the loader refuses one.
+connect_result() {
+  local message
+  printf '[base]\nBaseLanguage-x.cfg\n[connect]\n%b\n' "$1" > "${CONFIGURATIONS}/CONNECT_CONFIGURATION.cfg"
+  if message="$( (load_language_configuration CONNECT_CONFIGURATION "$HOME_DIR" && cat "$LANGUAGE_CONFIGURATION_CONNECT_FILE") 2>&1)"; then
+    printf '%s' "$message"
+  else
+    printf '%s|%s' "$?" "$message"
+  fi
+}
+check "allow localhost udp loads into the row append_connect_rule writes for it" "localhost * udp" "$(connect_result 'allow localhost udp')"
+check "loopback rules with no port, by name and by address, load" $'localhost * udp\n127.0.0.1 * udp\n127.0.0.2 * udp\n::1 *\n::ffff:127.0.0.1 * udp' "$(connect_result 'allow localhost udp\nallow 127.0.0.1 udp\nallow 127.0.0.2 udp\nallow [::1]\nallow [::ffff:127.0.0.1] udp')"
+result="$( (load_language_configuration GOOD_CONFIGURATION "$HOME_DIR" && wc -c < "$LANGUAGE_CONFIGURATION_CONNECT_FILE") 2>&1)"
+check "a configuration without [connect] holds no rows" "0" "$(tr -d ' ' <<< "$result")"
+for case in 'allow *.example.org udp|wildcard host name' 'allow localhost:0 udp|no usable port' 'allow localhost udx|not a transport' \
+  'allow 127.0.0.1/1 udp|only loopback may name no port' 'allow 127.0.0.0/8 udp|only loopback may name no port' \
+  'allow 127.evil.example udp|only loopback may name no port' 'allow [::ffff:128.0.0.1] udp|only loopback may name no port' \
+  'allow 127.0.0.1:53 udp|not a loopback rule that names no port' 'allow 10.0.0.1:53 udp|not a loopback rule that names no port' \
+  'allow example.org:443|not a loopback rule that names no port' 'allow *:53 udp|not a loopback rule that names no port' \
+  'allow 10.0.0.1 udp|only loopback may name no port' "deny localhost|is not an 'allow <host>[:<port>] [udp|tcp]' line"; do
+  result="$(connect_result "${case%|*}")"
+  if [[ "${result%%|*}" == "${PHB_EPOLICY}" && "${result#*|}" == *"${case##*|}"* && "${result#*|}" == *"CONNECT_CONFIGURATION.cfg', line 4."* ]]; then
+    ok "refused in [connect], with file and line: ${case%|*}"
+  else
+    bad "refused in [connect], with file and line: ${case%|*}" "status ${PHB_EPOLICY}, '${case##*|}'" "${result}"
+  fi
+done
 
 echo "== the password database =="
 # The home directory the password database holds for this user, read the way the JVM reads

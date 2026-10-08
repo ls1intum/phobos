@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 # One programming language configuration in, the base policies it names and, on first use, the
 # value of each of its placeholders out.
@@ -89,8 +89,8 @@ refuse_unknown_language_configuration() {
 refuse_unknown_language_section() {
   local section="$1"
   case "$section" in
-    base|placeholders) ;;
-    *) refuse_cfg "unknown section ${section@Q}; a programming language configuration has the sections [base] and [placeholders]" ;;
+    base|placeholders|connect) ;;
+    *) refuse_cfg "unknown section ${section@Q}; a programming language configuration has the sections [base], [placeholders] and [connect]" ;;
   esac
 }
 
@@ -432,11 +432,37 @@ determine_language_placeholder() {
   PARSE_LOCATION="$caller_location"
 }
 
+# Reads one [connect] line of a programming language configuration with append_connect_rule, so it
+# meets every refusal a policy cfg's [connect] line meets, and appends its row to
+# LANGUAGE_CONFIGURATION_CONNECT_FILE, unless it is not a rule for one loopback host that names no
+# port, which is refused: a programming language configuration says which base a run uses and
+# must not become a second, less visible place for egress rules. A rule that reaches beyond
+# loopback belongs in a base policy, whose change says so. Takes the line. Assumes it runs inside
+# load_language_configuration, with PARSE_LOCATION naming the line, and that it is called plainly,
+# so that a refusal ends the run.
+read_language_connect_line() {
+  local line="$1"
+  local row
+  local host=""
+  local port=""
+  row="$(new_scratch_file phobos-language-connect.XXXXXX)"
+  append_connect_rule "$line" "$row"
+  read -r host port _ < "$row"
+  if ! is_loopback_host "$host" || [[ "$port" != "*" ]]; then
+    rm -f "$row"
+    refuse_cfg "${line@Q} in [connect] is not a loopback rule that names no port, which is all a programming language configuration may add; a rule that reaches further belongs in a base policy"
+  fi
+  cat "$row" >> "$LANGUAGE_CONFIGURATION_CONNECT_FILE"
+  rm -f "$row"
+}
+
 # Reads the programming language configuration of that name and sets LANGUAGE_CONFIGURATION_BASES,
 # the absolute paths of the base policies it names in order, LANGUAGE_PLACEHOLDER_DEFINITIONS and
 # LANGUAGE_PLACEHOLDER_LINES, how and where each placeholder it names is determined, and empties
 # LANGUAGE_CONFIGURATION_PLACEHOLDERS, which determine_language_placeholder fills as placeholders are
-# used. No placeholder is determined here. The file is read with the
+# used, and LANGUAGE_CONFIGURATION_CONNECT_FILE, a rules file holding the rows of its [connect]
+# section as append_connect_rule writes them, empty when it has none. No placeholder is determined
+# here. The file is read with the
 # discipline of a policy cfg: no byte order mark, no NUL, no carriage return, everything from a "#"
 # a comment, nothing before the first section, no unknown section, and every refusal names the file
 # and the line. A configuration that names no base is refused. Takes the name and the folder of
@@ -459,6 +485,7 @@ load_language_configuration() {
   declare -gA LANGUAGE_CONFIGURATION_PLACEHOLDERS=()
   declare -gA LANGUAGE_PLACEHOLDER_DEFINITIONS=()
   declare -gA LANGUAGE_PLACEHOLDER_LINES=()
+  LANGUAGE_CONFIGURATION_CONNECT_FILE="$(new_scratch_file phobos-language-connect.XXXXXX)"
   refuse_unusable_cfg_file "$file"
   refuse_binary_cfg "$file"
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -479,6 +506,7 @@ load_language_configuration() {
     case "$section" in
       base) add_language_base "$line" "$home" ;;
       placeholders) read_language_placeholder_line "$line" "$number" ;;
+      connect) read_language_connect_line "$line" ;;
       *) refuse_cfg "${line@Q} appears before any [section] header" ;;
     esac
   done < "$file"

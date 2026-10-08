@@ -1,0 +1,87 @@
+10    socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_IP) = 3<TCP:[11419046]>
+10    bind(3<TCP:[11419046]>, {sa_family=AF_INET, sin_port=htons(0), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+10    listen(3<TCP:[127.0.0.1:47399]>, 128) = 0
+10    clone(child_stack=0xffff88181a40, flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, parent_tid=[17], tls=0xffff881828c0, child_tidptr=0xffff88182250) = 17
+17    accept4(3<TCP:[127.0.0.1:47399]>,  <unfinished ...>
+10    getsockname(3<TCP:[127.0.0.1:47399]>, {sa_family=AF_INET, sin_port=htons(47399), sin_addr=inet_addr("127.0.0.1")}, [16]) = 0
+10    newfstatat(AT_FDCWD</var/tmp>, "/usr/lib/python3.12/encodings", {st_mode=S_IFDIR|0755, st_size=4096, ...}, 0) = 0
+10    newfstatat(AT_FDCWD</var/tmp>, "/usr/lib/python3.12/encodings/idna.py", {st_mode=S_IFREG|0644, st_size=9710, ...}, 0) = 0
+10    newfstatat(AT_FDCWD</var/tmp>, "/usr/lib/python3.12/encodings/idna.py", {st_mode=S_IFREG|0644, st_size=9710, ...}, 0) = 0
+10    openat(AT_FDCWD</var/tmp>, "/usr/lib/python3.12/encodings/__pycache__/idna.cpython-312.pyc", O_RDONLY|O_CLOEXEC) = 5</usr/lib/python3.12/encodings/__pycache__/idna.cpython-312.pyc>
+10    ioctl(5</usr/lib/python3.12/encodings/__pycache__/idna.cpython-312.pyc>, TCGETS, 0xfffff3142000) = -1 ENOTTY (Inappropriate ioctl for device)
+10    getcwd("/var/tmp", 1024)          = 9
+10    newfstatat(AT_FDCWD</var/tmp>, "/var/tmp", {st_mode=S_IFDIR|S_ISVTX|0777, st_size=4096, ...}, 0) = 0
+10    newfstatat(AT_FDCWD</var/tmp>, "/usr/lib/python3.12", {st_mode=S_IFDIR|0755, st_size=4096, ...}, 0) = 0
+10    newfstatat(AT_FDCWD</var/tmp>, "/usr/lib/python3.12/stringprep.py", {st_mode=S_IFREG|0644, st_size=12917, ...}, 0) = 0
+10    newfstatat(AT_FDCWD</var/tmp>, "/usr/lib/python3.12/stringprep.py", {st_mode=S_IFREG|0644, st_size=12917, ...}, 0) = 0
+10    openat(AT_FDCWD</var/tmp>, "/usr/lib/python3.12/__pycache__/stringprep.cpython-312.pyc", O_RDONLY|O_CLOEXEC) = 5</usr/lib/python3.12/__pycache__/stringprep.cpython-312.pyc>
+10    ioctl(5</usr/lib/python3.12/__pycache__/stringprep.cpython-312.pyc>, TCGETS, 0xfffff3141940) = -1 ENOTTY (Inappropriate ioctl for device)
+10    socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_TCP) = 5<TCP:[11417184]>
+10    connect(5<TCP:[11417184]>, {sa_family=AF_INET, sin_port=htons(47399), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+17    <... accept4 resumed>{sa_family=AF_INET, sin_port=htons(57692), sin_addr=inet_addr("127.0.0.1")}, [16], SOCK_CLOEXEC) = 4<TCP:[127.0.0.1:47399->127.0.0.1:57692]>
+10    recvfrom(5<TCP:[127.0.0.1:57692->127.0.0.1:47399]>,  <unfinished ...>
+17    getsockname(4<TCP:[127.0.0.1:47399->127.0.0.1:57692]>, {sa_family=AF_INET, sin_port=htons(47399), sin_addr=inet_addr("127.0.0.1")}, [128 => 16]) = 0
+17    sendto(4<TCP:[127.0.0.1:47399->127.0.0.1:57692]>, "hello", 5, 0, NULL, 0) = 5
+10    <... recvfrom resumed>"hello", 5, 0, NULL, NULL) = 5
+17    getsockname(4<TCP:[127.0.0.1:47399->127.0.0.1:57692]>, {sa_family=AF_INET, sin_port=htons(47399), sin_addr=inet_addr("127.0.0.1")}, [16]) = 0
+17    getpeername(4<TCP:[127.0.0.1:47399->127.0.0.1:57692]>, {sa_family=AF_INET, sin_port=htons(57692), sin_addr=inet_addr("127.0.0.1")}, [16]) = 0
+10    sendto(5<TCP:[127.0.0.1:57692->127.0.0.1:47399]>, "\x16\x03\x01\x70\x69\x6e\x67", 7, 0, NULL, 0 <unfinished ...>
+17    exit(0 <unfinished ...>
+10    <... sendto resumed>)             = 7
+17    <... exit resumed>)               = ?
+10    openat(AT_FDCWD</var/tmp>, "/etc/hostname", O_RDONLY|O_CLOEXEC) = 4</etc/hostname>
+10    ioctl(4</etc/hostname>, TCGETS, 0xfffff31429f0) = -1 ENOTTY (Inappropriate ioctl for device)
+10    newfstatat(AT_FDCWD</var/tmp>, "/tmp/a", {st_mode=S_IFREG|0644, st_size=0, ...}, 0) = 0
+10    renameat(AT_FDCWD</var/tmp>, "/tmp/a", AT_FDCWD</var/tmp>, "/tmp/b") = 0
+10    mkdirat(AT_FDCWD</var/tmp>, "/tmp/d", 0777) = 0
+10    unlinkat(AT_FDCWD</var/tmp>, "/tmp/d", AT_REMOVEDIR) = 0
+10    clone(child_stack=0xfffff31424b0, flags=CLONE_VM|CLONE_VFORK|SIGCHLD <unfinished ...>
+18    execve("/bin/sh", ["/bin/sh", "-c", "cat /etc/hostname > /dev/null"], 0xfffff31431d8 /* 17 vars */ <unfinished ...>
+10    <... clone resumed>)              = 18
+18    <... execve resumed>)             = 0
+10    wait4(18,  <unfinished ...>
+18    faccessat(AT_FDCWD</var/tmp>, "/etc/ld.so.preload", R_OK) = -1 ENOENT (No such file or directory)
+18    openat(AT_FDCWD</var/tmp>, "/etc/ld.so.cache", O_RDONLY|O_CLOEXEC) = 3</etc/ld.so.cache>
+18    openat(AT_FDCWD</var/tmp>, "/lib/aarch64-linux-gnu/libc.so.6", O_RDONLY|O_CLOEXEC) = 3</usr/lib/aarch64-linux-gnu/libc.so.6>
+18    newfstatat(AT_FDCWD</var/tmp>, "/var/tmp", {st_mode=S_IFDIR|S_ISVTX|0777, st_size=4096, ...}, 0) = 0
+18    newfstatat(AT_FDCWD</var/tmp>, ".", {st_mode=S_IFDIR|S_ISVTX|0777, st_size=4096, ...}, 0) = 0
+18    openat(AT_FDCWD</var/tmp>, "/dev/null", O_WRONLY|O_CREAT|O_TRUNC, 0666) = 3</dev/null<char 1:3>>
+18    newfstatat(AT_FDCWD</var/tmp>, "/var/tmp/opt/core/cat", 0xffffca4e8928, 0) = -1 ENOENT (No such file or directory)
+18    newfstatat(AT_FDCWD</var/tmp>, "/opt/java/openjdk/bin/cat", 0xffffca4e8928, 0) = -1 ENOENT (No such file or directory)
+18    newfstatat(AT_FDCWD</var/tmp>, "/usr/local/sbin/cat", 0xffffca4e8928, 0) = -1 ENOENT (No such file or directory)
+18    newfstatat(AT_FDCWD</var/tmp>, "/usr/local/bin/cat", 0xffffca4e8928, 0) = -1 ENOENT (No such file or directory)
+18    newfstatat(AT_FDCWD</var/tmp>, "/usr/sbin/cat", 0xffffca4e8928, 0) = -1 ENOENT (No such file or directory)
+18    newfstatat(AT_FDCWD</var/tmp>, "/usr/bin/cat", {st_mode=S_IFREG|0755, st_size=67928, ...}, 0) = 0
+18    clone(child_stack=0xffffca4e8930, flags=CLONE_VM|CLONE_VFORK|SIGCHLD <unfinished ...>
+19    execve("/usr/bin/cat", ["cat", "/etc/hostname"], 0xaaaace3f06d8 /* 17 vars */ <unfinished ...>
+18    <... clone resumed>)              = 19
+19    <... execve resumed>)             = 0
+18    wait4(-1,  <unfinished ...>
+19    faccessat(AT_FDCWD</var/tmp>, "/etc/ld.so.preload", R_OK) = -1 ENOENT (No such file or directory)
+19    openat(AT_FDCWD</var/tmp>, "/etc/ld.so.cache", O_RDONLY|O_CLOEXEC) = 3</etc/ld.so.cache>
+19    openat(AT_FDCWD</var/tmp>, "/lib/aarch64-linux-gnu/libc.so.6", O_RDONLY|O_CLOEXEC) = 3</usr/lib/aarch64-linux-gnu/libc.so.6>
+19    openat(AT_FDCWD</var/tmp>, "/usr/lib/locale/locale-archive", O_RDONLY|O_CLOEXEC) = 3</usr/lib/locale/locale-archive>
+19    openat(AT_FDCWD</var/tmp>, "/etc/hostname", O_RDONLY) = 3</etc/hostname>
+19    write(1</dev/null<char 1:3>>, "c5e0e77a1552\n", 13) = 13
+19    exit_group(0)                     = ?
+18    <... wait4 resumed>[{WIFEXITED(s) && WEXITSTATUS(s) == 0}], 0, NULL) = 19
+18    --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=19, si_uid=0, si_status=0, si_utime=0, si_stime=0} ---
+18    wait4(-1, 0xffffca4e8874, WNOHANG, NULL) = -1 ECHILD (No child processes)
+18    exit_group(0)                     = ?
+10    <... wait4 resumed>[{WIFEXITED(s) && WEXITSTATUS(s) == 0}], 0, NULL) = 18
+10    --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=18, si_uid=0, si_status=0, si_utime=0, si_stime=0} ---
+10    socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC, IPPROTO_IP) = 4<UDP:[11417872]>
+10    bind(4<UDP:[11417872]>, {sa_family=AF_INET, sin_port=htons(0), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+10    socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC, IPPROTO_IP) = 6<UDP:[11417875]>
+10    getsockname(4<UDP:[127.0.0.1:43171]>, {sa_family=AF_INET, sin_port=htons(43171), sin_addr=inet_addr("127.0.0.1")}, [16]) = 0
+10    sendto(6<UDP:[11417875]>, "x", 1, 0, {sa_family=AF_INET, sin_port=htons(43171), sin_addr=inet_addr("127.0.0.1")}, 16) = 1
+10    recvfrom(4<UDP:[127.0.0.1:43171]>, "x", 1, 0, NULL, NULL) = 1
+10    getsockname(3<TCP:[127.0.0.1:47399]>, {sa_family=AF_INET, sin_port=htons(47399), sin_addr=inet_addr("127.0.0.1")}, [16]) = 0
+10    getpeername(3<TCP:[127.0.0.1:47399]>, 0xfffff3142718, [16]) = -1 ENOTCONN (Transport endpoint is not connected)
+10    getsockname(5<TCP:[127.0.0.1:57692->127.0.0.1:47399]>, {sa_family=AF_INET, sin_port=htons(57692), sin_addr=inet_addr("127.0.0.1")}, [16]) = 0
+10    getpeername(5<TCP:[127.0.0.1:57692->127.0.0.1:47399]>, 0xfffff3142718, [16]) = -1 ENOTCONN (Transport endpoint is not connected)
+10    getsockname(4<UDP:[127.0.0.1:43171]>, {sa_family=AF_INET, sin_port=htons(43171), sin_addr=inet_addr("127.0.0.1")}, [16]) = 0
+10    getpeername(4<UDP:[127.0.0.1:43171]>, 0xfffff3142718, [16]) = -1 ENOTCONN (Transport endpoint is not connected)
+10    getsockname(6<UDP:[0.0.0.0:42082]>, {sa_family=AF_INET, sin_port=htons(42082), sin_addr=inet_addr("0.0.0.0")}, [16]) = 0
+10    getpeername(6<UDP:[0.0.0.0:42082]>, 0xfffff3142718, [16]) = -1 ENOTCONN (Transport endpoint is not connected)
+10    exit_group(0)                     = ?

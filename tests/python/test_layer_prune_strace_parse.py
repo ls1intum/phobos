@@ -234,3 +234,78 @@ def test_the_golden_trace_holds_the_refusals_inside_the_domain_and_none_of_the_l
     outside = [call for index, call in enumerate(trace.syscalls)
                if call.name == "connect" and call.errno == "EACCES" and not trace.in_domain(index)]
     assert outside, "the golden trace keeps a guard refusal of a layer's own helper outside the domain"
+
+
+def test_iter_calls_keeps_successful_calls_and_their_decoration():
+    line = '16 openat(AT_FDCWD</w>, "/lib/libc.so.6", O_RDONLY|O_CLOEXEC) = 3</usr/lib/libc.so.6>'
+    [call] = list(strace_parse.iter_calls([line]))
+    assert call.result == 3
+    assert call.errno is None
+    assert call.decoration == "</usr/lib/libc.so.6>"
+
+
+def test_a_socket_and_a_device_keep_their_whole_decoration():
+    lines = [
+        ("17 accept4(3<TCP:[127.0.0.1:47399]>, {sa_family=AF_INET, sin_port=htons(57692), "
+         'sin_addr=inet_addr("127.0.0.1")}, [16], SOCK_CLOEXEC) = 4<TCP:[127.0.0.1:47399->127.0.0.1:57692]>'),
+        '18 openat(AT_FDCWD</w>, "/dev/null", O_WRONLY|O_CREAT|O_TRUNC, 0666) = 3</dev/null<char 1:3>>',
+    ]
+    accepted, opened = strace_parse.iter_calls(lines)
+    assert accepted.decoration == "<TCP:[127.0.0.1:47399->127.0.0.1:57692]>"
+    assert opened.decoration == "</dev/null<char 1:3>>"
+
+
+def test_a_failed_call_and_an_undecorated_result_have_no_decoration():
+    lines = [
+        '16 openat(AT_FDCWD</w>, "/etc/missing", O_RDONLY) = -1 ENOENT (No such file or directory)',
+        "16 setsid() = 16",
+    ]
+    assert [call.decoration for call in strace_parse.iter_calls(lines)] == ["", ""]
+
+
+def test_iter_calls_joins_halves_and_yields_every_call_in_log_order():
+    lines = [
+        '7 openat(AT_FDCWD</w>, "a", O_RDONLY <unfinished ...>',
+        '8 openat(AT_FDCWD</w>, "b", O_RDONLY) = 3</w/b>',
+        "7 <... openat resumed>) = 4</w/a>",
+        "8 --- SIGCHLD {si_signo=SIGCHLD} ---",
+    ]
+    calls = list(strace_parse.iter_calls(lines))
+    assert [(call.pid, call.decoration) for call in calls] == [(8, "</w/b>"), (7, "</w/a>")]
+
+
+def test_parse_trace_still_drops_the_successes_it_never_kept():
+    lines = [
+        '16 openat(AT_FDCWD</w>, "/etc/hostname", O_RDONLY) = 3</etc/hostname>',
+        '16 openat(AT_FDCWD</w>, "/etc/shadow", O_RDONLY) = -1 EACCES (Permission denied)',
+    ]
+    kept = strace_parse.parse_trace(lines).syscalls
+    assert [call.errno for call in kept] == ["EACCES"]
+    assert all(call.errno or call.name in strace_parse.KEPT_SUCCESSES for call in kept)
+
+
+def test_the_recorders_options_trace_successes_with_full_decorations_and_a_detached_tracer():
+    options = strace_parse.RECORD_ARGUMENTS
+    assert "-DDD" in options
+    assert "-yy" in options
+    assert "--seccomp-bpf" in options
+    trace_set = options[options.index("-e") + 1].removeprefix("trace=").split(",")
+    for name in ("%file", "%network", "%process", "ioctl", "fchdir", "write", "setsid", "setpgid", "io_uring_setup",
+                 "dup2", "fcntl", "open_by_handle_at"):
+        assert name in trace_set
+
+
+def test_every_golden_record_line_parses_or_is_a_known_non_call():
+    for raw in (FIXTURES / "record.txt").read_text().splitlines():
+        assert strace_parse.parse_line(raw) is not None or strace_parse.is_non_call(raw), raw
+
+
+def test_the_golden_record_yields_the_calls_the_recorder_reads():
+    calls = list(strace_parse.iter_calls((FIXTURES / "record.txt").read_text().splitlines()))
+    names = {call.name for call in calls}
+    assert {"bind", "listen", "connect", "accept4", "getsockname", "sendto", "renameat", "mkdirat", "unlinkat",
+            "execve", "clone"} <= names
+    [connect] = [call for call in calls if call.name == "connect"]
+    assert strace_parse.split_arguments(connect.arguments)[0] == "5<TCP:[11417184]>"
+    hostname_reads = [call for call in calls if call.name == "openat" and call.decoration == "</etc/hostname>"]
+    assert len(hostname_reads) == 2

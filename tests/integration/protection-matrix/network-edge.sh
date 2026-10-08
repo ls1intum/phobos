@@ -197,10 +197,12 @@ v6_case() {
 v6_case "allow [::1]:${PORT}" "::1"
 v6_case "allow ::1" "::1"
 v6_case "allow [::ffff:127.0.0.1]:${PORT}" "::ffff:127.0.0.1"
-v6_case "allow 127.0.0.1:${PORT}" ""
+v6_case "allow 127.0.0.1:${PORT}" "::ffff:127.0.0.1"
 v6_case "allow [::]:${PORT}" ""
 expect_verdict "the name localhost also admits the IPv6 loopback" passed connect6 "allow localhost:${PORT}" -- "$P" tcp6 ::1 "$PORT"
 expect_verdict "and no other IPv6 address" refused connect6 "allow localhost:${PORT}" -- "$P" tcp6 ::2 "$PORT"
+expect_verdict "and the IPv4-mapped spelling of the IPv4 loopback" passed connect6 "allow localhost:${PORT}" -- "$P" tcp6 ::ffff:127.0.0.1 "$PORT"
+expect_verdict "and not the mapped spelling of an address outside loopback" refused connect6 "allow localhost:${PORT}" -- "$P" tcp6 ::ffff:10.0.0.1 "$PORT"
 
 echo
 echo "== which kinds of socket can be made =="

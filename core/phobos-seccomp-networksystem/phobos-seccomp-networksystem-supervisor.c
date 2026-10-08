@@ -4,6 +4,7 @@
 #include "phobos-seccomp-networksystem-datagram.h"
 #include "phobos-seccomp-networksystem-destination.h"
 #include "phobos-seccomp-networksystem-diagnostics.h"
+#include "phobos-seccomp-networksystem-handoff.h"
 #include "phobos-seccomp-networksystem-held-sockets.h"
 #include "phobos-seccomp-networksystem-rules.h"
 #include "phobos-seccomp-networksystem-seccomp-compat.h"
@@ -44,41 +45,6 @@ static constexpr int SOCKET_ARGUMENT_PROTOCOL = 2;
 /* listen(fd, backlog). */
 static constexpr int LISTEN_ARGUMENT_DESCRIPTOR = 0;
 static constexpr int LISTEN_ARGUMENT_BACKLOG = 1;
-/* A shell reports a command killed by a signal as this plus the signal's number. */
-static constexpr int SIGNALLED_EXIT_BASE = 128;
-
-int receive_descriptor(int socket_descriptor) {
-    char payload = 0;
-    struct iovec vector = { .iov_base = &payload, .iov_len = 1 };
-    union {
-        char buffer[CMSG_SPACE(sizeof(int))];
-        struct cmsghdr alignment;
-    } control;
-    memset(&control, 0, sizeof(control));
-
-    struct msghdr message;
-    memset(&message, 0, sizeof(message));
-    message.msg_iov = &vector;
-    message.msg_iovlen = 1;
-    message.msg_control = control.buffer;
-    message.msg_controllen = sizeof(control.buffer);
-
-    ssize_t received;
-    do {
-        received = recvmsg(socket_descriptor, &message, MSG_CMSG_CLOEXEC);
-    } while (received < 0 && errno == EINTR);
-    if (received != 1) {
-        return -1;
-    }
-    struct cmsghdr *header = CMSG_FIRSTHDR(&message);
-    if (header == nullptr || header->cmsg_level != SOL_SOCKET ||
-        header->cmsg_type != SCM_RIGHTS || header->cmsg_len != CMSG_LEN(sizeof(int))) {
-        return -1;
-    }
-    int descriptor = -1;
-    memcpy(&descriptor, CMSG_DATA(header), sizeof(int));
-    return descriptor;
-}
 
 void answer(int notify_descriptor, struct seccomp_notif_resp *response, __u64 id,
             __s64 value, __s32 error) {
@@ -87,7 +53,7 @@ void answer(int notify_descriptor, struct seccomp_notif_resp *response, __u64 id
     response->val = value;
     response->error = error;
     response->flags = 0;
-    if (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_SEND, response) != 0 && errno != ENOENT) {
+    if (!send_notification_response(notify_descriptor, response) && errno != ENOENT) {
         log_verbose("notify send: %s", strerror(errno));
     }
 }
@@ -102,7 +68,7 @@ static void answer_continue(int notify_descriptor, struct seccomp_notif_resp *re
     response->val = 0;
     response->error = 0;
     response->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
-    if (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_SEND, response) != 0 && errno != ENOENT) {
+    if (!send_notification_response(notify_descriptor, response) && errno != ENOENT) {
         log_verbose("notify continue: %s", strerror(errno));
     }
 }
@@ -362,8 +328,9 @@ static void service_connect(int notify_descriptor, struct seccomp_notif *request
     }
     if (!connection_permitted(where.family, where.address, where.port,
                               provenance == FD_TYPE_DGRAM)) {
-        log_verbose("refusing connect to a destination the allow-list does not name, port %u",
-                    (unsigned)where.port);
+        char endpoint[ENDPOINT_TEXT_SIZE];
+        format_endpoint(&where, endpoint, sizeof(endpoint));
+        log_verbose("refusing connect to a destination the allow-list does not name: %s", endpoint);
         answer(notify_descriptor, response, request->id, 0, -EACCES);
         return;
     }
@@ -580,16 +547,6 @@ void supervise(int notify_descriptor) {
     }
     free(request);
     free(response);
-}
-
-int exit_code_from_status(int status) {
-    if (WIFEXITED(status)) {
-        return WEXITSTATUS(status);
-    }
-    if (WIFSIGNALED(status)) {
-        return SIGNALLED_EXIT_BASE + WTERMSIG(status);
-    }
-    return EXIT_CODE_SETUP_ERROR;
 }
 
 #ifdef PHOBOS_CONNECT_GUARD_UNIT_TEST

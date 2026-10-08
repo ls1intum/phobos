@@ -23,7 +23,8 @@ rest exists to take privileges away. None of the following is a vulnerability.
   raw system call cannot step around, enforcing the `[connect]` allow-list by host and port.
   It reads the destination address of the connect, so it holds a rule that names an IP literal
   to that exact address, the name `localhost` to the loopback range (every `127.x.x.x` address and
-  `::1`), a rule that names an IP range to that network, and a rule that names a DNS hostname it cannot tie to an address there to its port
+  `::1`; an IPv4-mapped IPv6 destination such as `::ffff:127.0.0.1` counts as the IPv4 address it
+  maps), a rule that names an IP range to that network, and a rule that names a DNS hostname it cannot tie to an address there to its port
   alone. Such a hostname rule's host is enforced by the egress broker, an HAProxy the network
   layer starts automatically for such a rule and that checks the TLS host name the guard cannot
   see; the network layer refuses an exact-name rule when no resolver is given, so an instructor
@@ -65,13 +66,18 @@ rest exists to take privileges away. None of the following is a vulnerability.
   directory was needed. Its orchestrator therefore starts processes and interprets their
   failures, and its output becomes the allow-list the sandbox later trusts. The discovery
   phase uses Bubblewrap to hide directories; the sandbox an exercise runs in does not.
+  The layer pruner beside it (`docker/prune_phase/layers/`, `var/tmp/helpers/layer_prune/`)
+  runs the reference under the grading layers instead and records their refusals with
+  `strace`. strace and the containment probe are installed in the prune image only, never in
+  the run-phase image a submission is graded in, and the prune container needs no privilege.
 - The Dockerfiles under `docker/` extend the Artemis test images and compile the C products.
   The run-phase image needs no user namespaces, no added capabilities and no security
   options: Landlock, the connect guard and the timeout are all self-imposed by the
   unprivileged process. The container the grader starts should add `--network none` and
   cgroup limits, which are the outer boundary Phobos cannot set from inside itself.
 
-The three C products, `phobos-landlock-filesystem-and-networksystem`, the connect guard and the timeout's group lock, are not
+The four C products, `phobos-landlock-filesystem-and-networksystem`, the connect guard, the
+timeout's group lock and the report-only supervisor `phobos-seccomp-filesystem`, are not
 committed. They are compiled inside the run-phase image from the source under `core/`, and CI
 checks the copies the image ships are position-independent with full RELRO. Where the connect guard binary is missing
 the network layer refuses to start rather than run the command without connect supervision, so a
@@ -94,6 +100,36 @@ same footing as the reference exercises the pruning phase runs. They must be sup
 instructor and must never be writable by the code being graded; a submission that could edit
 its own exercise configuration could grant itself any access, and that is an integration
 requirement Phobos relies on rather than a boundary it enforces.
+
+An Ares 2 security policy given to `--config` grants access exactly as an exercise
+configuration does, so the same holds for it: it must come from the instructor's test
+repository, never from the student's assignment tree. In an Artemis build a
+`security-policy.yaml` usually sits in the test repository's `src/test/resources`, and a
+grading script that searched the merged working tree for such a file could pick up a copy the
+submission placed there. The values an import depends on are operator input in the same way:
+the project root (`--project-root`, or the tail flags' last `--chdir`), which must be the
+directory the build tool starts the test JVM in, and the placeholder values a programming
+language configuration determines from the environment, the `PATH` and the password database
+of the process that runs `phobos.sh`. All of them are fixed before the command is started; a
+grading setup that hands `phobos.sh` an environment the submission influenced breaks this.
+
+A path a policy names is resolved through its symbolic links when the filesystem layer
+applies it, just before the command starts, and by then the submission is in place. A symbolic
+link the submission places at any component of a path that is only read or executed, or at any
+component but the last of a path that may be changed (the enforcer refuses a changeable path
+that is itself a link), makes the grant land where the link points. For an Ares 2 policy this is
+a rule where the import can see the risk: a path the import names that reaches the project root,
+which usually holds the submission's checkout, through a symbolic link, or through a name for the
+root that leads to some other place than the root itself, and so resolves to somewhere other than
+where the path says, is refused with the file and the line. A link before the path enters the root
+that leads away from it, such as `/bin` to `/usr/bin`, stays allowed. The project root itself must
+be the real path of a project directory: `/`, a root that reaches its directory through a symbolic
+link and a root with a `..` segment are refused with PHB-EPOLICY, from `--project-root` always
+and from the last `--chdir` where an imported path needs the root, because what lies below such a root cannot be told from
+a link. The check is made when the specification is built, so a link the submission places between that moment and the start of the command is not
+seen; the grader builds the specification after the submission is in place and starts the command
+right after. A path in an exercise configuration that lies in the submission's tree carries the
+risk as before: grant such a path only where no component of it is the submission's to choose.
 
 ## The environment Phobos is started in
 
@@ -118,22 +154,24 @@ before it runs any program or `cd`:
 - **CDPATH is unset**, so the `cd` an entry point makes to find its own directory goes where its
   argument says, and the command does not inherit it.
 - **TMPDIR and the C library's own path variables keep only what is absolute.** `TMPDIR` is unset when it
-  is not absolute, so the network layer's scratch files, made with `mktemp -t`, are not created
-  beneath the current directory. The relative entries of `GCONV_PATH` (where the C library loads
+  is not absolute, so no program Phobos or the command starts makes its temporary files beneath
+  the current directory. The relative entries of `GCONV_PATH` (where the C library loads
   character-set modules from, as code), `LOCPATH` and `NLSPATH` are removed, and `HOSTALIASES`
   and `TZDIR` are unset when they are not absolute, since every program Phobos starts would
   resolve them against the current directory. Absolute values are kept.
 
 Each entry point says on stderr what it removed from these, CDPATH and an invented PATH aside.
+
+The interpreter is not looked up either. Every script under `core/` begins with `#!/bin/bash`, so
+an entry point started as a program runs the system's bash whatever the caller's PATH holds, and
+so does every layer it starts afterwards by its absolute path. With `#!/usr/bin/env bash`, `env`
+would find `bash` through the caller's PATH before the script ran a line, and a relative entry
+ahead of bash's own directory would run a `bash` from the current directory instead of Phobos.
+The run-phase image, and every image built on it, has bash at `/bin/bash`.
+
 Some of the same class happens before a script's first line, so no script can undo it, and these
 are integration requirements on the grader:
 
-- **Start Phobos with a PATH of absolute directories, or through an absolute interpreter**
-  (`/bin/bash /var/tmp/opt/core/phobos.sh ...`). Each entry point begins with
-  `#!/usr/bin/env bash`, and `env` finds `bash` through the caller's PATH, so a relative entry
-  ahead of bash's own directory runs a `bash` from the current directory instead of Phobos.
-  The layers Phobos starts afterwards are named by their absolute paths, and the `bash` of
-  their own `#!` lines is found through the cleaned PATH.
 - **Start Phobos without `BASH_ENV`.** Bash sources the file it names before the first line of
   every non-interactive script, Phobos's own among them, and resolves a relative name against
   the current directory. `ENV` is read only by interactive shells and does not reach Phobos.
@@ -145,9 +183,21 @@ are integration requirements on the grader:
   character-set modules through a relative `LOCPATH` or `GCONV_PATH` before they are cleaned for
   everything after it.
 
-The simplest way to meet all of these is a minimal environment of absolute values:
+The simplest way to meet both is a minimal environment of absolute values:
 `env -i PATH=/usr/local/bin:/usr/bin:/bin /var/tmp/opt/core/phobos.sh --config exercise.cfg -- ./gradlew test`,
 adding back only what the command needs.
+
+## A run's own files are out of the command's reach
+
+Every temporary file Phobos makes for a run, the port lists the network layer builds its Landlock
+rules from among them, lives in the run's specification directory, most of them in its scratch
+subdirectory. The policy program refuses to place a specification directory it builds beneath a
+write path; one handed straight to a layer is the caller's to place. Each layer that makes such
+files sets the scratch directory itself, rather than taking `PHOBOS_SCRATCH` or `TMPDIR` from its
+environment, and a helper called without one refuses with `PHB-ERUNTIME` rather than fall back to
+`TMPDIR`, or to `/tmp`, which the shipped policies make writable, so the command of a concurrent
+run in the same container could see such a file, and as the same user replace it, while another
+run still reads its rules from it.
 
 ## Inbound filtering assumes a networked container, and is defence in depth, not a boundary
 

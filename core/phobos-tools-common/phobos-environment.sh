@@ -1,16 +1,16 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 # The environment an entry point is started in, made safe to look things up in.
 #
 # A grader may start Phobos with the submission's tree as the current directory, and the
 # caller's PATH may hold an entry that names that directory: ".", any other relative path, an
 # empty entry (a leading or trailing colon, or two in a row), or one beginning with a tilde,
-# which bash expands but execvp, and so env in every #! line and the enforcers, takes as a
-# directory in the current one. Every external program Phobos runs before the sandbox exists
+# which bash expands but execvp, and so GNU timeout and the enforcers, takes as a directory in
+# the current one. Every external program Phobos runs before the sandbox exists
 # would then be looked up there first. Where the environment has no PATH, bash invents one, and
 # some builds end it in ".". CDPATH would likewise move the cd an entry point makes to find its
-# own directory, a relative TMPDIR would put the network layer's scratch files in the
-# submission's tree, and the C library resolves a relative entry of GCONV_PATH (modules it
+# own directory, a relative TMPDIR would make every program that honours it, mktemp -t among
+# them, put its temporary files in the submission's tree, and the C library resolves a relative entry of GCONV_PATH (modules it
 # loads as code), LOCPATH, NLSPATH, HOSTALIASES and TZDIR there in every program it runs.
 #
 # Every entry point sources this file first, before phobos-common.sh, by a path it builds in
@@ -19,9 +19,9 @@
 # only assigns plain variables and is sourced again by phobos-common.sh to no effect. Its notices
 # are therefore plain lines rather than _log's, whose timestamp needs date and phobos-log.sh.
 #
-# What it cannot reach is stated in SECURITY.md: the #! line finds bash through the caller's
-# PATH before any of this runs, and bash reads BASH_ENV, and the dynamic loader LD_LIBRARY_PATH,
-# LD_PRELOAD and LD_AUDIT, before the first line of a script.
+# What it cannot reach is stated in SECURITY.md: bash reads BASH_ENV, and the dynamic loader
+# LD_LIBRARY_PATH, LD_PRELOAD and LD_AUDIT, before the first line of a script. The #! line of
+# every script here names /bin/bash, so bash itself is never looked up through PATH.
 # shellcheck source=phobos-constants.sh
 source "${BASH_SOURCE[0]%/*}/phobos-constants.sh"
 

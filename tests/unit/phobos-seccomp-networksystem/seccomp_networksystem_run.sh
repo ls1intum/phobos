@@ -37,6 +37,7 @@ MODULES=(
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-datagram.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-destination.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-diagnostics.c"
+  "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-handoff.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-held-sockets.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-options.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-resolve.c"
@@ -57,6 +58,7 @@ WRAPS=(
   -Wl,--wrap=getrlimit
   -Wl,--wrap=dup2
   -Wl,--wrap=signal
+  -Wl,--wrap=sigaction
   -Wl,--wrap=kill
   -Wl,--wrap=execvp
   -Wl,--wrap=_exit

@@ -1,0 +1,3 @@
+# The fixture session of record_replay.sh: the command prints its marker itself, so the script only
+# waits for it. Nothing is typed, so the echo of a typed line can never satisfy the expectation.
+expect OK-DONE

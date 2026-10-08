@@ -176,8 +176,9 @@ static bool destination_permitted(const struct sockaddr_storage *name) {
         return false;
     }
     if (!connection_permitted(where.family, where.address, where.port, true)) {
-        log_verbose("refusing a datagram to a destination the allow-list does not name, port %u",
-                    (unsigned)where.port);
+        char endpoint[ENDPOINT_TEXT_SIZE];
+        format_endpoint(&where, endpoint, sizeof(endpoint));
+        log_verbose("refusing a datagram to a destination the allow-list does not name: %s", endpoint);
         return false;
     }
     return true;

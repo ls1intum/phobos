@@ -422,4 +422,19 @@ if ! grep -q '^START' "$PM_OUT" && (( PM_STATUS == PHB_EPOLICY )) && grep -q 'no
 run_pm --config "$c_rw" -- "$P" read "$PM/none/secret.txt"
 if op_failed_with open $DENIED_ERRNOS; then ok "a write grant does not grant reading elsewhere"; else bad "a write grant does not grant reading elsewhere" "$(pm_describe)"; fi
 
+echo
+echo "== an imported Ares 2 policy =="
+a_ro="$(ares_cfg ares_ro "fs $PM/ro r")"
+a_rw="$(ares_cfg ares_rw "fs $PM/rw rw")"
+a_exec_read="$(ares_cfg ares_exec_read "fs $PM/exec r")"
+a_exec="$(ares_cfg ares_exec "fs $PM/exec rx")"
+a_nothing="$(ares_cfg ares_nothing "fs $PM/none -")"
+allow_case "a tree granted only by an imported readAllFiles can be read" "$a_ro" read -- "$P" read "$PM/ro/data.txt"
+deny_case "and a sibling the import does not name is denied" fs "$a_ro" open "$DENIED_ERRNOS" -- "$P" read "$PM/none/secret.txt"
+deny_case "and the imported tree cannot be written, since overwriteAllFiles is false" fs "$a_ro" open "$DENIED_ERRNOS" -- "$P" open "$PM/ro/data.txt" w
+allow_case "a tree granted an imported overwriteAllFiles can be written" "$a_rw" open -- "$P" open "$PM/rw/data.txt" w
+deny_case "a program under an entry with executeAllFiles false does not run" fs "$a_exec_read" exec "$DENIED_ERRNOS" -- "$P" exec "$PM/exec/pprobe-static" execd
+allow_case "and under one with executeAllFiles true it runs" "$a_exec" exec -- "$P" exec "$PM/exec/pprobe-static" execd
+deny_case "an entry with every flag false grants nothing" fs "$a_nothing" open "$DENIED_ERRNOS" -- "$P" read "$PM/none/secret.txt"
+
 finish

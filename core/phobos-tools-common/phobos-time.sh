@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 # The timeout contract: how a value is spelled, compared and read back.
 #

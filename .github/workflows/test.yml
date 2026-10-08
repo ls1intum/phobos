@@ -45,7 +45,8 @@ jobs:
         run: |
           for script in var/tmp/pruning/run_minimal_fs_all.sh var/tmp/pruning/detect_minimal_fs.sh \
                         core/phobos.sh core/phobos-policysystem.sh core/phobos-filesystem.sh \
-                        core/phobos-networksystem.sh core/phobos-resourcesystem.sh core/phobos-timeoutsystem.sh; do
+                        core/phobos-networksystem.sh core/phobos-resourcesystem.sh core/phobos-timeoutsystem.sh \
+                        var/tmp/helpers/layer_record/phobos-record; do
             if [ ! -x "${script}" ]; then
               echo "::error file=${script}::not executable, so it cannot be started as a program"
               exit 1
@@ -65,6 +66,10 @@ jobs:
             name="$(basename "${suite}")"
             case "${name}" in
               harness.sh | lib.sh | run-all.sh | policy-redundancy-probe.sh) continue ;;
+            esac
+            # A fixture's script is an exercise a suite runs, not a suite of its own.
+            case "${suite}" in
+              */*-fixture/*) continue ;;
             esac
             if ! grep -rqF -- "${name}" .github/workflows; then
               echo "::error file=${suite}::no workflow starts this suite, so it runs nowhere"
@@ -126,6 +131,11 @@ jobs:
       - name: No entry point looks a program up in the current directory
         if: ${{ !cancelled() }}
         run: bash tests/integration/startup_environment.sh
+      # Every temporary file of a run lies in its own specification directory, out of the reach of
+      # the command of a concurrent run, and never in TMPDIR, or /tmp when it is unset.
+      - name: A run's temporary files stay in its specification directory
+        if: ${{ !cancelled() }}
+        run: bash tests/integration/scratch_location.sh
 
       # How the network allow-list becomes Landlock TCP-port rules: a concrete port is
       # enforced, a loopback host with no port is tolerated, a non-loopback host with no
@@ -159,6 +169,19 @@ jobs:
       - name: No programming language in the code
         if: ${{ !cancelled() }}
         run: bash tests/unit/phobos-tools-policysystem/no_language_in_code.sh
+
+      # How an Ares 2 policy becomes the parsed state a .cfg gives: every field the import maps is
+      # mapped as the documentation says, and every element whose translation would widen or narrow
+      # the sandbox without saying so is refused with its line.
+      - name: The Ares 2 policy import
+        if: ${{ !cancelled() }}
+        run: bash tests/unit/phobos-tools-policysystem/ares_policy.sh
+
+      # The policy program given an Ares 2 policy: base selection by the programming language
+      # configuration, the additive fold beside a .cfg, the project root and the covered-entry skip.
+      - name: The policy program with an Ares 2 policy
+        if: ${{ !cancelled() }}
+        run: bash tests/integration/ares_policy_program.sh
 
       - name: The connect guard enforces the allow-list by host and port
         if: ${{ !cancelled() }}

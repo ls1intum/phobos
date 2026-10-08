@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 set -euo pipefail
 # This script's directory, found in bash alone so that PATH and CDPATH are cleaned before any
@@ -92,6 +92,7 @@ EXIT STATUS
   2         phobos-networksystem.sh was called the wrong way (PHB_EXIT_USAGE)
   11        the policy is invalid (PHB-EPOLICY)
   15        the guard, the broker or the inbound filter could not be started (PHB-ERUNTIME)
+  16        the command ran but the guard could not read its exit status (PHB-ESTATUS)
 
 EXAMPLES
   phobos-networksystem.sh --config exercise.cfg -- ./gradlew test
@@ -158,7 +159,7 @@ if (( ${#CONFIGS[@]} > 0 )); then
   shift
   build_owned_spec_from_configs "$HERE" "$SPEC_PARENT" "$TAIL_FLAGS_FILE_OPT" "${CONFIGS[@]}"
   set +e
-  run_forwarding_signals bash "${BASH_SOURCE[0]}" "${LAYER_FLAGS[@]}" "$BUILT_SPEC_DIR" -- "$@"
+  run_forwarding_signals /bin/bash "${BASH_SOURCE[0]}" "${LAYER_FLAGS[@]}" "$BUILT_SPEC_DIR" -- "$@"
   rc=$?
   set -e
   exit "$rc"
@@ -166,6 +167,14 @@ fi
 
 [[ $# -ge 3 && "$2" == "--" ]] || usage
 SPEC_DIR="$1"; shift 2
+
+# The temporary files this layer makes, the port lists it builds the Landlock rules from among
+# them, go under the specification directory, which lies outside every write path and is removed
+# whole. Set here rather than inherited, so that neither TMPDIR, or /tmp when it is unset, which
+# the command of a concurrent run may write, nor a PHOBOS_SCRATCH left in the environment decides
+# where they go.
+PHOBOS_SCRATCH="${SPEC_DIR}/${PHB_SPEC_SCRATCH}"
+mkdir -p "$PHOBOS_SCRATCH"
 
 # The HAProxy children this layer starts, stopped by end_network_layer however the layer ends.
 BROKER_PID=""

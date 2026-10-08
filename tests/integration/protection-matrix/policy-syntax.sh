@@ -68,7 +68,7 @@ for line in \
   "allow 127.0.0.1" "allow 127.0.0.1:80" "allow 127.0.0.1:65535" "allow  127.0.0.1:80" "allow 127.0.0.1:80 tcp" \
   "allow 10.0.0.0/8:80" "allow 127.0.0.1/32:80" "allow [::1]" "allow [::1]:80" "allow ::1" "allow [::]:80" \
   "allow [::ffff:127.0.0.1]:80" "allow localhost" "allow localhost:80" "allow *:80" \
-  "allow 127.0.0.1:*"; do
+  "allow 127.0.0.1:*" "allow 127.0.0.1/32" "allow 127.9.9.9" "allow 0:0:0:0:0:0:0:1" "allow [::ffff:127.0.0.1]"; do
   accepted "[connect] ${line}" "[connect]" "$line"
 done
 
@@ -82,7 +82,8 @@ for line in \
   "allow 256.1.1.1:80" "allow 1.2.3:80" "allow 1.2.3.4.5:80" "allow 127.1:80" "allow 2130706433:80" "allow 01.2.3.4:80" \
   "allow 127.0.0.1/33:80" "allow 127.0.0.1/-1:80" "allow 127.0.0.1/abc:80" "allow 127.0.0.1/:80" "allow 0.0.0.0/0:80" \
   "allow [::/0]:80" "allow [::1/129]:80" "allow 127.0.0.1:" "allow [::1]:" "allow [::1::2]:80" "allow [fe80::1%eth0]:80" \
-  "allow example.org/24:80"; do
+  "allow example.org/24:80" "allow 127.0.0.1/1" "allow 127.0.0.0/8" "allow 127.0.0.1/31" "allow 127.evil.example" \
+  "allow 128.0.0.1" "allow [::ffff:128.0.0.1]" "allow [::1/64]"; do
   refused "[connect] ${line}" "$PHB_EPOLICY" "[connect]" "$line"
 done
 
@@ -199,6 +200,57 @@ refused "nproc=0x10" "$PHB_EPOLICY" "[limits]" "nproc=0x10"
 refused "a decimal point in a count" "$PHB_EPOLICY" "[limits]" "nproc=1.5"
 refused "a sign in front of a count" "$PHB_EPOLICY" "[limits]" "cpu=+5"
 refused "an empty value for a count" "$PHB_EPOLICY" "[limits]" "cpu="
+
+echo
+echo "== Ares 2 policies =="
+# ares_accepted TITLE ENTRY...: the imported policy is accepted and the command runs and ends with status 0.
+ares_accepted() {
+  local title="$1"
+  local config
+  shift
+  config="$(ares_cfg syntax "$@")"
+  run_pm --config "$config" -- "$P" cwd
+  if started && (( PM_STATUS == 0 )); then ok "accepted: an Ares 2 policy with ${title}"; else bad "accepted: an Ares 2 policy with ${title}" "$(pm_describe)"; fi
+}
+# ares_refused TITLE FROM TO: the imported policy with the line FROM replaced by TO is refused with PHB-EPOLICY before
+# the command is reached.
+ares_refused() {
+  local title="$1"
+  local config
+  config="$(ares_cfg syntax "fs $PM/ro r" "net 127.0.0.1 80")"
+  sed -i "s|$2|$3|" "$config"
+  run_pm --config "$config" -- "$P" cwd
+  if ! started && (( PM_STATUS == PHB_EPOLICY )); then ok "refused with ${PHB_EPOLICY}: an Ares 2 policy with ${title}"; else bad "refused: an Ares 2 policy with ${title}" "$(pm_describe)"; fi
+}
+ares_accepted "no entry at all"
+ares_accepted "a read entry" "fs $PM/ro r"
+ares_accepted "every right on a tree" "fs $PM/rw rwcxd"
+ares_accepted "an entry that grants nothing" "fs $PM/none -"
+ares_accepted "a loopback network entry with a port" "net 127.0.0.1 80"
+ares_accepted "localhost on every port" "net localhost 0"
+ares_accepted "a timeout" "timeout 30000"
+# The shipped configuration determines these three from the image: the JDK the java on the PATH belongs to, the password
+# database's home of the user running the suite, and /tmp.
+ares_accepted "the shipped configuration's three placeholders" 'fs ${java.home}/lib r' 'fs ${user.home} r' 'fs ${java.io.tmpdir} r'
+run_pm --debug --config "$PM/cfg/syntax.yaml" -- "$P" cwd
+if grep -q "\${java.home} is $(dirname "$(dirname "$(readlink -f "$(command -v java)")")")" "$PM_ERR" && grep -q "\${java.io.tmpdir} is /tmp" "$PM_ERR" \
+  && grep -q "\${user.home} is $(getent passwd "$(id -u)" | cut -d: -f6)" "$PM_ERR"; then
+  ok "and each resolves to what the image and the password database say"
+else
+  bad "the shipped configuration's placeholders resolve to what the image says" "$(pm_describe)"
+fi
+ares_refused "version 2" "PolicyVersion: 1" "PolicyVersion: 2"
+ares_refused "an unknown configuration" "$PM_ARES_CONFIGURATION" "NO_SUCH_CONFIGURATION"
+ares_refused "a boolean spelt yes" "readAllFiles: true" "readAllFiles: yes"
+ares_refused "a quoted port" "onThePort: 80" "onThePort: \"80\""
+ares_refused "a port past 65535" "onThePort: 80" "onThePort: 70000"
+ares_refused "a connection opened but no data sent" "sendData: true" "sendData: false"
+ares_refused "the whole file system as a path" "\"$PM/ro\"" "\"*\""
+ares_refused "a path that does not exist" "\"$PM/ro\"" "\"$PM/no-such-path\""
+ares_refused "a '..' segment" "\"$PM/ro\"" "\"$PM/ro/../none\""
+ares_refused "a placeholder the configuration does not name" "\"$PM/ro\"" "\"\${HOME}/x\""
+ares_refused "an unknown key" "theFollowingClassesAreTestClasses: \\[\\]" "theFollowingClassesAreTestClasses: []\\n  unknownKey: 1"
+ares_refused "a timeout of 0" "regardingTimeouts: \\[\\]" "regardingTimeouts:\\n      - timeout: 0"
 
 echo
 echo "== section headers and the shape of a file =="

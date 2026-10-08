@@ -39,6 +39,7 @@
 #undef main
 
 #include "../../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-diagnostics.h"
+#include "../../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-model.h"
 #include "../../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-options.h"
 #include "../../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-path-rule.h"
 #include "../../../core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-ruleset.h"
@@ -76,6 +77,15 @@ struct syscall_record {
     char entered_directory[RECORDED_PATH_LENGTH];
     size_t closed_descriptor_count;
     int closed_descriptor[RECORDED_RULE_LIMIT];
+    unsigned int sequence;
+    unsigned int restricted_at;
+    unsigned int seccomp_at;
+    unsigned int seccomp_calls;
+    unsigned int seccomp_operation;
+    unsigned int seccomp_flags;
+    unsigned int seccomp_length;
+    unsigned int seccomp_first_code;
+    unsigned int seccomp_first_value;
 };
 
 static struct syscall_record *record;
@@ -100,6 +110,7 @@ static int fail_create = 0;
 static int fail_add_path = 0;
 static int fail_add_port = 0;
 static int fail_restrict = 0;
+static int fail_seccomp = 0;
 static int fail_open = 0;
 static int fail_fstat = 0;
 static int fail_prctl = 0;
@@ -107,6 +118,8 @@ static int fail_chdir = 0;
 static int fail_exec = 0;
 static int force_symlink = 0;
 static int force_regular_file = 0;
+/* The model cases compare real inodes, so they let fstat through to the kernel. */
+static int pass_fstat_through = 0;
 /* Descriptor 0 is a descriptor like any other. The tool must not read it as a
  * failure, and handing it out costs no real file, which is what lets the case
  * with a full rule table run without exhausting the process. */
@@ -129,7 +142,11 @@ int __wrap_open(const char *path, int flags, ...) {
 }
 
 int __real___fxstat(int ver, int fd, struct stat *st);
+int __real_fstat(int fd, struct stat *st);
 int __wrap_fstat(int fd, struct stat *st) {
+    if (pass_fstat_through) {
+        return __real_fstat(fd, st);
+    }
     if (fail_fstat) {
         errno = EIO;
         return -1;
@@ -204,8 +221,26 @@ static long mock_add_rule(int ruleset_descriptor, int rule_type, const void *rul
 
 static long mock_restrict_self(int ruleset_descriptor) {
     record->restricted_ruleset_descriptor = ruleset_descriptor;
+    record->restricted_at = ++record->sequence;
     if (fail_restrict) {
         errno = EPERM;
+        return -1;
+    }
+    return 0;
+}
+
+/* Stands in for seccomp, which the enforcer calls only to install the report marker. */
+static long mock_seccomp(unsigned int operation, unsigned int flags,
+                         const struct sock_fprog *program) {
+    record->seccomp_calls++;
+    record->seccomp_at = ++record->sequence;
+    record->seccomp_operation = operation;
+    record->seccomp_flags = flags;
+    record->seccomp_length = program->len;
+    record->seccomp_first_code = program->filter[0].code;
+    record->seccomp_first_value = program->filter[0].k;
+    if (fail_seccomp) {
+        errno = EINVAL;
         return -1;
     }
     return 0;
@@ -237,6 +272,10 @@ long __wrap_syscall(long number, ...) {
         result = mock_add_rule(ruleset_descriptor, rule_type, rule_attributes);
     } else if (number == SYSCALL_NUMBER_LANDLOCK_RESTRICT_SELF) {
         result = mock_restrict_self(va_arg(arguments, int));
+    } else if (number == SYS_seccomp) {
+        unsigned int operation = va_arg(arguments, unsigned int);
+        unsigned int flags = va_arg(arguments, unsigned int);
+        result = mock_seccomp(operation, flags, va_arg(arguments, const struct sock_fprog *));
     }
     va_end(arguments);
     return result;
@@ -353,6 +392,7 @@ static void reset_mocks(void) {
     fail_add_path = 0;
     fail_add_port = 0;
     fail_restrict = 0;
+    fail_seccomp = 0;
     fail_open = 0;
     fail_fstat = 0;
     fail_prctl = 0;
@@ -360,6 +400,7 @@ static void reset_mocks(void) {
     fail_exec = 0;
     force_symlink = 0;
     force_regular_file = 0;
+    pass_fstat_through = 0;
     force_path_descriptor_zero = 0;
     verbose = 0;
 }
@@ -1501,6 +1542,291 @@ static void test_file_versus_directory(void) {
           (DIRECTORY_ONLY_ACCESS_RIGHTS & LANDLOCK_ACCESS_FILESYSTEM_EXECUTE) == 0);
 }
 
+/* ------------------------------------------------------ the model of the ruleset */
+
+/* Room for a refusal the policy module words. */
+static constexpr size_t MODEL_ERROR_LENGTH = 512;
+
+/* Room for one path of the temporary tree the model cases build, and for its root, which is kept
+ * short enough that every path beneath it fits. */
+static constexpr size_t MODEL_PATH_LENGTH = 256;
+static constexpr size_t MODEL_ROOT_LENGTH = 64;
+
+/* The modes the model cases create their directories and files with, readable by this user only. */
+static constexpr mode_t MODEL_DIRECTORY_MODE = 0700;
+static constexpr mode_t MODEL_FILE_MODE = 0600;
+
+/* The temporary tree the model cases anchor their rules on, so they depend on no path of the
+ * machine they run on: a directory granted read and execute, one granted read and write, one
+ * named by no rule, a file in each, and a symbolic link to the first. */
+struct model_tree {
+    char root[MODEL_ROOT_LENGTH];
+    char granted[MODEL_PATH_LENGTH];
+    char granted_file[MODEL_PATH_LENGTH];
+    char writable[MODEL_PATH_LENGTH];
+    char writable_file[MODEL_PATH_LENGTH];
+    char unnamed[MODEL_PATH_LENGTH];
+    char unnamed_file[MODEL_PATH_LENGTH];
+    char link[MODEL_PATH_LENGTH];
+};
+
+/* Creates an empty regular file with an explicit mode. mknod rather than open, because the suite
+ * wraps open and close. */
+static void make_model_file(const char *path) {
+    if (mknod(path, S_IFREG | MODEL_FILE_MODE, 0) != 0) {
+        perror(path);
+        exit(1);
+    }
+}
+
+static void make_model_tree(struct model_tree *tree) {
+    snprintf(tree->root, sizeof(tree->root), "/tmp/phobos-model-XXXXXX");
+    if (mkdtemp(tree->root) == NULL) {
+        perror("mkdtemp");
+        exit(1);
+    }
+    snprintf(tree->granted, sizeof(tree->granted), "%s/granted", tree->root);
+    snprintf(tree->granted_file, sizeof(tree->granted_file), "%s/granted/file", tree->root);
+    snprintf(tree->writable, sizeof(tree->writable), "%s/writable", tree->root);
+    snprintf(tree->writable_file, sizeof(tree->writable_file), "%s/writable/file", tree->root);
+    snprintf(tree->unnamed, sizeof(tree->unnamed), "%s/unnamed", tree->root);
+    snprintf(tree->unnamed_file, sizeof(tree->unnamed_file), "%s/unnamed/file", tree->root);
+    snprintf(tree->link, sizeof(tree->link), "%s/link", tree->root);
+    if (mkdir(tree->granted, MODEL_DIRECTORY_MODE) != 0
+        || mkdir(tree->writable, MODEL_DIRECTORY_MODE) != 0
+        || mkdir(tree->unnamed, MODEL_DIRECTORY_MODE) != 0
+        || symlink(tree->granted, tree->link) != 0) {
+        perror("model tree");
+        exit(1);
+    }
+    make_model_file(tree->granted_file);
+    make_model_file(tree->writable_file);
+    make_model_file(tree->unnamed_file);
+}
+
+static void remove_model_tree(const struct model_tree *tree) {
+    unlink(tree->granted_file);
+    unlink(tree->writable_file);
+    unlink(tree->unnamed_file);
+    unlink(tree->link);
+    rmdir(tree->granted);
+    rmdir(tree->writable);
+    rmdir(tree->unnamed);
+    rmdir(tree->root);
+}
+
+/* The model is built in static storage: it holds a whole rule table and the options beside it. */
+static struct policy_model model_under_test;
+
+static bool build_model(char **arguments, int landlock_version, char *error) {
+    int count = 0;
+    while (arguments[count] != NULL) {
+        count++;
+    }
+    return build_policy_model(count, arguments, landlock_version, &model_under_test, error,
+                              MODEL_ERROR_LENGTH);
+}
+
+/* The checked parser answers a refusal with its reason, and a call made the wrong way with an
+ * empty one, and in neither case ends the process: a supervisor that linked it would otherwise
+ * end with it, and every call its filter traps would fail. The exiting wrapper the enforcer uses
+ * is held to its old behaviour by the cases above. */
+static void test_parse_arguments_checked(void) {
+    printf("\nThe parser that answers rather than exits\n");
+    static struct options options;
+    char error[MODEL_ERROR_LENGTH];
+    char *bad_letter[] = {"enforcer", "--rights=rz", "/usr", "--", "/bin/true", NULL};
+    check("a right that does not exist is refused without exiting",
+          !parse_arguments_checked(5, bad_letter, &options, error, sizeof(error)));
+    check("and the refusal names the letter", strstr(error, "'z' is not a right") != NULL);
+
+    char *unknown[] = {"enforcer", "--nonsense", "x", "--", "/bin/true", NULL};
+    check("an unknown option is refused without exiting",
+          !parse_arguments_checked(5, unknown, &options, error, sizeof(error)));
+    check("and leaves the reason empty, so the caller prints the usage", error[0] == '\0');
+
+    char *no_command[] = {"enforcer", "--rights=r", "/usr", "--", NULL};
+    check("nothing to run is refused with an empty reason",
+          !parse_arguments_checked(4, no_command, &options, error, sizeof(error))
+              && error[0] == '\0');
+
+    char *bad_port[] = {"enforcer", "--bind-tcp", "http", "--", "/bin/true", NULL};
+    check("a port that is not a number is refused with its reason",
+          !parse_arguments_checked(5, bad_port, &options, error, sizeof(error))
+              && strstr(error, "not a TCP port: 'http'") != NULL);
+
+    char *verbose_call[] = {"enforcer", "--verbose", "--rights=rx", "/usr", "--", "/bin/true",
+                            NULL};
+    check("a good call is read",
+          parse_arguments_checked(6, verbose_call, &options, error, sizeof(error))
+              && options.path_rule_count == 1 && options.rules[0].executable
+              && strcmp(options.command[0], "/bin/true") == 0);
+    check("--verbose is recorded in the options, not in the diagnostics",
+          options.verbose && !verbose);
+
+    unsigned long value = 0;
+    check("a number in range is read",
+          parse_number_checked("8080", 1, 65535, "port", &value, error, sizeof(error))
+              && value == 8080);
+    check("an empty number is refused as empty",
+          !parse_number_checked("", 1, 65535, "port", &value, error, sizeof(error))
+              && strcmp(error, "port: empty value") == 0);
+}
+
+/* The version query answers rather than refuses: 1 or more for a kernel with Landlock, and -1
+ * for one without, which the enforcer keeps telling apart from a version 0 that is only too old. */
+static void test_query_landlock_version(void) {
+    printf("\nThe version query that answers rather than exits\n");
+    mock_landlock_version = 8;
+    check("a kernel with Landlock answers its version", query_landlock_version() == 8);
+    mock_landlock_version = 0;
+    check("a kernel offering version 0 answers 0", query_landlock_version() == 0);
+    mock_landlock_version = -1;
+    check("a kernel without Landlock answers -1", query_landlock_version() == -1);
+    reset_mocks();
+}
+
+/* The model unions the rights of every rule along a path, by inode, as Landlock does, and takes
+ * the rights from the enforcer's own tables, the directory-only ones stripped from a file rule. */
+static void test_model_of_the_ruleset(void) {
+    printf("\nThe model of the ruleset the enforcer builds\n");
+    struct model_tree tree;
+    make_model_tree(&tree);
+    pass_fstat_through = 1;
+    char error[MODEL_ERROR_LENGTH];
+
+    char *arguments[] = {"enforcer", "--rights=rx", tree.granted, "--rights=rw", tree.writable,
+                         "--rights=rwmd", tree.writable_file, "--", "/bin/true", NULL};
+    check("a good command line builds a model", build_model(arguments, 8, error));
+    check("every rule is in it", model_under_test.rule_count == 3);
+    uint64_t granted = model_rights_along(&model_under_test, tree.granted_file);
+    check("a file beneath a read-and-execute rule may be executed",
+          (granted & LANDLOCK_ACCESS_FILESYSTEM_EXECUTE) != 0);
+    check("but not written", (granted & LANDLOCK_ACCESS_FILESYSTEM_WRITE_FILE) == 0);
+    check("a file beneath no rule is granted nothing",
+          model_rights_along(&model_under_test, tree.unnamed_file) == 0);
+    check("the root of the tree, above every rule, is granted nothing",
+          model_rights_along(&model_under_test, tree.root) == 0);
+    check("a relative path is granted nothing",
+          model_rights_along(&model_under_test, "granted/file") == 0);
+    check("the rights of a directory rule and a file rule on one path are united",
+          (model_rights_along(&model_under_test, tree.writable_file)
+           & (LANDLOCK_ACCESS_FILESYSTEM_WRITE_FILE | LANDLOCK_ACCESS_FILESYSTEM_READ_FILE))
+              == (LANDLOCK_ACCESS_FILESYSTEM_WRITE_FILE | LANDLOCK_ACCESS_FILESYSTEM_READ_FILE));
+    check("a file rule loses the rights only a directory can hold",
+          (model_under_test.rules[2].rights & DIRECTORY_ONLY_ACCESS_RIGHTS) == 0
+              && (model_under_test.rules[2].rights & LANDLOCK_ACCESS_FILESYSTEM_WRITE_FILE) != 0);
+    check("a directory rule keeps them",
+          (model_under_test.rules[1].rights & LANDLOCK_ACCESS_FILESYSTEM_READ_DIRECTORY) != 0);
+    check("the handled rights are the enforcer's at this version",
+          model_under_test.handled_filesystem == filesystem_rights_for_version(8));
+
+    check("a model at version 3 handles TRUNCATE",
+          build_model(arguments, 3, error)
+              && (model_under_test.handled_filesystem & LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE) != 0);
+    check("a model at version 2 does not, as Landlock does not",
+          build_model(arguments, 2, error)
+              && (model_under_test.handled_filesystem & LANDLOCK_ACCESS_FILESYSTEM_TRUNCATE) == 0);
+
+    char *through_link[] = {"enforcer", "--rights=r", tree.link, "--", "/bin/true", NULL};
+    check("a reading rule on a symbolic link is anchored on what the link names",
+          build_model(through_link, 8, error)
+              && (model_rights_along(&model_under_test, tree.granted_file)
+                  & LANDLOCK_ACCESS_FILESYSTEM_READ_FILE) != 0);
+
+    char *changeable_link[] = {"enforcer", "--rights=rw", tree.link, "--", "/bin/true", NULL};
+    check("a changeable rule on a symbolic link is refused, as the enforcer refuses it",
+          !build_model(changeable_link, 8, error) && strstr(error, "symbolic link") != NULL);
+
+    char missing[MODEL_PATH_LENGTH];
+    snprintf(missing, sizeof(missing), "%s/missing", tree.root);
+    char *absent[] = {"enforcer", "--rights=r", missing, "--", "/bin/true", NULL};
+    check("a rule path that cannot be opened is refused with its reason",
+          !build_model(absent, 8, error) && strstr(error, "cannot open") != NULL);
+
+    pass_fstat_through = 0;
+    fail_fstat = 1;
+    char *unstated[] = {"enforcer", "--rights=r", tree.granted, "--", "/bin/true", NULL};
+    check("a rule path that cannot be examined is refused with its reason",
+          !build_model(unstated, 8, error) && strstr(error, "cannot stat") != NULL);
+    fail_fstat = 0;
+    pass_fstat_through = 1;
+
+    char *usage[] = {"enforcer", "--rights=r", tree.granted, NULL};
+    check("a call made the wrong way is refused with a reason all the same",
+          !build_model(usage, 8, error) && error[0] != '\0');
+    char *refused[] = {"enforcer", "--rights=rq", tree.granted, "--", "/bin/true", NULL};
+    check("a refused command line is refused with the parser's reason",
+          !build_model(refused, 8, error) && strstr(error, "'q' is not a right") != NULL);
+    remove_model_tree(&tree);
+    reset_mocks();
+}
+
+/* The bind model follows the network ruleset: a direction it does not handle is free, a handled
+ * one admits the named ports, and port 0 only with the ephemeral grant for that transport. */
+static void test_model_of_bind(void) {
+    printf("\nThe model of the bind rules\n");
+    char error[MODEL_ERROR_LENGTH];
+    char *closed[] = {"enforcer", "--no-filesystem", "--close-bind", "--bind-tcp", "8080",
+                      "--ephemeral-bind-udp", "--", "/bin/true", NULL};
+    check("a network-only command line builds a model", build_model(closed, 10, error));
+    check("it handles no filesystem right", model_under_test.handled_filesystem == 0);
+    check("a named TCP port may be bound", model_bind_permitted(&model_under_test, false, 8080));
+    check("another TCP port may not", !model_bind_permitted(&model_under_test, false, 8081));
+    check("TCP port 0 may not without its ephemeral grant",
+          !model_bind_permitted(&model_under_test, false, 0));
+    check("UDP port 0 may with its ephemeral grant",
+          model_bind_permitted(&model_under_test, true, 0));
+    check("a UDP port no rule names may not", !model_bind_permitted(&model_under_test, true, 53));
+
+    check("below version 10 UDP bind is not handled, so it is free",
+          build_model(closed, 8, error) && model_bind_permitted(&model_under_test, true, 53));
+
+    char *open_bind[] = {"enforcer", "--no-filesystem", "--connect-tcp", "443", "--",
+                         "/bin/true", NULL};
+    check("without --close-bind or a bind rule every bind is free",
+          build_model(open_bind, 10, error) && model_bind_permitted(&model_under_test, false, 1)
+              && model_bind_permitted(&model_under_test, true, 1));
+
+    char *named_udp[] = {"enforcer", "--no-filesystem", "--bind-udp", "5353",
+                         "--ephemeral-bind-tcp", "--close-bind", "--", "/bin/true", NULL};
+    check("a named UDP port may be bound",
+          build_model(named_udp, 10, error) && model_bind_permitted(&model_under_test, true, 5353));
+    check("and TCP port 0 with its ephemeral grant",
+          model_bind_permitted(&model_under_test, false, 0));
+}
+
+/* The marker that tells a reporting supervisor which tasks are in this domain: one filter that
+ * allows everything, installed with no flags after the restriction and only when asked for, and a
+ * failure to install it refuses the run rather than leaving the reporter to guess. */
+static void test_report_marker(void) {
+    printf("\nThe report marker\n");
+    char *marked[] = {"phobos-landlock-filesystem-and-networksystem", "--mark-reported-domain",
+                      "--rights=r", "/usr", "--", "/bin/true", NULL};
+    char *unmarked[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=r", "/usr", "--",
+                        "/bin/true", NULL};
+    expect_exit("a marked run goes through", 0, marked);
+    check("exactly one filter is installed", record->seccomp_calls == 1);
+    check("as a plain filter with no flags and no listener",
+          record->seccomp_operation == SECCOMP_SET_MODE_FILTER && record->seccomp_flags == 0);
+    check("of one instruction that allows everything",
+          record->seccomp_length == 1 && record->seccomp_first_code == (BPF_RET | BPF_K)
+              && record->seccomp_first_value == SECCOMP_RET_ALLOW);
+    check("after the restriction, so the reporter counts the enforcer's filters before the marker",
+          record->restricted_at != 0 && record->seccomp_at > record->restricted_at);
+    expect_exit("an unmarked run goes through", 0, unmarked);
+    check("and installs no filter", record->seccomp_calls == 0);
+    fail_seccomp = 1;
+    expect_exit("a marker that cannot be installed refuses the run", EXIT_CODE_POLICY_ERROR,
+                marked);
+    check("and says why", stderr_says("seccomp marker"));
+    static struct options options;
+    char error[MODEL_ERROR_LENGTH];
+    check("the checked parser accepts the flag",
+          parse_arguments_checked(6, marked, &options, error, sizeof(error))
+              && options.mark_reported_domain);
+}
+
 int main(void) {
     record = mmap(NULL, sizeof(*record), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (record == MAP_FAILED) {
@@ -1528,6 +1854,11 @@ int main(void) {
     test_what_reaches_the_kernel();
     test_close_bind();
     test_boundaries();
+    test_parse_arguments_checked();
+    test_query_landlock_version();
+    test_model_of_the_ruleset();
+    test_model_of_bind();
+    test_report_marker();
     printf("\n%d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }

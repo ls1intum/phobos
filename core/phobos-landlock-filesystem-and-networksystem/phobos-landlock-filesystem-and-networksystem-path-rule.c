@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #include "phobos-landlock-filesystem-and-networksystem-path-rule.h"
 
+#include "phobos-landlock-filesystem-and-networksystem-policy.h"
 #include "phobos-landlock-filesystem-and-networksystem-ruleset.h"
 
 #include <fcntl.h>

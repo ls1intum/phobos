@@ -98,7 +98,9 @@ fi
 echo
 echo "== the report never costs the command its output =="
 run_snippet "head -c ${LARGE_LINE_BYTES} /dev/zero | tr '\\0' q >&2; echo done"
-length="$(printf '%s' "$OUT" | tr -cd q | wc -c | tr -d ' ')"
+# Only the command's own output is counted: Phobos's log lines, which start with their time in
+# brackets, name the run's temporary paths, and the random letters of those may include a q.
+length="$(printf '%s' "$OUT" | grep -v '^\[[0-9T:Z-]*\] ' | tr -cd q | wc -c | tr -d ' ')"
 if [[ "$RC" -eq 0 && "$length" -eq "$LARGE_LINE_BYTES" && "$OUT" == *done* && "$OUT" != *"PHB-EDENY"* \
       && "$OUT" != *"awk:"* ]]; then
   ok "one stderr line far beyond the counter's bound passes whole even when the counter gives up on it"

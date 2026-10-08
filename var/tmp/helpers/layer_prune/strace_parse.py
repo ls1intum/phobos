@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 
 from layer_prune.record import Syscall
 
@@ -34,6 +34,32 @@ STRACE_ARGUMENTS = (
     "trace=%file,%network,%process,%desc,landlock_restrict_self,setsid,setpgid,ioctl",
 )
 
+# The options the recording pruner (layer_record) passes to strace around a program it records with no
+# sandbox at all. -DDD detaches the tracer as a grandchild in a session of its own, so the program
+# stays the calling shell's child and keeps the terminal, its job control and its signals. -yy also
+# decorates a socket with its protocol and ends and a device with its numbers, which is how a
+# recorded endpoint and a device ioctl are told apart; -x keeps a buffer such as a TLS ClientHello
+# readable byte for byte. --seccomp-bpf is safe here, unlike in STRACE_ARGUMENTS, because no connect
+# guard runs around a recorded program, and it makes a call-heavy program record several times
+# faster. The trace set is the recording pruner plan's A.3.4: write brings the ClientHello, ioctl a
+# device control no section can grant, and setsid, setpgid and io_uring_setup are calls the grading
+# layers refuse whatever a policy grants. dup, dup2, dup3 and fcntl follow a device the session opened
+# onto another descriptor, and open_by_handle_at, which %file does not include (measured with strace
+# 6.8), is traced so that its use is reported as unsupported rather than missed.
+RECORD_ARGUMENTS = (
+    "-DDD",
+    "-f",
+    "-qq",
+    "-yy",
+    "-x",
+    "-s",
+    "4096",
+    "--seccomp-bpf",
+    "-e",
+    ("trace=%file,%network,%process,ioctl,fchdir,write,setsid,setpgid,io_uring_setup,dup,dup2,dup3,fcntl,"
+     "open_by_handle_at"),
+)
+
 # The successful calls parse_trace keeps beside every failed one: the ones that build the process
 # tree and the domain, the ones that say what a socket is and which port it holds, and the ones that
 # move a process's working directory, which a relative path is resolved against when strace did not
@@ -54,7 +80,7 @@ KEPT_SUCCESSES = frozenset({
 
 LINE = re.compile(
     r"^(?P<pid>\d+) +(?P<name>[a-z0-9_]+)\((?P<arguments>.*)\) += "
-    r"(?P<result>-?\d+|\?|0x[0-9a-f]+)(?: (?P<errno>E[A-Z0-9]+) \(.*\))?"
+    r"(?P<result>-?\d+|\?|0x[0-9a-f]+)(?P<decoration><.*>)?(?: (?P<errno>E[A-Z0-9]+) \(.*\))?"
 )
 UNFINISHED = re.compile(r"^(?P<pid>\d+) +(?P<head>.*) <unfinished \.\.\.>$")
 RESUMED = re.compile(r"^(?P<pid>\d+) +<\.\.\. (?P<name>[a-z0-9_]+) resumed>(?P<tail>.*)$")
@@ -96,7 +122,8 @@ class Trace:
 def parse_line(line: str) -> Syscall | None:
     """Parses one complete call line, or a resumed one already joined; None for anything else.
 
-    Assumes the line came from strace with STRACE_ARGUMENTS, so it starts with a thread id.
+    Assumes the line came from strace -f with STRACE_ARGUMENTS or RECORD_ARGUMENTS, so it starts
+    with a thread id.
     """
     match = LINE.match(line.rstrip("\n"))
     if match is None:
@@ -109,6 +136,7 @@ def parse_line(line: str) -> Syscall | None:
         arguments=match.group("arguments"),
         result=result,
         errno=match.group("errno"),
+        decoration=match.group("decoration") or "",
     )
 
 
@@ -145,6 +173,18 @@ def joined_lines(lines: Iterable[str]) -> Iterable[str]:
                 yield f"{pid} {head}{resumed.group('tail')}"
             continue
         yield line
+
+
+def iter_calls(lines: Iterable[str]) -> Iterator[Syscall]:
+    """Yields every completed call of a log in the order the calls returned, successful or not.
+
+    Each `<unfinished ...>` half is joined with its `<... resumed>` half first; status lines, signal
+    deliveries and a half whose other half never arrived yield nothing.
+    """
+    for line in joined_lines(lines):
+        call = parse_line(line)
+        if call is not None:
+            yield call
 
 
 def split_arguments(text: str) -> list[str]:
@@ -386,10 +426,8 @@ def parse_trace(lines: Iterable[str]) -> Trace:
     one id was given to two processes.
     """
     walk = DomainWalk()
-    for line in joined_lines(walk.noting_root(lines)):
-        call = parse_line(line)
-        if call is not None:
-            walk.take(call)
+    for call in iter_calls(walk.noting_root(lines)):
+        walk.take(call)
     start = walk.domain_from(count_port_only=False)
     if not start:
         start = walk.domain_from(count_port_only=True)

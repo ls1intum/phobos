@@ -25,7 +25,9 @@ class Syscall:
     `arguments` is the text between the call's parentheses, exactly as printed, decorations
     included. `result` is the return value, or None where strace printed `?` because the call never
     returned (exit_group, a successful execve seen from the old image). `errno` is the symbolic
-    error name for a failed call and None otherwise.
+    error name for a failed call and None otherwise. `decoration` is what -y or -yy printed after
+    the result, angle brackets included (`</usr/lib/libc.so.6>`, `<TCP:[127.0.0.1:4->127.0.0.1:5]>`),
+    and empty where the result carries none.
     """
 
     pid: int
@@ -33,6 +35,25 @@ class Syscall:
     arguments: str
     result: int | None
     errno: str | None
+    decoration: str = ""
+
+
+@dataclasses.dataclass(frozen=True)
+class Need:
+    """An access a run needed: the sections Landlock would have to grant on each of `objects`.
+
+    The recording pruner turns every successful call it recorded into Needs, as the layer pruner
+    turns every refused call into a Denial, so both can be generalised alike. `run` numbers the
+    recorded session or observed run, `tid` is the calling thread as strace printed it and `tgid`
+    its thread group, which /proc/self names. `evidence` is the call the need was read from.
+    """
+
+    objects: tuple[str, ...]
+    sections: frozenset[str]
+    run: int
+    tid: int
+    tgid: int
+    evidence: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -43,6 +64,9 @@ class Denial:
     directory for a creation, a removal or a rename), and `sections` the configuration sections that
     would grant it, empty where no section can. `address`, `port` and `transport` describe a network
     destination or a local port and are None otherwise. `operation` names the refused system call.
+    `pid` is the refusing process (its thread-group id) and `tid` the refusing thread, the id strace
+    printed; `run` numbers the observed run the denial came from, which the caller sets, so that a
+    name seen changing between runs can be told apart from one seen once.
     """
 
     pid: int
@@ -54,3 +78,5 @@ class Denial:
     port: int | None
     transport: str | None
     errno: str
+    run: int = 0
+    tid: int = 0

@@ -28,12 +28,14 @@ one disagree, the full one is right.
 Phobos runs a student submission for an Artemis programming exercise with access to only
 what the exercise's own tests were shown to need. It works in two phases.
 
-**Resource discovery, offline.** Run the reference exercise repeatedly, hiding a directory
-each time by overlaying it with an empty tmpfs, and observe whether the tests still pass. A
-directory whose absence changes nothing was never needed and stays hidden; one whose absence
-breaks the run is restored, read-only first and writable only if that is not enough. The walk
-is top-down, so an unused subtree is dropped in one step rather than file by file. The result
-is a path set: every path the run needs, with the access mode it needs.
+**Resource discovery, offline.** For Java, the layer pruner runs the reference exercise
+through the grading layers, starting from a policy that grants nothing, grants exactly what
+each refusal it records proves, removes what turns out unneeded, derives the limits, and
+writes a complete configuration per exercise. For Python, still, the reference is run
+repeatedly with a directory hidden each time by an empty tmpfs: a directory whose absence
+changes nothing was never needed and stays hidden; one whose absence breaks the run is
+restored, read-only first and writable only if that is not enough. Either way the orchestrator
+merges the results into one base per language.
 
 **Sandbox application, at grading time.** The submission runs under a Landlock ruleset that
 grants exactly the rights the policy names on those paths; every other path is denied, though
@@ -42,10 +44,14 @@ enforces the `[connect]` allow-list by host and port from outside the process; a
 rule that names a host is enforced by the egress broker (an HAProxy that checks the TLS host
 name), which the network layer starts automatically for such a rule; an exact-name rule is
 refused when no resolver is given. A timeout and resource limits bound the run, and the
-container around it supplies `--network none` and the cgroup caps.
+container around it supplies `--network none` and the cgroup caps. With the network layer
+off, a report-only supervisor prints a `Phobos Security Error` line on stderr for each
+distinct action it can attribute with certainty to Landlock or the timeout's group lock,
+staying silent wherever it is in doubt. It never lets a refused call succeed nor a permitted
+one fail.
 
-The two phases do not deny in the same way. While pruning, a hidden directory is an empty,
-writable tmpfs; while grading, a path the policy does not name is refused with EACCES. A tool
+The Bubblewrap prune and grading do not deny in the same way. While pruning, a hidden directory
+is an empty, writable tmpfs; while grading, a path the policy does not name is refused with EACCES. A tool
 that only needs some writable scratch directory can therefore pass the prune with that
 directory hidden and still be refused at grading time, which is worth checking when a pruned
 policy fails a run that passed its prune.
@@ -56,7 +62,7 @@ environment, offline, and grading itself only applies a fixed configuration.
 ## Tech Stack
 
 - POSIX shell for the wrapper and the layers, which is the bulk of the repository
-- C for `phobos-landlock-filesystem-and-networksystem`, the connect guard and the timeout's group lock, all compiled inside the run-phase image
+- C for `phobos-landlock-filesystem-and-networksystem`, the connect guard, the timeout's group lock and the report-only supervisor `phobos-seccomp-filesystem`, all four compiled inside the run-phase image
 - Python for the prune orchestrator and the artefact helpers
 - Docker for both phases, one image per language environment
 - Java for the two template checkers in `.github/scripts/` and for the two acceptance fixtures
@@ -64,8 +70,11 @@ environment, offline, and grading itself only applies a fixed configuration.
 
 The filesystem layer is enforced by Landlock, an unprivileged Linux kernel sandbox, applied
 by `phobos-landlock-filesystem-and-networksystem` (the C program under `core/`). The run phase needs no privileges, no
-capabilities and no container flags. The discovery phase still uses Bubblewrap to hide
-directories while it measures; the sandbox an exercise runs in does not.
+capabilities and no container flags. The Python prune still uses Bubblewrap to hide
+directories while it measures; the sandbox an exercise runs in does not. The Java prune runs
+the layer pruner (`var/tmp/helpers/layer_prune/`, in `docker/prune_phase/layers/`), which
+measures under the grading layers themselves, observing their refusals with `strace`;
+README.md, "The layer pruner", says how to run it.
 
 ## Build and development commands
 
@@ -101,8 +110,9 @@ Every entry point starts by removing each `PATH` entry that is not absolute, uns
 and dropping what is not absolute from `TMPDIR`, `GCONV_PATH`, `LOCPATH`, `NLSPATH`,
 `HOSTALIASES` and `TZDIR`, before it runs any program, because the current directory may be the
 submission's tree. The command sees the cleaned environment, so it is named by its path
-(`./gradlew`), and a `PATH` with no absolute entry is refused with `PHB-ERUNTIME`. What no
-script can clean, the `env` of the `#!` line, `BASH_ENV` and the loader's `LD_*`, is an
+(`./gradlew`), and a `PATH` with no absolute entry is refused with `PHB-ERUNTIME`. Every script
+under `core/` begins with `#!/bin/bash`, so bash itself is never looked up through `PATH`
+(AGENTS.md states the rule). What no script can clean, `BASH_ENV` and the loader's `LD_*`, is an
 integration requirement in SECURITY.md.
 
 ### The linters, which are the gate
@@ -132,7 +142,7 @@ awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print 
 
 One of those is narrower than it looks: `bandit` runs over exactly two directories, not the
 whole tree, because everything else Python here is fixture. `hadolint` matches `Dockerfile*` at
-any depth, which reaches the five under `docker/`. CI runs
+any depth, which reaches every one under `docker/`. CI runs
 shellcheck and hadolint inside pinned container images, installs cppcheck with apt, and
 downloads `actionlint` and `editorconfig-checker` at a pinned version and checksum; the commands above assume the tools are installed locally and will
 differ in version, which is the usual reason a local run and CI disagree.
@@ -154,7 +164,10 @@ docker run --rm --network none -v "$PWD/tests:/tests:ro" phobos-run-phase:ci \
 ```
 
 Each prune container works independently on its language and writes its result into the
-shared `var/tmp` mount; nothing passes between containers except through that directory.
+shared `var/tmp/path_sets` directory, `verify_java` being the one that reads the orchestrator's
+output back; nothing passes between containers except through `var/tmp`. The Java prune needs
+the run-phase image `phobos-run-phase-java` built first, and `verify_java` re-runs the Java
+exercises under the merged configuration at the end.
 
 ### The host
 
@@ -176,6 +189,7 @@ core/                      the sandbox itself
   phobos-landlock-filesystem-and-networksystem/  its *.c/.h: the C program that applies the Landlock policy, then exec's
   phobos-seccomp-networksystem/  its *.c/.h: the connect guard, supervises connect() and enforces [connect] by host and port
   phobos-seccomp-timeoutsystem/  its *.c: the group lock, a seccomp filter refusing setsid and setpgid, then exec's
+  phobos-seccomp-filesystem/     its *.c/.h: the report-only supervisor, reports what Landlock and the group lock block when the network layer is off
   phobos-tools-common/     sourced by every layer through phobos-common.sh, which sources the rest here but phobos-environment.sh, and the five per-subsystem helpers
     phobos-environment.sh  sourced first by every entry point: PATH and the other lookup variables made safe before anything is looked up
     phobos-common.sh       the shared entry the layers source; it sources the others
@@ -188,20 +202,23 @@ core/                      the sandbox itself
   phobos-tools-policysystem/
     phobos-policy-parse.sh one cfg in, the parsed state and the specification files out
     phobos-policy-yaml.sh  a strict subset of YAML in, flat records with line numbers out
-    phobos-language-configuration.sh  a programming language configuration in, its bases and placeholder values out
+    phobos-language-configuration.sh  a programming language configuration in, its bases, placeholder values and [connect] rows out
+    phobos-policy-ares.sh  an Ares 2 security policy in, the same parsed state a cfg gives out
   phobos-tools-filesystem/
     phobos-rights.sh       a parsed policy to the --rights= arguments phobos-landlock-filesystem-and-networksystem takes
   phobos-tools-networksystem/
     phobos-haproxy.sh      the egress broker and inbound filter: turns [connect]/[accept] into an haproxy.cfg
     phobos-network-args.sh [connect] and [bind] to the TCP and UDP port rules Landlock enforces
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
-    language-configurations/  one file per Ares 2 programming language configuration: its bases and placeholders
-docker/prune_phase/        one image per language, the layer prune image under layers/, plus the orchestrator
+    language-configurations/  one file per Ares 2 programming language configuration: its bases, placeholders and [connect] rows
+docker/prune_phase/        one image per language, the layer pruner's, and the orchestrator
+  layers/                  the layer pruner's image: the run-phase image, strace, the probe, an empty base
 docker/run_phase/          the image an exercise actually runs in
 tests/                     unit/ (C and shell units), integration/ (shell suites, the acceptance suites and
                            protection-matrix/), python/, and two probes
 documentation/             the Docusaurus site, with its own gate
 var/tmp/                   prune inputs, helpers and example outputs
+  helpers/layer_prune/     the layer pruner: observe, attribute, grow, minimise, limits, verify, write
 ```
 
 ## Coding conventions

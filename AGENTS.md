@@ -36,6 +36,10 @@ intention.
 - The acceptance suites must run in an ordinary container with no `--privileged`, no
   `--cap-add` and no `--security-opt`. A suite that needs any of those is measuring a
   different sandbox from the one an exercise gets.
+- A shell script under `core/` begins with `#!/bin/bash`, and Phobos starts bash itself only
+  as `/bin/bash`. `#!/usr/bin/env bash` or a bare `bash` looks the interpreter up through the
+  caller's `PATH` before any sandbox exists, which the current directory, the submission's
+  tree, can then decide.
 
 The policy itself is additive by design, and that is not a hole to close. Everything is denied
 first, and the platform, language and exercise configurations each only widen the allow-list;
@@ -109,19 +113,27 @@ as a dependency.
 - A pruning heuristic that treats an ambiguous outcome as "needed" produces a larger
   allow-list, which is a weaker sandbox that still looks like it works. Say in the pull
   request which direction a heuristic errs in.
+- In the layer pruner, a grant needs an attributed denial: a refusal recorded inside the
+  command's sandbox, by the layer under test, which the control replay confirms the sandbox
+  caused. A run that fails without one is never turned into a grant.
+- The prune container runs without privileges, as every suite here does, and with `--network none`
+  unless the exercise declares a host; ptrace of one's own child needs neither. Between layered runs
+  the pruner removes whatever earlier runs added outside the working directory, so it refuses to run
+  anywhere but in that container.
 
 ## The compiled binaries
 
-None of the C products is committed. `phobos-landlock-filesystem-and-networksystem`, the connect guard and the timeout's
-group lock are built from the source under `core/`, once per architecture, inside the run-phase
-image. `.gitattributes` marks `*.so` binary so that a stray shared object is never normalised,
-though none is shipped.
+None of the C products is committed. `phobos-landlock-filesystem-and-networksystem`, the
+connect guard, the timeout's group lock and the report-only supervisor
+`phobos-seccomp-filesystem` are built from the source under `core/`, once per architecture,
+inside the run-phase image. `.gitattributes` marks `*.so` binary so that a stray shared object
+is never normalised, though none is shipped.
 
 **Rule:**
 
 - Never check a compiled binary in. The `run-phase` job in `build.yml` builds the image for
   amd64 and arm64 on native runners and, on the copies each image ships, checks with `readelf`
-  that all three are position-independent (`Type: DYN`) with full RELRO (`BIND_NOW`), so both
+  that all four are position-independent (`Type: DYN`) with full RELRO (`BIND_NOW`), so both
   architectures are proven on every run; publishing the multi-arch image is a manual step (below).
 - Where the connect guard binary is missing the network layer ends the run with PHB-ERUNTIME
   rather than running without connect supervision, so a bare checkout with nothing built does

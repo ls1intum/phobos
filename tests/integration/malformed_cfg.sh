@@ -237,5 +237,45 @@ refused "[limits] with a key that is no limit" "$(cfg_text '[limits]\ncolour=5\n
 refused "[limits] with a value that is not a number" "$(cfg_text '[limits]\nnproc=abc\n')" "must be a non-negative whole number" "line 2"
 refused "[limits] with a timeout in the wrong spelling" "$(cfg_text '[limits]\ntimeout=5.5\n')" "exactly three decimals" "line 2"
 accepted "a loopback rule without a port beside a rule with one, which the guard alone then enforces" "$(cfg_text '[connect]\nallow 127.0.0.1:*\nallow 1.2.3.4:80\n')"
+for line in 'allow localhost' 'allow 127.0.0.1' 'allow 127.9.9.9' 'allow 127.0.0.1/32' 'allow [::1]' 'allow ::1' 'allow 0:0:0:0:0:0:0:1' 'allow [::ffff:127.0.0.1]' 'allow localhost udp'; do
+  accepted "a rule that names a single loopback address and no port: ${line}" "$(cfg_text '[connect]\n%s\n' "$line")"
+done
+for line in 'allow 127.0.0.1/1' 'allow 127.0.0.0/8' 'allow 127.0.0.1/31' 'allow 127.evil.example' 'allow 127.evil.example udp' 'allow 128.0.0.1' 'allow [::ffff:128.0.0.1]' 'allow [::1/64]' 'allow example.org' 'allow *'; do
+  refused "a rule that names ${line#allow } and no port, which is not a single loopback address" "$(cfg_text '[connect]\n%s\n' "$line")" "and no port, and only loopback may name no port" "line 2"
+done
+accepted "a range that starts like loopback with a concrete port" "$(cfg_text '[connect]\nallow 127.0.0.1/1:8080\nallow 127.evil.example:443\n')"
+
+echo
+echo "== an Ares 2 policy that is not the text it should be =="
+# The same file-level refusals for a name ending in .yaml, which the Ares 2 reader takes, with the same
+# words. The control is a well-formed policy under a programming language configuration of this core.
+mkdir -p "${CORE_X}/language-configurations"
+printf '[base]\nBaseTest.cfg\n' > "${CORE_X}/language-configurations/TEST_CONFIGURATION.cfg"
+ARES_POLICY='thisPolicyFileCompliesToThePolicyVersion: 1\nregardingTheSupervisedCode:\n  theFollowingProgrammingLanguageConfigurationIsUsed: TEST_CONFIGURATION\n  theFollowingClassesAreTestClasses: []\n  theFollowingResourceAccessesArePermitted:\n    regardingFileSystemInteractions: []\n    regardingNetworkConnections: []\n    regardingCommandExecutions: []\n    regardingThreadCreations: []\n    regardingPackageImports: []\n    regardingTimeouts: []\n'
+# yaml_text FORMAT [ARGUMENT...]: as cfg_text, into a file whose name ends in .yaml.
+# shellcheck disable=SC2059
+yaml_text() {
+  local file
+  file="$(mktemp --suffix=.yaml "${WORK}/policy.XXXXXX")"
+  printf -- "$@" > "$file"
+  printf '%s' "$file"
+}
+accepted "a well-formed Ares 2 policy" "$(yaml_text "$ARES_POLICY")"
+refused "an Ares 2 policy that names nothing" "${WORK}/missing.yaml" "does not exist" "missing.yaml"
+if (( $(id -u) == 0 )); then
+  skip "an Ares 2 policy this user may not read" "running as root, which reads every file"
+else
+  SECRET_YAML="$(yaml_text "$ARES_POLICY")"
+  chmod 000 "$SECRET_YAML"
+  refused "an Ares 2 policy this user may not read" "$SECRET_YAML" "cannot be read"
+fi
+mkdir "${WORK}/dir.yaml"
+refused "an Ares 2 policy that is a directory" "${WORK}/dir.yaml" "is a directory"
+refused "an Ares 2 policy with a byte order mark" "$(yaml_text "\xef\xbb\xbf${ARES_POLICY}")" "byte order mark"
+refused "an Ares 2 policy with a NUL byte" "$(yaml_text "${ARES_POLICY}# \0\n")" "NUL byte"
+refused "an Ares 2 policy with Windows line endings" "$(yaml_text 'thisPolicyFileCompliesToThePolicyVersion: 1\r\n')" "carriage return" "line 1"
+refused "an Ares 2 policy with a byte that is not UTF-8, shown escaped" "$(yaml_text "${ARES_POLICY}# \xff\n")" "not valid UTF-8" "line 12"
+refused "an Ares 2 policy with a tab" "$(yaml_text "${ARES_POLICY}\t# x\n")" "tab character" "line 12"
+refused "an Ares 2 policy with an unknown configuration" "$(yaml_text "${ARES_POLICY//TEST_CONFIGURATION/OTHER_CONFIGURATION}")" "has no file" "line 3"
 
 finish

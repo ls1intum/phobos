@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 set -euo pipefail
 # This script's directory, found in bash alone so that PATH and CDPATH are cleaned before any
@@ -35,7 +35,9 @@ USAGE
 POLICY
   Base configuration      every "${HERE}/Base*.cfg", applied first, in sorted order. With
                           none present Phobos refuses to run (PHB-EPOLICY) rather than run
-                          the command unconfined.
+                          the command unconfined. When a --config file is an Ares 2
+                          policy, the bases are instead the ones its programming language
+                          configuration lists, with that configuration's [connect] rows.
   Exercise configuration  only the files given with --config, applied in that order.
   Tail configuration      "${HERE}/TailPhobos.cfg", flags only, applied last.
 
@@ -80,7 +82,16 @@ RESTRICTION OPTIONS (every restriction is applied by default)
 
 OTHER OPTIONS
   --config <file>, -c <file>
-        An exercise configuration, applied on top of the base. May be given repeatedly.
+        An exercise configuration, applied on top of the base. May be given repeatedly. A file
+        whose name ends in .yaml or .yml is read as an Ares 2 security policy: the programming
+        language configuration it names decides the base policies, and its file system, network
+        and timeout permissions are imported; README.md says how each is mapped.
+  --project-root <dir>
+        The directory a relative path and \${PROJECT_ROOT} in an Ares 2 policy are resolved
+        against, which must be the one the build tool starts the test JVM in, and the real path
+        of a project directory: not "/", and not reached through a symbolic link. Without it,
+        the last --chdir of the tail flags is used, held to the same rule where an imported
+        path needs it, and with neither such a path is refused.
   --debug, -d
         Report on stderr what each layer does and runs, and have the enforcers report
         verbosely too. It prints the whole effective policy, so it is meant for diagnosis
@@ -115,9 +126,29 @@ ENVIRONMENT
   CDPATH, and drops what is not absolute from TMPDIR, GCONV_PATH, LOCPATH, NLSPATH, HOSTALIASES
   and TZDIR, so nothing is looked up in the current directory before the sandbox exists. The
   command is given the cleaned environment too, so name it by its path (./gradlew). A PATH with
-  no absolute entry is refused (PHB-ERUNTIME). Start phobos.sh
-  with a PATH of absolute directories and without BASH_ENV, LD_LIBRARY_PATH, LD_PRELOAD or
+  no absolute entry is refused (PHB-ERUNTIME). Every script's #! line names /bin/bash, so bash
+  itself is never looked up. Start phobos.sh without BASH_ENV, LD_LIBRARY_PATH, LD_PRELOAD or
   LD_AUDIT, which take effect before its first line; SECURITY.md says why.
+
+WHAT IT REPORTS
+  stdout carries the command's own output and nothing else; every message of Phobos goes to
+  stderr. With the network restriction off (-nnr), the filesystem layer's report-only
+  supervisor (phobos-seccomp-filesystem beside this script) prints a line for each distinct
+  blocked action it can attribute with certainty, at most 100 per run, such as
+    Phobos Security Error: the program tried to illegally read the File '/etc/shadow' but was blocked by Phobos.
+  It covers the refusals of the filesystem sandbox and, when the timeout layer applies a
+  timeout, the setsid, setpgid and foreign-ABI calls the timeout's group lock refuses. Every
+  doubt ends in silence, so a run without such a line may still have been refused something.
+  It never lets a refused call succeed nor a permitted one fail;
+  the one difference it makes is that the group lock's refusals fail with EACCES rather than
+  ENOSYS. Should it die, the calls it watches fail with ENOSYS, so nothing is granted. When
+  the kernel or the setup cannot support it, it prints a notice naming what goes unreported
+  and why, and the run is enforced all the same; on a kernel older than Linux 6.6 it says
+  once that reporting is slower. With the network restriction on, the connect guard is the
+  run's one supervisor and no such line is printed.
+  After the command has ended, the filesystem layer may also print "Sandbox denials:
+  network=N, filesystem=N. (PHB-EDENY)", counted from the command's own stderr. Neither is a
+  status: the command's exit status is passed through unchanged.
 
 SIGNALS
   A SIGTERM, SIGHUP, SIGINT or SIGQUIT sent to phobos.sh is passed on to the command, and the run
@@ -132,6 +163,8 @@ EXIT STATUS
   11        the policy is invalid or missing (PHB-EPOLICY)
   14        the command ran past its timeout (PHB-ETIMEOUT)
   15        something the run needs could not be started (PHB-ERUNTIME)
+  16        the command ran but its exit status could not be read, so the run cannot say
+            whether it succeeded (PHB-ESTATUS)
 
 EXAMPLES
   phobos.sh --config exercise.cfg -- ./gradlew test
@@ -179,6 +212,8 @@ opt_tail_flags_file=""
 opt_spec_parent=""
 opt_haproxy_bin=""
 opt_resolver=""
+opt_project_root=""
+opt_project_root_given=0
 
 cfgs=()
 cmd=()
@@ -218,6 +253,8 @@ while (( "$#" )); do
       shift; [[ $# -gt 0 ]] || usage; opt_tail_flags_file="$1"; shift;;
     --spec-parent)
       shift; [[ $# -gt 0 ]] || usage; opt_spec_parent="$1"; shift;;
+    --project-root)
+      shift; [[ $# -gt 0 ]] || usage; opt_project_root="$1"; opt_project_root_given=1; shift;;
     --)
       shift
       while (( "$#" )); do cmd+=("$1"); shift; done
@@ -294,6 +331,7 @@ trap 'finish_owned_spec_dir "$?" "$SPEC_DIR"' EXIT
 # the one policy program, over the directory this script owns and the chain below reads.
 policy_flags=( --spec-dir "$SPEC_DIR" --tail-flags-file "$tail_flags_file" )
 if (( enable_debug )); then policy_flags+=( --debug ); fi
+if (( opt_project_root_given )); then policy_flags+=( --project-root "$opt_project_root" ); fi
 for c in "${cfgs[@]}"; do policy_flags+=( --config "$c" ); done
 "${HERE}/phobos-policysystem.sh" "${policy_flags[@]}"
 
@@ -327,6 +365,13 @@ if (( enable_network ));   then chain+=( "${HERE}/phobos-networksystem.sh"   "${
 fs_flags=( "${dbg[@]}" --landlock-bin "$landlock_bin" )
 if (( enable_resources )); then fs_flags+=( --resources-layer "${HERE}/phobos-resourcesystem.sh" ); fi
 if (( ! enable_filesystem )); then fs_flags+=( --no-landlock ); fi
+# Only one seccomp listener may exist per filter tree, so with the network layer on its connect
+# guard is the run's one supervisor and the filesystem layer starts no reporter of its own. The
+# group lock is above the filesystem layer exactly when the timeout layer applies it, which it
+# does when it is in the chain and a timeout is set; this is the trusted half of what lets the
+# reporter answer the lock's refusals, its signature being the other.
+if (( enable_network )); then fs_flags+=( --no-own-reporter ); fi
+if (( enable_timeout )) && [[ -s "${SPEC_DIR}/timeout.sec" ]]; then fs_flags+=( --group-lock-above ); fi
 chain+=( "${HERE}/phobos-filesystem.sh" "${fs_flags[@]}" "$SPEC_DIR" -- )
 debug_log phobos "run the layer chain" "${chain[@]}" "${cmd[@]}"
 exec "${chain[@]}" "${cmd[@]}"

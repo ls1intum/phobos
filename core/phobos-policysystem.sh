@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # shellcheck shell=bash
 #
 # phobos-policysystem.sh -- turn the base and exercise configuration into a run's specification.
@@ -11,7 +11,8 @@
 # each layer's own --config option does through this program, so no layer ever parses a config.
 #
 # Usage:
-#   phobos-policysystem.sh [--debug] --spec-dir <dir> [--tail-flags-file <file>] [--config <file>]...
+#   phobos-policysystem.sh [--debug] --spec-dir <dir> [--tail-flags-file <file>] [--project-root <dir>]
+#                          [--config <file>]...
 #
 # The caller creates and owns --spec-dir and removes it when the run ends. This script only
 # writes into it, using a scratch subdirectory of it for its own temporary files.
@@ -37,7 +38,8 @@ merges them and writes the specification the layers read. It applies nothing its
 runs no command: it only writes files into a directory the caller owns.
 
 USAGE
-  phobos-policysystem.sh [--debug] --spec-dir <dir> [--tail-flags-file <file>] [--config <file>]...
+  phobos-policysystem.sh [--debug] --spec-dir <dir> [--tail-flags-file <file>]
+                         [--project-root <dir>] [--config <file>]...
   phobos-policysystem.sh --help
 
   There is no -- and no command. Every argument is an option.
@@ -49,15 +51,30 @@ OPTIONS
                               keeps its own temporary files in a scratch subdirectory of it.
   --config <file>, -c <file>  An exercise configuration, applied on top of the base. May be
                               given repeatedly and is applied in the order given. A file
-                              that does not exist ends the run with PHB-EPOLICY.
+                              that does not exist ends the run with PHB-EPOLICY. A file
+                              whose name ends in .yaml or .yml is read as an Ares 2
+                              security policy, every other one as a Phobos configuration;
+                              each reader refuses the other's format.
+  --project-root <dir>        The directory a relative path and \${PROJECT_ROOT} in an Ares 2
+                              policy are resolved against: the one the build tool starts
+                              the test JVM in. It must be an absolute path to an existing
+                              directory, and the real path of a project directory: not "/",
+                              and not reached through a symbolic link. Without it, the last
+                              --chdir of the tail flags is used, held to the same rule where
+                              an imported path needs it, and with neither such a path is
+                              refused.
   --tail-flags-file <file>    The tail flags, applied last
                               (default: "${HERE}/TailPhobos.cfg").
   --debug, -d                 Print the effective specification on stderr, one line per file.
   --help, -h                  Print this manual and end with status 0.
 
 WHAT IT READS
-  Every "${HERE}/Base*.cfg", in the order the shell sorts them, then each --config file. A
-  name that matches Base*.cfg but is not a readable file ends the run with PHB-EPOLICY
+  Every "${HERE}/Base*.cfg", in the order the shell sorts them, then each --config file. When
+  a --config file is an Ares 2 policy, the bases are instead exactly the ones the programming
+  language configuration it names lists, "${HERE}/language-configurations/<NAME>.cfg", together
+  with the [connect] rows of that configuration; every Ares 2 policy of a run names the same
+  configuration. A name that matches Base*.cfg, or that a configuration lists, but is not a
+  readable file ends the run with PHB-EPOLICY
   rather than being skipped, because skipping it would build a narrower policy and report it
   as a working one. With no Base*.cfg at all there is no sandbox to build, which is likewise
   refused.
@@ -117,12 +134,15 @@ usage() {
 
 SPEC_DIR=""
 tail_flags_file="${HERE}/TailPhobos.cfg"
+project_root_option=""
+project_root_given=0
 cfgs=()
 while (( "$#" )); do
   case "$1" in
     --spec-dir)        shift; [[ $# -gt 0 ]] || usage; SPEC_DIR="$1"; shift;;
     --tail-flags-file) shift; [[ $# -gt 0 ]] || usage; tail_flags_file="$1"; shift;;
     --config|-c)       shift; [[ $# -gt 0 ]] || usage; cfgs+=("$1"); shift;;
+    --project-root)    shift; [[ $# -gt 0 ]] || usage; project_root_option="$1"; project_root_given=1; shift;;
     --debug|-d)        enable_debug_log; shift;;
     --help|-h)         show_help;;
     *) usage;;
@@ -144,6 +164,38 @@ for c in "${cfgs[@]}"; do
   refuse_unusable_cfg_file "$c"
 done
 
+# The project root an Ares 2 policy's relative paths and ${PROJECT_ROOT} are resolved against:
+# --project-root where it was given, which must be an absolute path to an existing directory,
+# and otherwise the last --chdir of the tail flags, the directory the enforcer runs the command
+# in. Never the current directory of this program and never the policy file's directory. Both
+# sources are operator input fixed before the command exists. A relative --chdir is kept as it
+# is and refused by the import only where a path needs it. A --project-root that was given
+# empty, as an unset variable in a grading script gives it, is refused rather than taken for
+# none, and so is one with a ".." segment, which would name the root differently for a relative
+# path than for ${PROJECT_ROOT}, one that is "/" and one that reaches its directory through a
+# symbolic link (unreal_project_root_reason).
+if (( project_root_given )); then
+  if [[ "$project_root_option" != /* || ! -d "$project_root_option" || "/${project_root_option}/" == */../* ]]; then
+    report "Policy invalid: --project-root ${project_root_option@Q} is not an absolute path to an existing directory without a '..' segment. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  if project_root_reason="$(unreal_project_root_reason "$project_root_option")"; then
+    report "Policy invalid: --project-root ${project_root_option@Q} must be the real path of a project directory: ${project_root_reason}. (PHB-EPOLICY)"
+    exit "${PHB_EPOLICY}"
+  fi
+  project_root="$project_root_option"
+  debug_log policy "project root ${project_root}, from --project-root"
+else
+  project_root="$(tail_flags_working_directory "$tail_flags_file")"
+  debug_log policy "project root ${project_root:-none}, from the last --chdir of the tail flags"
+fi
+
+# An Ares 2 policy names a programming language configuration, and that configuration decides
+# the bases: exactly the ones it lists, and no other Base*.cfg. A run with no Ares policy is
+# untouched and folds every Base*.cfg, as it always has, so it never reaches a base under
+# language-configurations/ nor a configuration's [connect] rows.
+ares_select_language_configuration "$HERE" "${cfgs[@]}"
+
 # Every Base*.cfg beside this script, in the order the shell sorts a glob, which is the order
 # the documentation promises. Read with a glob rather than by parsing ls, because a name is
 # what this repository is careful about everywhere else it reads one.
@@ -157,9 +209,16 @@ done
 shopt -s nullglob
 base_cfgs=( "${HERE}"/Base*.cfg )
 shopt -u nullglob
+if [[ -n "$ARES_SELECTED_CONFIGURATION" ]]; then
+  base_cfgs=( "${LANGUAGE_CONFIGURATION_BASES[@]}" )
+fi
 for candidate in "${base_cfgs[@]}"; do
   [[ -f "$candidate" && -r "$candidate" ]] && continue
-  report "Policy invalid: ${candidate@Q} matches Base*.cfg but is not a readable file, so the base policy cannot be built. (PHB-EPOLICY)"
+  if [[ -n "$ARES_SELECTED_CONFIGURATION" ]]; then
+    report "Policy invalid: ${candidate@Q}, a base the programming language configuration ${ARES_SELECTED_CONFIGURATION@Q} lists, is not a readable file, so the base policy cannot be built. (PHB-EPOLICY)"
+  else
+    report "Policy invalid: ${candidate@Q} matches Base*.cfg but is not a readable file, so the base policy cannot be built. (PHB-EPOLICY)"
+  fi
   exit "${PHB_EPOLICY}"
 done
 if [[ ${#base_cfgs[@]} -eq 0 ]]; then
@@ -233,7 +292,9 @@ effective_limit() {
 # what makes the model additive in every dimension. A sixth argument, any non-empty word, marks an
 # exercise configuration, whose [read] and [execute] paths must exist. Assumes it is called plainly, not in a
 # subshell, because parse_cfg_policy refuses a malformed cfg by ending the run and because
-# merge_limits writes the pooled state this shell holds.
+# merge_limits writes the pooled state this shell holds. An exercise configuration whose name ends
+# in .yaml or .yml is read by parse_ares_policy, against the base folded so far, and every other
+# file by parse_cfg_policy, so a base is always read as a cfg.
 fold_cfg_into() {
   local cfg="$1"
   local fs_dir="$2"
@@ -242,7 +303,11 @@ fold_cfg_into() {
   local accept_file="$5"
   local exercise="${6:-}"
   local merged
-  parse_cfg_policy "$cfg" "$exercise"
+  if [[ -n "$exercise" ]] && is_ares_policy_file "$cfg"; then
+    parse_ares_policy "$cfg" "$project_root" "$base_dir"
+  else
+    parse_cfg_policy "$cfg" "$exercise"
+  fi
   fs_union_dir "$fs_dir" "$PARSED_FS_DIR"
   merged="$(mktemp -p "$PHOBOS_SCRATCH")"
   net_union "$merged" "$net_file" "$PARSED_NET_FILE"
@@ -272,6 +337,15 @@ drop_every_network_rule() {
 for b in "${base_cfgs[@]}"; do
   fold_cfg_into "$b" "$base_dir" "$base_net" "$base_bind" "$base_accept"
 done
+
+# The [connect] rows of the programming language configuration an Ares 2 policy named belong to
+# the base it selected, so they are folded in here, before any exercise configuration, exactly as
+# a [connect] row of a base it lists would be.
+if [[ -n "$ARES_SELECTED_CONFIGURATION" ]]; then
+  merged_base_net="$(mktemp -p "$PHOBOS_SCRATCH")"
+  net_union "$merged_base_net" "$base_net" "$LANGUAGE_CONFIGURATION_CONNECT_FILE"
+  mv "$merged_base_net" "$base_net"
+fi
 
 # Effective policy: start from the base, then add each exercise config on top. The model is
 # additive in every dimension. Everything is denied first, and the platform, language and

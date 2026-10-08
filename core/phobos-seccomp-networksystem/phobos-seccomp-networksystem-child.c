@@ -2,6 +2,7 @@
 #include "phobos-seccomp-networksystem-child.h"
 
 #include "phobos-seccomp-networksystem-diagnostics.h"
+#include "phobos-seccomp-networksystem-handoff.h"
 
 #include <errno.h>
 #include <stddef.h>
@@ -148,36 +149,6 @@ static bool install_sendmsg_lockout(int bootstrap_descriptor) {
         .filter = instructions,
     };
     return syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, &program) == 0;
-}
-
-/* Hand one file descriptor to the supervisor over the socket pair. */
-static bool send_descriptor(int socket_descriptor, int descriptor_to_send) {
-    char payload = 'N';
-    struct iovec vector = { .iov_base = &payload, .iov_len = 1 };
-    union {
-        char buffer[CMSG_SPACE(sizeof(int))];
-        struct cmsghdr alignment;
-    } control;
-    memset(&control, 0, sizeof(control));
-
-    struct msghdr message;
-    memset(&message, 0, sizeof(message));
-    message.msg_iov = &vector;
-    message.msg_iovlen = 1;
-    message.msg_control = control.buffer;
-    message.msg_controllen = sizeof(control.buffer);
-
-    struct cmsghdr *header = CMSG_FIRSTHDR(&message);
-    header->cmsg_level = SOL_SOCKET;
-    header->cmsg_type = SCM_RIGHTS;
-    header->cmsg_len = CMSG_LEN(sizeof(int));
-    memcpy(CMSG_DATA(header), &descriptor_to_send, sizeof(int));
-
-    ssize_t sent;
-    do {
-        sent = sendmsg(socket_descriptor, &message, 0);
-    } while (sent < 0 && errno == EINTR);
-    return sent == 1;
 }
 
 /* The descriptor the bootstrap is moved to: the floor, reduced to one below the soft descriptor

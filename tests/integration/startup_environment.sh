@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # What every entry point does with the environment it is started in, before it runs anything:
 # no PATH entry that is relative or empty, which means the current directory, is ever used to
-# find a program, CDPATH never redirects the entry point's own cd, a relative TMPDIR never puts a
-# layer's scratch files in the current directory, the C library's own path variables keep only
-# what is absolute, and a PATH with no absolute entry at all is refused rather than searched.
+# find a program, CDPATH never redirects the entry point's own cd, a relative TMPDIR never reaches
+# a program that would make its temporary files beneath the current directory, the C library's own
+# path variables keep only what is absolute, and a PATH with no absolute entry at all is refused rather than searched.
 # The current directory is the submission's tree when a grader starts Phobos there, and every
 # program found through it would run before any sandbox exists.
 #
@@ -13,10 +13,9 @@
 # And a run with a clean absolute PATH behaves as it did, the command seeing that PATH unchanged,
 # while the command of a run with a polluted PATH sees exactly the absolute entries.
 #
-# Every entry point is started through bash by its absolute path rather than as a program. The
-# #!/usr/bin/env bash line would otherwise find bash itself through the polluted PATH before the
-# entry point runs a line, which no script can prevent; SECURITY.md states that as an
-# integration requirement, and this suite measures what the scripts themselves do.
+# Most checks start an entry point through bash by its absolute path, so they measure what the
+# scripts themselves do. One section starts each as a program, as a grader does, and holds the
+# #! line to naming /bin/bash, which no PATH can redirect, rather than having env look bash up.
 #
 # No Landlock kernel and no compiler is needed: pass-through stand-ins take the place of the
 # enforcers, since what is measured here happens before any of them is started.
@@ -45,8 +44,9 @@ IFS=: read -r -a clean_entries <<< "$CLEAN_PATH"
 BASH_BIN="$(command -v bash)"
 
 # A copy of core with a minimal base policy, and one pass-through stand-in that serves as the
-# Landlock enforcer, the timeout's group lock and the connect guard: it skips its own options up
-# to -- and execs the rest, so a run reaches the command without a kernel feature.
+# Landlock enforcer, the timeout's group lock, the connect guard and the filesystem layer's denial
+# reporter: it skips its own options up to -- and execs the rest, so a run reaches the command
+# without a kernel feature, and no layer prints a notice for a program the copy does not hold.
 CORE_X="$WORK/core-x"
 cp -R "$CORE" "$CORE_X"
 chmod +x "$CORE_X"/*.sh
@@ -127,7 +127,7 @@ entry_args() {
       printf '%s\0' "$CORE_X/phobos-policysystem.sh" --spec-dir "$(mktemp -d "$WORK/policy.XXXXXX")" --config "$BASE" ;;
     phobos-filesystem.sh)
       printf '%s\0' "$CORE_X/phobos-filesystem.sh" --spec-parent "$SPECS" --landlock-bin "$PASS" \
-        --config "$BASE" -- /usr/bin/env ;;
+        --reporter-bin "$PASS" --config "$BASE" -- /usr/bin/env ;;
     phobos-networksystem.sh)
       printf '%s\0' "$CORE_X/phobos-networksystem.sh" --spec-parent "$SPECS" --connect-guard-bin "$PASS" \
         --landlock-bin "$PASS" --config "$BASE" -- /usr/bin/env ;;
@@ -195,6 +195,41 @@ for polluted in "${POLLUTED[@]}"; do
 done
 
 echo
+echo "== started as a program, no entry point's #! line finds bash through PATH =="
+# A bash is planted in the current directory with the rest. An entry point started as a program
+# under a PATH that begins with "." runs it only if its #! line looks bash up through PATH.
+for entry in "${ENTRIES[@]}"; do
+  mapfile -d '' -t args < <(entry_args "$entry")
+  : > "$PLANTED_LOG"
+  OUT="$(cd "$SUB" && PATH=".:${CLEAN_PATH}" "${args[@]}" 2>&1)"
+  RC=$?
+  PLANTED="$(sort -u "$PLANTED_LOG" | tr '\n' ' ')"
+  if [[ "$RC" -eq 0 && -z "$PLANTED" ]]; then
+    ok "$entry started as a program under PATH='.:...' runs no planted bash or other tool"
+  else
+    bad "$entry started as a program under PATH='.:...' runs no planted bash or other tool" \
+      "exit 0, nothing planted ran" "exit ${RC}, planted: ${PLANTED}: ${OUT}"
+  fi
+done
+# Nor does a layer run on its own look bash up when it starts itself again over the
+# specification it built: a bash first in an absolute PATH entry is never the one that runs.
+mkdir -p "$WORK/only-bash"
+cp "$SUB/bash" "$WORK/only-bash/bash"
+for entry in "${ENTRIES[@]}"; do
+  mapfile -d '' -t args < <(entry_args "$entry")
+  : > "$PLANTED_LOG"
+  OUT="$(cd "$SUB" && PATH="$WORK/only-bash:${CLEAN_PATH}" "${args[@]}" 2>&1)"
+  RC=$?
+  PLANTED="$(sort -u "$PLANTED_LOG" | tr '\n' ' ')"
+  if [[ "$RC" -eq 0 && -z "$PLANTED" ]]; then
+    ok "$entry with another bash first in PATH never runs that bash"
+  else
+    bad "$entry with another bash first in PATH never runs that bash" \
+      "exit 0, the other bash never ran" "exit ${RC}, planted: ${PLANTED}: ${OUT}"
+  fi
+done
+
+echo
 echo "== a trailing empty entry is not the fallback for a program the absolute entries lack =="
 for entry in "${ENTRIES[@]}"; do
   mapfile -d '' -t args < <(entry_args "$entry")
@@ -203,6 +238,20 @@ for entry in "${ENTRIES[@]}"; do
     ok "$entry under PATH='<no dirname>:' never runs the planted dirname"
   else
     bad "$entry under PATH='<no dirname>:' never runs the planted dirname" "no planted dirname" "exit ${RC}, planted: ${PLANTED}: ${OUT}"
+  fi
+done
+
+echo
+echo "== an entry point finds its own files without dirname =="
+# Every entry point and the library they share find the files beside them in bash alone, so a
+# PATH that holds no dirname cannot leave them sourcing from a directory dirname failed to name.
+for entry in "${ENTRIES[@]}"; do
+  mapfile -d '' -t args < <(entry_args "$entry")
+  run_entry "$NO_DIRNAME" "${args[@]}"
+  if [[ "$RC" -eq 0 && -z "$PLANTED" && "$OUT" != *"No such file"* ]]; then
+    ok "$entry under a PATH without dirname starts and runs"
+  else
+    bad "$entry under a PATH without dirname starts and runs" "exit 0, no missing file" "exit ${RC}, planted: ${PLANTED}: ${OUT}"
   fi
 done
 
@@ -238,12 +287,12 @@ for entry in "${ENTRIES[@]}"; do
 done
 
 echo
-echo "== a relative TMPDIR never puts a layer's scratch in the current directory =="
-# The network layer makes its scratch files through mktemp -t, which honours TMPDIR. A relative
-# TMPDIR naming no directory makes that fail the run, and one naming a directory puts the files
-# in the submission's tree; an absolute TMPDIR is the grader's choice and is kept. The layer
-# removes those files again before the command starts, so a directory left empty afterwards
-# proves nothing, and the relative TMPDIR naming no directory is what makes the lookup visible.
+echo "== a relative TMPDIR is dropped, an absolute one is kept =="
+# A program that honours TMPDIR, mktemp -t among them, makes its temporary files beneath the
+# current directory when TMPDIR is relative, so no program Phobos or the command starts is given
+# one. A relative TMPDIR naming no directory would also fail any such use in the run. An absolute
+# TMPDIR is the grader's choice and is kept. Phobos's own files never go through TMPDIR, which
+# scratch_location.sh holds.
 run_entry "$CLEAN_PATH" "$CORE_X/phobos.sh" --spec-parent "$SPECS" --landlock-bin "$PASS" --pgroup-lock-bin "$PASS" \
   --connect-guard-bin "$PASS" --config "$CONNECT_CFG" -- /usr/bin/env
 if [[ "$RC" -eq 0 && "$OUT" != *TMPDIR=* ]]; then
@@ -255,9 +304,9 @@ OUT="$(cd "$SUB" && PATH="$CLEAN_PATH" TMPDIR=no-such-relative-dir "$BASH_BIN" "
   --landlock-bin "$PASS" --pgroup-lock-bin "$PASS" --connect-guard-bin "$PASS" --config "$CONNECT_CFG" -- /usr/bin/env 2>&1)"
 RC=$?
 if [[ "$RC" -eq 0 && "$OUT" != *TMPDIR=* ]]; then
-  ok "a relative TMPDIR is dropped: mktemp no longer resolves it beneath the current directory, the command is not given it"
+  ok "a relative TMPDIR is dropped: the run works and the command is not given it"
 else
-  bad "a relative TMPDIR is dropped: mktemp no longer resolves it beneath the current directory, the command is not given it" \
+  bad "a relative TMPDIR is dropped: the run works and the command is not given it" \
     "exit 0, no TMPDIR" "exit ${RC}: ${OUT}"
 fi
 mkdir -p "$WORK/tmp"
