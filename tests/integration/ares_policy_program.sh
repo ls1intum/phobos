@@ -3,7 +3,7 @@
 # configuration it names selects the base policies and adds its [connect] rows to them, and the policy
 # is folded in as an exercise configuration, beside any .cfg, by the same additive merge. Both
 # directions are pinned: what the import grants arrives in the specification, and what it must not
-# touch, a base row, a row that is only lexically under the base, a .cfg-only run, stays as it was.
+# touch, a base row, a .cfg-only run, stays as it was.
 # No Landlock kernel is needed: this checks the files the program writes and runs the filesystem
 # layer's hierarchy check over them.
 set -uo pipefail
@@ -122,7 +122,11 @@ if spec_has read.paths "$OUTSIDE/data.txt"; then ok "an absolute path outside th
 
 policy link/data.txt read > "$WORK/link.yaml"
 run_policy --tail-flags-file "$WORK/tail.flags" --config "$WORK/link.yaml"
-if spec_has read.paths "$PROJ/link/data.txt"; then ok "a row only lexically under the base, through a symbolic link, is written"; else bad "a row only lexically under the base, through a symbolic link, is written" "present" "$(cat "$SPEC/read.paths")"; fi
+if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"reaches the project root"* && "$ERR" == *"link.yaml', line 7."* ]]; then ok "a symbolic link inside the project root is refused, with file and line"; else bad "a symbolic link inside the project root is refused, with file and line" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
+ln -s "$OUTSIDE" "$WORK/outside-link"
+policy "$WORK/outside-link/data.txt" read > "$WORK/outside-link.yaml"
+run_policy --tail-flags-file "$WORK/tail.flags" --config "$WORK/outside-link.yaml"
+if [[ "$STATUS" == 0 ]] && spec_has read.paths "$WORK/outside-link/data.txt"; then ok "a link outside the project root is allowed and written as written"; else bad "a link outside the project root is allowed and written as written" "status 0" "${STATUS}: ${ERR}"; fi
 
 policy /usr/bin "read execute" > "$WORK/usrbin.yaml"
 run_policy --config "$WORK/usrbin.yaml"
@@ -223,7 +227,7 @@ hierarchy="$(
 )"
 hierarchy_status=$?
 if (( hierarchy_status == PHB_EPOLICY )) && [[ "$hierarchy" == *"Policy unenforceable"* ]]; then ok "a strict-subset .cfg row beside an Ares policy is still refused by the hierarchy check"; else bad "a strict-subset .cfg row beside an Ares policy is still refused by the hierarchy check" "status ${PHB_EPOLICY}" "${hierarchy_status}: ${hierarchy}"; fi
-for case in "$PROJ/allowed.yaml|$PROJ" "$WORK/link.yaml|$PROJ/link/data.txt"; do
+for case in "$PROJ/allowed.yaml|$PROJ" "$WORK/outside-link.yaml|$WORK/outside-link/data.txt"; do
   yaml="${case%|*}"
   run_policy --tail-flags-file "$WORK/tail.flags" --config "$yaml"
   built="$STATUS"
@@ -268,6 +272,21 @@ for root in relative/root "$WORK/does-not-exist" "" "$PROJ/../other"; do
   run_policy --project-root "$root" --config "$WORK/relative.yaml"
   if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"is not an absolute path to an existing directory"* ]]; then ok "--project-root '${root}' is refused"; else bad "--project-root '${root}' is refused" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
 done
+ln -s "$PROJ" "$WORK/proj-link"
+for root in / "$WORK/proj-link"; do
+  run_policy --project-root "$root" --config "$WORK/relative.yaml"
+  if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"must be the real path of a project directory"* ]]; then ok "--project-root '${root}' is refused as not a real project directory"; else bad "--project-root '${root}' is refused as not a real project directory" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
+done
+printf '[read]\n/usr\n' > "$WORK/no-ares.cfg"
+run_policy --project-root "$WORK/proj-link" --config "$WORK/no-ares.cfg"
+if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"must be the real path of a project directory"* ]]; then ok "--project-root '${WORK}/proj-link' is refused with no Ares policy at all"; else bad "--project-root is refused with no Ares policy at all" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
+printf -- '--chdir %s\n' "$WORK/proj-link" > "$WORK/tail-link.flags"
+run_policy --tail-flags-file "$WORK/tail-link.flags" --config "$WORK/relative.yaml"
+if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"must be the real path of a project directory"* ]]; then ok "a tail --chdir that is a link is refused where an imported path needs it"; else bad "a tail --chdir that is a link is refused where an imported path needs it" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
+printf -- '--chdir /\n' > "$WORK/tail-slash.flags"
+policy /usr/bin read > "$WORK/usr-bin.yaml"
+run_policy --tail-flags-file "$WORK/tail-slash.flags" --config "$WORK/usr-bin.yaml"
+if [[ "$STATUS" == "$PHB_EPOLICY" && "$ERR" == *"the root of the file system"* ]]; then ok "a tail --chdir of / is refused where an imported path needs it"; else bad "a tail --chdir of / is refused where an imported path needs it" "status ${PHB_EPOLICY}" "${STATUS}: ${ERR}"; fi
 mkdir -p "$WORK/spec-parent-empty-root"
 out="$(bash "$CORE_X/phobos.sh" --tail-flags-file "$WORK/tail.flags" --spec-parent "$WORK/spec-parent-empty-root" --project-root "" \
   -nfr -nnr -ntr -nrr --config "$WORK/relative.yaml" -- /bin/true 2>&1)"

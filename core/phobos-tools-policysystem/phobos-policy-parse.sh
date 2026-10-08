@@ -372,7 +372,10 @@ refuse_malformed_address() {
 # exact host name as well as an address, a CIDR, a loopback name or "*": a datagram carries no TLS
 # host name for the egress broker to check, so the network layer resolves the name once, before the
 # command starts, and holds the rule to the addresses it had then. A line of any other shape, or an
-# unknown marker, is refused. Assumes it is called plainly, so that the refusal ends the run.
+# unknown marker, is refused, and so is a rule that names no port for anything but one loopback
+# address (is_loopback_host), because nothing but the connect guard holds such a rule. Assumes
+# is_loopback_host is defined, which phobos-common.sh arranges, and that it is called plainly, so
+# that the refusal ends the run.
 append_connect_rule() {
   local line="$1"
   local rules="$2"
@@ -397,6 +400,9 @@ append_connect_rule() {
   refuse_wildcard_host_name "$host"
   refuse_malformed_address "$host" "$port" "$line"
   [[ "$port" == "*" ]] || refuse_unusable_port "$host" "$port"
+  if [[ "$port" == "*" ]] && ! is_loopback_host "$host"; then
+    refuse_cfg "${line@Q} in [connect] names ${host@Q} and no port, and only loopback may name no port: localhost, one address in 127.0.0.0/8, or ::1 or its IPv4-mapped form. A range such as 127.0.0.1/1 reaches far beyond loopback, and a host name is enforced by its port. Name a concrete port"
+  fi
   if [[ "$proto" == "udp" ]]; then
     printf '%s %s %s\n' "$host" "$port" "udp" >>"$rules"
   else

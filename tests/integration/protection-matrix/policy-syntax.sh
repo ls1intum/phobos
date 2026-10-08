@@ -68,7 +68,7 @@ for line in \
   "allow 127.0.0.1" "allow 127.0.0.1:80" "allow 127.0.0.1:65535" "allow  127.0.0.1:80" "allow 127.0.0.1:80 tcp" \
   "allow 10.0.0.0/8:80" "allow 127.0.0.1/32:80" "allow [::1]" "allow [::1]:80" "allow ::1" "allow [::]:80" \
   "allow [::ffff:127.0.0.1]:80" "allow localhost" "allow localhost:80" "allow *:80" \
-  "allow 127.0.0.1:*"; do
+  "allow 127.0.0.1:*" "allow 127.0.0.1/32" "allow 127.9.9.9" "allow 0:0:0:0:0:0:0:1" "allow [::ffff:127.0.0.1]"; do
   accepted "[connect] ${line}" "[connect]" "$line"
 done
 
@@ -82,7 +82,8 @@ for line in \
   "allow 256.1.1.1:80" "allow 1.2.3:80" "allow 1.2.3.4.5:80" "allow 127.1:80" "allow 2130706433:80" "allow 01.2.3.4:80" \
   "allow 127.0.0.1/33:80" "allow 127.0.0.1/-1:80" "allow 127.0.0.1/abc:80" "allow 127.0.0.1/:80" "allow 0.0.0.0/0:80" \
   "allow [::/0]:80" "allow [::1/129]:80" "allow 127.0.0.1:" "allow [::1]:" "allow [::1::2]:80" "allow [fe80::1%eth0]:80" \
-  "allow example.org/24:80"; do
+  "allow example.org/24:80" "allow 127.0.0.1/1" "allow 127.0.0.0/8" "allow 127.0.0.1/31" "allow 127.evil.example" \
+  "allow 128.0.0.1" "allow [::ffff:128.0.0.1]" "allow [::1/64]"; do
   refused "[connect] ${line}" "$PHB_EPOLICY" "[connect]" "$line"
 done
 
