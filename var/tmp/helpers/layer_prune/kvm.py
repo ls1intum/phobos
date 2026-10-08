@@ -206,8 +206,10 @@ def abi10_phase(pruning: stages.Pruning, policy: cfgfile.Policy, capture: Captur
     """The joint verification on this kernel; the policy it ends with and the UDP bind rows it added, each with its audit record.
 
     A failing run is diagnosed with one observed run. Only a UDP bind the kernel names as refused, whose
-    rule the strace derivation also asks for, is added; any other rule, or a failure with no refusal to
-    explain it, aborts, because then the two kernels differ in something this run may not decide.
+    rule the strace derivation also asks for, is added (port 0 included, which its record names by no
+    port); any other rule, or a failure with no refusal to explain it, aborts, because then the two
+    kernels differ in something this run may not decide. A refused UDP connect is no difference: the
+    connect guard refuses it on every kernel, so it never reaches a rule here.
     """
     current = policy
     added: list[dict] = []
@@ -219,9 +221,10 @@ def abi10_phase(pruning: stages.Pruning, policy: cfgfile.Policy, capture: Captur
         records, _, _ = read_records(capture)
         decision = stages.network_decision(pruning, diagnosis)
         rows, other = audit.abi10_rows(decision.bind, records, current.bind)
-        if other or decision.connect or not rows:
+        connect = [rule for rule in decision.connect if not rule.endswith(" udp")]
+        if other or connect or not rows:
             raise search.PruneAbort("the guest kernel differs from the default prune's in more than a UDP bind port",
-                                    {"other_bind_rules": other, "connect_rules": list(decision.connect),
+                                    {"other_bind_rules": other, "connect_rules": connect,
                                      "audit": [item.raw for item in records][:20]})
         added += [{"rule": row, "audit": [item.raw for item in records if audit.BIND_UDP in item.blockers]} for row in rows]
         current = dataclasses.replace(current, bind=current.bind + tuple(rows))

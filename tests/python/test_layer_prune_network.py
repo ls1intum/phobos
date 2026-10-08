@@ -133,11 +133,22 @@ def test_another_loopback_address_gets_a_wildcard_of_its_own():
     assert decision.connect == ("allow 127.0.0.2:*",)
 
 
-def test_an_ipv4_mapped_loopback_destination_is_reported_not_granted():
+def test_an_ipv4_mapped_loopback_destination_is_granted_as_the_ipv4_endpoint_it_maps():
     decision = network.network_rules([connect("::ffff:127.0.0.1", 43521, "tcp")], frozenset({("AF_INET6", 43521, "tcp")}), ())
-    assert decision.connect == ()
+    assert decision.connect == ("allow 127.0.0.1:*",)
     assert decision.refused_external == ()
-    assert "IPv4-mapped" in decision.reported[0]
+
+
+def test_an_ipv4_mapped_loopback_destination_nothing_bound_is_granted_exactly_as_ipv4():
+    decision = network.network_rules([connect("::ffff:127.0.0.1", 43521, "tcp")], frozenset(), ())
+    assert decision.connect == ("allow 127.0.0.1:43521",)
+    assert "no process of the run bound that port" in decision.reported[0]
+
+
+def test_an_ipv4_mapped_external_destination_is_refused_not_granted():
+    decision = network.network_rules([connect("::ffff:10.0.0.1", 80, "tcp")], frozenset(), ())
+    assert decision.connect == ()
+    assert decision.refused_external == ("::ffff:10.0.0.1:80 tcp",)
 
 
 def test_a_dual_stack_server_matches_an_ipv4_client_by_port_and_transport():
@@ -177,6 +188,35 @@ def test_the_ephemeral_port_of_a_client_socket_is_not_a_server():
     ]
     assert network.bound_ports(strace_parse.parse_trace(lines)) == frozenset({("AF_INET6", 43000, "tcp")})
 
+
+def test_without_udp_port_support_an_exact_loopback_udp_rule_is_reported_and_not_granted():
+    decision = network.network_rules([connect("127.0.0.53", 53, "udp")], frozenset(), (), udp_ports=False)
+    assert decision.connect == ()
+    assert decision.reported and "needs Landlock version 10" in decision.reported[0]
+
+
+def test_with_udp_port_support_the_same_denial_is_granted_exactly():
+    decision = network.network_rules([connect("127.0.0.53", 53, "udp")], frozenset(), ())
+    assert decision.connect == ("allow 127.0.0.53:53 udp",)
+
+
+def test_without_udp_port_support_a_udp_wildcard_for_a_port_the_run_held_is_still_granted():
+    decision = network.network_rules([connect("127.0.0.1", 40000, "udp")], frozenset({("AF_INET", 40000, "udp")}), (),
+                                     udp_ports=False)
+    assert decision.connect == ("allow 127.0.0.1:* udp",)
+
+
+def test_without_udp_port_support_an_explicit_udp_bind_is_reported_and_port_zero_is_not():
+    decision = network.network_rules([bind(5000, "udp", "127.0.0.1"), bind(0, "udp")], frozenset(), (), udp_ports=False)
+    assert decision.bind == ("allow 0 udp",)
+    assert any("needs Landlock version 10" in item for item in decision.reported)
+
+
+def test_without_udp_port_support_tcp_rules_are_unchanged():
+    decision = network.network_rules([connect("127.0.0.1", 5432, "tcp"), bind(8080, "tcp", "127.0.0.1")], frozenset(), (),
+                                     udp_ports=False)
+    assert decision.connect == ("allow 127.0.0.1:5432",)
+    assert decision.bind == ("allow 8080",)
 
 def test_both_loopback_families_are_localhost_and_udp_keeps_its_marker():
     assert network.loopback_wildcard(frozenset({"inet", "inet6"}), "tcp") == "allow localhost"

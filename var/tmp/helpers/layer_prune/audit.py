@@ -50,8 +50,9 @@ NETWORK_BLOCKERS = frozenset({"net.bind_tcp", "net.connect_tcp", BIND_UDP, "net.
 LOCAL_PORT_KEYS = ("lport", "src", "sport")
 REMOTE_PORT_KEYS = ("dest", "fport", "dport")
 
-# A UDP bind rule a row may be: a port from 1 to 65535 in ASCII digits, no leading zero, and the marker.
-UDP_BIND_RULE = re.compile(r"allow ([1-9][0-9]{0,4}) udp", re.ASCII)
+# A UDP bind rule a row may be: port 0, or a port from 1 to 65535 in ASCII digits with no leading zero,
+# and the marker. Port 0 is the kernel's choice, whose audit record names no port at all.
+UDP_BIND_RULE = re.compile(r"allow (0|[1-9][0-9]{0,4}) udp", re.ASCII)
 PORT_MAXIMUM = 65535
 RECORD_PATTERN = re.compile(r"type=(?P<type>\w+)\b.*?audit\((?P<stamp>[0-9.]+):(?P<serial>\d+)\):\s*(?P<body>.*)$")
 FIELD_PATTERN = re.compile(r'(?P<key>[a-z_]+)=(?:"(?P<quoted>[^"]*)"|(?P<bare>\S+))')
@@ -185,8 +186,8 @@ def cross_check(strace_denials: Iterable[record.Denial], audit_denials: Iterable
 
 
 def udp_bind_ports(records: Iterable[AuditRecord]) -> set[int]:
-    """The local ports the kernel says a UDP bind was refused on."""
-    return {audit.port for audit in records if BIND_UDP in audit.blockers and audit.port is not None}
+    """The local ports the kernel says a UDP bind was refused on; a record that names none is a bind to port 0."""
+    return {audit.port if audit.port is not None else 0 for audit in records if BIND_UDP in audit.blockers}
 
 
 def abi10_rows(strace_bind_rules: Iterable[str], records: Iterable[AuditRecord], held: Iterable[str]) -> tuple[list[str], list[str]]:

@@ -4,7 +4,7 @@
 5,404,8100300,-;audit: type=1423 audit(1759830000.104:44): domain=195ba459b blockers=fs.make_reg path="/srv/data" dev="vda" ino=2200
 5,405,8100400,-;audit: type=1423 audit(1759830000.105:45): domain=195ba459b blockers=fs.read_file path=2F7372762F776974682073706163652F66696C65 dev="vda" ino=2212
 5,406,8100500,-;audit: type=1423 audit(1759830000.106:46): domain=195ba459b blockers=fs.ioctl_dev path="/dev/null" dev="devtmpfs" ino=5
-5,407,8100600,-;audit: type=1423 audit(1759830000.107:47): domain=195ba459b blockers=net.bind_udp lport=5000
+5,407,8100600,-;audit: type=1423 audit(1759830000.107:47): domain=195ba459b blockers=net.bind_udp saddr=127.0.0.1 src=5000
 5,408,8100700,-;audit: type=1423 audit(1759830000.108:48): domain=195ba459b blockers=net.connect_tcp daddr=10.0.0.1 dest=80
 5,409,8100800,-;audit: type=1424 audit(1759830000.109:49): domain=195ba459b status=allocated mode=enforcing
 6,410,8100900,-;audit: type=1423 audit(1759830000.110:50): this line is damaged

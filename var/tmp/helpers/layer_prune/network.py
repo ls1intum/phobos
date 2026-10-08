@@ -22,6 +22,10 @@ DECLARED_HOST = re.compile(
 )
 # The highest port number.
 PORT_MAXIMUM = 65535
+# The first Landlock version that handles UDP ports. Below it the enforcer refuses, before the command
+# starts, a policy with a UDP rule that names a port, so no such rule can be derived on a kernel that
+# lacks it: the default prune runs on version 7 or 8, and the KVM run observes version 10.
+FIRST_UDP_PORT_VERSION = 10
 # The calls whose success names a local port the run holds.
 BINDING_CALLS = frozenset({"bind", "getsockname"})
 
@@ -133,12 +137,13 @@ class Collected:
     reported: list[str] = dataclasses.field(default_factory=list)
 
 
-def decide_connect(denial: Denial, bound: frozenset[tuple[str, int, str]], collected: Collected) -> None:
+def decide_connect(denial: Denial, bound: frozenset[tuple[str, int, str]], collected: Collected,
+                   udp_ports: bool = True) -> None:
     """Sorts one refused connect or datagram: an external refusal, a loopback wildcard or exact rule, or a report.
 
     A server is recognised by port and transport alone, so a dual-stack server bound to :: matches a
-    client that connects over IPv4. An IPv4-mapped loopback destination is reported: the guard holds
-    ::1 and localhost to their own spellings, so no rule could grant it.
+    client that connects over IPv4. An IPv4-mapped loopback destination is the IPv4 endpoint it maps,
+    as the guard judges it, so it is sorted as that address.
     """
     if denial.address is None or denial.port is None:
         return
@@ -151,21 +156,27 @@ def decide_connect(denial: Denial, bound: frozenset[tuple[str, int, str]], colle
         collected.reported.append(f"loopback {destination}: the socket's transport is unknown; not granted")
         return
     if kind == "mapped":
-        collected.reported.append(f"loopback {destination}: an IPv4-mapped address no rule can name; not granted")
-        return
+        denial = dataclasses.replace(denial, address=str(ipaddress.ip_address(denial.address).ipv4_mapped))
     if any(port == denial.port and transport == denial.transport for _, port, transport in bound):
         collected.wildcards.add((denial.address, denial.transport))
+        return
+    if denial.transport == "udp" and not udp_ports:
+        collected.reported.append(f"loopback {destination}: an exact UDP port rule needs Landlock version "
+                                  f"{FIRST_UDP_PORT_VERSION}, which this kernel lacks; not granted")
         return
     collected.exact.add((denial.address, denial.transport, exact_loopback(denial.address, denial.port, denial.transport)))
     collected.reported.append(f"loopback {destination}: no process of the run bound that port; granted exactly")
 
 
-def decide_bind(denial: Denial, collected: Collected) -> None:
+def decide_bind(denial: Denial, collected: Collected, udp_ports: bool = True) -> None:
     """Sorts one refused bind or listen into the bind rules or the reported refusals."""
     if denial.transport is None:
         collected.reported.append(f"bind of port {denial.port}: the socket's transport is unknown; not granted")
     elif denial.port == 0:
         collected.binds.add("allow 0" + transport_marker(denial.transport))
+    elif denial.transport == "udp" and not udp_ports:
+        collected.reported.append(f"bind of UDP port {denial.port}: an explicit UDP port rule needs Landlock version "
+                                  f"{FIRST_UDP_PORT_VERSION}, which this kernel lacks; not granted")
     elif denial.port is not None and denial.address is not None and loopback_kind(denial.address) in ("inet", "inet6"):
         collected.binds.add(f"allow {denial.port}" + transport_marker(denial.transport))
     else:
@@ -191,7 +202,7 @@ def connect_rules(collected: Collected) -> set[str]:
 
 
 def network_rules(denials: list[Denial], bound: frozenset[tuple[str, int, str]],
-                  declared_hosts: tuple[str, ...]) -> NetworkDecision:
+                  declared_hosts: tuple[str, ...], udp_ports: bool = True) -> NetworkDecision:
     """The rules one run's network refusals ask for, by A.6.5.
 
     A refused loopback destination on a port a server of the run held becomes a wildcard for that
@@ -200,16 +211,18 @@ def network_rules(denials: list[Denial], bound: frozenset[tuple[str, int, str]],
     explicit port only for a loopback address. A refusal whose transport is unknown is reported. An
     external destination is never granted, whatever the declared hosts: a declared host is a name, a
     record holds addresses, and the guard holds a name rule to its port, so a destination it refused
-    is one no declared rule names. `declared_hosts` is named in the report when it is.
+    is one no declared rule names. `declared_hosts` is named in the report when it is. With `udp_ports`
+    false, a rule that would name a UDP port is reported and not granted, since the kernel's Landlock
+    could not enforce it and the enforcer would refuse the policy.
     """
     collected = Collected()
     for denial in denials:
         if denial.layer != LAYER_NETWORK:
             continue
         if attribute.SECTION_BIND in denial.sections:
-            decide_bind(denial, collected)
+            decide_bind(denial, collected, udp_ports)
         else:
-            decide_connect(denial, bound, collected)
+            decide_connect(denial, bound, collected, udp_ports)
     if collected.refused and declared_hosts:
         collected.reported.append("declared hosts are names and match no refused address: " + ", ".join(declared_hosts))
     return NetworkDecision(connect=tuple(sorted(connect_rules(collected))), bind=tuple(sorted(collected.binds)),

@@ -11,18 +11,6 @@ name: Prune the Maven reference exercise
 
 on:
   workflow_dispatch:
-  # Temporary. GitHub can dispatch only a workflow the default branch already holds, so until this
-  # file is on main the run is started by pushing to the branch it is written on. Remove it when
-  # the pull request is rebased onto main.
-  push:
-    branches: [ "feature/prune-maven-reference" ]
-    paths:
-      - ".github/workflows/prune-maven.yml"
-      - "tests/integration/layer_prune_maven.sh"
-      - "var/tmp/helpers/layer_prune/**"
-      - "var/tmp/testing-dir/java-maven/**"
-      - "docker/**"
-      - "docker-compose.yaml"
 
 permissions: {}
 
