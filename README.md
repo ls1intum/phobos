@@ -172,7 +172,7 @@ Build the run-phase image (it compiles the four C products and bakes in the scri
 docker compose -f docker/run_phase/java/docker-compose.yaml up --build
 ```
 
-For Python exercises, `docker/run_phase/python/docker-compose.yaml` builds the Python run-phase image the same way. It is built from the official Python image (`python:3.13-slim-trixie`), not from Artemis's `ls1tum/artemis-python-docker`, whose release is too old for the C products: an Artemis Python exercise graded under Phobos must select this image. Its CI job holds it to every suite that needs no Java; the acceptance suites that compile Java probes or run Maven stay with the Java image. Its shipped `BaseLanguage-python.cfg` still names the paths of the old Artemis image, so a Python base has to be pruned for it before it grades.
+For Python exercises, `docker/run_phase/python/docker-compose.yaml` builds the Python run-phase image the same way. It is built from the official Python image (`python:3.13-slim-trixie`), not from Artemis's `ls1tum/artemis-python-docker`, whose release is too old for the C products: an Artemis Python exercise graded under Phobos must select this image. Its CI job holds it to every suite that needs no Java; the acceptance suites that compile Java probes or run Maven stay with the Java image. Its shipped `BaseLanguage-python.cfg` is the layer pruner's result for the Python reference exercise on this image, joined from an x86_64 and an aarch64 run; the exercise passes under it in CI, and a code path that exercise never takes is refused when graded.
 
 Then, inside that image, wrap the exercise's build command with `phobos.sh`, giving the exercise's own configuration:
 

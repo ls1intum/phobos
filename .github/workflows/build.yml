@@ -522,6 +522,18 @@ jobs:
           done
           exit "${failed}"
 
+      # The Python reference exercise under the Python base the image ships, which the layer pruner
+      # derived from this very exercise: the template's two phases pass, and a canary, a write beside
+      # the working directory and an unnamed address are refused. Without it a stale base would go
+      # unnoticed, as the previous one did.
+      - name: The shipped Python base runs the Python reference exercise both ways
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
+            -v "${PWD}/var/tmp/testing-dir/python/python-reference:/exercise:ro" \
+            phobos-run-phase-python:ci \
+            bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/python-policy-test.sh
+
       - name: Build the prune image on the Python run-phase image
         id: prune-build
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
