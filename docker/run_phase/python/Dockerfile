@@ -48,7 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssl \
     procps \
  && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir pytest==8.4.2 iniconfig==2.3.0 packaging==26.3 pluggy==1.6.0 Pygments==2.21.0
+RUN pip install --no-cache-dir pytest==8.4.2 iniconfig==2.3.1 packaging==26.3 pluggy==1.6.0 Pygments==2.21.0
 
 ENV PHOBOS_HOME=/var/tmp/opt/core
 RUN mkdir -p "${PHOBOS_HOME}"
