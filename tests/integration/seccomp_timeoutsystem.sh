@@ -166,7 +166,11 @@ echo "== with the network on, the connect guard still traps a forbidden connect 
 # guard still decides every connect although the lock is in force. This exercises both layers on,
 # with a timeout set, over a loopback-only policy so no broker is needed and the network layer's
 # own Landlock is not invoked. It needs the connect guard, so it is built here.
-if "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/guard" "${CORE}"/phobos-seccomp-networksystem/phobos-seccomp-networksystem*.c 2>"$WORK/guard-cc.log"; then
+if "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/guard" "${CORE}"/phobos-seccomp-networksystem/phobos-seccomp-networksystem*.c \
+  "${CORE}"/phobos-seccomp-filesystem/phobos-seccomp-filesystem-*.c \
+  "${CORE}"/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-policy.c \
+  "${CORE}"/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-path-rule.c \
+  "${CORE}"/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-model.c 2>"$WORK/guard-cc.log"; then
   cp "$WORK/guard" "$CORE_X/phobos-seccomp-networksystem"
   cat > "$WORK/connect-probe.c" <<'C'
 #define _GNU_SOURCE

@@ -178,9 +178,9 @@ check "with the filesystem restriction off the limits still reach the command" "
 echo
 echo "== the limits bind the command and none of the helpers around it =="
 # A policy with a one-megabyte file-size limit and a small memory limit. The command's output
-# passes through the filesystem layer's helpers; were they bound by the command's limits, the
-# stderr pass-through would die at the first megabyte and take the command with it (SIGPIPE,
-# exit 141). Both streams go to pipes, so only a helper's own writes could meet the limit.
+# goes through this layer's streams; were a helper of the layers bound by the command's limits, it
+# would die at the first megabyte and take the command with it (SIGPIPE, exit 141). Both streams
+# go to pipes, so only a helper's own writes could meet the limit.
 FSIZE_MB=1
 OUTPUT_BYTES=3000000
 FSIZE_BLOCKS=1024
@@ -214,6 +214,71 @@ if [[ "$long_line_rc" -ne "$SIGPIPE_EXIT" && "$long_line_rc" -eq 0 ]]; then
   ok "a single endless stderr line under a memory limit does not end the run with SIGPIPE"
 else
   bad "a single endless stderr line under a memory limit does not end the run with SIGPIPE" "exit 0" "exit ${long_line_rc}"
+fi
+
+echo
+echo "== a limit the command hit is worded =="
+CPU_LINE="Phobos Security Error: the program tried to illegally exceed the CPU Time Limit of 1 seconds but was blocked by Phobos."
+FSIZE_LINE="Phobos Security Error: the program tried to illegally exceed the File Size Limit of ${FSIZE_MB} MB but was blocked by Phobos."
+SIGKILL_EXIT=137
+SIGXCPU_EXIT=152
+SIGXFSZ_EXIT=153
+
+# Runs a command under phobos.sh with the given [limits] body, the network and timeout layers off, and
+# puts the combined output in OUT and the status in RC.
+run_limited() {
+  local limits_body=$1
+  shift
+  printf '[read]\n/usr\n[limits]\n%s\n' "$limits_body" > "$CORE_F/BaseTest.cfg"
+  OUT="$(bash "$CORE_F/phobos.sh" --spec-parent "$parent" --landlock-bin "$WORK/passthrough-landlock" \
+    --no-networksystem-restriction --no-timeoutsystem-restriction -- "$@" 2>&1)"
+  RC=$?
+}
+
+run_limited 'cpu=1' bash -c 'while :; do :; done'
+if [[ "$RC" == "$SIGKILL_EXIT" && "$(grep -cxF -- "$CPU_LINE" <<< "$OUT")" == 1 ]]; then
+  ok "a command that runs out of CPU time is ended by the kernel (SIGKILL, the soft and hard limit being one) and the limit is worded once"
+else
+  bad "a command that runs out of CPU time is ended by the kernel and the limit is worded once" \
+    "exit ${SIGKILL_EXIT} and one line" "exit ${RC}: $OUT"
+fi
+run_limited "fsize_mb=${FSIZE_MB}" bash -c "head -c 2000000 /dev/zero > '$WORK/big'"
+if [[ "$RC" == "$SIGXFSZ_EXIT" && "$(grep -cxF -- "$FSIZE_LINE" <<< "$OUT")" == 1 ]]; then
+  ok "a command that writes a file past its limit is ended by SIGXFSZ and the limit is worded once"
+else
+  bad "a command that writes a file past its limit is ended by SIGXFSZ and the limit is worded once" \
+    "exit ${SIGXFSZ_EXIT} and one line" "exit ${RC}: $OUT"
+fi
+run_limited 'cpu=1' true
+if [[ "$RC" == 0 && "$OUT" != *"Phobos Security Error"* ]]; then
+  ok "a run within its limits prints no such line"
+else
+  bad "a run within its limits prints no such line" "exit 0 and no line" "exit ${RC}: $OUT"
+fi
+run_limited 'cpu=1' bash -c "exit ${SIGXCPU_EXIT}"
+if [[ "$RC" == "$SIGXCPU_EXIT" && "$OUT" != *"Phobos Security Error"* ]]; then
+  ok "a command that exits with 152 by itself, having used almost no processor time, is no CPU limit hit"
+else
+  bad "a command that exits with 152 by itself is no CPU limit hit" "exit ${SIGXCPU_EXIT} and no line" "exit ${RC}: $OUT"
+fi
+run_limited 'cpu=1' bash -c 'kill -KILL $$'
+if [[ "$RC" == "$SIGKILL_EXIT" && "$OUT" != *"Phobos Security Error"* ]]; then
+  ok "nor is a command killed from outside before it has used the limit"
+else
+  bad "nor is a command killed from outside before it has used the limit" "exit ${SIGKILL_EXIT} and no line" "exit ${RC}: $OUT"
+fi
+run_limited 'cpu=0' bash -c 'kill -KILL $$'
+if [[ "$RC" == "$SIGKILL_EXIT" && "$OUT" != *"Phobos Security Error"* ]]; then
+  ok "nor where the CPU limit is switched off with 0"
+else
+  bad "nor where the CPU limit is switched off with 0" "exit ${SIGKILL_EXIT} and no line" "exit ${RC}: $OUT"
+fi
+run_limited 'cpu=0
+fsize_mb=0' bash -c "exit ${SIGXFSZ_EXIT}"
+if [[ "$RC" == "$SIGXFSZ_EXIT" && "$OUT" != *"Phobos Security Error"* ]]; then
+  ok "nor is a status of 153 where the limits are switched off with 0"
+else
+  bad "nor is a status of 153 where the limits are switched off with 0" "exit ${SIGXFSZ_EXIT} and no line" "exit ${RC}: $OUT"
 fi
 
 finish

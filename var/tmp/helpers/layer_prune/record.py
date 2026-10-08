@@ -80,3 +80,8 @@ class Denial:
     errno: str
     run: int = 0
     tid: int = 0
+
+    def need(self) -> Need:
+        """The access granting this denial would give: the same objects and sections, as a Need."""
+        return Need(objects=self.objects, sections=self.sections, run=self.run, tid=self.tid, tgid=self.pid,
+                    evidence=f"{self.tid} {self.operation}()")

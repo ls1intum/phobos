@@ -21,7 +21,11 @@ RUN mkdir -p /build/bin \
     -o /build/bin/phobos-landlock-filesystem-and-networksystem \
     /build/phobos-landlock-filesystem-and-networksystem/*.c
 RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
-    -o /build/bin/phobos-seccomp-networksystem /build/phobos-seccomp-networksystem/*.c
+    -o /build/bin/phobos-seccomp-networksystem /build/phobos-seccomp-networksystem/*.c \
+    /build/phobos-seccomp-filesystem/phobos-seccomp-filesystem-*.c \
+    /build/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-policy.c \
+    /build/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-path-rule.c \
+    /build/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-model.c
 RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
     -o /build/bin/phobos-seccomp-timeoutsystem \
     /build/phobos-seccomp-timeoutsystem/phobos-seccomp-timeoutsystem.c
@@ -48,7 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssl \
     procps \
  && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir pytest==8.4.2 iniconfig==2.3.1 packaging==26.3 pluggy==1.6.0 Pygments==2.21.0
+RUN pip install --no-cache-dir pytest==9.1.1 iniconfig==2.3.1 packaging==26.3 pluggy==1.6.0 Pygments==2.21.0
 
 ENV PHOBOS_HOME=/var/tmp/opt/core
 RUN mkdir -p "${PHOBOS_HOME}"

@@ -24,9 +24,10 @@
  *
  * Reporting is a diagnostic, never a reason to refuse a run: a filter that cannot be installed (a
  * listener already held above it, EBUSY) is said once and the command runs without reporting.
- * Once its child has ended, a drainer it forks keeps answering whatever the child left behind, with
- * its output silenced, until no task is left, and the supervisor ends with the child's status, or
- * with 16 (PHB-ESTATUS) when that status could not be read.
+ * Once its child has ended it prints the run's one summary line, when anything was counted, and a
+ * drainer it forks keeps answering whatever the child left behind, with its output silenced, until
+ * no task is left; the supervisor ends with the child's status, or with 16 (PHB-ESTATUS) when that
+ * status could not be read.
  *
  * This file is the sequence of stages and nothing else. What each stage works with lives beside it:
  *
@@ -43,6 +44,7 @@
 #define _GNU_SOURCE
 #include "phobos-seccomp-filesystem-filter.h"
 #include "phobos-seccomp-filesystem-handoff.h"
+#include "phobos-seccomp-filesystem-message.h"
 #include "phobos-seccomp-filesystem-refusals.h"
 #include "phobos-seccomp-filesystem-reporter.h"
 
@@ -313,6 +315,7 @@ static int supervise_child(pid_t child, int socket_descriptor, const sigset_t *f
         }
     }
     bool reaped = reap_command(child, forwarded, &status);
+    report_summary();
     if (listener >= 0) {
         start_drainer(listener, forwarded, request, request_size, response);
         close(listener);

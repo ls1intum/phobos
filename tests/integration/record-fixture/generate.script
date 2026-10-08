@@ -1,0 +1,27 @@
+# The session of record_generate.sh, typed into python3 -q with its history kept in the working directory.
+# It reads a file of a fine-grained root, writes a temporary file and moves it over a name, creates a
+# directory named after its own process id, deletes a file the exercise ships, moves a directory from /tmp
+# into the working directory, runs a child and a script, and uses loopback TCP and UDP. Every step
+# waits for what Python prints, never for a time, and markers are printed in two halves so the echo of
+# the typed line can never satisfy an expectation.
+expect >>>
+send import os, socket, subprocess, tempfile, threading
+send print("OK-" + "G1", len(open("/etc/hostname").read()) > 0, len(open("/proc/self/status").read()) > 0)
+expect OK-G1
+send fd, name = tempfile.mkstemp(dir="."); os.write(fd, b"data"); os.close(fd); os.replace(name, "out.txt"); print("OK-" + "G2")
+expect OK-G2
+send os.makedirs("cache/%d" % os.getpid()); open("cache/%d/entry" % os.getpid(), "w").write("x"); print("OK-" + "G3")
+expect OK-G3
+send os.remove("old.txt"); print("OK-" + "G4")
+expect OK-G4
+send os.mkdir("/tmp/moved-dir"); os.rename("/tmp/moved-dir", "moved-dir"); print("OK-" + "G5")
+expect OK-G5
+send server = socket.socket(); server.bind(("127.0.0.1", 0)); server.listen(); port = server.getsockname()[1]
+send threading.Thread(target=lambda: server.accept()[0].sendall(b"hi"), daemon=True).start()
+send client = socket.create_connection(("127.0.0.1", port)); print("OK-" + "G6", client.recv(2))
+expect OK-G6
+send a = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); a.bind(("127.0.0.1", 0)); b = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); b.sendto(b"u", a.getsockname()); print("OK-" + "G7", a.recv(1))
+expect OK-G7
+send print("OK-" + "G8", subprocess.run(["ls", "/usr/share/doc"], capture_output=True).returncode, subprocess.run(["./tool.sh"], capture_output=True).returncode)
+expect OK-G8
+send exit(0)

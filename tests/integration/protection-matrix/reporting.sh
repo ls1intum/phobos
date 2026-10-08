@@ -7,15 +7,24 @@
 # never run. Run inside the run-phase image, in an ordinary container. See lib.sh for what makes a
 # denial count.
 #
-# Until the connect guard reports (PR 3 of the denial-reporting plan), the filesystem layer starts its
-# own reporter only with the network layer off, so every switch set below carries -nnr; the standalone
-# filesystem layer is the ninth entry.
+# The supervisor is the connect guard when the network layer is on and the filesystem layer's report-only
+# supervisor when it is off, so every combination of the three switches -ntr, -nnr and -nrr is run, and the
+# standalone filesystem layer is the ninth entry. The network layer's own refusals, the ports Landlock
+# refuses to bind, the calls a filter refuses outright and the closing summary are held to the same contract.
 set -uo pipefail
 PM_HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 source "${PM_HERE}/lib.sh"
 pm_setup || finish
-trap pm_restore EXIT
+SERVER_PIDS=()
+cleanup() {
+  local pid
+  for pid in "${SERVER_PIDS[@]}"; do
+    reap "$pid"
+  done
+  pm_restore
+}
+trap cleanup EXIT
 P="$PM/bin/pprobe"
 PREFIX='Phobos Security Error: the program tried to illegally '
 SUFFIX=' but was blocked by Phobos.'
@@ -192,6 +201,12 @@ exact_lines() {
   grep -cxF -- "${PREFIX}$1${SUFFIX}" "$PM_ERR"
 }
 
+# Prints how many blocked actions the last run's summary counted for a layer (filesystem, network or timeout),
+# or 0 when it printed no summary.
+summary_count() {
+  sed -n "s/^Phobos Security Summary: .* \([0-9][0-9]*\) in the $1 layer.*/\1/p" "$PM_ERR" | head -1 | grep . || printf '0\n'
+}
+
 # reported_case TITLE SWITCHES CONFIG OPNAME ERRNOS LINE -- PROBE ARGS...
 # The baseline is the standalone filesystem layer with --no-own-reporter: Landlock alone. The reported run is
 # phobos.sh with SWITCHES, or the standalone layer with its own reporter for "standalone". Their results for
@@ -239,7 +254,7 @@ reported_case() {
 
 echo
 echo "== every action is refused or granted exactly as without the reporter, with one line per refusal =="
-for switches in "-nnr" "-nnr -ntr" "-nnr -nrr" "-nnr -ntr -nrr" standalone; do
+for switches in "-nnr" "-nnr -ntr" "-nnr -nrr" "-nnr -ntr -nrr" "" "-ntr" "-nrr" "-ntr -nrr" standalone; do
   PREP=""
   reported_case "granted read [${switches}]" "$switches" "$c_rw" open "" "" -- "$P" read "$PM/rw/data.txt"
   reported_case "refused read [${switches}]" "$switches" "$c_rw" open "EACCES" \
@@ -311,12 +326,13 @@ echo "== with the filesystem layer off nothing is refused, so nothing is reporte
 run_pm -nnr --no-filesystem-restriction --config "$c_rw" -- "$P" read "$PM/none/secret.txt"
 if op_ok open && [[ "$(own_report_lines)" == 0 ]]; then ok "-nfr reports nothing"; else bad "-nfr reports nothing" "$(pm_describe)"; fi
 echo
-echo "== with the network layer on, the connect guard is the supervisor, which reports from PR 3 =="
-run_pm --config "$c_rw" -- "$P" read "$PM/none/secret.txt"
-if op_failed_with open EACCES && [[ "$(own_report_lines)" == 0 ]] && ! grep -q 'reporting is off' "$PM_ERR"; then
-  ok "a run with the network layer on starts no second reporter beside the guard, and its refusal still holds"
+echo "== with the network layer on, the connect guard is the one supervisor, and it reports =="
+run_pm --debug --config "$c_rw" -- "$P" read "$PM/none/secret.txt"
+if op_failed_with open EACCES && [[ "$(exact_lines "read the File '$PM/none/secret.txt'")" == 1 ]] \
+  && ! grep -q 'reporting is off' "$PM_ERR" && ! grep -F '[phobos] filesystem: run' "$PM_ERR" | grep -qF "$REPORTER"; then
+  ok "a run with the network layer on reports a refused read through the guard, and starts no second supervisor beside it"
 else
-  bad "a run with the network layer on starts no second reporter beside the guard" "$(pm_describe)"
+  bad "a run with the network layer on reports a refused read through the guard" "$(pm_describe)"
 fi
 
 echo
@@ -327,6 +343,11 @@ if grep -q LOOPED "$PM_OUT" && [[ "$(exact_lines "read the File '$PM/none/secret
 else
   bad "2000 refused reads of one file print one line" "$(pm_describe)"
 fi
+if [[ "$(summary_count filesystem)" -ge 2000 && "$(summary_count network)" == 0 && "$(summary_count timeout)" == 0 ]]; then
+  ok "and the summary counts every one of the 2000 refusals, for the filesystem layer"
+else
+  bad "and the summary counts every one of the 2000 refusals, for the filesystem layer" "$(grep 'Phobos Security Summary' "$PM_ERR")"
+fi
 mkdir -p "$PM/none/many"
 for number in $(seq 1 150); do printf x > "$PM/none/many/f${number}"; done
 run_pm -nnr --config "$c_rw" -- /bin/sh -c "i=1; while [ \$i -le 150 ]; do true 2>/dev/null < '$PM/none/many/f'\$i; i=\$((i+1)); done; echo LOOPED"
@@ -335,6 +356,11 @@ if grep -q LOOPED "$PM_OUT" && [[ "$(grep -c "^${PREFIX}read the File '$PM/none/
   ok "150 distinct refused files print 100 lines and the overflow notice once"
 else
   bad "150 distinct refused files print 100 lines and the overflow notice once" "$(grep -c "^${PREFIX}" "$PM_ERR") lines: $(pm_describe)"
+fi
+if [[ "$(summary_count filesystem)" -ge 150 ]] && grep -qE '; 100 were shown above, [0-9]+ repeats and 50 beyond the limit of 100 lines were not\. \(PHB-EDENY\)$' "$PM_ERR"; then
+  ok "and the summary counts all 150, showing 100 of them and withholding 50 beyond the limit"
+else
+  bad "and the summary counts all 150, showing 100 of them and withholding 50 beyond the limit" "$(grep 'Phobos Security Summary' "$PM_ERR")"
 fi
 
 echo
@@ -442,6 +468,188 @@ if (( PM_STATUS == 4 )) && [[ -z "$(op_result open)" ]]; then
   ok "the command cannot install a listener of its own beneath the reporter, so it cannot take the supervision over"
 else
   bad "the command cannot install a listener of its own beneath the reporter" "$(pm_describe)"
+fi
+
+echo
+echo "== the connect guard words its own refusals, and a granted neighbour stays silent =="
+PORT_A=39401
+PORT_B=39402
+BIND_PORT=39431
+srv_a="$(start_tcp_server 127.0.0.1 "$PORT_A" 400 600)"
+SERVER_PIDS+=("$srv_a")
+c_net="$(cfg net <<EOF2
+[read]
+$PM/rw
+[connect]
+allow 127.0.0.1:$PORT_A
+EOF2
+)"
+if [[ -z "$srv_a" ]]; then
+  bad "the TCP server on 127.0.0.1:${PORT_A} starts" "no server"
+else
+  for switches in "" "-ntr" "-nfr" "-ntr -nfr"; do
+    # SWITCHES is a space-separated list of options, none of which holds a space.
+    # shellcheck disable=SC2086
+    run_pm $switches --config "$c_net" -- "$P" tcp 127.0.0.1 "$PORT_A"
+    if op_ok connect && [[ "$(grep -c 'the Endpoint' "$PM_ERR")" == 0 ]]; then
+      ok "a granted loopback connect keeps its result and prints nothing [${switches:-all layers}]"
+    else
+      bad "a granted loopback connect keeps its result and prints nothing [${switches:-all layers}]" "$(pm_describe)"
+    fi
+    # shellcheck disable=SC2086
+    run_pm $switches --config "$c_net" -- "$P" tcp 127.0.0.1 "$PORT_B"
+    if op_failed_with connect EACCES && [[ "$(exact_lines "connect to the Endpoint 127.0.0.1:${PORT_B} over TCP")" == 1 ]]; then
+      ok "a refused connect fails with the errno network.sh pins and prints one line [${switches:-all layers}]"
+    else
+      bad "a refused connect fails with the errno network.sh pins and prints one line [${switches:-all layers}]" "$(pm_describe)"
+    fi
+  done
+  run_pm --config "$c_net" -- "$P" tcp 127.0.0.1 "$PORT_B"
+  # At least one and not exactly one: a program whose C library asks the name service cache for a user
+  # makes a UNIX connect the guard refuses, and words it too, for a task of the filesystem domain.
+  if [[ "$(summary_count network)" -ge 1 && "$(summary_count filesystem)" == 0 && "$(summary_count timeout)" == 0 ]] \
+    && grep -qE '^Phobos Security Summary: Phobos blocked [0-9]+ actions? of the program, 0 in the filesystem layer, [0-9]+ in the network layer and 0 in the timeout layer; [0-9]+ (was|were) shown above, [0-9]+ repeats? and 0 beyond the limit of 100 lines were not\. \(PHB-EDENY\)$' "$PM_ERR"; then
+    ok "the summary counts the refusals for the network layer, in its fixed shape"
+  else
+    bad "the summary counts the refusals for the network layer, in its fixed shape" "$(pm_describe)"
+  fi
+  run_pm --config "$c_net" -- "$P" unixconnect "$PM/work/no-such.sock"
+  if op_failed_with connect_unix EACCES && [[ "$(exact_lines "connect to the Socket File '$PM/work/no-such.sock'")" == 1 ]]; then
+    ok "a connect to a UNIX socket path is refused by the guard and names the socket file"
+  else
+    bad "a connect to a UNIX socket path names the socket file" "$(pm_describe)"
+  fi
+  run_pm --config "$c_net" -- "$P" raw
+  if op_failed_with raw EACCES && [[ "$(exact_lines "open the Socket Type raw (AF_INET, SOCK_RAW)")" == 1 ]]; then
+    ok "a raw socket is refused and named"
+  else
+    bad "a raw socket is refused and named" "$(pm_describe)"
+  fi
+  run_pm --config "$c_net" -- "$P" listen_unbound
+  if op_failed_with listen_unbound EACCES && [[ "$(exact_lines "listen on the Port chosen by the kernel over TCP")" == 1 ]]; then
+    ok "a listen on a socket bound to no port is refused and named"
+  else
+    bad "a listen on a socket bound to no port is refused and named" "$(pm_describe)"
+  fi
+fi
+
+echo
+echo "== the ports Landlock refuses to bind are reported, in a run that arms both models in order =="
+for switches in "" "-nfr"; do
+  # shellcheck disable=SC2086
+  run_pm $switches --config "$c_net" -- "$P" bind 127.0.0.1 "$BIND_PORT" tcp
+  if op_failed_with bind_tcp EACCES && [[ "$(exact_lines "bind the Port ${BIND_PORT} over TCP")" == 1 ]]; then
+    ok "a refused bind prints one line naming the port and the transport [${switches:-all layers}]"
+  else
+    bad "a refused bind prints one line naming the port and the transport [${switches:-all layers}]" "$(pm_describe)"
+  fi
+done
+run_pm -nfr --config "$c_net" -- "$P" read "$PM/none/secret.txt"
+if op_ok open && [[ "$(own_report_lines)" == 0 ]]; then
+  ok "with the filesystem layer off the guard reports no filesystem line, the read being granted"
+else
+  bad "with the filesystem layer off the guard reports no filesystem line" "$(pm_describe)"
+fi
+run_pm --config "$c_net" -- /bin/sh -c "'$P' bind 127.0.0.1 $BIND_PORT tcp; '$P' read '$PM/none/secret.txt'"
+if [[ "$(exact_lines "bind the Port ${BIND_PORT} over TCP")" == 1 && "$(exact_lines "read the File '$PM/none/secret.txt'")" == 1 ]]; then
+  ok "the network enforcer arms the bind model and the filesystem enforcer the filesystem model, in that order, in one run"
+else
+  bad "the network enforcer arms the bind model and the filesystem enforcer the filesystem model, in order" "$(pm_describe)"
+fi
+c_bind="$(cfg bindok <<EOF2
+[read]
+$PM/rw
+[bind]
+allow 0
+EOF2
+)"
+run_pm --config "$c_bind" -- "$P" bind 127.0.0.1 0 tcp
+if op_ok bind_tcp && [[ "$(grep -c 'the Port' "$PM_ERR")" == 0 ]]; then
+  ok "a bind the policy allows keeps its result and prints nothing"
+else
+  bad "a bind the policy allows keeps its result and prints nothing" "$(pm_describe)"
+fi
+
+echo
+echo "== the calls a Phobos filter refuses outright: EACCES and one line, with the network layer on too =="
+run_direct "$P" io_uring
+io_uring_available=0
+if op_ok io_uring_setup; then io_uring_available=1; fi
+for switches in "" "-ntr" "-nfr" "-ntr -nfr"; do
+  if (( io_uring_available )); then
+    # shellcheck disable=SC2086
+    run_pm $switches --config "$c_rw" -- "$P" io_uring
+    if op_failed_with io_uring_setup EACCES && [[ "$(exact_lines "use the Kernel Interface io_uring")" == 1 ]]; then
+      ok "io_uring is refused with EACCES and reported [${switches:-all layers}]"
+    else
+      bad "io_uring is refused with EACCES and reported [${switches:-all layers}]" "$(pm_describe)"
+    fi
+  else
+    skip "io_uring is refused with EACCES and reported [${switches:-all layers}]" "the container's own seccomp profile refuses io_uring, so there is no evidence either way"
+  fi
+  # shellcheck disable=SC2086
+  run_pm $switches --config "$c_rw" -- "$P" setsid
+  if op_failed_with setsid EACCES && [[ "$(exact_lines "leave the Session")" == 1 ]]; then
+    ok "setsid is refused with EACCES and reported [${switches:-all layers}]"
+  else
+    bad "setsid is refused with EACCES and reported [${switches:-all layers}]" "$(pm_describe)"
+  fi
+  # shellcheck disable=SC2086
+  run_pm $switches --config "$c_rw" -- "$P" setpgid
+  if op_failed_with setpgid EACCES && [[ "$(exact_lines "leave the Process Group")" == 1 ]]; then
+    ok "setpgid is refused with EACCES and reported [${switches:-all layers}]"
+  else
+    bad "setpgid is refused with EACCES and reported [${switches:-all layers}]" "$(pm_describe)"
+  fi
+done
+run_pm --config "$c_rw" -- "$P" setsid
+if [[ "$(summary_count timeout)" == 1 ]]; then
+  ok "setsid is counted for the timeout layer while its group lock is above and was found"
+else
+  bad "setsid is counted for the timeout layer while its group lock is above and was found" "$(pm_describe)"
+fi
+run_pm -ntr --config "$c_rw" -- "$P" read "$PM/rw/data.txt"
+network_before="$(summary_count network)"
+run_pm -ntr --config "$c_rw" -- "$P" setsid
+if [[ "$(summary_count timeout)" == 0 && "$(summary_count network)" == $(( network_before + 1 )) ]]; then
+  ok "and for the network layer, which refuses it alone, once the timeout layer is off"
+else
+  bad "and for the network layer, which refuses it alone, once the timeout layer is off" "$(pm_describe)"
+fi
+if [[ "$(uname -m)" != x86_64 ]]; then
+  skip "a call through the i386 interface is refused with EACCES and reported" "this machine is not x86-64, which is the only architecture with that interface"
+else
+  run_direct "$P" int80
+  if ! op_ok int80; then
+    skip "a call through the i386 interface is refused with EACCES and reported" "the container's own profile refuses the call, so there is no evidence either way"
+  else
+    run_pm --config "$c_rw" -- "$P" int80
+    if op_failed_with int80 EACCES && [[ "$(exact_lines "use the Kernel Interface i386 system call 20")" == 1 ]]; then
+      ok "a call through the i386 interface is refused with EACCES and reported"
+    else
+      bad "a call through the i386 interface is refused with EACCES and reported" "$(pm_describe)"
+    fi
+  fi
+fi
+
+echo
+echo "== the connect guard gone: every trapped call fails with ENOSYS, and none succeeds =="
+bg_pm "$PM/out/tick-guard.out" "$PM/out/tick-guard.err" --config "$c_rw" -- "$PM/bin/tick" "$PM/rw/data.txt" "$PM/none/secret.txt" 6
+wait_for_line "$PM/out/tick-guard.out" "TICK 1 " 60 || bad "the tick helper starts under the guard" "$(cat "$PM/out/tick-guard.err")"
+guard="$(pgrep -o -f "^${PHOBOS_HOME}/phobos-seccomp-networksystem ")"
+if [[ "$guard" =~ ^[1-9][0-9]*$ ]]; then
+  kill -KILL "$guard"
+  wait_for_line "$PM/out/tick-guard.out" "TICK 5 " 100
+  wait "$BG_PID" 2>/dev/null
+  check "before the kill: granted, and refused three times" "TICK 0 granted=OK refused=EACCES setsid=EACCES setpgid=EACCES" \
+    "$(grep -m1 '^TICK 0 ' "$PM/out/tick-guard.out")"
+  check "after it: every trapped call fails with ENOSYS" "TICK 5 granted=ENOSYS refused=ENOSYS setsid=ENOSYS setpgid=ENOSYS" \
+    "$(grep '^TICK 5 ' "$PM/out/tick-guard.out")"
+  check "and in no round did the refused read, setsid or setpgid succeed" "0" \
+    "$(grep -cE '^TICK [0-9]+ .*(refused=OK|setsid=OK|setpgid=OK)' "$PM/out/tick-guard.out")"
+else
+  bad "the guard can be found to kill" "no process runs ${PHOBOS_HOME}/phobos-seccomp-networksystem"
+  reap "$BG_PID"
 fi
 
 echo

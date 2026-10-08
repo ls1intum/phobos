@@ -24,11 +24,12 @@ import pathlib
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
 
-from layer_prune import strace_parse
+from layer_prune import sampler, strace_parse
 
 from layer_record import (
     guard,
@@ -61,6 +62,10 @@ POLL_SECONDS = 0.2
 # The name the tracer runs under, which the wait for leftovers must leave running: it ends by itself
 # once nothing it traces is left.
 TRACER_NAME = "strace"
+
+# Where a session may write files besides its working directory, for the size of the largest one.
+SCRATCH_ROOTS = (pathlib.Path("/tmp"), pathlib.Path("/var/tmp"))
+BYTES_PER_MEGABYTE = 1024 * 1024
 
 CHDIR_LINE = re.compile(r"^--chdir[ =](?P<directory>\S+)\s*$")
 CONTAINER_LINE = re.compile(r"/docker/containers/(?P<id>[0-9a-f]{12,64})/")
@@ -163,7 +168,8 @@ def copy_exercise(exercise: pathlib.Path | None, workdir: pathlib.Path) -> None:
 
 
 def record_session(command: list[str], recording: pathlib.Path, workdir: pathlib.Path,
-                   script: pathlib.Path | None, listing: pathlib.Path | None = None) -> SessionResult:
+                   script: pathlib.Path | None, listing: pathlib.Path | None = None,
+                   sample: bool = False) -> SessionResult:
     """Records one session of the command in workdir and answers its result.
 
     Assumes strace is installed and that this process may trace its own descendants. The terminal
@@ -171,7 +177,8 @@ def record_session(command: list[str], recording: pathlib.Path, workdir: pathlib
     pseudo-terminal instead (pty_script). `listing` is the snapshot the session belongs to, written
     into session.json relative to the recording. The script is parsed before anything is created,
     and session.json is written once the trace is complete, so a recording never holds a session
-    without one unless the recorder itself was killed.
+    without one unless the recorder itself was killed. With `sample`, the session's process tree is
+    sampled beside it (the tracer left out) and samples.json is written next to the trace.
     """
     actions = pty_script.parse(script.read_text(encoding="utf-8")) if script is not None else None
     number = _next_session(recording)
@@ -180,7 +187,19 @@ def record_session(command: list[str], recording: pathlib.Path, workdir: pathlib
     argv = ["strace", *strace_parse.RECORD_ARGUMENTS, "-o", str(directory / "trace"), "--", *command]
     started = _now()
     interactive = script is not None or sys.stdin.isatty()
-    run = run_traced(argv, workdir, actions, directory / "transcript")
+    watcher = sampler.Sampler(os.getpid(), include_root=False, exclude=frozenset({TRACER_NAME})) if sample else None
+    began = time.monotonic()
+    if watcher is not None:
+        watcher.start()
+    try:
+        run = run_traced(argv, workdir, actions, directory / "transcript")
+    finally:
+        samples = watcher.stop() if watcher is not None else []
+    if watcher is not None:
+        wall = time.monotonic() - began
+        held = {"wall_seconds": wall, "samples": samples,
+                "largest_file_mb": largest_changed_file_mb((workdir, *SCRATCH_ROOTS), time.time() - wall)}
+        (directory / "samples.json").write_text(json.dumps(held) + "\n", encoding="utf-8")
     meta = {
         "command": command,
         "started": started,
@@ -202,6 +221,26 @@ def record_session(command: list[str], recording: pathlib.Path, workdir: pathlib
     (directory / "session.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return SessionResult(number=number, status=run.status, interactive=interactive,
                          expectations_met=run.expectations_met, signal=run.signal)
+
+
+def largest_changed_file_mb(roots: tuple[pathlib.Path, ...], since: float) -> float:
+    """The largest regular file under the roots modified at or after `since` (epoch seconds), in megabytes.
+
+    What `ulimit -f` bounds is the size a process writes a file to; a file the session wrote is
+    changed after it started. Symbolic links are not followed, and the recordings directory is left out.
+    """
+    largest = 0
+    for root in roots:
+        for current, subdirectories, files in os.walk(root):
+            subdirectories[:] = [name for name in subdirectories if os.path.join(current, name) not in snapshot.DEFAULT_SKIP]
+            for name in files:
+                try:
+                    status = os.lstat(os.path.join(current, name))
+                except OSError:
+                    continue
+                if stat.S_ISREG(status.st_mode) and status.st_mtime >= since:
+                    largest = max(largest, status.st_size)
+    return largest / BYTES_PER_MEGABYTE
 
 
 def run_traced(argv: list[str], workdir: pathlib.Path, actions: list[pty_script.Action] | None,

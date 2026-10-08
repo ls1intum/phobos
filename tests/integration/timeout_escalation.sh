@@ -124,6 +124,12 @@ if [[ "$out" == *"PHB-ETIMEOUT"* ]]; then
 else
   bad "it reports the timeout" "PHB-ETIMEOUT in the output, got: ${out}"
 fi
+expiry_line="Phobos Security Error: the program tried to illegally exceed the Time Limit of ${SHORT_TIMEOUT_SECONDS} seconds but was blocked by Phobos."
+if [[ "$(grep -cxF -- "$expiry_line" <<< "$out")" == 1 ]]; then
+  ok "a timed-out run prints the blocked-action line once"
+else
+  bad "a timed-out run prints the blocked-action line once" "one line [${expiry_line}], got: ${out}"
+fi
 if (( elapsed >= ESCALATION_MINIMUM_SECONDS )); then
   ok "the escalation waited its kill-after before SIGKILL (elapsed ${elapsed}s)"
 else
@@ -190,8 +196,8 @@ res="$(run_chain landlock "$LONG_TIMEOUT_SECONDS" bash -c "exit ${PHB_TIMEOUT_EX
 rc="${res%%|*}"
 out="${res#*|}"
 out="${out#*|}"
-if [[ "$rc" == "$PHB_TIMEOUT_EXPIRED_EXIT" && "$out" != *"PHB-ETIMEOUT"* ]]; then
-  ok "a command exiting 124 at once keeps its status and no timeout is reported"
+if [[ "$rc" == "$PHB_TIMEOUT_EXPIRED_EXIT" && "$out" != *"PHB-ETIMEOUT"* && "$out" != *"Phobos Security Error"* ]]; then
+  ok "a command exiting 124 at once keeps its status and no timeout and no blocked action is reported"
 else
   bad "a command exiting 124 at once keeps its status and no timeout is reported" "exit ${PHB_TIMEOUT_EXPIRED_EXIT} without PHB-ETIMEOUT, got exit ${rc}: ${out}"
 fi

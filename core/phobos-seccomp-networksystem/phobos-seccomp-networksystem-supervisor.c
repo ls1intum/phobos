@@ -1,14 +1,20 @@
 #define _GNU_SOURCE
 #include "phobos-seccomp-networksystem-supervisor.h"
 
+#include "phobos-seccomp-networksystem-broker-log.h"
+#include "phobos-seccomp-networksystem-child.h"
 #include "phobos-seccomp-networksystem-datagram.h"
 #include "phobos-seccomp-networksystem-destination.h"
 #include "phobos-seccomp-networksystem-diagnostics.h"
 #include "phobos-seccomp-networksystem-handoff.h"
 #include "phobos-seccomp-networksystem-held-sockets.h"
+#include "phobos-seccomp-networksystem-report.h"
 #include "phobos-seccomp-networksystem-rules.h"
 #include "phobos-seccomp-networksystem-seccomp-compat.h"
 #include "phobos-seccomp-networksystem-socket-types.h"
+
+#include "../phobos-seccomp-filesystem/phobos-seccomp-filesystem-refusals.h"
+#include "../phobos-seccomp-filesystem/phobos-seccomp-filesystem-reporter.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -71,6 +77,52 @@ static void answer_continue(int notify_descriptor, struct seccomp_notif_resp *re
     if (!send_notification_response(notify_descriptor, response) && errno != ENOENT) {
         log_verbose("notify continue: %s", strerror(errno));
     }
+}
+
+/* Whether the calls the guard's filter refuses outright, other than io_uring, are counted for the
+ * timeout layer: its group lock is above the guard and its signature was found. Otherwise the
+ * network layer is the only one that refuses them (A.5.8, point 9). */
+static bool group_lock_counted_for_timeout = false;
+
+/* The descriptor of the pipe the egress broker logs its refusals to, or NO_BROKER_LOG. */
+static int broker_log_descriptor = -1;
+
+void configure_group_lock_attribution(bool timeout_layer) {
+    group_lock_counted_for_timeout = timeout_layer;
+}
+
+void configure_broker_log(int descriptor) {
+    broker_log_descriptor = descriptor;
+}
+
+/* The transport of one of the command's sockets, for the reporter's judgement of a bind: the type
+ * this guard recorded for the socket behind the descriptor, or -1 for a socket it never saw. */
+int tracked_socket_type(pid_t owner, int descriptor) {
+    uint8_t type = lookup_socket_type(fd_socket_inode(owner, descriptor));
+    if (type == FD_TYPE_STREAM) {
+        return SOCK_STREAM;
+    }
+    return type == FD_TYPE_DGRAM ? SOCK_DGRAM : -1;
+}
+
+void configure_reporting(const char *landlock_bin, int landlock_version) {
+    if (landlock_bin != nullptr) {
+        reporter_configure(landlock_bin, landlock_version);
+    }
+    reporter_use_socket_types(tracked_socket_type);
+}
+
+/* The layer a refused call is counted for: io_uring for the network layer, which refuses it alone,
+ * and setsid, setpgid and every foreign-ABI call for the timeout layer when its group lock refuses
+ * them too, and for the network layer otherwise. */
+static enum report_layer refusal_layer(const struct seccomp_data *data) {
+    bool io_uring = data->arch == GUARD_NATIVE_AUDIT_ARCH
+                    && (data->nr == __NR_io_uring_setup || data->nr == __NR_io_uring_enter
+                        || data->nr == __NR_io_uring_register);
+    if (io_uring || !group_lock_counted_for_timeout) {
+        return REPORT_LAYER_NETWORK;
+    }
+    return REPORT_LAYER_TIMEOUT;
 }
 
 int connect_within_deadline(int family, const struct sockaddr *address, socklen_t length) {
@@ -283,7 +335,12 @@ bool connect_on_behalf(int notify_descriptor, struct seccomp_notif_resp *respons
 }
 
 /* Decide one trapped connect: read the destination from the child, confirm the notification is
- * still valid so the read belongs to this call, and refuse a family this guard does not carry.
+ * still valid so the read belongs to this call, and refuse a family this guard does not carry. A
+ * refused connect to a UNIX socket is worded only for a task of the filesystem domain, the command
+ * and what it started: every layer's shell runs under this guard's filter before the domain exists
+ * and asks the name service cache for the user at start-up, a connect the guard refuses, and worded
+ * it would blame the program for Phobos's own helpers. With the filesystem layer off there is no
+ * domain, and no such line is worded.
  * The socket's provenance is then resolved before the allow-list check, because the transport is
  * part of the decision: a stream socket is TCP and a datagram socket is UDP, and the allow-list
  * holds each transport apart, so a UDP-only rule must not admit a TCP connection to the same host
@@ -316,6 +373,9 @@ static void service_connect(int notify_descriptor, struct seccomp_notif *request
     struct destination where = read_destination(&storage);
     if (where.family != AF_INET && where.family != AF_INET6) {
         log_verbose("refusing connect of family %d, which this guard does not carry", where.family);
+        if (where.family == AF_UNIX && reporter_task_in_domain(notify_descriptor, request)) {
+            report_refused_socket_file(&storage, length);
+        }
         answer(notify_descriptor, response, request->id, 0, -EACCES);
         return;
     }
@@ -331,6 +391,8 @@ static void service_connect(int notify_descriptor, struct seccomp_notif *request
         char endpoint[ENDPOINT_TEXT_SIZE];
         format_endpoint(&where, endpoint, sizeof(endpoint));
         log_verbose("refusing connect to a destination the allow-list does not name: %s", endpoint);
+        bool datagram = provenance == FD_TYPE_DGRAM;
+        report_refused_endpoint(datagram ? "send to" : "connect to", &where, datagram);
         answer(notify_descriptor, response, request->id, 0, -EACCES);
         return;
     }
@@ -364,6 +426,7 @@ static void service_socket(int notify_descriptor, struct seccomp_notif *request,
     if (domain == AF_PACKET || base_type == SOCK_RAW
         || ((domain == AF_INET || domain == AF_INET6) && icmp)) {
         log_verbose("refusing socket(domain=%d, type=%d, protocol=%d)", domain, type, protocol);
+        report_refused_socket_kind(domain, type);
         answer(notify_descriptor, response, request->id, 0, -EACCES);
         return;
     }
@@ -468,6 +531,7 @@ static void service_listen(int notify_descriptor, struct seccomp_notif *request,
     }
     if (!listen_permitted(held)) {
         log_verbose("refusing listen on a socket bound to no port, fd %d", target_descriptor);
+        report_refused_listen();
         answer(notify_descriptor, response, request->id, 0, -EACCES);
         return;
     }
@@ -484,6 +548,14 @@ void service_one(int notify_descriptor, struct seccomp_notif *request,
                  struct seccomp_notif_resp *response, size_t request_size) {
     memset(request, 0, request_size);
     if (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_RECV, request) != 0) {
+        return;
+    }
+    if (is_filter_refusal(&request->data)) {
+        answer_filter_refusal(notify_descriptor, request, response, refusal_layer(&request->data));
+        return;
+    }
+    if (reporter_handles(request)) {
+        reporter_service(notify_descriptor, request, response);
         return;
     }
     if (request->data.nr == __NR_connect) {
@@ -530,20 +602,32 @@ void supervise(int notify_descriptor) {
     }
 
     for (;;) {
-        struct pollfd watch = { .fd = notify_descriptor, .events = POLLIN, .revents = 0 };
-        int ready = poll(&watch, 1, -1);
+        struct pollfd watch[2] = {
+            { .fd = notify_descriptor, .events = POLLIN, .revents = 0 },
+            { .fd = broker_log_descriptor, .events = POLLIN, .revents = 0 },
+        };
+        int ready = poll(watch, 2, -1);
         if (ready < 0) {
             if (errno == EINTR) {
                 continue;
             }
             break;
         }
-        if (watch.revents & POLLIN) {
+        if (watch[1].revents & POLLIN) {
+            drain_broker_log(broker_log_descriptor);
+        }
+        if (watch[1].revents & (POLLERR | POLLNVAL | POLLHUP)) {
+            broker_log_descriptor = -1;
+        }
+        if (watch[0].revents & POLLIN) {
             service_one(notify_descriptor, request, response, request_size);
         }
-        if (watch.revents & (POLLHUP | POLLERR)) {
+        if (watch[0].revents & (POLLHUP | POLLERR)) {
             break;
         }
+    }
+    if (broker_log_descriptor >= 0) {
+        drain_broker_log(broker_log_descriptor);
     }
     free(request);
     free(response);
@@ -557,5 +641,10 @@ void broker_reset_for_tests(void) {
 
 void ephemeral_listen_reset_for_tests(void) {
     ephemeral_listen_allowed = false;
+}
+
+void reporting_reset_for_tests(void) {
+    group_lock_counted_for_timeout = false;
+    broker_log_descriptor = -1;
 }
 #endif

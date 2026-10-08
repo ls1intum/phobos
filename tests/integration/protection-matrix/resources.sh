@@ -154,13 +154,28 @@ run_pm --config "$c_m300" -- /bin/sh -c "$P alloc 200 & $P alloc 200 & wait"
 gap_case "the address space limit is per process: two processes of 200 MiB each map their memory under mem_mb=300" "phobos-resourcesystem.sh --help" "$(holds_if test "$(grep -c 'OP mmap ret=0' "$PM_OUT")" = 2)"
 
 echo
-echo "== the helpers around the command are not held to its limits =="
+echo "== the supervisor around the command is not held to its limits, and the limit holds the command's own files =="
 c_tight="$(cfg_limits tight nofile=16 fsize_mb=1)"
+# Standard error through a pipe: the file-size limit counts files, so three megabytes pass whole, and the
+# supervisor, which writes there as well and is started before the limits are set, is not cut short.
+run_pm_stderr_through_pipe() {
+  PM_OUT="$PM/out/last.out"
+  PM_ERR="$PM/out/last.err"
+  { timeout --kill-after=5 "$WATCHDOG_SECONDS" phobos.sh --tail-flags-file "$PM/tail.flags" "$@" > "$PM_OUT" < /dev/null; } 2>&1 | cat > "$PM_ERR"
+  PM_STATUS=${PIPESTATUS[0]}
+}
 run_direct "$P" emit e 3145728
 direct_sum="$(tail -c 3145729 "$PM_ERR" | cksum)"
+run_pm_stderr_through_pipe --config "$c_tight" -- "$P" emit e 3145728
+if [[ "$(tail -c 3145729 "$PM_ERR" | cksum)" == "$direct_sum" && "$(wc -c < "$PM_ERR" | tr -d ' ')" -ge 3145729 ]]; then ok "three megabytes and a newline written to a pipe on standard error arrive whole under a one megabyte file limit"; else bad "standard error through a pipe arrives whole under a tight file limit" "$(wc -c < "$PM_ERR") bytes arrived"; fi
+if grep -q 'Phobos Security Summary' "$PM_ERR"; then bad "nothing was blocked, so no summary" "a summary appeared although nothing was denied"; else ok "and nothing is summarised for a run in which nothing was blocked"; fi
 run_pm --config "$c_tight" -- "$P" emit e 3145728
-if [[ "$(tail -c 3145729 "$PM_ERR" | cksum)" == "$direct_sum" && "$(wc -c < "$PM_ERR" | tr -d ' ')" -ge 3145729 ]]; then ok "three megabytes and a newline written to standard error pass whole through the helper that watches it, under a one megabyte file limit"; else bad "standard error passes through whole under a tight file limit" "$(wc -c < "$PM_ERR") bytes arrived"; fi
-if grep -q 'Sandbox denials' "$PM_ERR"; then bad "the denial counter ran to its end" "the report appeared although nothing was denied"; else ok "and the helper that counts denials reported nothing for output that contains none"; fi
+if (( PM_STATUS == 153 )) && [[ "$(wc -c < "$PM_ERR" | tr -d ' ')" -lt 3145729 ]] \
+  && grep -qxF 'Phobos Security Error: the program tried to illegally exceed the File Size Limit of 1 MB but was blocked by Phobos.' "$PM_ERR"; then
+  ok "the same three megabytes written into a file are cut at the limit, the command ends with SIGXFSZ (153) and the limit is worded"
+else
+  bad "a file on standard error is held to the file-size limit" "status ${PM_STATUS}, $(wc -c < "$PM_ERR" | tr -d ' ') bytes: $(pm_describe | cut -c1-300)"
+fi
 run_pm --config "$c_tight" -- "$P" emit o 100000
 check "output on standard output below the file limit arrives whole" "100001" "$(grep -v '^START$' "$PM_OUT" | wc -c | tr -d ' ')"
 if (( PM_STATUS == 0 )); then ok "and the run ends with the command's own status"; else bad "the run ends with the command's own status" "status $PM_STATUS"; fi

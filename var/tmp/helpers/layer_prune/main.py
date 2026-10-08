@@ -260,7 +260,8 @@ def main(argv: list[str]) -> int:
         print(f"the pruner removes what its runs leave behind, so it runs only in the prune container, which sets "
               f"{stages.PRUNE_CONTAINER_VARIABLE}=1", file=sys.stderr)
         return EXIT_ABORTED
-    environment = runner.Environment(resolver=options.resolver, kept=(options.output_dir,))
+    environment = runner.Environment(resolver=options.resolver, kept=(options.output_dir,),
+                                     landlock_version=landlock_version())
     root = pathlib.Path(options.testing_root) / options.key
     for name, given in (("testing root", options.testing_root), ("output directory", options.output_dir)):
         if overlaps(pathlib.Path(given), pathlib.Path(environment.testing_dir)):

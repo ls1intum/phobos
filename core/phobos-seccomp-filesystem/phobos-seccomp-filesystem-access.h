@@ -75,4 +75,9 @@ bool decode_trapped_call(const struct seccomp_data *data, struct access_request 
 extern const int REPORT_TRAPPED_CALLS[];
 extern const size_t REPORT_TRAPPED_CALL_COUNT;
 
+/* The two of them the connect guard traps when it reports no filesystem denial: bind, whose port it
+ * judges against the network model, and landlock_restrict_self, which arms the models. */
+extern const int REPORT_NETWORK_TRAPPED_CALLS[];
+extern const size_t REPORT_NETWORK_TRAPPED_CALL_COUNT;
+
 #endif

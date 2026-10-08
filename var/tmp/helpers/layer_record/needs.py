@@ -632,8 +632,8 @@ def _other(call: Syscall, walk: _Walk) -> Effect:
         return _bind(call, walk)
     if call.name == "listen":
         socket_text = strace_parse.argument(call, 0) or ""
-        local, _ = _socket_ends(socket_text)
-        transport = _transport(socket_text)
+        local, _ = socket_ends(socket_text)
+        transport = transport_of(socket_text)
         if local is None and transport is not None:
             return Effect(endpoints=((f"0 {transport}", PAIR_BIND),))
         return Effect()
@@ -689,7 +689,7 @@ def _bind(call: Syscall, walk: _Walk) -> Effect:
         if call.errno is None:
             walk.note_created(path)
         return Effect(grants=(((attribute.parent_of(path),), frozenset({SECTION_CREATE_IPC})),))
-    transport = _transport(strace_parse.argument(call, 0) or "")
+    transport = transport_of(strace_parse.argument(call, 0) or "")
     if family not in attribute.INET_FAMILIES or port is None or transport is None:
         return Effect()
     return Effect(endpoints=((f"{port} {transport}", PAIR_BIND),))
@@ -705,7 +705,7 @@ def _connect(call: Syscall) -> Effect:
     makes that socket's connect count (plan A.8.4).
     """
     socket_text = strace_parse.argument(call, 0) or ""
-    transport = _transport(socket_text)
+    transport = transport_of(socket_text)
     destination = attribute.destination_text(call) if call.name in CONNECT_CALLS else ""
     family, address, port = attribute.parse_address(destination)
     if family == "AF_UNIX":
@@ -724,15 +724,15 @@ def _connect(call: Syscall) -> Effect:
         return Effect(fixed=((pair, (f"{call.name} with the address family {family}: refused by the connect "
                                      "guard, which carries only AF_INET and AF_INET6, on every Landlock version")),))
     if family in attribute.INET_FAMILIES and address is not None and port is not None:
-        endpoint = _endpoint(address, port, transport or ("tcp" if call.name == "connect" else "udp"))
+        endpoint = endpoint_text(address, port, transport or ("tcp" if call.name == "connect" else "udp"))
         endpoints = [(endpoint, PAIR_CONNECT)]
         if call.name != "connect":
             endpoints.append((endpoint, PAIR_SENT))
         return Effect(endpoints=tuple(endpoints))
     if transport == "udp" and call.name in SEND_ON_CONNECTED_CALLS:
-        _, remote = _socket_ends(socket_text)
+        _, remote = socket_ends(socket_text)
         if remote is not None:
-            return Effect(endpoints=((_endpoint(remote[0], remote[1], "udp"), PAIR_SENT),))
+            return Effect(endpoints=((endpoint_text(remote[0], remote[1], "udp"), PAIR_SENT),))
     return Effect()
 
 
@@ -742,7 +742,7 @@ def _abstract_name(text: str) -> str:
     return strace_parse.unescape(match.group(1)) if match else ""
 
 
-def _endpoint(address: str, port: int, transport: str) -> str:
+def endpoint_text(address: str, port: int, transport: str) -> str:
     """An endpoint spelt once: IPv4-mapped IPv6 as IPv4, IPv6 in brackets, then port and transport."""
     try:
         parsed = ipaddress.ip_address(address)
@@ -754,7 +754,7 @@ def _endpoint(address: str, port: int, transport: str) -> str:
     return f"{text}:{port} {transport}"
 
 
-def _transport(socket_text: str) -> str | None:
+def transport_of(socket_text: str) -> str | None:
     """tcp or udp from a socket argument's -yy decoration (`5<TCP:[...]>`), None otherwise."""
     match = DESCRIPTOR_ARGUMENT.match(socket_text)
     decoration = match.group("decoration") if match else None
@@ -769,7 +769,7 @@ def _transport(socket_text: str) -> str | None:
     return None
 
 
-def _socket_ends(socket_text: str) -> tuple[tuple[str, int] | None, tuple[str, int] | None]:
+def socket_ends(socket_text: str) -> tuple[tuple[str, int] | None, tuple[str, int] | None]:
     """The local and remote end a -yy socket decoration shows; None for an end it does not show.
 
     A socket that is neither bound nor connected is decorated with its inode only (`<TCP:[1234]>`).
