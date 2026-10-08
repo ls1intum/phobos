@@ -30,6 +30,7 @@ and is not one.
 | `extra-tests.sh` | inheritance by a second process, a run as an unprivileged user, the control probe showing the denial comes from Landlock and not from file permissions, and the options no policy file reaches |
 | `phase-test.sh` | rights tightened and widened across four phases of one Maven project, and the trap of an unrestricted final phase running what a restricted one left behind |
 | `shipped-policy-test.sh` | the policy the image actually ships, rather than a policy written for the test, runs a real build |
+| `maven-policy-test.sh` | the Maven reference exercise, mounted at `/exercise`, imports its own Ares 2 policy under each of the four `JAVA_USING_MAVEN_*` configurations and passes; a file the Maven base does not name is refused, and a run with no Ares 2 policy cannot read the Maven dependency repository |
 | `network-port-test.sh` | a raw `connect()` syscall reaches the network below libc, and Landlock's `--connect-tcp` rule refuses it anyway |
 | `scoping-test.sh` | Landlock scoping: a sandboxed process can neither signal a process outside its domain nor reach an abstract UNIX socket there. Skipped below Landlock version 6 |
 | `seccomp-networksystem-test.sh` | the connect guard in the image: an allowed destination connects, a forbidden one is refused, and a destination cannot be swapped after the check |
