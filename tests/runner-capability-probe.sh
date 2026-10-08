@@ -3,13 +3,12 @@
 #
 # Some of the things Phobos wants to test in CI depend on the machine rather
 # than on this repository: whether Landlock enforces inside an ordinary
-# container, whether Bubblewrap can build a sandbox at all, and whether ptrace
-# sees a traced Landlock refusal. None can be read out of the source, and a runner
+# container, whether a guest kernel boots under KVM, and whether ptrace sees a
+# traced Landlock refusal. None can be read out of the source, and a runner
 # image can withdraw any without warning, so each question is asked here, the same way.
 #
 #   runner-capability-probe.sh --report           survey, always exits 0
 #   runner-capability-probe.sh --assert-landlock  0 enforced, 1 not, 3 cannot tell
-#   runner-capability-probe.sh --assert-bwrap     0 sandboxed, 1 not, 3 cannot tell
 #   runner-capability-probe.sh --assert-kvm       0 a guest kernel boots under KVM, 1 not, 3 cannot tell
 #   runner-capability-probe.sh --assert-ptrace    0 a traced Landlock denial is seen, 1 not, 3 cannot tell
 #
@@ -54,22 +53,6 @@ value_of() {
   local output
   output="$("$@" 2>&1 | head -1)"
   printf '%s' "${output:--}"
-}
-
-# One kernel setting, or a note that this kernel does not carry it.
-sysctl_value() {
-  local value
-  value="$(sysctl -n "$1" 2>/dev/null)" || value=""
-  printf '%s' "${value:-not present on this kernel}"
-}
-
-# Whether an unprivileged user namespace can be created here at all.
-userns_verdict() {
-  if unshare -Ur true >/dev/null 2>&1; then
-    printf 'works'
-  else
-    printf 'refused'
-  fi
 }
 
 # The distribution's own name for itself, read rather than sourced.
@@ -170,51 +153,6 @@ run_probe_in_container() {
     /probe --enforce /permitted /permitted/data.txt /forbidden/secret.txt
 }
 
-# Bubblewrap, and the AppArmor setting that decides whether it may run at all.
-report_bwrap() {
-  hdr "Bubblewrap and user namespaces"
-  fact "bwrap" "$(value_of bwrap --version)"
-  fact "apparmor_restrict_unprivileged_userns" \
-    "$(sysctl_value kernel.apparmor_restrict_unprivileged_userns)"
-  fact "unprivileged_userns_clone" "$(sysctl_value kernel.unprivileged_userns_clone)"
-  if [[ -r /sys/kernel/security/apparmor/profiles ]]; then
-    local profiles
-    profiles="$(grep -c bwrap /sys/kernel/security/apparmor/profiles 2>/dev/null)"
-    fact "loaded AppArmor bwrap profiles" "${profiles:-0}"
-  else
-    fact "loaded AppArmor bwrap profiles" "the profile list is unreadable here"
-  fi
-  fact "unshare -Ur" "$(userns_verdict)"
-  fact "the pruner's own flag list" "$(pruner_flag_verdict)"
-}
-
-# The flags the pruner passes today, and whether this Bubblewrap knows them all.
-#
-# Read from the help output rather than by running a sandbox, so that a host which
-# forbids namespaces cannot be mistaken for a rejected flag. The list is the one
-# var/tmp/pruning/detect_minimal_fs.sh builds its invocation from; a flag added there
-# and not here is only missing from this report, not from the prune.
-PRUNER_FLAGS="--tmpfs --clearenv --ro-bind --bind --dir --setenv --proc --dev --share-net --new-session --unshare-pid --unshare-uts --unshare-ipc --chdir"
-
-pruner_flag_verdict() {
-  if ! command -v bwrap >/dev/null 2>&1; then
-    printf 'not checked, bwrap is absent'
-    return
-  fi
-  local help
-  local flag
-  local unknown=""
-  help="$(bwrap --help 2>&1)"
-  for flag in ${PRUNER_FLAGS}; do
-    grep -q -- "${flag}" <<<"${help}" || unknown+="${flag} "
-  done
-  if [[ -z "${unknown}" ]]; then
-    printf 'all accepted'
-  else
-    printf 'rejected: %s' "${unknown% }"
-  fi
-}
-
 # Landlock has to enforce here and in an ordinary container, or B3 cannot run.
 assert_landlock() {
   hdr "Assert: Landlock enforces"
@@ -252,62 +190,6 @@ assert_landlock() {
   if [[ "${container_status}" == "${EXIT_INDETERMINATE}" ]]; then
     return "${EXIT_INDETERMINATE}"
   fi
-  return "${EXIT_UNAVAILABLE}"
-}
-
-# The directories a sandboxed build needs, read-only, as the pruner binds them.
-system_bindings() {
-  local directory
-  for directory in /bin /usr/bin /lib /lib64 /usr/lib /etc; do
-    [[ -e "${directory}" ]] && printf '%s\n%s\n%s\n' "--ro-bind" "${directory}" "${directory}"
-  done
-  for directory in /lib/*-linux-gnu; do
-    [[ -e "${directory}" ]] && printf '%s\n%s\n%s\n' "--ro-bind" "${directory}" "${directory}"
-  done
-  return 0
-}
-
-# Bubblewrap in the shape the pruner uses it, running a real script.
-#
-# Not bwrap /bin/true: the namespaces, the tmpfs root and the bound work
-# directory are the parts that fail on a restricted host, and a trivial
-# invocation exercises none of them. The host /tmp is deliberately not bound
-# in, unlike the pruner, which needs that fixed rather than reproduced.
-assert_bwrap() {
-  hdr "Assert: Bubblewrap sandboxes"
-  if ! command -v bwrap >/dev/null 2>&1; then
-    unknown "bwrap is not installed, so nothing was measured"
-    return "${EXIT_INDETERMINATE}"
-  fi
-  if [[ "${EUID}" -eq 0 ]]; then
-    unknown "running as root, which is exempt from the restriction this is meant to measure"
-    return "${EXIT_INDETERMINATE}"
-  fi
-  local sandbox_workdir="/var/tmp/testing-dir"
-  mkdir -p "${WORK}/exercise"
-  printf '#!/bin/bash\necho sandboxed-build-ran\n' >"${WORK}/exercise/build_script.sh"
-  chmod +x "${WORK}/exercise/build_script.sh"
-
-  local options=()
-  readarray -t options < <(system_bindings)
-  local output
-  output="$(bwrap \
-    --tmpfs / \
-    --tmpfs /tmp \
-    "${options[@]}" \
-    --dir /var --dir /var/tmp --dir "${sandbox_workdir}" \
-    --bind "${WORK}/exercise" "${sandbox_workdir}" \
-    --proc /proc --dev /dev --share-net \
-    --unshare-pid --unshare-uts --unshare-ipc \
-    --chdir "${sandbox_workdir}" \
-    -- /bin/bash "${sandbox_workdir}/build_script.sh" 2>&1)"
-  local status="$?"
-  if [[ "${status}" -eq 0 && "${output}" == *sandboxed-build-ran* ]]; then
-    ok "Bubblewrap built a production-shaped sandbox and ran a script inside it"
-    return "${EXIT_AVAILABLE}"
-  fi
-  bad "Bubblewrap could not build a production-shaped sandbox (exit ${status})"
-  printf '%s\n' "${output}" | sed 's/^/    /'
   return "${EXIT_UNAVAILABLE}"
 }
 
@@ -545,7 +427,7 @@ announce() {
 # The lines of this file's header comment that are its usage text, and the status a call made
 # the wrong way ends with.
 USAGE_FIRST_LINE=2
-USAGE_LAST_LINE=22
+USAGE_LAST_LINE=21
 EXIT_USAGE=2
 
 usage() {
@@ -557,17 +439,12 @@ case "${1:-}" in
   --report)
     report_machine
     report_landlock
-    report_bwrap
     report_kvm
     report_ptrace
     printf '\nA survey only. Nothing here fails the run; use the assert modes for that.\n'
     ;;
   --assert-landlock)
     assert_landlock
-    announce "$?"
-    ;;
-  --assert-bwrap)
-    assert_bwrap
     announce "$?"
     ;;
   --assert-kvm)

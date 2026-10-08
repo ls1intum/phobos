@@ -1,7 +1,7 @@
 """The layer pruner's command line: prune every exercise of one language key and write its artefacts (A.9).
 
     python3 main.py [--stage filesystem|network|limits|all] [--testing-root DIR] [--output-dir DIR]
-                    [--resolver ADDRESS] [--verify MERGED_DIR] <key>
+                    [--resolver ADDRESS] [--verify MERGED_DIR] [--kernel-observer audit] <key>
 
 For each exercise under <testing-root>/<key> it writes <key>_<exercise>.cfg, the policy, and
 <key>_<exercise>.json, the record (schema version 2), each to a temporary file renamed into place, and
@@ -16,6 +16,12 @@ With --verify it prunes nothing: it runs every exercise of the key under the orc
 BaseLanguage-<key>.cfg and exercises/<key>_<exercise>.cfg in MERGED_DIR, as grading will apply them,
 writes verify/<key>_<exercise>.json beneath the output directory, and ends with status 1 naming each
 exercise that did not match its reference. It touches no artefact of the prune.
+
+With --kernel-observer audit, which runs only in a KVM guest (A.6.9), it prunes nothing either: for each
+exercise it reads <key>_<exercise>.cfg and its record from the output directory, checks strace's
+attribution against the kernel's own Landlock audit records and verifies the policy on this kernel's
+Landlock ABI, and writes <key>_<exercise>.abi10.json, and <key>_<exercise>.abi10.cfg only where it adds a
+UDP bind row (kvm.py). It ends with status 3 where the guest cannot observe the records at all.
 """
 
 from __future__ import annotations
@@ -32,11 +38,12 @@ import platform
 import shutil
 import subprocess  # nosec B404
 import sys
+import tempfile
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from layer_prune import cfgfile, generalise, runner, search, stages
+from layer_prune import cfgfile, generalise, kvm, runner, search, stages
 
 # The record's schema version (A.9).
 SCHEMA_VERSION = 2
@@ -164,6 +171,8 @@ def arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--resolver", default=None, help="the resolver phobos.sh is given for declared hosts")
     parser.add_argument("--verify", default=None, metavar="MERGED_DIR",
                         help="verify the orchestrator's merged configuration in MERGED_DIR instead of pruning")
+    parser.add_argument("--kernel-observer", choices=("audit",), default=None,
+                        help="in a KVM guest, check strace's attribution against Landlock's audit records and add ABI 10 rows")
     parser.add_argument("key")
     return parser.parse_args(argv)
 
@@ -206,11 +215,46 @@ def verify_one(directory: pathlib.Path, key: str, environment: runner.Environmen
     return reason
 
 
+def kernel_observe(options: argparse.Namespace, environment: runner.Environment, exercises: list[pathlib.Path],
+                   output: pathlib.Path, origin: dict[str, str | int], pristine: generalise.Snapshot) -> int:
+    """Runs the audit observer over every exercise of the key; 0 when all held, EXIT_ABORTED or EXIT_INDETERMINATE."""
+    failed = False
+    with tempfile.TemporaryDirectory(prefix="layer-prune-kvm.") as scratch:
+        capture = None
+        try:
+            capture = kvm.Capture(sentinel=kvm.sentinel_for(environment, pathlib.Path(scratch)))
+            proof = kvm.selftest(environment, capture, int(origin["landlock_abi"]), pathlib.Path(scratch))
+            print(f"the guest observes Landlock: {proof['selftest_record']}", flush=True)
+            for directory in exercises:
+                entry, sidecar, reason = kvm.verify_exercise(directory, options.key, environment, output, pristine,
+                                                             origin, capture, abort_record)
+                base = f"{options.key}_{directory.name}"
+                for stale in (output / f"{base}.abi10.cfg", output / f"{base}.abi10.json"):
+                    stale.unlink(missing_ok=True)
+                if sidecar is not None:
+                    write_atomically(output / f"{base}.abi10.cfg", sidecar)
+                write_atomically(output / f"{base}.abi10.json", json.dumps(entry, indent=2, sort_keys=True) + "\n")
+                print(f"{options.key}/{directory.name}: "
+                      f"{'verified on this kernel' if reason is None else 'failed: ' + reason}", flush=True)
+                failed = failed or reason is not None
+        except (kvm.Indeterminate, OSError) as failure:
+            print(f"the guest cannot observe Landlock's audit records: {failure}", file=sys.stderr)
+            return kvm.EXIT_INDETERMINATE
+        finally:
+            if capture is not None:
+                capture.close()
+    return EXIT_ABORTED if failed else 0
+
+
 def main(argv: list[str]) -> int:
     """Prunes, or with --verify verifies, every exercise of the key; 0 when all succeeded, EXIT_ABORTED otherwise."""
     options = arguments(argv)
     if options.verify is not None and options.stage != "all":
         print("--verify checks the merged configuration of a whole prune; it takes no --stage", file=sys.stderr)
+        return EXIT_ABORTED
+    if options.kernel_observer is not None and (options.verify is not None or options.stage != "all"):
+        print("--kernel-observer checks a finished prune on this kernel; it takes neither --verify nor --stage",
+              file=sys.stderr)
         return EXIT_ABORTED
     if os.environ.get(stages.PRUNE_CONTAINER_VARIABLE) != "1":
         print(f"the pruner removes what its runs leave behind, so it runs only in the prune container, which sets "
@@ -228,7 +272,9 @@ def main(argv: list[str]) -> int:
         return EXIT_ABORTED
     output = pathlib.Path(options.output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    if options.verify is None:
+    if options.kernel_observer is not None:
+        pass
+    elif options.verify is None:
         remove_stale(output, options.key)
     else:
         for stale in (output / VERIFY_DIRECTORY).glob(f"{options.key}_*.json"):
@@ -236,6 +282,11 @@ def main(argv: list[str]) -> int:
     exercises = sorted(path for path in root.iterdir() if path.is_dir() and not path.name.startswith("."))
     origin = provenance(environment)
     pristine = stages.pristine_index(environment)
+    if options.kernel_observer is not None:
+        if not exercises:
+            print(f"no exercise under {options.testing_root}/{options.key}", file=sys.stderr)
+            return EXIT_ABORTED
+        return kernel_observe(options, environment, exercises, output, origin, pristine)
     aborted = {}
     for directory in exercises:
         if options.verify is None:

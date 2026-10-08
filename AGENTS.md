@@ -98,10 +98,10 @@ created under the wrong name, so the run silently loses access the policy grante
 
 ## A prune run that fails for the wrong reason is worse than one that fails
 
-The discovery phase decides what a submission is allowed to reach by hiding a directory and
-observing whether the tests still pass. It therefore reads a test failure as "this was
-needed". Anything that fails a run for an unrelated reason gets written into the allow-list
-as a dependency.
+The discovery phase decides what a submission is allowed to reach by running the reference
+under the grading layers and granting what each refusal it records proves. A failure it can
+pin on a refusal becomes a grant; anything that fails a run for an unrelated reason risks
+being written into the allow-list as a dependency.
 
 **Rule:**
 
@@ -156,6 +156,9 @@ docker buildx build --platform linux/amd64,linux/arm64 \
   -f docker/run_phase/java/Dockerfile -t <namespace>/phobos:latest --push "$CTX"
 ```
 
+The Python run-phase image is published the same way from `docker/run_phase/python/Dockerfile`,
+under a tag of its own (for example `<namespace>/phobos-python:latest`).
+
 `buildx --push` builds both architectures and pushes one multi-arch manifest, so a `docker pull`
 selects the puller's architecture. The per-architecture acceptance suites ran natively in CI;
 this step only packages and publishes. An image that embeds Phobos, such as a grading image,
@@ -209,9 +212,12 @@ PR_BODY="$(cat body.md)" java .github/scripts/CheckPullRequestTemplate.java
 ```
 
 The checker is a single-file Java program, run through the source-code launcher of JDK 11 or
-newer, so it needs no build step and adds no language to the repository. The only other Java
-here is the release checker and the acceptance fixtures, which is why the CodeQL workflow analyses `java-kotlin`: the checker reads a pull
-request body that an outsider writes verbatim.
+newer, so it needs no build step and adds no language to the repository. Beside the release
+checker it is the only Java of Phobos itself, which is why the CodeQL workflow analyses
+`java-kotlin`: the checker reads a pull request body that an outsider writes verbatim, and
+CodeQL's manual build compiles it. The two reference exercises under `var/tmp/testing-dir/` are
+Java too, but they are inputs, built in the run-phase image's stages and by the prune phase, not
+code of the sandbox.
 
 **Only the template's own headings.** The check reports every line it reads as a heading that
 the template does not define, sub-headings included. Whatever sits under an invented heading

@@ -1,0 +1,1 @@
+{"report_globs": ["target/surefire-reports/TEST-*.xml"], "declared_hosts": [], "heap_pinned": true, "pinned_read_roots": [{"path": "/root/.m2/repository", "manifest": "/srv/phobos-manifest/maven-repository.sha256"}], "seed": "java.cfg"}

@@ -22,7 +22,16 @@ import tempfile
 import time
 import uuid
 
-from layer_prune import cfgfile, limits, network, sampler, strace_parse, verdict
+from layer_prune import (
+    cfgfile,
+    limits,
+    network,
+    pinned,
+    sampler,
+    seed,
+    strace_parse,
+    verdict,
+)
 
 # Where the run-phase image keeps Phobos, the working directory grading uses, and where the
 # candidate configurations are written. A pruned policy may grant writing under /run, so every
@@ -31,7 +40,7 @@ from layer_prune import cfgfile, limits, network, sampler, strace_parse, verdict
 PHOBOS_HOME = "/var/tmp/opt/core"
 TESTING_DIR = "/var/tmp/testing-dir"
 CANDIDATE_DIR = "/run/layer-prune"
-SPEC_PARENT = "/var/tmp"
+SPEC_PARENT = cfgfile.SPEC_PARENT
 # The status a run gets when the pruner's own hard limit ended it, read as a timeout by the verdict.
 HARD_LIMIT_STATUS = verdict.TIMEOUT_STATUS
 # The status and the marker Phobos ends a run with when it could not read the command's exit status.
@@ -45,7 +54,8 @@ DEFAULT_RUN_SECONDS = 1800
 REAP_SECONDS = 10
 REAP_INTERVAL_SECONDS = 0.05
 # The keys prune.json may hold, with the type each value must have (A.6.8).
-SETTING_TYPES = {"report_globs": list, "declared_hosts": list, "heap_pinned": bool}
+SETTING_TYPES = {"report_globs": list, "declared_hosts": list, "heap_pinned": bool, "pinned_read_roots": list,
+                 "seed": str}
 
 
 class PrunerDefect(Exception):
@@ -78,6 +88,8 @@ class Exercise:
     report_globs: tuple[str, ...]
     declared_hosts: tuple[str, ...]
     heap_pinned: bool = False
+    pinned_read_roots: tuple[pinned.PinnedRoot, ...] = ()
+    seed: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -132,7 +144,8 @@ RUN_NUMBERS = itertools.count(1)
 
 def read_settings(directory: pathlib.Path) -> dict:
     """The exercise's prune.json, or an empty one; ExerciseRefused when it is not a JSON object of the known
-    keys, each of its type, with only strings in its lists and only relative report globs."""
+    keys, each of its type, with only strings in its lists (the pinned read roots are objects, see
+    pinned.parse) and only relative report globs."""
     path = directory / "prune.json"
     if not path.is_file():
         return {}
@@ -145,7 +158,17 @@ def read_settings(directory: pathlib.Path) -> dict:
     for key, value in settings.items():
         if key not in SETTING_TYPES or not isinstance(value, SETTING_TYPES[key]):
             raise ExerciseRefused(f"{path} holds {key!r} with a value prune.json does not take")
-        if isinstance(value, list) and not all(isinstance(item, str) and item for item in value):
+        if key == "pinned_read_roots":
+            try:
+                pinned.parse(value, str(path))
+            except ValueError as error:
+                raise ExerciseRefused(str(error)) from error
+        elif key == "seed":
+            try:
+                seed.parse_name(value, str(path))
+            except ValueError as error:
+                raise ExerciseRefused(str(error)) from error
+        elif isinstance(value, list) and not all(isinstance(item, str) and item for item in value):
             raise ExerciseRefused(f"{path} holds {key!r} with an entry that is not a non-empty string")
     if any(pattern.startswith("/") for pattern in settings.get("report_globs", ())):
         raise ExerciseRefused(f"{path} holds an absolute report glob")
@@ -172,7 +195,9 @@ def read_exercise(directory: pathlib.Path) -> Exercise:
     if stale:
         raise ExerciseRefused(f"{directory} already holds a report its globs match: {stale[0]}")
     return Exercise(name=directory.name, workdir=directory, build_script=script, report_globs=globs,
-                    declared_hosts=declared, heap_pinned=bool(settings.get("heap_pinned", False)))
+                    declared_hosts=declared, heap_pinned=bool(settings.get("heap_pinned", False)),
+                    pinned_read_roots=pinned.parse(settings.get("pinned_read_roots", []), str(directory / "prune.json")),
+                    seed=settings.get("seed"))
 
 
 def restore(exercise: Exercise, environment: Environment) -> pathlib.Path:

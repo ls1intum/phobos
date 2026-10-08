@@ -23,10 +23,12 @@ from layer_prune import (
     generalise,
     limits,
     network,
+    pinned,
     record,
     runner,
     sampler,
     search,
+    seed,
     verdict,
 )
 
@@ -88,6 +90,9 @@ class Pruning:
     removed_pairs: set[tuple[str, str]] = dataclasses.field(default_factory=set)
     removed_rules: set[tuple[str, str]] = dataclasses.field(default_factory=set)
     comments: dict[str, str] = dataclasses.field(default_factory=dict)
+    pinned_roots: dict[str, str] = dataclasses.field(default_factory=dict)
+    seeded: dict[str, frozenset[str]] = dataclasses.field(default_factory=dict)
+    seed_name: str | None = None
     pristine: generalise.Snapshot = dataclasses.field(
         default_factory=lambda: generalise.Snapshot(existing=frozenset(), directories=frozenset(), scanned=()))
 
@@ -284,11 +289,22 @@ def restore_pristine(pruning: Pruning) -> list[str]:
     return removed
 
 
+def at_or_below_seed(pruning: Pruning, path: str) -> bool:
+    """Whether `path` is a seeded path or lies beneath one, where the hierarchy rule copies the seed's rights down.
+
+    A directory beneath a seeded one holds the seed's rights without being in the seed, so it counts as seeded
+    for the rule that no grant climbs from a seed, and it is not a root a refusal may ask write-class rights from.
+    """
+    return any(path == seeded or cfgfile.is_beneath(path, seeded) for seeded in pruning.seeded)
+
+
 def snapshot_for(pruning: Pruning, policy: cfgfile.Policy) -> generalise.Snapshot:
     """What existed before the runs: the pristine exercise at the working directory, and the index of the rest.
 
     Only the working directory and the write-granted directories are climbed from (A.6.5); every other
-    path is answered from the index taken before the first run.
+    path is answered from the index taken before the first run. A directory only a seed write-grants is
+    not climbed from: the seed is not a refusal, and climbing would let a refusal ask for write-class
+    rights on its subdirectories that neither the seed nor the shipped base grants.
     """
     existing: set[str] = set()
     directories: set[str] = set()
@@ -300,7 +316,8 @@ def snapshot_for(pruning: Pruning, policy: cfgfile.Policy) -> generalise.Snapsho
         existing.update(os.path.join(mapped, name) for name in files + subdirectories)
         directories.update(os.path.join(mapped, name) for name in subdirectories)
     roots = sorted(path for path, sections in policy.fs.items() if sections & set(cfgfile.WRITE_SECTIONS)
-                   and pruning.pristine.is_directory(path) and not within_testing_dir(path))
+                   and pruning.pristine.is_directory(path) and not within_testing_dir(path)
+                   and not at_or_below_seed(pruning, path))
     return generalise.Snapshot(existing=frozenset(existing) | pruning.pristine.existing,
                                directories=frozenset(directories) | pruning.pristine.directories,
                                scanned=(runner.TESTING_DIR, *roots), indexed=pruning.pristine.scanned)
@@ -338,7 +355,8 @@ def filesystem_grants(pruning: Pruning, current: list[record.Denial], snapshot: 
                 kept.append(path)
         if kept:
             remaining.append(dataclasses.replace(denial, objects=tuple(kept)))
-    found, notes = generalise.grants_and_notes(remaining, snapshot, generalise.DEFAULT_FINE_ROOTS, held)
+    found, notes = generalise.grants_and_notes(remaining, snapshot, generalise.DEFAULT_FINE_ROOTS, held,
+                                               pruning.pinned_roots)
     notes.reported.extend(per_run_reported)
     for path, sections in found.items():
         grants.setdefault(path, set()).update(sections)
@@ -381,8 +399,8 @@ def filesystem_run(pruning: Pruning, policy: cfgfile.Policy, observe: bool, stag
     return pruning.run(open_network, OBSERVED_NETWORK if observe else UNOBSERVED_NETWORK, stage)
 
 
-def grow_filesystem(pruning: Pruning, seed: cfgfile.Policy) -> cfgfile.Policy:
-    """Stage 1's grow loop from a seed policy (A.6.4)."""
+def grow_filesystem(pruning: Pruning, start: cfgfile.Policy) -> cfgfile.Policy:
+    """Stage 1's grow loop from a starting policy (A.6.4)."""
     snapshots: list[tuple[generalise.Snapshot, cfgfile.Policy]] = []
 
     def observed(policy: cfgfile.Policy) -> runner.RunResult:
@@ -398,7 +416,9 @@ def grow_filesystem(pruning: Pruning, seed: cfgfile.Policy) -> cfgfile.Policy:
         """The same run without the observer."""
         return filesystem_run(pruning, normalised(pruning, policy), False, "filesystem rerun")
 
-    return search.grow(observed, seed, pruning.reference, pruning.budget.grow_rounds, derive, unobserved)
+    grown = search.grow(observed, start, pruning.reference, pruning.budget.grow_rounds, derive, unobserved)
+    pruning.note("grow", rounds=len(snapshots), grants=len(grown.fs))
+    return grown
 
 
 def minimise_policy_fs(pruning: Pruning, policy: cfgfile.Policy, stage: str,
@@ -439,18 +459,41 @@ def with_pairs(policy: cfgfile.Policy, pairs: list[tuple[str, str]]) -> cfgfile.
     return dataclasses.replace(policy, fs={path: frozenset(sections) for path, sections in fs.items()})
 
 
-def prune_filesystem(pruning: Pruning, seed: cfgfile.Policy) -> cfgfile.Policy:
+def prune_filesystem(pruning: Pruning, start: cfgfile.Policy) -> cfgfile.Policy:
     """Stage 1: grow from denials, compact, normalise, minimise, with the network layer and the limits off.
 
     The network layer stays on for the declared hosts of an exercise that names some (filesystem_run).
     """
-    grown = grow_filesystem(pruning, seed)
+    grown = grow_filesystem(pruning, start)
     compacted = generalise.compact(grown.fs, generalise.DEFAULT_COMPACTION_THRESHOLD, generalise.DEFAULT_FINE_ROOTS)
     pruning.note("compaction", before=sorted(grown.fs), after=sorted(compacted))
     minimised = minimise_policy_fs(pruning, normalised(pruning, dataclasses.replace(grown, fs=compacted)), "filesystem")
     comments = {**pruning.comments, **generalise.per_run_grants(pruning.history)[1]}
     pruning.note("widenings", grants=widenings(pruning, minimised))
     return dataclasses.replace(minimised, comments={path: text for path, text in comments.items() if path in minimised.fs})
+
+
+def seed_comments(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
+    """The policy with the comment above each seeded path that still holds seeded rows.
+
+    Made once, from the policy the prune ends with, because the later stages (the filesystem minimisation
+    after the network, the limits, the joint verification) may drop seeded rows the first minimisation kept.
+    The comment names only the seeded sections that are still there and is joined to any other comment on
+    the path; a path none of whose seeded sections remain gets none.
+    """
+    comments = dict(policy.comments)
+    for path, rows in pruning.seeded.items():
+        surviving = rows & policy.fs.get(path, frozenset())
+        if surviving:
+            note = seed.comment_for(pruning.seed_name or "", path, surviving)
+            comments[path] = f"{comments[path]}; {note}" if path in comments else note
+    for path, sections in policy.fs.items():
+        for ancestor, rows in pruning.seeded.items():
+            inherited = rows & sections if cfgfile.is_beneath(path, ancestor) else frozenset()
+            if inherited:
+                note = seed.comment_inherited(pruning.seed_name or "", ancestor, path, inherited)
+                comments[path] = f"{comments[path]}; {note}" if path in comments else note
+    return dataclasses.replace(policy, comments=comments)
 
 
 def widenings(pruning: Pruning, policy: cfgfile.Policy) -> list[dict[str, Any]]:
@@ -466,7 +509,8 @@ def widenings(pruning: Pruning, policy: cfgfile.Policy) -> list[dict[str, Any]]:
             continue
         behind = [item for item in observed if item == path or cfgfile.is_beneath(item, path)]
         found.append({"path": path, "sections": sorted(sections), "observed": behind[:WIDENING_EXAMPLES],
-                      "observed_count": len(behind), "covers": entries_beneath(path)})
+                      "observed_count": len(behind), "covers": entries_beneath(path),
+                      "seeded": sorted(sections & pruning.seeded.get(path, frozenset()))})
     return found
 
 
@@ -665,8 +709,8 @@ def verify(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
         pruning.note("verification routing", grants=jsonable(new_grants), connect=list(new_connect),
                      bind=list(new_bind))
         if new_grants:
-            seed = search.with_grants(current, new_grants)
-            current = dataclasses.replace(prune_filesystem(pruning, seed), connect=current.connect,
+            routed = search.with_grants(current, new_grants)
+            current = dataclasses.replace(prune_filesystem(pruning, routed), connect=current.connect,
                                           bind=current.bind, limits=current.limits)
         elif new_connect or new_bind:
             current = dataclasses.replace(prune_network(pruning, current, current.connect + new_connect,
@@ -675,6 +719,69 @@ def verify(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
             raise search.PruneAbort("the joint verification failed without a denial a stage owns",
                                     {"layers": sorted({denial.layer for denial in found})})
     raise search.PruneAbort("the joint verification did not settle")
+
+
+def verify_pinned_roots(pruning: Pruning, when: str = "before the first run") -> None:
+    """Checks every pinned read root the exercise declares against its manifest; PruneAbort if one does not match.
+
+    Done before the first run, since only a root that passed is ever granted as a directory
+    (generalise.grants_and_notes), and again before the joint verification and at the end, because the
+    runs execute as the uid that could change the tree: a prune whose runs changed it is not one to ship.
+    The record says which were checked, how many files each manifest fixes and what else each tree holds.
+    """
+    checked = []
+    for root in pruning.exercise.pinned_read_roots:
+        try:
+            counts = pinned.verify(root)
+        except ValueError as failure:
+            raise search.PruneAbort(f"a pinned read root does not match its manifest ({when}): {failure}",
+                                    {"path": root.path, "manifest": root.manifest}) from failure
+        pruning.pinned_roots[root.path] = pinned.GRANT_COMMENT.format(path=root.path, manifest=root.manifest)
+        checked.append({"path": root.path, "manifest": root.manifest, **counts})
+    if checked:
+        pruning.note("pinned read roots", when=when, roots=checked)
+
+
+def seed_policy(pruning: Pruning, directory: str = seed.SEED_DIRECTORY) -> cfgfile.Policy:
+    """The policy the filesystem stage starts from: empty, or the exercise's language seed (seed.py).
+
+    An exercise names its seed in prune.json. A seed that is missing or not one a seed may be aborts the
+    exercise, since the prune would otherwise fail later for a reason it did not name; this is done before
+    any run, so the seed is read before a build or the permissive run could have touched it. The record
+    says which rows were seeded, and their comments are made at the end of the prune (seed_comments).
+    """
+    name = pruning.exercise.seed
+    empty = cfgfile.Policy(fs={}, connect=(), bind=(), limits={})
+    if name is None:
+        return empty
+    environment = pruning.environment
+    protected = tuple(os.path.realpath(path) for path in (
+        environment.spec_parent, environment.testing_dir, environment.candidate_dir, environment.log_dir,
+        environment.phobos_home, *environment.kept))
+    try:
+        seeded = seed.load(name, directory, protected)
+    except ValueError as failure:
+        raise search.PruneAbort(f"the language seed cannot be used: {failure}", {"seed": name}) from failure
+    pruning.seed_name = name
+    pruning.seeded = {entry: frozenset(sections) for entry, sections in seeded.fs.items()}
+    pruning.note("seed", name=name, rows={entry: sorted(sections) for entry, sections in seeded.fs.items()})
+    return dataclasses.replace(empty, fs=dict(seeded.fs))
+
+
+def check_pinned_grants(pruning: Pruning, policy: cfgfile.Policy) -> None:
+    """Refuses a policy that makes a pinned read root anything but read-only; PruneAbort naming the entry.
+
+    The root itself may hold [read] and nothing else, and no write-class right may sit on it or on an
+    ancestor of it, which would make the pinned tree writable. Writes beneath it stay file by file.
+    """
+    for root in pruning.pinned_roots:
+        if set(policy.fs.get(root, ())) - {"read"}:
+            raise search.PruneAbort(f"the pinned read root {root} is granted more than [read]",
+                                    {"sections": sorted(policy.fs[root])})
+        for path, sections in policy.fs.items():
+            if sections & generalise.WRITE_CLASS and (path == root or generalise.is_beneath(root, path)):
+                raise search.PruneAbort(f"the pinned read root {root} lies under a write-class grant on {path}",
+                                        {"sections": sorted(sections)})
 
 
 def require_prune_container() -> None:
@@ -735,19 +842,26 @@ def prune_exercise(exercise: runner.Exercise, budget: Budget, environment: runne
     index = pristine if pristine is not None else pristine_index(environment)
     pruning = Pruning(exercise=exercise, budget=budget, environment=environment, pristine=index)
     try:
+        seeded = seed_policy(pruning)
+        verify_pinned_roots(pruning)
+        check_pinned_grants(pruning, seeded)
         pruning.reference = baseline(pruning)
         permissive_run(pruning)
-        policy = prune_filesystem(pruning, cfgfile.Policy(fs={}, connect=(), bind=(), limits={}))
+        policy = prune_filesystem(pruning, seeded)
         if stage != "filesystem":
             policy = prune_network(pruning, policy)
             if set(network.seed_rules(exercise.declared_hosts)) - set(policy.connect):
                 policy = minimise_policy_fs(pruning, policy, "filesystem after network", final_network=True)
         if stage in ("limits", "all"):
             policy = prune_limits(pruning, policy)
+        check_pinned_grants(pruning, policy)
         if stage == "all":
+            verify_pinned_roots(pruning, "before the joint verification")
             policy = verify(pruning, policy)
+            check_pinned_grants(pruning, policy)
             pruning.note("containment", checks=containment.run_checks(policy, environment))
+        verify_pinned_roots(pruning, "after the last run")
     except search.PruneAbort as abort:
         abort.evidence["record"] = pruning.log
         raise
-    return policy, pruning.log
+    return seed_comments(pruning, policy), pruning.log

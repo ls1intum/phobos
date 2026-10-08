@@ -34,6 +34,15 @@ PM_OUT=""
 PM_ERR=""
 PM_STATUS=0
 
+# The base policy the image ships beside phobos-policysystem.sh, whichever language it is for, which the
+# suites replace with the minimal one below: a second Base*.cfg left beside it would widen every case.
+mapfile -t PM_BASES < <(compgen -G "${PHOBOS_HOME}/Base*.cfg")
+if (( ${#PM_BASES[@]} > 1 )); then
+  echo "the image ships ${#PM_BASES[@]} Base*.cfg files, and the matrix replaces exactly one" >&2
+  exit 1
+fi
+PM_BASE="${PM_BASES[0]:-${PHOBOS_HOME}/BaseLanguage-java.cfg}"
+
 export PATH="${PHOBOS_HOME}:${PATH}"
 
 # Compiles the probe twice, dynamic and static, and lays out the fixtures and the minimal base policy.
@@ -53,9 +62,10 @@ pm_setup() {
   printf 'TOP-SECRET\n' > "$PM/none/secret.txt"
   chmod 0644 "$PM"/ro/data.txt "$PM"/rw/data.txt "$PM"/none/secret.txt
   chmod 0755 "$PM"/ro/pprobe-static "$PM"/none/pprobe-static
-  if [[ -f "${PHOBOS_HOME}/BaseLanguage-java.cfg" ]] && ! pm_base_is_ours; then
-    cp "${PHOBOS_HOME}/BaseLanguage-java.cfg" "$PM/base.original"
+  if [[ -f "${PM_BASE}" ]] && ! pm_base_is_ours; then
+    cp "${PM_BASE}" "$PM/base.original"
   fi
+  pm_install_ares_configuration || return 1
   pm_install_base
   printf -- '--chdir %s/work\n' "$PM" > "$PM/tail.flags"
   return 0
@@ -90,19 +100,55 @@ BASE
 
 # Writes the minimal base policy over the image's.
 pm_install_base() {
-  pm_minimal_base > "${PHOBOS_HOME}/BaseLanguage-java.cfg"
+  pm_minimal_base > "${PM_BASE}"
+}
+
+# The programming language configurations are read from this folder of the image.
+PM_CONFIGURATIONS="${PHOBOS_HOME}/language-configurations"
+# The configuration the suites write for an image whose base is not the Java one, and the Java configuration it is
+# made from.
+PM_NEUTRAL_CONFIGURATION="PM_NEUTRAL_FOR_THE_IMAGES_BASE"
+PM_JAVA_CONFIGURATION="JAVA_USING_GRADLE_ARCHUNIT_AND_ASPECTJ"
+
+# Makes the Ares 2 policies of the suites name a programming language configuration whose base the image has. The Java
+# configurations name BaseLanguage-java.cfg, which a Python image does not ship, so an image with another base gets a
+# configuration of the suites' own: the Java one with its [base] line naming the image's base, which pm_install_base
+# replaces with the minimal one. Everything else stays what the shipped file says, the loopback UDP rule included, so the
+# cases hold the import to the same rules in every image. An image with the Java base uses the shipped configuration as
+# it is. The configuration is written before the base is touched and a failure is recorded, so a suite that cannot write
+# it ends with a failure and leaves the image's base as it was.
+pm_install_ares_configuration() {
+  local base_name="${PM_BASE##*/}"
+  local source="${PM_CONFIGURATIONS}/${PM_JAVA_CONFIGURATION}.cfg"
+  local target="${PM_CONFIGURATIONS}/${PM_NEUTRAL_CONFIGURATION}.cfg"
+  PM_ARES_CONFIGURATION="${PM_JAVA_CONFIGURATION}"
+  if [[ "${base_name}" == "BaseLanguage-java.cfg" ]]; then
+    return 0
+  fi
+  if [[ ! -f "${source}" ]]; then
+    bad "the Ares 2 cases have a configuration to start from" "${source} is missing"
+    return 1
+  fi
+  if ! PM_IMAGE_BASE="${base_name}" awk '$0 == "BaseLanguage-java.cfg" { print ENVIRON["PM_IMAGE_BASE"]; next } { print }' "${source}" \
+      > "${target}" || ! grep -qxF -- "${base_name}" "${target}"; then
+    rm -f "${target}"
+    bad "the Ares 2 cases have a configuration that names the image's base" "${target} could not be written with ${base_name} as its base"
+    return 1
+  fi
+  PM_ARES_CONFIGURATION="${PM_NEUTRAL_CONFIGURATION}"
 }
 
 # Whether the base policy in place is the minimal one this library wrote, so that a backup is taken of the image's
 # own and never of a leftover from an earlier suite that did not get to restore it.
 pm_base_is_ours() {
-  [[ "$(cat "${PHOBOS_HOME}/BaseLanguage-java.cfg")" == "$(pm_minimal_base)" ]]
+  [[ "$(cat "${PM_BASE}")" == "$(pm_minimal_base)" ]]
 }
 
 pm_restore() {
   if [[ -f "$PM/base.original" ]]; then
-    cp "$PM/base.original" "${PHOBOS_HOME}/BaseLanguage-java.cfg"
+    cp "$PM/base.original" "${PM_BASE}"
   fi
+  rm -f "${PM_CONFIGURATIONS}/${PM_NEUTRAL_CONFIGURATION}.cfg"
 }
 
 # Prints the Landlock version the kernel offers, or 0.
@@ -120,8 +166,9 @@ cfg() {
   printf '%s\n' "$path"
 }
 
-# The programming language configuration the Ares 2 policies of the suites name: one the image ships, whose base,
-# BaseLanguage-java.cfg, pm_install_base has replaced with the minimal one.
+# The programming language configuration the Ares 2 policies of the suites name: the Java one the image ships, whose base,
+# BaseLanguage-java.cfg, pm_install_base has replaced with the minimal one, or in an image with another base the
+# configuration pm_install_ares_configuration writes for it.
 PM_ARES_CONFIGURATION="JAVA_USING_GRADLE_ARCHUNIT_AND_ASPECTJ"
 
 # Writes an Ares 2 policy to a named file under cfg/ and prints its path. Takes the name, then one argument per entry:

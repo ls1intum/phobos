@@ -13,6 +13,11 @@ The rules, each erring in the direction A.7 names, and every case no rule covers
 - No directory nearer the root than MINIMUM_WIDENING_DEPTH is granted, except a write-class right on
   the directory Landlock checks it on (a creation in /tmp); a [read] of such a directory, or a
   widening or a climb that would reach one, is reported instead.
+- The one exception to "file by file" inside a fine-grained root, Markus's explicit decision: a tree the
+  exercise declares as a pinned read root (pinned.py), whose contents the image build fixed by checksum,
+  gets `[read]`, and only `[read]`, as one entry on exactly that directory, for every read of anything
+  beneath it, with a comment saying why. It is never widened to an ancestor, never write-class, and
+  [execute] and every other section on a path beneath it keep every rule above.
 - A per-run name (a kernel-assigned id in PER_RUN_PATTERNS whose value differs between observed runs,
   or equals the refusing process's or thread's own id) is granted on its smallest stable directory,
   with a comment, and only for [read] and [execute]; a write-class right on a per-run name is reported.
@@ -38,6 +43,7 @@ import os
 import posixpath
 import re
 from collections.abc import Iterable
+from pathlib import PurePosixPath
 
 from layer_prune import cfgfile
 from layer_prune.record import LAYER_FILESYSTEM, Denial
@@ -50,6 +56,11 @@ DEFAULT_COMPACTION_THRESHOLD = 3
 MINIMUM_COMPACTION_THRESHOLD = 2
 # The shallowest directory a grant may be widened to: never `/`, never a top-level directory.
 MINIMUM_WIDENING_DEPTH = 2
+# The directories phobos.sh's specification directory lies beneath (its default parent, and every
+# ancestor of it): phobos-policysystem.sh refuses a policy with a write-class right on any of them,
+# since the graded command could then rewrite its own policy.
+SPECIFICATION_ANCESTORS = tuple(str(path) for path in (PurePosixPath(cfgfile.SPEC_PARENT),
+                                                         *PurePosixPath(cfgfile.SPEC_PARENT).parents))
 # How many observed paths a per-run comment names before it only counts the rest.
 COMMENT_EXAMPLES = 3
 # The sections that may be widened to a containing directory or compacted; every other one is write-class.
@@ -349,6 +360,10 @@ def placed(path: str, section: str, snapshot: Snapshot, fine_roots: tuple[str, .
     if target is None:
         notes.report(path, section, "no path that existed before the run, inside the scanned roots and deep enough")
         return None
+    if section not in READ_CLASS and target in SPECIFICATION_ANCESTORS:
+        notes.report(path, section, f"a write-class right on {target} would cover Phobos's own specification "
+                                    "directory, which phobos-policysystem.sh refuses")
+        return None
     if writable(target):
         if section in READ_CLASS and within(target, fine_roots) and snapshot.is_directory(target):
             notes.comments.setdefault(target, f"listed: [read] on the directory {target} makes every entry beneath "
@@ -417,9 +432,19 @@ def narrow_execute(grants: dict[str, frozenset[str]], executed: Iterable[str], s
     return {path: frozenset(sections) for path, sections in result.items() if sections}
 
 
+def pinned_root_of(path: str, pinned_roots: dict[str, str]) -> str | None:
+    """The declared pinned read root a path is, or lies beneath; None when it is in none."""
+    return next((root for root in pinned_roots if path == root or is_beneath(path, root)), None)
+
+
 def grants_and_notes(denials: list[Denial], snapshot: Snapshot, fine_roots: tuple[str, ...],
-                     held: dict[str, frozenset[str]] | None = None) -> tuple[dict[str, frozenset[str]], Notes]:
+                     held: dict[str, frozenset[str]] | None = None,
+                     pinned_roots: dict[str, str] | None = None) -> tuple[dict[str, frozenset[str]], Notes]:
     """The grants the filesystem denials ask for outside per-run names, with the comments and reports beside them.
+
+    `pinned_roots` maps each verified pinned read root to the comment its grant gets (pinned.py). A
+    [read] of anything in one goes on that directory; no other section ever does, and no write-class right
+    is ever granted on one or on an ancestor of one: that is reported instead.
 
     [execute] is narrowed to the executed files wherever it would sit on a directory that overlaps a
     write-class right of these grants or of `held`, the policy they are layered on (narrow_execute).
@@ -439,7 +464,17 @@ def grants_and_notes(denials: list[Denial], snapshot: Snapshot, fine_roots: tupl
                     continue
                 if section == "execute" and snapshot.existed(path):
                     executed.add(path)
+                pinned = pinned_root_of(path, pinned_roots or {}) if section == "read" else None
+                if pinned is not None:
+                    grants.setdefault(pinned, set()).add(section)
+                    notes.comments.setdefault(pinned, (pinned_roots or {})[pinned])
+                    continue
                 target = placed(path, section, snapshot, fine_roots, notes)
+                if target is not None and section not in READ_CLASS and any(
+                        target == root or is_beneath(root, target) for root in pinned_roots or {}):
+                    notes.report(path, section, "a write-class right on a pinned read root or on an ancestor of one "
+                                                "would make the pinned tree writable")
+                    continue
                 if target is not None:
                     grants.setdefault(target, set()).add(section)
     found = {path: frozenset(sections) for path, sections in grants.items()}
@@ -447,13 +482,14 @@ def grants_and_notes(denials: list[Denial], snapshot: Snapshot, fine_roots: tupl
 
 
 def grants_for(denials: list[Denial], snapshot: Snapshot, fine_roots: tuple[str, ...],
-               held: dict[str, frozenset[str]] | None = None) -> dict[str, frozenset[str]]:
+               held: dict[str, frozenset[str]] | None = None,
+               pinned_roots: dict[str, str] | None = None) -> dict[str, frozenset[str]]:
     """The grants the filesystem denials ask for, generalised as the module docstring states.
 
     Denials of other layers are ignored, objects per_run_grants takes are left to it, and whatever no
     rule covers is left out; grants_and_notes says why. `held` is the policy the grants are layered on.
     """
-    return grants_and_notes(denials, snapshot, fine_roots, held)[0]
+    return grants_and_notes(denials, snapshot, fine_roots, held, pinned_roots)[0]
 
 
 def compact(grants: dict[str, frozenset[str]], threshold: int, fine_roots: tuple[str, ...],

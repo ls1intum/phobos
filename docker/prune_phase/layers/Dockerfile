@@ -22,13 +22,17 @@ FROM ${RUN_PHASE_IMAGE}
 
 # strace is the observer (ptrace, no privileges); python3 runs the pruner. DL3008 is ignored
 # repository-wide in .hadolint.yaml, for the reason given there.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 \
-    strace \
+# On a run-phase image that has a python3 already (the Python one), none is added beside it, so the
+# prune image differs from the image it was built on by the observer and the probe alone.
+RUN apt-get update && apt-get install -y --no-install-recommends strace \
+ && if ! command -v python3 > /dev/null; then apt-get install -y --no-install-recommends python3; fi \
  && rm -rf /var/lib/apt/lists/*
 
 RUN rm -f "${PHOBOS_HOME}"/Base*.cfg
 COPY docker/prune_phase/layers/BasePrune.cfg ${PHOBOS_HOME}/BasePrune.cfg
+# The language seeds an exercise's prune.json may name (var/tmp/helpers/layer_prune/seed.py): the one place a
+# language's own needs enter a prune, never its code.
+COPY docker/prune_phase/layers/seeds /usr/local/share/phobos-prune/seeds
 COPY --from=probe /build/phobos-prune-probe /usr/local/libexec/phobos-prune-probe
 
 # The pruner removes what its runs leave behind outside the working directory, so it runs only where

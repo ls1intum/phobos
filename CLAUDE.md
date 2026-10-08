@@ -28,14 +28,11 @@ one disagree, the full one is right.
 Phobos runs a student submission for an Artemis programming exercise with access to only
 what the exercise's own tests were shown to need. It works in two phases.
 
-**Resource discovery, offline.** For Java, the layer pruner runs the reference exercise
-through the grading layers, starting from a policy that grants nothing, grants exactly what
-each refusal it records proves, removes what turns out unneeded, derives the limits, and
-writes a complete configuration per exercise. For Python, still, the reference is run
-repeatedly with a directory hidden each time by an empty tmpfs: a directory whose absence
-changes nothing was never needed and stays hidden; one whose absence breaks the run is
-restored, read-only first and writable only if that is not enough. Either way the orchestrator
-merges the results into one base per language.
+**Resource discovery, offline.** The layer pruner runs the reference exercise through the
+grading layers, starting from a policy that grants nothing, grants exactly what each refusal
+it records proves, removes what turns out unneeded, derives the limits, and writes a complete
+configuration per exercise. The orchestrator merges them into one base per language and a
+small file per exercise.
 
 **Sandbox application, at grading time.** The submission runs under a Landlock ruleset that
 grants exactly the rights the policy names on those paths; every other path is denied, though
@@ -49,12 +46,6 @@ off, a report-only supervisor prints a `Phobos Security Error` line on stderr fo
 distinct action it can attribute with certainty to Landlock or the timeout's group lock,
 staying silent wherever it is in doubt. It never lets a refused call succeed nor a permitted
 one fail.
-
-The Bubblewrap prune and grading do not deny in the same way. While pruning, a hidden directory
-is an empty, writable tmpfs; while grading, a path the policy does not name is refused with EACCES. A tool
-that only needs some writable scratch directory can therefore pass the prune with that
-directory hidden and still be refused at grading time, which is worth checking when a pruned
-policy fails a run that passed its prune.
 
 The point of the split is that the expensive, fragile part happens once per language
 environment, offline, and grading itself only applies a fixed configuration.
@@ -70,11 +61,10 @@ environment, offline, and grading itself only applies a fixed configuration.
 
 The filesystem layer is enforced by Landlock, an unprivileged Linux kernel sandbox, applied
 by `phobos-landlock-filesystem-and-networksystem` (the C program under `core/`). The run phase needs no privileges, no
-capabilities and no container flags. The Python prune still uses Bubblewrap to hide
-directories while it measures; the sandbox an exercise runs in does not. The Java prune runs
-the layer pruner (`var/tmp/helpers/layer_prune/`, in `docker/prune_phase/layers/`), which
-measures under the grading layers themselves, observing their refusals with `strace`;
-README.md, "The layer pruner", says how to run it.
+capabilities and no container flags. The prune runs the layer pruner
+(`var/tmp/helpers/layer_prune/`, in `docker/prune_phase/layers/`), which measures under the
+grading layers themselves, observing their refusals with `strace`; README.md, "The layer
+pruner", says how to run it. Nothing uses Bubblewrap any more.
 
 ## Build and development commands
 
@@ -161,12 +151,13 @@ docker build -f docker/run_phase/java/Dockerfile -t phobos-run-phase:ci build/ru
 # an acceptance suite, in an ordinary container: no --privileged, no --cap-add, no --security-opt
 docker run --rm --network none -v "$PWD/tests:/tests:ro" phobos-run-phase:ci \
   bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/run-tests.sh
+docker compose -f docker/run_phase/python/docker-compose.yaml up --build
 ```
 
 Each prune container works independently on its language and writes its result into the
-shared `var/tmp/path_sets` directory, `verify_java` being the one that reads the orchestrator's
-output back; nothing passes between containers except through `var/tmp`. The Java prune needs
-the run-phase image `phobos-run-phase-java` built first, and `verify_java` re-runs the Java
+shared `var/tmp/path_sets` directory; nothing passes between containers except through
+`var/tmp`. Each language's prune needs its run-phase image (`phobos-run-phase-java`,
+`phobos-run-phase-python`) built first, and `verify_java` and `verify_python` re-run the
 exercises under the merged configuration at the end.
 
 ### The host
@@ -211,9 +202,9 @@ core/                      the sandbox itself
     phobos-network-args.sh [connect] and [bind] to the TCP and UDP port rules Landlock enforces
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
     language-configurations/  one file per Ares 2 programming language configuration: its bases, placeholders and [connect] rows
-docker/prune_phase/        one image per language, the layer pruner's, and the orchestrator
+docker/prune_phase/        the layer pruner's image and the orchestrator's
   layers/                  the layer pruner's image: the run-phase image, strace, the probe, an empty base
-docker/run_phase/          the image an exercise actually runs in
+docker/run_phase/          the images an exercise actually runs in, one per language (java/, python/)
 tests/                     unit/ (C and shell units), integration/ (shell suites, the acceptance suites and
                            protection-matrix/), python/, and two probes
 documentation/             the Docusaurus site, with its own gate

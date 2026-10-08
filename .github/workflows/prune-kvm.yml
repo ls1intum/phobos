@@ -1,0 +1,251 @@
+# The KVM run of the layer pruner: a second, kernel-native observer, on x86 only (prune plan A.6.9).
+#
+# The ordinary-container prune (build.yml, Compose) stays the default and the only thing that writes an
+# exercise's configuration. This workflow takes what it wrote and runs the same layers, in the same root
+# file system, on a Linux 7.2 kernel in a QEMU guest under KVM, where the pruner owns the kernel and can
+# read Landlock's own audit records. Two things come out of it:
+#   * a cross-check: every Landlock refusal strace attributed has an audit record that agrees, or the
+#     derivation of a right from a call (A.6.2) is wrong for that call and the job fails with both records;
+#   * the rights the container kernels (Landlock version 8 and below) never refuse, in particular the UDP
+#     bind of version 10: a refused UDP bind the kernel names becomes `<key>_<exercise>.abi10.cfg`, one
+#     `[bind] allow <port> udp` row, with a record naming the SHA-256 of the .cfg it verified.
+#
+# One run is one key on one commit, in three jobs, which hand over artefacts and never share a directory:
+#   prune  the default prune in an ordinary container on an x86 runner: the .cfg and .json of every exercise;
+#   kvm    the audit observer in the guest, on ubuntu-24.04 and ubuntu-26.04: the .abi10.json and .abi10.cfg;
+#   merge  the orchestrator over both sets in one directory: BaseLanguage-<key>.cfg with the rows folded in.
+# A base meant to carry ABI 10 rows is adopted from the merge job's output, and the adopting pull request
+# links this run. A guest that cannot boot under KVM, or cannot read the records, ends its job red as
+# indeterminate (status 3), never as a pass.
+#
+# Manual on purpose: the guest runs the whole of a prune's verification, so it takes far longer than a
+# check belonging to every change. `source: fixture` runs the layer pruner's fixture exercise, which binds
+# a UDP port, and holds the result to both directions (tests/integration/kvm_fixture_result.sh).
+name: Prune with the kernel as a second observer
+
+on:
+  workflow_dispatch:
+    inputs:
+      key:
+        description: "The key to prune and verify: java for the fixture and the Java exercises, python for Python"
+        required: true
+        default: java
+        type: string
+      source:
+        description: "fixture: the layer pruner's fixture; reference: the exercises of var/tmp/testing-dir/<key>"
+        required: true
+        default: fixture
+        type: choice
+        options:
+          - fixture
+          - reference
+  # Temporary. GitHub can dispatch only a workflow the default branch already holds, so until this file
+  # is on main a push to the branch it is written on starts a run of the fixture. Remove it when the pull
+  # request is rebased onto main.
+  push:
+    branches: [ "feature/prune-kvm-observer" ]
+    paths:
+      - ".github/workflows/prune-kvm.yml"
+      - ".github/scripts/*kvm*"
+      - ".github/scripts/stage-prune-inputs.sh"
+      - "var/tmp/helpers/layer_prune/**"
+      - "core/phobos-landlock-filesystem-and-networksystem/**"
+      - "tests/integration/kvm_fixture_result.sh"
+
+permissions: {}
+
+concurrency:
+  group: prune-kvm-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # A push has no inputs, so these are the fixture's.
+  PRUNE_KEY: ${{ inputs.key || 'java' }}
+  PRUNE_SOURCE: ${{ inputs.source || 'fixture' }}
+  # The run-phase image follows the key: python has its own, every other key is a Java one.
+  RUN_PHASE: ${{ (inputs.key || 'java') == 'python' && 'python' || 'java' }}
+
+jobs:
+  prune:
+    name: The default prune, in an ordinary container
+    runs-on: ubuntu-26.04
+    timeout-minutes: 355
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assemble the build context and stage the inputs
+        run: |
+          .github/scripts/assemble-run-phase-context.sh "${RUNNER_TEMP}/run-phase-context"
+          .github/scripts/stage-prune-inputs.sh "${PRUNE_SOURCE}" "${PRUNE_KEY}" "${RUNNER_TEMP}/inputs"
+
+      - name: Build the run-phase image and the prune image on it
+        run: |
+          docker build -f "docker/run_phase/${RUN_PHASE}/Dockerfile" -t phobos-run-phase:ci \
+            "${RUNNER_TEMP}/run-phase-context"
+          docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci \
+            -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers:ci .
+
+      # As Compose starts it: no network, cgroup limits, and no privilege, capability or security option.
+      - name: Prune the key
+        run: |
+          mkdir -p "${RUNNER_TEMP}/path_sets"
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${RUNNER_TEMP}/inputs/exercises:/srv/phobos-prune-exercises:ro" \
+            -v "${RUNNER_TEMP}/inputs/helpers:/var/tmp/helpers:ro" \
+            -v "${RUNNER_TEMP}/inputs/setup.sh:/setup.sh:ro" -v "${RUNNER_TEMP}/inputs/env.sh:/env.sh:ro" \
+            -v "${RUNNER_TEMP}/path_sets:/var/tmp/path_sets" \
+            --entrypoint bash phobos-prune-layers:ci -c 'source /env.sh && source /setup.sh \
+              && exec python3 /var/tmp/helpers/layer_prune/main.py --stage all "$0"' "${PRUNE_KEY}"
+
+      # The guest runs this very image, not one built again from the same Dockerfiles: the packages the
+      # prune image installs are not pinned, so a second build could hold other versions.
+      - name: Save the prune image for the guests
+        run: docker save phobos-prune-layers:ci | gzip -1 > "${RUNNER_TEMP}/prune-image.tar.gz"
+
+      - name: Keep the prune image
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: prune-image
+          path: ${{ runner.temp }}/prune-image.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Keep the artefacts of the default prune
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: default-prune
+          path: ${{ runner.temp }}/path_sets
+          if-no-files-found: error
+
+  kvm:
+    name: The audit observer in a guest on ${{ matrix.runner }}
+    needs: prune
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 355
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-26.04]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install QEMU, the filesystem tools and what the kernel build needs
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends qemu-system-x86 e2fsprogs build-essential flex bison bc \
+            libelf-dev libssl-dev xz-utils curl
+
+      # First, because a guest that cannot boot under KVM answers nothing and the kernel build is long.
+      - name: Assert that a guest boots under KVM
+        run: bash tests/runner-capability-probe.sh --assert-kvm
+
+      - name: Build the pinned Linux 7.2 guest kernel
+        run: .github/scripts/build-kvm-kernel.sh "${RUNNER_TEMP}/kernel"
+
+      - name: Stage the inputs
+        run: .github/scripts/stage-prune-inputs.sh "${PRUNE_SOURCE}" "${PRUNE_KEY}" "${RUNNER_TEMP}/inputs"
+
+      - name: Download the prune image the default prune ran in
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: prune-image
+          path: ${{ runner.temp }}/image
+
+      - name: Load it
+        run: gunzip -c "${RUNNER_TEMP}/image/prune-image.tar.gz" | docker load
+
+      - name: Download the artefacts of the default prune
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: default-prune
+          path: ${{ runner.temp }}/path_sets
+
+      # The guest proves it can observe Landlock before it prunes anything: version 10 or later, and one
+      # deliberate refusal that produces exactly one record it can read back.
+      - name: Run the audit observer in the guest
+        run: |
+          .github/scripts/run-prune-in-kvm-guest.sh phobos-prune-layers:ci "${RUNNER_TEMP}/kernel/bzImage" \
+            "${RUNNER_TEMP}/inputs" "${RUNNER_TEMP}/path_sets" "${PRUNE_KEY}"
+
+      - name: Hold the fixture's result to both directions
+        if: ${{ env.PRUNE_SOURCE == 'fixture' }}
+        run: bash tests/integration/kvm_fixture_result.sh "${RUNNER_TEMP}/path_sets"
+
+      # Kept even when the run failed, since the records and the console are what explain it.
+      - name: Keep the artefacts of the guest
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kvm-${{ matrix.runner }}
+          path: |
+            ${{ runner.temp }}/path_sets/*.abi10.*
+            ${{ runner.temp }}/path_sets/kvm-console.log
+            ${{ runner.temp }}/path_sets/audit-raw.log
+          if-no-files-found: warn
+
+      - name: Keep the kernel configuration
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kernel-config-${{ matrix.runner }}
+          path: ${{ runner.temp }}/kernel/config
+          if-no-files-found: warn
+
+  merge:
+    name: The base with the ABI 10 rows folded in
+    needs: kvm
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the default prune and the guest's records
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: ${{ runner.temp }}/artefacts
+
+      # The two guests run the same pinned kernel on the same image, so they must find the same rows; a
+      # difference fails the job rather than letting either leg stand for both. The comment header of a
+      # sidecar holds a date, so the rows are compared without comments.
+      - name: Compare the two guests
+        run: |
+          left="${RUNNER_TEMP}/artefacts/kvm-ubuntu-24.04"
+          right="${RUNNER_TEMP}/artefacts/kvm-ubuntu-26.04"
+          diff <(cd "${left}" && ls ./*.abi10.cfg 2> /dev/null) <(cd "${right}" && ls ./*.abi10.cfg 2> /dev/null)
+          for sidecar in "${left}"/*.abi10.cfg; do
+            [ -e "${sidecar}" ] || continue
+            diff <(grep -v '^#' "${sidecar}") <(grep -v '^#' "${right}/$(basename "${sidecar}")")
+          done
+
+      # One directory, as the orchestrator reads it; the records of the guest on ubuntu-26.04 stand for both.
+      - name: Put both sets in one directory and merge
+        run: |
+          mkdir -p "${RUNNER_TEMP}/path_sets"
+          cp -R "${RUNNER_TEMP}/artefacts/default-prune/." "${RUNNER_TEMP}/path_sets/"
+          cp "${RUNNER_TEMP}"/artefacts/kvm-ubuntu-26.04/*.abi10.* "${RUNNER_TEMP}/path_sets/"
+          python3 docker/prune_phase/orchestrate/orchestrate.py --langs "${PRUNE_KEY}" \
+            --path-dir "${RUNNER_TEMP}/path_sets" --core-dir "${RUNNER_TEMP}/core" --helpers-dir var/tmp/helpers
+
+      - name: Keep the merged base
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: merged-base
+          path: ${{ runner.temp }}/core
+          if-no-files-found: error
