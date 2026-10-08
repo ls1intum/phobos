@@ -1490,6 +1490,84 @@ static bool permits_v6(const char *ip, uint16_t port) {
     return connection_permitted(AF_INET6, &address, port, false);
 }
 
+static bool permits_mapped_udp(const char *ip, uint16_t port) {
+    struct in6_addr address;
+    inet_pton(AF_INET6, ip, &address);
+    return connection_permitted(AF_INET6, &address, port, true);
+}
+
+/* An IPv4-mapped destination is the IPv4 endpoint it maps, so the rules that name that endpoint cover it
+ * and no rule covers more through it. Both directions: what a loopback or IPv4 literal rule admits as
+ * IPv4 it admits mapped, on the same ports, and a mapped destination outside what a rule names stays
+ * refused, as does one on another port or another transport. */
+static void test_mapped_ipv4_destinations(void) {
+    reset_behaviour();
+    remember_rule("localhost", "*", false);
+    check("localhost admits ::ffff:127.0.0.1 on any port", permits_v6("::ffff:127.0.0.1", 12345));
+    check("localhost admits ::ffff:127.9.9.9, as it admits 127.9.9.9", permits_v6("::ffff:127.9.9.9", 12345) && permits_v4("127.9.9.9", 12345));
+    check("localhost still refuses ::ffff:10.0.0.1", !permits_v6("::ffff:10.0.0.1", 12345));
+    check("localhost still refuses ::ffff:8.8.8.8, as it refuses 8.8.8.8", !permits_v6("::ffff:8.8.8.8", 12345) && !permits_v4("8.8.8.8", 12345));
+    check("localhost still admits ::1 and refuses an IPv6 destination that only ends like loopback",
+          permits_v6("::1", 1) && !permits_v6("2001:db8::7f00:1", 1));
+
+    /* Only the mapped spelling is the IPv4 endpoint. Every other IPv6 address that carries 7f00:1 in its last
+     * 32 bits is another destination and stays refused: the IPv4-compatible and SIIT forms, NAT64, a
+     * documentation prefix, and addresses that match the mapped prefix only in part. */
+    static const char *const lookalikes[] = {
+        "::7f00:1", "::ffff:0:7f00:1", "64:ff9b::7f00:1", "2001:db8::ffff:7f00:1", "1::ffff:7f00:1",
+        "0:0:0:1:0:ffff:7f00:1", "0:0:0:0:1:ffff:7f00:1", "fe80::ffff:7f00:1", "100::ffff:7f00:1",
+    };
+    for (size_t index = 0; index < sizeof(lookalikes) / sizeof(lookalikes[0]); index++) {
+        reset_behaviour();
+        remember_rule("localhost", "*", false);
+        remember_rule("127.0.0.1", "*", false);
+        remember_rule("localhost", "*", true);
+        remember_rule("127.0.0.1", "*", true);
+        check("a look-alike of the mapped loopback is refused over TCP and UDP",
+              !permits_v6(lookalikes[index], 80) && !permits_mapped_udp(lookalikes[index], 80));
+    }
+
+    reset_behaviour();
+    remember_rule("127.0.0.1", "*", false);
+    check("an IPv4 literal on any port admits its mapped spelling", permits_v6("::ffff:127.0.0.1", 40000));
+    check("an IPv4 literal refuses another address in the mapped spelling", !permits_v6("::ffff:127.0.0.2", 40000));
+    check("an IPv4 literal refuses a mapped address of another block", !permits_v6("::ffff:10.0.0.1", 40000));
+
+    reset_behaviour();
+    remember_rule("127.0.0.1", "80", false);
+    check("an IPv4 literal with a port admits the mapped spelling on that port", permits_v6("::ffff:127.0.0.1", 80));
+    check("and refuses the mapped spelling on a port no rule names", !permits_v6("::ffff:127.0.0.1", 81));
+    check("and the same mapped destination over UDP, which no rule names", !permits_mapped_udp("::ffff:127.0.0.1", 80));
+
+    reset_behaviour();
+    remember_rule("127.0.0.1", "80", true);
+    check("a UDP rule admits the mapped spelling over UDP", permits_mapped_udp("::ffff:127.0.0.1", 80));
+    check("and not over TCP", !permits_v6("::ffff:127.0.0.1", 80));
+
+    reset_behaviour();
+    remember_rule("::ffff:127.0.0.1", "80", false);
+    check("an IPv6 literal that is a mapped address still admits that address", permits_v6("::ffff:127.0.0.1", 80));
+    check("and still does not admit the IPv4 spelling it was not written for", !permits_v4("127.0.0.1", 80));
+
+    reset_behaviour();
+    remember_rule("::ffff:10.0.0.0/104", "80", false);
+    check("a mapped range still admits a mapped address inside it", permits_v6("::ffff:10.1.2.3", 80));
+    check("and refuses a mapped address outside it", !permits_v6("::ffff:11.1.2.3", 80));
+
+    reset_behaviour();
+    remember_rule("*", "443", false);
+    check("a wildcard host still rests on the port for a mapped destination", permits_v6("::ffff:8.8.8.8", 443) && !permits_v6("::ffff:8.8.8.8", 80));
+
+    reset_behaviour();
+    remember_rule("example.com", "8080", false);
+    check("a host name rule still rests on its port for a mapped destination", permits_v6("::ffff:9.9.9.9", 8080) && !permits_v6("::ffff:9.9.9.9", 80));
+
+    struct in6_addr unspecified_mapped;
+    inet_pton(AF_INET6, "::ffff:0.0.0.0", &unspecified_mapped);
+    check("a mapped address is loopback exactly when the IPv4 address is", address_is_loopback(AF_INET6, &(struct in6_addr){ .s6_addr = { [10] = 0xff, [11] = 0xff, [12] = 127, [15] = 1 } })
+          && !address_is_loopback(AF_INET6, &unspecified_mapped));
+}
+
 static void test_connect_ranges(void) {
     reset_behaviour();
     remember_rule("104.16.0.0/12", "443", false);
@@ -3848,6 +3926,7 @@ int main(void) {
 
     test_rule_parsing();
     test_policy_matching();
+    test_mapped_ipv4_destinations();
     test_connect_ranges();
     test_address_and_destination();
     test_format_endpoint();

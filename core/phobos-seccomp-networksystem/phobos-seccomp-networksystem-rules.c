@@ -147,7 +147,23 @@ bool load_rules(const char *path) {
     return true;
 }
 
+/* Reads an IPv4-mapped IPv6 destination, ::ffff:a.b.c.d, as the IPv4 address a.b.c.d it stands for: a
+ * program that opens an IPv6 socket and connects to an IPv4 peer, as a Java virtual machine does by
+ * default, reaches the very same endpoint, so it is judged as that endpoint. Writes the IPv4 address to
+ * out and answers true for such a destination, and answers false, leaving out alone, for anything else. */
+static bool mapped_ipv4_destination(int family, const void *address, struct in_addr *out) {
+    if (family != AF_INET6 || !IN6_IS_ADDR_V4MAPPED((const struct in6_addr *)address)) {
+        return false;
+    }
+    memcpy(out, &((const struct in6_addr *)address)->s6_addr[MAPPED_IPV4_FIRST_BYTE], sizeof(*out));
+    return true;
+}
+
 bool address_is_loopback(int family, const void *address) {
+    struct in_addr mapped;
+    if (mapped_ipv4_destination(family, address, &mapped)) {
+        return address_is_loopback(AF_INET, &mapped);
+    }
     if (family == AF_INET) {
         const struct in_addr *v4 = address;
         return (ntohl(v4->s_addr) >> IPV4_FIRST_OCTET_SHIFT) == IPV4_LOOPBACK_FIRST_OCTET;
@@ -202,6 +218,10 @@ bool rule_host_matches(const struct connect_rule *rule, int family, const void *
     }
     struct in_addr v4;
     if (inet_pton(AF_INET, rule->host, &v4) == 1) {
+        struct in_addr mapped;
+        if (mapped_ipv4_destination(family, address, &mapped)) {
+            return memcmp(&mapped, &v4, sizeof(v4)) == 0;
+        }
         return family == AF_INET && memcmp(address, &v4, sizeof(v4)) == 0;
     }
     struct in6_addr v6;
