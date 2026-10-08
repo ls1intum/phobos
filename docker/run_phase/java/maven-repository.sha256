@@ -49,6 +49,14 @@ a1b02d1a0483aea12d93c0935bf5a241fbbb71df8ace492319715b718f412496  de/tum/cit/ase
 6add22f2003338b3d98228a4b3b7cb6fe13c253d27f5284b5f32ff92e762f5a7  de/tum/cit/ase/ares/2.2.1/ares-2.2.1.jar.sha1
 ec912fc9a9c075a2a4aefa41ec27ab7bdcb13b14bbc266b1369046142b41cdfd  de/tum/cit/ase/ares/2.2.1/ares-2.2.1.pom
 be07b7d1dc1fd60f8e555f2032e4a8814c99527940bf425aea2d070cfcb0ae22  de/tum/cit/ase/ares/2.2.1/ares-2.2.1.pom.sha1
+75fb747659d84541cb39bfb2f617025324af9a4ae5f10ab2237316a5e3ee338e  org/apache/maven/plugins/maven-clean-plugin/3.5.0/_remote.repositories
+a15977e3457ff8cd803c1a37e1e53aad76e4609cd23bbca8e8f783e5c78e5fa8  org/apache/maven/plugins/maven-clean-plugin/3.5.0/maven-clean-plugin-3.5.0.jar
+7e3985b2cb7149a7a2cf791242c120e4cc90bda3570890b7945f65926e5ec9d4  org/apache/maven/plugins/maven-clean-plugin/3.5.0/maven-clean-plugin-3.5.0.jar.sha1
+9dc0a3f49b582aa36d2617c69034a66cdf5b1ec789f7e6ff506df962551fde89  org/apache/maven/plugins/maven-clean-plugin/3.5.0/maven-clean-plugin-3.5.0.pom
+98a05f2405bbd0a8c062a19b2fa91a854a7606979449ea951086c7b743963286  org/apache/maven/plugins/maven-clean-plugin/3.5.0/maven-clean-plugin-3.5.0.pom.sha1
+42bdc803c4fb9bf668a31ed978cf2496b7be44666b54bcd8efea5f100488933e  org/apache/maven/plugins/maven-plugins/44/_remote.repositories
+d7801d725de2abb706efb931e22eac5df4d0c7fc8c9ea9a4d9986782407aaff7  org/apache/maven/plugins/maven-plugins/44/maven-plugins-44.pom
+9014b69c313fbba6f5bf2cd94c186f445fbd29e7051bc2af2799fa3e2640e7f6  org/apache/maven/plugins/maven-plugins/44/maven-plugins-44.pom.sha1
 bc19028351cb4ea3689cb3fb6ad5d19ed54cdd83d0366110fad751248bffa8a1  org/objenesis/objenesis/3.3/_remote.repositories
 02dfd0b0439a5591e35b708ed2f5474eb0948f53abf74637e959b8e4ef69bfeb  org/objenesis/objenesis/3.3/objenesis-3.3.jar
 9175206dfc17d972540336bd8ec3e549a5b19bfa5f6c12f4f70b01d481420963  org/objenesis/objenesis/3.3/objenesis-3.3.jar.sha1
