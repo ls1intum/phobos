@@ -62,7 +62,7 @@ environment, offline, and grading itself only applies a fixed configuration.
 The filesystem layer is enforced by Landlock, an unprivileged Linux kernel sandbox, applied
 by `phobos-landlock-filesystem-and-networksystem` (the C program under `protecter/src/`). The run phase needs no privileges, no
 capabilities and no container flags. The prune runs the layer pruner
-(`pruner/src/layer_prune/`, in `docker/prune_phase/layers/`), which measures under the
+(`pruner/src/layer_prune/`, in `docker/pruner/layers/`), which measures under the
 grading layers themselves, observing their refusals with `strace`; README.md, "The layer
 pruner", says how to run it. Nothing uses Bubblewrap any more.
 
@@ -137,7 +137,7 @@ find . -name '*.sh'  -type f -print0 | xargs -0 shellcheck -x -S warning
 ( failed=0; while IFS= read -r f; do gcc-14 -std=gnu23 -fsyntax-only -Wall -Wextra -Werror -fanalyzer "$f" || failed=1; done < <(find . -name '*.c' -type f); exit "$failed" )
 find . -name '*.c'   -type f -print0 | xargs -0 cppcheck --std=c23 --enable=warning --quiet --error-exitcode=1
 ruff check --no-cache .
-bandit --recursive --ini .bandit --severity-level medium docker/prune_phase/orchestrate pruner/src
+bandit --recursive --ini .bandit --severity-level medium docker/pruner/orchestrate pruner/src
 yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 actionlint
@@ -161,12 +161,12 @@ comment saying why.
 ```
 docker compose -f docker-compose.yaml up --build        # the prune environments
 .github/scripts/assemble-run-phase-context.sh build/run-phase-context   # the build context the compose file reads
-docker compose -f docker/run_phase/java/docker-compose.yaml up --build
-docker build -f docker/run_phase/java/Dockerfile -t phobos-run-phase:ci build/run-phase-context
+docker compose -f docker/protecter/java/docker-compose.yaml up --build
+docker build -f docker/protecter/java/Dockerfile -t phobos-run-phase:ci build/run-phase-context
 # an acceptance suite, in an ordinary container: no --privileged, no --cap-add, no --security-opt
 docker run --rm --network none -v "$PWD/protecter/test:/tests:ro" phobos-run-phase:ci \
   bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/run-tests.sh
-docker compose -f docker/run_phase/python/docker-compose.yaml up --build
+docker compose -f docker/protecter/python/docker-compose.yaml up --build
 ```
 
 Each prune container works independently on its language and writes its result into the
@@ -225,9 +225,9 @@ pruner/                    the pruners, which discover what a policy needs
                            layer_record/: the recording pruner (record a session unsandboxed, generate a policy, replay
                            it, compare it; prune image only)
   test/                    integration/ (the pruner suites and their fixtures), python/, and the runner probes
-docker/prune_phase/        the layer pruner's image and the orchestrator's
+docker/pruner/             the layer pruner's image and the orchestrator's
   layers/                  the layer pruner's image: the run-phase image, strace, the probe, an empty base
-docker/run_phase/          the images an exercise actually runs in, one per language (java/, python/)
+docker/protecter/          the images an exercise actually runs in, one per language (java/, python/)
 exercises/                 the reference exercises: the pruners' input and the protecter's acceptance fixtures
 phobos-cli.sh              one command line for phobos.sh, the layer pruner, the recording pruner and the image build; on a host it
                            starts Docker, in an image it starts what the image holds, and it refuses every switch that turns a layer off

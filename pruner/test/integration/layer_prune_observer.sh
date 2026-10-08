@@ -10,7 +10,7 @@
 # A fourth fact is about what the pruner writes: every policy cfgfile.render produces is accepted by
 # the real parser and runs a command, and the strict subset it refuses is one Phobos refuses too.
 #
-# Runs inside the prune image (docker/prune_phase/layers/Dockerfile) with the test trees mounted at
+# Runs inside the prune image (docker/pruner/layers/Dockerfile) with the test trees mounted at
 # /repo/protecter/test and /repo/pruner/test, and pruner/src at /var/tmp/helpers, all read-only, in an ordinary container:
 # --network none, and no --privileged, no --cap-add, no --security-opt. ptrace of one's own child
 # needs none of them.

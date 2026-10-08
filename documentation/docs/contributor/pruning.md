@@ -90,7 +90,7 @@ The code is in `pruner/src/layer_prune/`:
 - `generalise.py` decides when a file becomes its directory.
 - `cfgfile.py` writes the result as a policy the parser accepts.
 
-The image, `docker/prune_phase/layers/Dockerfile`, adds `strace` and `python3` to the run-phase
+The image, `docker/pruner/layers/Dockerfile`, adds `strace` and `python3` to the run-phase
 image of the language being pruned (`phobos-run-phase-java` or `phobos-run-phase-python`). Its only base, `BasePrune.cfg`, grants nothing, so every grant in a pruned policy has a
 refusal behind it.
 
@@ -100,7 +100,7 @@ runs the seven jobs of the pipeline in order and stops at the first that fails (
 exercise under one key by hand, in an ordinary container:
 
 ```bash
-docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers .
+docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci -f docker/pruner/layers/Dockerfile -t phobos-prune-layers .
 docker run --rm --network none \
   -v "$PWD/exercises:/srv/phobos-prune-exercises:ro" -v "$PWD/pruner/src:/var/tmp/helpers:ro" \
   -v "$PWD/build/pruner/path_sets:/var/tmp/path_sets" phobos-prune-layers \
@@ -136,7 +136,7 @@ the same image as the Gradle one, by the Compose service `prune_java_maven`. The
 `verify_java_maven` verifies it.
 
 The image holds the dependencies Maven resolves, pre-loaded and held to
-`docker/run_phase/java/maven-repository.sha256`, and `pruner/test/integration/layer_prune_maven.sh`
+`docker/protecter/java/maven-repository.sha256`, and `pruner/test/integration/layer_prune_maven.sh`
 re-hashes every file the manifest lists before it prunes. Maven offline stops at the first
 dependency file it cannot read, so granting that repository file by file would take one prune
 round per file. Inside a fine-grained root such as `/root` a grant is otherwise always file by
@@ -162,7 +162,7 @@ adopt in a pull request of its own that lists every widening.
 
 The build writes scratch files with random names in `/tmp` (Ares, Surefire), which the pruner never
 grants from a refusal. The exercise's `prune.json` therefore names a seed, `"seed": "java.cfg"`,
-a file beside the prune image's Dockerfile (`docker/prune_phase/layers/seeds/java.cfg`) that
+a file beside the prune image's Dockerfile (`docker/pruner/layers/seeds/java.cfg`) that
 starts the first policy with `[read]`, `[write]`, `[create]` and `[delete]` on `/tmp`. The
 minimisation drops a row the build does not need, and one comment above the path names the seeded
 rows that stayed. Language-specific rows live only in such a file, never in the pruner or in
@@ -234,7 +234,7 @@ kernel's documented layout, and the first run replaces them with the raw lines i
 Each prune container works independently on its own language and writes into the shared
 `build/pruner/path_sets` directory; nothing passes between containers except through that directory.
 Every language is pruned by the layer pruner, on an image built from that language's run-phase
-image, so build the run-phase images first (`docker/run_phase/<language>/docker-compose.yaml`
+image, so build the run-phase images first (`docker/protecter/<language>/docker-compose.yaml`
 says how):
 
 ```bash
@@ -242,7 +242,7 @@ docker compose -f docker-compose.yaml up --build
 ```
 
 Each container writes a complete `<lang>_<exercise>.cfg` and its record per exercise.
-`docker/prune_phase/orchestrate/orchestrate.py` then merges them. It holds each `.cfg` to the
+`docker/pruner/orchestrate/orchestrate.py` then merges them. It holds each `.cfg` to the
 SHA-256 its record carries before it merges anything. A language that failed, one that
 produced nothing, and one whose `.cfg` its record does not vouch for each stop the merge rather
 than shrinking it. An aborted exercise stops the merge as well.
@@ -265,7 +265,7 @@ records to `path_sets/verify/`.
 next to a `BaseLanguage-java.cfg` gives a Java run the paths of every other language too. The
 orchestrator writes every alternative into one directory on purpose, because they are
 alternatives rather than parts of one policy. Choosing between them is the packaging step, and
-`docker/run_phase/java/Dockerfile` does the choosing by naming one file.
+`docker/protecter/java/Dockerfile` does the choosing by naming one file.
 :::
 
 ## The three files written for reading

@@ -9,7 +9,7 @@ services:
       # Run this from the repository root before `docker compose build`:
       #   .github/scripts/assemble-run-phase-context.sh build/run-phase-context
       context: ../../../build/run-phase-context
-      dockerfile: ../../docker/run_phase/java/Dockerfile
+      dockerfile: ../../docker/protecter/java/Dockerfile
     image: phobos-run-phase-java
     stdin_open: true
     tty: true

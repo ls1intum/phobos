@@ -1,6 +1,6 @@
 strace -- version 6.8
 
-Captured in the prune image (docker/prune_phase/layers/Dockerfile on the run-phase image), arm64,
+Captured in the prune image (docker/pruner/layers/Dockerfile on the run-phase image), arm64,
 Linux 7.0 (Docker Desktop), Landlock ABI 8, as root in an ordinary container with --network none:
 
   strace -f -qq -y -s 4096 -o basic-full.txt \

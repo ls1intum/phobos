@@ -28,7 +28,7 @@
       "customType": "regex",
       "managerFilePatterns": [
         ".github/workflows/lint.yml",
-        "docker/run_phase/python/Dockerfile"
+        "docker/protecter/python/Dockerfile"
       ],
       "matchStrings": [
         "(?<depName>[a-zA-Z0-9][a-zA-Z0-9._-]*)==(?<currentValue>[0-9][^\\s\\\\\"']*)"

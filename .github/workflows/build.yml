@@ -95,7 +95,7 @@ jobs:
         include:
           - name: prune orchestrate
             slug: prune-orchestrate
-            context: docker/prune_phase/orchestrate
+            context: docker/pruner/orchestrate
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -168,7 +168,7 @@ jobs:
         run: |
           # shellcheck disable=SC2086
           docker build ${FRESH} \
-            -f docker/run_phase/java/Dockerfile \
+            -f docker/protecter/java/Dockerfile \
             -t phobos-run-phase:ci \
             "${RUNNER_TEMP}/run-phase-context"
 
@@ -424,7 +424,7 @@ jobs:
           && contains(fromJSON('["recorder-and-egress","pruner"]'), matrix.group) }}
         run: |
           docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci \
-            -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers:ci .
+            -f docker/pruner/layers/Dockerfile -t phobos-prune-layers:ci .
 
       # strace observes a Landlock refusal made inside the shipped chain, a permitted read beside it
       # still works, and the parser and attribution turn the record into exactly that one denial. An
@@ -518,7 +518,7 @@ jobs:
         run: |
           # shellcheck disable=SC2086
           docker build ${FRESH} \
-            -f docker/run_phase/python/Dockerfile \
+            -f docker/protecter/python/Dockerfile \
             -t phobos-run-phase-python:ci \
             "${RUNNER_TEMP}/run-phase-context"
 
@@ -598,7 +598,7 @@ jobs:
           && contains(fromJSON('["pruner-a","egress"]'), matrix.group) }}
         run: |
           docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase-python:ci \
-            -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers-python:ci .
+            -f docker/pruner/layers/Dockerfile -t phobos-prune-layers-python:ci .
 
       - name: The prune image's observer on the Python image sees what the layers refuse, and only that
         if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner-a' }}

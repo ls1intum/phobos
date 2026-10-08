@@ -453,9 +453,9 @@ cli --dry-run build java
 check "build java builds two commands" 2 "$(count_line COMMAND)"
 first="$(sed -n '2p' <<<"${OUT}")"
 check "the first is the assembler of this checkout" "${REPOSITORY}/.github/scripts/assemble-run-phase-context.sh" "${first}"
-has_pair --project-directory "${REPOSITORY}/docker/run_phase/java" && has_pair -f "${REPOSITORY}/docker/run_phase/java/docker-compose.yaml" && ok "the second builds the compose file of the language" || bad "the second builds the compose file of the language" "${OUT}"
+has_pair --project-directory "${REPOSITORY}/docker/protecter/java" && has_pair -f "${REPOSITORY}/docker/protecter/java/docker-compose.yaml" && ok "the second builds the compose file of the language" || bad "the second builds the compose file of the language" "${OUT}"
 cli --dry-run build python
-has_pair -f "${REPOSITORY}/docker/run_phase/python/docker-compose.yaml" && ok "build python builds the Python compose file" || bad "build python builds the Python compose file" "${OUT}"
+has_pair -f "${REPOSITORY}/docker/protecter/python/docker-compose.yaml" && ok "build python builds the Python compose file" || bad "build python builds the Python compose file" "${OUT}"
 cli --dry-run build
 expect_refused "build without a language is refused" "${PHB_EXIT_USAGE}"
 cli --dry-run build java python
@@ -463,7 +463,7 @@ expect_refused "build with two languages is refused" "${PHB_EXIT_USAGE}"
 cli --dry-run build ruby
 expect_refused "build of another language is refused" "${PHB_EXIT_USAGE}"
 FAKE="${WORK}/checkout"
-mkdir -p "${FAKE}/protecter/src" "${FAKE}/.github/scripts" "${FAKE}/docker/run_phase/java" "${FAKE}/docker/run_phase/python"
+mkdir -p "${FAKE}/protecter/src" "${FAKE}/.github/scripts" "${FAKE}/docker/protecter/java" "${FAKE}/docker/protecter/python"
 cp -R "${REPOSITORY}/protecter/src/phobos-tools-common" "${FAKE}/protecter/src/"
 cp "${CLI}" "${FAKE}/phobos-cli.sh"
 printf '#!/bin/bash\necho "assembler $*" >> "%s/steps"\nexit "${ASSEMBLER_STATUS:-0}"\n' "${WORK}" > "${FAKE}/.github/scripts/assemble-run-phase-context.sh"

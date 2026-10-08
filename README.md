@@ -35,7 +35,7 @@ scripts look for it; a bare checkout is refused rather than run unprotected.
 
 ```bash
 .github/scripts/assemble-run-phase-context.sh build/run-phase-context
-docker compose -f docker/run_phase/java/docker-compose.yaml up --build
+docker compose -f docker/protecter/java/docker-compose.yaml up --build
 ```
 
 Then wrap a command with `phobos.sh`, inside that image:

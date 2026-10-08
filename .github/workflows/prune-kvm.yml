@@ -73,10 +73,10 @@ jobs:
 
       - name: Build the run-phase image and the prune image on it
         run: |
-          docker build -f "docker/run_phase/${RUN_PHASE}/Dockerfile" -t phobos-run-phase:ci \
+          docker build -f "docker/protecter/${RUN_PHASE}/Dockerfile" -t phobos-run-phase:ci \
             "${RUNNER_TEMP}/run-phase-context"
           docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci \
-            -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers:ci .
+            -f docker/pruner/layers/Dockerfile -t phobos-prune-layers:ci .
 
       # As Compose starts it: no network, cgroup limits, and no privilege, capability or security option.
       - name: Prune the key
@@ -227,7 +227,7 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/path_sets"
           cp -R "${RUNNER_TEMP}/artefacts/default-prune/." "${RUNNER_TEMP}/path_sets/"
           cp "${RUNNER_TEMP}"/artefacts/kvm-ubuntu-26.04/*.abi10.* "${RUNNER_TEMP}/path_sets/"
-          python3 docker/prune_phase/orchestrate/orchestrate.py --langs "${PRUNE_KEY}" \
+          python3 docker/pruner/orchestrate/orchestrate.py --langs "${PRUNE_KEY}" \
             --path-dir "${RUNNER_TEMP}/path_sets" --core-dir "${RUNNER_TEMP}/core" --helpers-dir pruner/src
 
       - name: Keep the merged base

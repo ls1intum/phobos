@@ -12,7 +12,7 @@ from the one an exercise gets.
 .github/scripts/assemble-run-phase-context.sh /tmp/ctx
 
 # 2. image
-docker build -f docker/run_phase/java/Dockerfile -t phobos-landlock-filesystem-and-networksystem:test /tmp/ctx
+docker build -f docker/protecter/java/Dockerfile -t phobos-landlock-filesystem-and-networksystem:test /tmp/ctx
 
 # 3. one suite, with no security flags of any kind and no network
 docker run --rm --network none -v "$PWD/protecter/test:/tests:ro" \

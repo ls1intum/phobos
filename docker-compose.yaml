@@ -1,11 +1,11 @@
 # What every service of the layer pruner shares. The network is set per service: none for the prune
 # and its verification, and the project's own network for the opt-in egress service only. Each
 # language's prune image is built on that language's run-phase image, so an exercise is pruned in
-# the image it is graded in: docker/run_phase/<language>/docker-compose.yaml builds it.
+# the image it is graded in: docker/protecter/<language>/docker-compose.yaml builds it.
 x-prune-layers: &prune_layers
   build:
     context: .
-    dockerfile: docker/prune_phase/layers/Dockerfile
+    dockerfile: docker/pruner/layers/Dockerfile
     args:
       RUN_PHASE_IMAGE: ${RUN_PHASE_IMAGE:-phobos-run-phase-java}
   image: phobos-prune-layers
@@ -22,7 +22,7 @@ x-prune-layers-python: &prune_layers_python
   <<: *prune_layers
   build:
     context: .
-    dockerfile: docker/prune_phase/layers/Dockerfile
+    dockerfile: docker/pruner/layers/Dockerfile
     args:
       RUN_PHASE_IMAGE: ${RUN_PHASE_IMAGE_PYTHON:-phobos-run-phase-python}
   image: phobos-prune-layers-python
@@ -35,7 +35,7 @@ x-verify-volumes: &verify_volumes
   - ./build/pruner/config:/srv/phobos-merged:ro
 
 services:
-  # Every language is pruned on the grading layers themselves (docker/prune_phase/layers, README
+  # Every language is pruned on the grading layers themselves (docker/pruner/layers, README
   # "The layer pruner"). The exercises are mounted read-only and only the artefacts' directory is
   # writable, since every run replaces /var/tmp/testing-dir with a fresh copy of the exercise
   # (A.6.1). No network, no privilege and no capability: strace traces only the pruner's own
@@ -52,7 +52,7 @@ services:
   # service is for a program that must reach hosts. Never point either at an untrusted submission.
   # No privilege, capability or security option: strace traces only the recorder's own children.
   # The image is built from the repository root, since its Dockerfile copies files by their
-  # repository paths, on the run-phase image docker/run_phase/java/docker-compose.yaml builds. The
+  # repository paths, on the run-phase image docker/protecter/java/docker-compose.yaml builds. The
   # recordings are written as root under ./build/pruner/recordings, so removing one may need sudo; without
   # RECORD_EXERCISE an empty directory there stands in for the exercise.
   record: &record
@@ -60,7 +60,7 @@ services:
     image: phobos-prune-layers-record
     build:
       context: .
-      dockerfile: docker/prune_phase/layers/Dockerfile
+      dockerfile: docker/pruner/layers/Dockerfile
       args:
         RUN_PHASE_IMAGE: ${RUN_PHASE_IMAGE:-phobos-run-phase-java}
     entrypoint: ["/var/tmp/helpers/layer_record/phobos-record"]
@@ -89,7 +89,7 @@ services:
       - ./exercises:/srv/phobos-prune-exercises:ro
       - ./pruner/src:/var/tmp/helpers:ro
       - ./build/pruner/path_sets:/var/tmp/path_sets
-      - ./docker/run_phase/java/maven-repository.sha256:/srv/phobos-manifest/maven-repository.sha256:ro
+      - ./docker/protecter/java/maven-repository.sha256:/srv/phobos-manifest/maven-repository.sha256:ro
     command: ["--stage", "all", "java-maven"]
 
   prune_python:
@@ -110,7 +110,7 @@ services:
     command: ["--resolver", "127.0.0.11", "--output-dir", "/var/tmp/path_sets/egress", "java-egress"]
 
   orchestrate:
-    build: docker/prune_phase/orchestrate
+    build: docker/pruner/orchestrate
     volumes:
       - ./pruner/src:/var/tmp/helpers:ro
       - ./build/pruner/path_sets:/var/tmp/path_sets
