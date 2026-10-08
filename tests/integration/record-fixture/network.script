@@ -1,0 +1,8 @@
+# The session of record_networked.sh: an HTTPS request to a name the stand-in server's resolver knows,
+# with the certificate unchecked since the server's is self-signed. The marker is printed in two halves
+# so the echo of the typed line can never satisfy the expectation.
+expect >>>
+send import ssl, http.client
+send c = http.client.HTTPSConnection("api.phobos.test", context=ssl._create_unverified_context()); c.request("GET", "/"); r = c.getresponse(); print("OK-" + "N1", r.status, r.read())
+expect OK-N1 200
+send exit(0)

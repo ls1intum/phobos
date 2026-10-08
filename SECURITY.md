@@ -67,7 +67,14 @@ rest exists to take privileges away. None of the following is a vulnerability.
   what each refusal proves, and its orchestrator merges the result into the allow-list the
   sandbox later trusts. strace and the containment probe are installed in the prune image only,
   never in the run-phase image a submission is graded in, and the prune container needs no
-  privilege. Nothing in either phase uses Bubblewrap any more.
+  privilege. The recording pruner (`var/tmp/helpers/layer_record/`) is the exception to "the reference
+  runs under a policy": while it records, the program runs with no sandbox at all, and it is for the
+  instructor's own reference program, never for an untrusted submission. The run-phase image does not
+  hold it, it is started only in the prune image, which the helpers are mounted into, and nothing under
+  `core/` names it. It refuses the grading options and a command whose words name a file of the layers
+  (a wrapper script that starts them is not caught); the policy it generates covers only what the
+  recorded sessions did, and says so.
+  Nothing in either phase uses Bubblewrap any more.
 - The Dockerfiles under `docker/` extend the Artemis Java test image and, for Python, the official
   Python image, and compile the C products.
   The run-phase image needs no user namespaces, no added capabilities and no security

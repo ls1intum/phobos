@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import socket
 import struct
 
 # A DNS message's header: id, flags, and the four section counts, each 16 bits.
@@ -141,6 +142,22 @@ def valid_hostname(name: str) -> str | None:
     if not all(LABEL.match(label) for label in labels) or NUMERIC_LABEL.match(labels[-1]):
         return None
     return lowered
+
+
+def rule_hostname(name: str) -> str | None:
+    """The name when it may stand in a rule for a host the session reached, else None.
+
+    valid_hostname's grammar, and also not localhost or beneath it (which names the loopback, not the
+    address that was reached) and not a spelling the C library reads as an address (`0x7f.1`, a number).
+    """
+    valid = valid_hostname(name)
+    if valid is None or valid == "localhost" or valid.endswith(".localhost"):
+        return None
+    try:
+        socket.inet_aton(valid)
+    except OSError:
+        return valid
+    return None
 
 
 def _answers(message: bytes) -> list[tuple[str, str]]:

@@ -166,3 +166,50 @@ def test_the_permissive_network_is_loopback_port_zero_and_the_declared_hosts():
     assert opened.connect == (*cfgfile.PERMISSIVE_CONNECT, "allow api.example.org:443")
     assert opened.bind == cfgfile.PERMISSIVE_BIND
     assert opened.fs == {"/usr": frozenset({"read"})}
+
+
+def test_a_header_and_rule_comments_are_written_and_read_back_without_them():
+    original = cfgfile.Policy(fs={"/var/tmp/testing-dir": frozenset({"read"})},
+                              connect=(cfgfile.Rule("allow example.org:443", "TLS host name"),),
+                              bind=("allow 0",), limits={}, header=("Recorded by phobos-record.",),
+                              notes=("Grading will refuse: setsid",))
+    text = cfgfile.render(original)
+    assert text.startswith("# Recorded by phobos-record.\n")
+    assert "# TLS host name\nallow example.org:443\n" in text
+    assert text.rstrip().endswith("# Grading will refuse: setsid")
+    again = cfgfile.read_policy(text)
+    assert again.connect == ("allow example.org:443",)
+    assert again.fs == original.fs
+
+
+def test_a_comment_rule_is_written_as_a_comment_and_grants_nothing():
+    text = cfgfile.render(cfgfile.Policy(fs={}, connect=("allow 127.0.0.1:*", "# not granted: lookup of x"),
+                                         bind=(), limits={}))
+    assert "# not granted: lookup of x\n" in text
+    assert cfgfile.read_policy(text).connect == ("allow 127.0.0.1:*",)
+
+
+def test_a_rule_comment_cannot_end_its_line_and_become_a_rule():
+    original = cfgfile.Policy(fs={}, connect=(cfgfile.Rule("allow 127.0.0.1:*", "seen as evil\n[write]\n/"),),
+                              bind=(), limits={})
+    text = cfgfile.render(original)
+    assert "\n[write]\n" not in text
+    assert "seen as evil\\x0a[write]\\x0a/" in text
+    assert cfgfile.read_policy(text).fs == {}
+
+
+def test_a_header_and_a_note_cannot_end_their_line_either():
+    text = cfgfile.render(cfgfile.Policy(fs={}, connect=(), bind=(), limits={}, header=("a\r\n[read]\n/",),
+                                         notes=("b [write]",)))
+    assert cfgfile.read_policy(text).fs == {}
+    assert "\\xe2\\x80\\xa8" in text
+
+
+@pytest.mark.parametrize("path", ["/tmp/a\rb", "/tmp/a\x1bb", "/tmp/a\x7fb", "/tmp/a\udcffb"])
+def test_a_path_with_a_control_character_or_invalid_utf8_is_refused(path):
+    with pytest.raises(ValueError):
+        cfgfile.render(policy({path: {"read"}}))
+
+
+def test_comment_text_writes_everything_but_printable_ascii_and_hash_as_hex():
+    assert cfgfile.comment_text("a b\nc#dé") == "a b\\x0ac\\x23d\\xc3\\xa9"

@@ -9,6 +9,11 @@ Paths are compared as written, so the caller passes them through os.path.realpat
 the system can answer (whether a [read] path exists, a dangling link, the hierarchy after links are
 resolved) is left to the phobos-policysystem.sh gate and the run, which refuse it with PHB-EPOLICY.
 
+A network rule may carry a comment, written above it, and a rule whose text starts with `# ` is written as
+a comment itself (a lookup the instructor should see but no rule grants). A policy may also carry a header
+and trailing notes, written as comments. Every such comment is passed through `comment_text`, so no
+observed value can end its line and become a rule.
+
 `read_policy` splits and trims lines exactly as phobos-policy-parse.sh does: lines end at LF only, a
 carriage return is refused, and only the whitespace bash's [[:space:]] names is trimmed. Beyond the
 parser, it refuses every path and limit render would refuse, so nothing it reads can be written back
@@ -21,6 +26,7 @@ import dataclasses
 import pathlib
 import posixpath
 import re
+from typing import Self
 
 from layer_prune import network
 
@@ -50,6 +56,8 @@ FORBIDDEN_RULE_CHARACTERS = re.compile("[#\x00-\x1f\x7f\x85\u2028\u2029]")
 # The shapes a [connect] and a [bind] line must have: allow, a destination or a port, a transport.
 CONNECT_RULE = re.compile(r"allow [^\s]+(?: (?:tcp|udp))?")
 BIND_RULE = re.compile(r"allow (?P<port>0|[1-9][0-9]{0,4})(?: (?:tcp|udp))?")
+# What comment_text writes as \xHH: everything but printable ASCII, and the `#` that check_rule refuses.
+UNPRINTABLE = re.compile("[^\x20-\x22\x24-\x7e]")
 # The highest port, the most digits a limit may have (PHB_LARGEST_LIMIT_DIGITS), and the largest
 # megabyte value the resource layer can apply (PHB_LARGEST_MEGABYTES).
 PORT_MAXIMUM = 65535
@@ -72,12 +80,34 @@ PERMISSIVE_CONNECT = ("allow 127.0.0.1:*", "allow [::1]", "allow localhost")
 PERMISSIVE_BIND = ("allow 0", "allow 0 udp")
 
 
+class Rule(str):
+    """A [connect] or [bind] rule that carries the comment written above it.
+
+    It is the rule's text as a str, so everything that compares or parses rules reads it as one, and
+    `comment` is empty where there is none. A rule whose text starts with `# ` is written as a comment.
+    """
+
+    comment: str
+
+    def __new__(cls, text: str, comment: str = "") -> Self:
+        """The rule `text` with its comment."""
+        rule = super().__new__(cls, text)
+        rule.comment = comment
+        return rule
+
+    @property
+    def text(self) -> str:
+        """The rule as a plain str."""
+        return str(self)
+
+
 @dataclasses.dataclass(frozen=True)
 class Policy:
     """A policy: filesystem grants by path, [connect] and [bind] rules, [limits] values, and comments.
 
     `fs` maps an absolute path to the sections that grant it. `comments` maps a path to one line
     written as a comment above that path's first line, the reason a grant is wider than observed.
+    `header` is written as comment lines before everything, `notes` as comment lines after it.
     """
 
     fs: dict[str, frozenset[str]]
@@ -85,6 +115,8 @@ class Policy:
     bind: tuple[str, ...]
     limits: dict[str, int]
     comments: dict[str, str] = dataclasses.field(default_factory=dict)
+    header: tuple[str, ...] = ()
+    notes: tuple[str, ...] = ()
 
 
 def rights_of(sections: frozenset[str]) -> frozenset[str]:
@@ -97,12 +129,30 @@ def is_beneath(path: str, ancestor: str) -> bool:
     return path != ancestor and path.startswith(ancestor.rstrip("/") + "/")
 
 
+def comment_text(text: str) -> str:
+    """The text with every character outside printable ASCII written as \\xHH per UTF-8 byte, and `#` too.
+
+    A comment is the one place observed text (a host name, a file name) reaches a policy file in a
+    form that is not checked as a rule, so nothing in it may end the line.
+    """
+    return UNPRINTABLE.sub(lambda match: "".join(f"\\x{byte:02x}" for byte in match.group().encode("utf-8", "surrogateescape")), text)
+
+
+def is_comment_rule(rule: str) -> bool:
+    """Whether a network rule is a comment rule: written as a comment line, granting nothing."""
+    return rule.startswith("# ")
+
+
 def check_path(path: str) -> None:
     """Refuses a path the parser would refuse or misread, or one not in normal form (`..`, `//`, a trailing `/`)."""
     if not path.startswith("/"):
         raise ValueError(f"{path!r} is not an absolute path")
     if FORBIDDEN_PATH_CHARACTERS.search(path) or path != path.strip():
         raise ValueError(f"{path!r} holds a character a policy path cannot carry")
+    try:
+        path.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ValueError(f"{path!r} is not valid UTF-8, which a policy file must be") from error
     if posixpath.normpath(path) != path or path.startswith("//"):
         raise ValueError(f"{path!r} is not in normal form")
 
@@ -116,9 +166,11 @@ def check_rule(rule: str) -> None:
 def check_network(policy: Policy) -> None:
     """Refuses a [connect] or [bind] line that is not in its section's shape."""
     for rule in policy.connect:
-        if not CONNECT_RULE.fullmatch(rule):
+        if not is_comment_rule(rule) and not CONNECT_RULE.fullmatch(rule):
             raise ValueError(f"{rule!r} is not a [connect] rule")
     for rule in policy.bind:
+        if is_comment_rule(rule):
+            continue
         match = BIND_RULE.fullmatch(rule)
         if match is None or int(match.group("port")) > PORT_MAXIMUM:
             raise ValueError(f"{rule!r} is not a [bind] rule")
@@ -152,8 +204,11 @@ def check_policy(policy: Policy) -> None:
         if unknown:
             raise ValueError(f"{path!r} names unknown sections {sorted(unknown)}")
     check_hierarchy(policy.fs)
-    for rule in policy.connect + policy.bind + tuple(policy.comments.values()):
-        check_rule(rule)
+    for rule in policy.connect + policy.bind:
+        if not is_comment_rule(rule):
+            check_rule(rule)
+    for comment in policy.comments.values():
+        check_rule(comment)
     check_network(policy)
     check_limits(policy.limits)
 
@@ -163,6 +218,8 @@ def render(policy: Policy) -> str:
     check_policy(policy)
     blocks: list[str] = []
     commented: set[str] = set()
+    if policy.header:
+        blocks.append(comment_block(policy.header))
     for section in FILESYSTEM_SECTIONS:
         paths = sorted(path for path, sections in policy.fs.items() if section in sections)
         if not paths:
@@ -176,11 +233,29 @@ def render(policy: Policy) -> str:
         blocks.append("\n".join(lines))
     for section, rules in (("connect", policy.connect), ("bind", policy.bind)):
         if rules:
-            blocks.append("\n".join([f"[{section}]", *rules]))
+            blocks.append("\n".join([f"[{section}]", *rule_lines(rules)]))
     limit_lines = [f"{key}={policy.limits[key]}" for key in LIMIT_KEYS if key in policy.limits]
     if limit_lines:
         blocks.append("\n".join(["[limits]", *limit_lines]))
+    if policy.notes:
+        blocks.append(comment_block(policy.notes))
     return "\n\n".join(blocks) + "\n" if blocks else ""
+
+
+def comment_block(lines: tuple[str, ...]) -> str:
+    """The lines as comment lines, each passed through comment_text."""
+    return "\n".join(f"# {comment_text(line)}" for line in lines)
+
+
+def rule_lines(rules: tuple[str, ...]) -> list[str]:
+    """The lines of a network section: a rule's comment above it, a comment rule as a comment line."""
+    lines: list[str] = []
+    for rule in rules:
+        comment = getattr(rule, "comment", "")
+        if comment:
+            lines.append(f"# {comment_text(comment)}")
+        lines.append(f"# {comment_text(rule[2:])}" if is_comment_rule(rule) else str(rule))
+    return lines
 
 
 def read_policy(text: str) -> Policy:

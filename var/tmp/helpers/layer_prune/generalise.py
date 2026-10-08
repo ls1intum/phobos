@@ -46,7 +46,7 @@ from collections.abc import Iterable
 from pathlib import PurePosixPath
 
 from layer_prune import cfgfile
-from layer_prune.record import LAYER_FILESYSTEM, Denial
+from layer_prune.record import LAYER_FILESYSTEM, Denial, Need
 
 # The directories inside which grants stay file by file and are never compacted (decision 7).
 DEFAULT_FINE_ROOTS = ("/etc", "/dev", "/proc", "/sys", "/root", "/home", "/run")
@@ -201,6 +201,24 @@ def rewrite_self(path: str, tgid: int, tid: int) -> str:
     return path
 
 
+def as_denials(items: Iterable[Denial | Need]) -> list[Denial]:
+    """The items as denials: a Need becomes the filesystem denial of the same objects, sections and ids.
+
+    The recording pruner generalises what a session needed exactly as the layer pruner generalises
+    what a run was refused, so a Need is read as the denial it would have been. Its thread group
+    takes the place of the refusing process, and the call it was read from names the operation.
+    """
+    return [item if isinstance(item, Denial) else need_as_denial(item) for item in items]
+
+
+def need_as_denial(need: Need) -> Denial:
+    """The filesystem denial a Need stands for; its operation is the name of the call in its evidence."""
+    words = need.evidence.split("(", 1)[0].split()
+    return Denial(pid=need.tgid, layer=LAYER_FILESYSTEM, operation=words[-1] if words else "need",
+                  objects=need.objects, sections=need.sections, address=None, port=None, transport=None,
+                  errno="", run=need.run, tid=need.tid)
+
+
 def object_paths(denial: Denial) -> list[str]:
     """The denial's objects with /proc/self rewritten; a self link of a denial without ids is left as it is."""
     if not denial.pid or not denial.tid:
@@ -263,16 +281,22 @@ def changing_values(denials: list[Denial], observations: list[tuple[int, str, Pe
     return changing
 
 
-def stable_directory(path: str, denial: Denial, match: PerRunMatch, changing: set[tuple[int, int]]) -> str | None:
-    """The parent of the leftmost per-run component of a path, or None where no component is per-run."""
-    own = {denial.pid, denial.tid}
+def stable_directory(path: str, denial: Denial, match: PerRunMatch, changing: set[tuple[int, int]],
+                     own_ids: frozenset[int] = frozenset()) -> str | None:
+    """The parent of the leftmost per-run component of a path, or None where no component is per-run.
+
+    A process or thread id is per-run when it is the refusing one's own or one of `own_ids`, the ids
+    of every process a recorded session ran.
+    """
+    own = {denial.pid, denial.tid, *own_ids}
     for position, (placeholder, value, start) in enumerate(match.values):
         if (position, value) in changing or (placeholder in ("<pid>", "<tid>") and value in own):
             return path[:start].rstrip("/") or "/"
     return None
 
 
-def classify_per_run(denials: list[Denial]) -> dict[tuple[int, str], tuple[str, str]]:
+def classify_per_run(denials: list[Denial],
+                     own_ids: frozenset[int] = frozenset()) -> dict[tuple[int, str], tuple[str, str]]:
     """Every (denial index, object as rewritten) that is a per-run name, mapped to (stable directory, shape)."""
     observed: dict[tuple[str, frozenset[str], str], list[tuple[int, str, PerRunMatch]]] = {}
     for index, denial in enumerate(denials):
@@ -286,7 +310,7 @@ def classify_per_run(denials: list[Denial]) -> dict[tuple[int, str], tuple[str, 
     for observations in observed.values():
         changing = changing_values(denials, observations)
         for index, path, match in observations:
-            directory = stable_directory(path, denials[index], match, changing)
+            directory = stable_directory(path, denials[index], match, changing, own_ids)
             if directory is not None:
                 taken[(index, path)] = (directory, match.shape)
     return taken
@@ -302,16 +326,21 @@ def per_run_comment(directory: str, shapes: dict[str, set[str]]) -> str:
     return f"per-run name: {'; '.join(parts)}; granted on {directory}"
 
 
-def per_run_grants(denials: list[Denial]) -> tuple[dict[str, frozenset[str]], dict[str, str]]:
+def per_run_grants(denials: Iterable[Denial | Need],
+                   own_ids: frozenset[int] = frozenset()) -> tuple[dict[str, frozenset[str]], dict[str, str]]:
     """The [read] and [execute] grants on smallest stable directories for per-run names, and the comment above each.
+
+    `own_ids` are the process and thread ids a recorded session ran: a /proc entry of any of them is a
+    per-run name from a single session, where a refused run only knows its own.
 
     A matching name seen with one value only, in another process than the refusing one, is not taken
     here and stays file by file in grants_for; a changing name outside the table is never taken; a
     write-class right on a per-run name is never granted (grants_and_notes reports it).
     """
+    denials = as_denials(denials)
     grants: dict[str, set[str]] = {}
     seen: dict[str, dict[str, set[str]]] = {}
-    for (index, path), (directory, shape) in classify_per_run(denials).items():
+    for (index, path), (directory, shape) in classify_per_run(denials, own_ids).items():
         sections = denials[index].sections & READ_CLASS
         if not sections:
             continue
@@ -437,9 +466,9 @@ def pinned_root_of(path: str, pinned_roots: dict[str, str]) -> str | None:
     return next((root for root in pinned_roots if path == root or is_beneath(path, root)), None)
 
 
-def grants_and_notes(denials: list[Denial], snapshot: Snapshot, fine_roots: tuple[str, ...],
-                     held: dict[str, frozenset[str]] | None = None,
-                     pinned_roots: dict[str, str] | None = None) -> tuple[dict[str, frozenset[str]], Notes]:
+def grants_and_notes(denials: Iterable[Denial | Need], snapshot: Snapshot, fine_roots: tuple[str, ...],
+                     held: dict[str, frozenset[str]] | None = None, pinned_roots: dict[str, str] | None = None,
+                     own_ids: frozenset[int] = frozenset()) -> tuple[dict[str, frozenset[str]], Notes]:
     """The grants the filesystem denials ask for outside per-run names, with the comments and reports beside them.
 
     `pinned_roots` maps each verified pinned read root to the comment its grant gets (pinned.py). A
@@ -449,7 +478,8 @@ def grants_and_notes(denials: list[Denial], snapshot: Snapshot, fine_roots: tupl
     [execute] is narrowed to the executed files wherever it would sit on a directory that overlaps a
     write-class right of these grants or of `held`, the policy they are layered on (narrow_execute).
     """
-    taken = classify_per_run(denials)
+    denials = as_denials(denials)
+    taken = classify_per_run(denials, own_ids)
     notes = Notes()
     grants: dict[str, set[str]] = {}
     executed: set[str] = set()
@@ -481,15 +511,15 @@ def grants_and_notes(denials: list[Denial], snapshot: Snapshot, fine_roots: tupl
     return narrow_execute(found, executed, snapshot, notes, held), notes
 
 
-def grants_for(denials: list[Denial], snapshot: Snapshot, fine_roots: tuple[str, ...],
-               held: dict[str, frozenset[str]] | None = None,
-               pinned_roots: dict[str, str] | None = None) -> dict[str, frozenset[str]]:
+def grants_for(denials: Iterable[Denial | Need], snapshot: Snapshot, fine_roots: tuple[str, ...],
+               held: dict[str, frozenset[str]] | None = None, pinned_roots: dict[str, str] | None = None,
+               own_ids: frozenset[int] = frozenset()) -> dict[str, frozenset[str]]:
     """The grants the filesystem denials ask for, generalised as the module docstring states.
 
     Denials of other layers are ignored, objects per_run_grants takes are left to it, and whatever no
     rule covers is left out; grants_and_notes says why. `held` is the policy the grants are layered on.
     """
-    return grants_and_notes(denials, snapshot, fine_roots, held, pinned_roots)[0]
+    return grants_and_notes(denials, snapshot, fine_roots, held, pinned_roots, own_ids)[0]
 
 
 def compact(grants: dict[str, frozenset[str]], threshold: int, fine_roots: tuple[str, ...],

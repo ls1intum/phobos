@@ -96,7 +96,7 @@ jobs:
         run: docker save phobos-prune-layers:ci | gzip -1 > "${RUNNER_TEMP}/prune-image.tar.gz"
 
       - name: Keep the prune image
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: prune-image
           path: ${{ runner.temp }}/prune-image.tar.gz
@@ -105,7 +105,7 @@ jobs:
 
       - name: Keep the artefacts of the default prune
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: default-prune
           path: ${{ runner.temp }}/path_sets
@@ -145,7 +145,7 @@ jobs:
         run: .github/scripts/stage-prune-inputs.sh "${PRUNE_SOURCE}" "${PRUNE_KEY}" "${RUNNER_TEMP}/inputs"
 
       - name: Download the prune image the default prune ran in
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: prune-image
           path: ${{ runner.temp }}/image
@@ -154,7 +154,7 @@ jobs:
         run: gunzip -c "${RUNNER_TEMP}/image/prune-image.tar.gz" | docker load
 
       - name: Download the artefacts of the default prune
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: default-prune
           path: ${{ runner.temp }}/path_sets
@@ -173,7 +173,7 @@ jobs:
       # Kept even when the run failed, since the records and the console are what explain it.
       - name: Keep the artefacts of the guest
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kvm-${{ matrix.runner }}
           path: |
@@ -184,7 +184,7 @@ jobs:
 
       - name: Keep the kernel configuration
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kernel-config-${{ matrix.runner }}
           path: ${{ runner.temp }}/kernel/config
@@ -204,7 +204,7 @@ jobs:
           persist-credentials: false
 
       - name: Download the default prune and the guest's records
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: ${{ runner.temp }}/artefacts
 
@@ -232,7 +232,7 @@ jobs:
 
       - name: Keep the merged base
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: merged-base
           path: ${{ runner.temp }}/core

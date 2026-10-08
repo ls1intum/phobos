@@ -217,3 +217,8 @@ def test_without_udp_port_support_tcp_rules_are_unchanged():
                                      udp_ports=False)
     assert decision.connect == ("allow 127.0.0.1:5432",)
     assert decision.bind == ("allow 8080",)
+
+def test_both_loopback_families_are_localhost_and_udp_keeps_its_marker():
+    assert network.loopback_wildcard(frozenset({"inet", "inet6"}), "tcp") == "allow localhost"
+    assert network.loopback_wildcard(frozenset({"inet"}), "udp") == "allow 127.0.0.1:* udp"
+    assert network.loopback_wildcard(frozenset({"inet6"}), "tcp") == "allow [::1]"
