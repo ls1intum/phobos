@@ -289,6 +289,15 @@ def restore_pristine(pruning: Pruning) -> list[str]:
     return removed
 
 
+def at_or_below_seed(pruning: Pruning, path: str) -> bool:
+    """Whether `path` is a seeded path or lies beneath one, where the hierarchy rule copies the seed's rights down.
+
+    A directory beneath a seeded one holds the seed's rights without being in the seed, so it counts as seeded
+    for the rule that no grant climbs from a seed, and it is not a root a refusal may ask write-class rights from.
+    """
+    return any(path == seeded or cfgfile.is_beneath(path, seeded) for seeded in pruning.seeded)
+
+
 def snapshot_for(pruning: Pruning, policy: cfgfile.Policy) -> generalise.Snapshot:
     """What existed before the runs: the pristine exercise at the working directory, and the index of the rest.
 
@@ -308,7 +317,7 @@ def snapshot_for(pruning: Pruning, policy: cfgfile.Policy) -> generalise.Snapsho
         directories.update(os.path.join(mapped, name) for name in subdirectories)
     roots = sorted(path for path, sections in policy.fs.items() if sections & set(cfgfile.WRITE_SECTIONS)
                    and pruning.pristine.is_directory(path) and not within_testing_dir(path)
-                   and path not in pruning.seeded)
+                   and not at_or_below_seed(pruning, path))
     return generalise.Snapshot(existing=frozenset(existing) | pruning.pristine.existing,
                                directories=frozenset(directories) | pruning.pristine.directories,
                                scanned=(runner.TESTING_DIR, *roots), indexed=pruning.pristine.scanned)
@@ -478,6 +487,12 @@ def seed_comments(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
         if surviving:
             note = seed.comment_for(pruning.seed_name or "", path, surviving)
             comments[path] = f"{comments[path]}; {note}" if path in comments else note
+    for path, sections in policy.fs.items():
+        for ancestor, rows in pruning.seeded.items():
+            inherited = rows & sections if cfgfile.is_beneath(path, ancestor) else frozenset()
+            if inherited:
+                note = seed.comment_inherited(pruning.seed_name or "", ancestor, path, inherited)
+                comments[path] = f"{comments[path]}; {note}" if path in comments else note
     return dataclasses.replace(policy, comments=comments)
 
 
