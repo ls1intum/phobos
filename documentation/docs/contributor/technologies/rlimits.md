@@ -41,13 +41,13 @@ rather than leaving it unbounded.
 
 The resource layer is the last step before `phobos-landlock-filesystem-and-networksystem`, started by the filesystem layer
 rather than sitting in the outer chain. Everything Phobos runs beside the command therefore
-stays outside the limits: the layer shells, the standard error pass-through, the denial
-counter, and the connect guard's supervisor.
+stays outside the limits: the layer shells, the connect guard's supervisor and the report-only
+supervisor.
 
-That is not tidiness. A helper that met the command's file-size, memory or processor-time limit
-would die, and the command's output would go with it. The denial counter has small limits of
-its own for the same reason, so a single endless line of standard error cannot grow it without
-bound.
+That is not tidiness. A helper that meets the command's file-size, memory or processor-time limit
+dies, and the command's output goes with it. The command's own standard error has no such
+shield: a caller that redirects it to a regular file counts against the file-size limit, as
+standard output always has.
 
 ## What they are not
 

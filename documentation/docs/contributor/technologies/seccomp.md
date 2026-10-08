@@ -111,7 +111,11 @@ memory. It mirrors the Landlock decision only to decide whether to print a `Phob
 line, and it always answers `CONTINUE`, so the kernel and Landlock decide. When the group lock is
 present, the supervisor takes over the lock's refusals as well. A run has one effective listener,
 so the supervisor runs only when the network layer is off. With the network layer on, the connect
-guard is the run's one supervisor and does this work too.
+guard is the run's one supervisor and does this work too: it links the same reporter, adds `bind`
+and, with `--report-filesystem`, the path calls to its own filter, and answers its own refusals
+(`io_uring`, `setsid`, `setpgid`, a foreign ABI) with `EACCES` through the reporter's refusal
+handler, which has no way to continue a call. Each kind of trap has one answer: observation traps
+`CONTINUE`, refusal traps `EACCES`, and the guard's enforcement traps as before.
 
 ## Where seccomp sits relative to Landlock
 

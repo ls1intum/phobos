@@ -121,8 +121,8 @@ through unchanged.
 ## Stage 5: the filesystem, the resources, the command
 
 `phobos-filesystem.sh` builds the `--rights=` arguments, appends the tail flags, and runs the
-command as a **child** rather than replacing itself with it, so that it can watch the
-command's standard error for denials. Between itself and `phobos-landlock-filesystem-and-networksystem` it starts
+command as a **child** rather than replacing itself with it, so that it can word a resource
+limit the command hit. Between itself and `phobos-landlock-filesystem-and-networksystem` it starts
 `phobos-resourcesystem.sh`, which sets the rlimits and execs on.
 
 With the network layer off there is no connect guard. The filesystem layer then puts the
@@ -130,15 +130,15 @@ report-only supervisor `phobos-seccomp-filesystem` in front of the resource laye
 enforcer, whichever of them is in the chain. The supervisor forks before the limits and Landlock
 exist, so its supervising half is bound by neither, and the half that goes on becomes the rest of
 the chain. It prints a `Phobos Security Error` line on standard error for each distinct blocked
-action it can attribute with certainty. It answers every file call with `CONTINUE`, so Landlock
-alone decides. It ends with `PHB-ESTATUS` (16) if it cannot read the command's exit status. With
-the network layer on, the connect guard is the run's one supervisor and does this work, and
-`phobos.sh` tells the filesystem layer so with `--no-own-reporter`.
+action it can attribute with certainty, and one `Phobos Security Summary` line when the command
+has ended. It answers every file call with `CONTINUE`, so Landlock alone decides. It ends with
+`PHB-ESTATUS` (16) if it cannot read the command's exit status. With the network layer on, the
+connect guard is the run's one supervisor and does this work, with its own refusals and the egress
+broker's added, and `phobos.sh` tells the filesystem layer so with `--no-own-reporter`.
 
 That ordering is the whole reason the resource layer is not a link of the outer chain: the
-limits reach `phobos-landlock-filesystem-and-networksystem` and the command and nothing else. The layer shells, the standard
-error pass-through, the denial counter, the connect guard's supervisor and the report-only supervisor
-all run without them.
+limits reach `phobos-landlock-filesystem-and-networksystem` and the command and nothing else. The layer shells, the
+connect guard's supervisor and the report-only supervisor all run without them.
 
 `phobos-landlock-filesystem-and-networksystem` then adds one `LANDLOCK_RULE_PATH_BENEATH` rule per path, enters the working
 directory the tail flags named, sets `PR_SET_NO_NEW_PRIVS`, calls `landlock_restrict_self` and
@@ -146,7 +146,7 @@ execs the command.
 
 ## Signals, and who stays alive
 
-Five properties hold the chain together, and each is easy to break:
+Four properties hold the chain together, and each is easy to break:
 
 - **The layers that wait ignore `SIGTERM`.** GNU `timeout` signals the whole process group, and
   the escalation to `SIGKILL` only fires while the timeout's own child is still alive. The
@@ -166,15 +166,6 @@ Five properties hold the chain together, and each is easy to break:
   a reused process number unlikely to be signalled. Where `/proc` cannot be read it checks the
   number alone. A command that ignores `SIGTERM` runs to its limit, and `SIGKILL` cannot be
   passed on.
-- **The filesystem layer's wait for the denial counts is bounded**, and stays below the
-  escalation, so `timeout` never escalates while the layer is still waiting.
-- **The standard error pass-through and the denial counter ignore all four signals.** A
-  terminal's Ctrl+C, quit or hangup reaches the whole process group, these helpers included. The
-  filesystem layer makes them with `SIGTERM`, `SIGHUP`, `SIGINT` and `SIGQUIT` ignored and
-  restores its own dispositions straight afterwards. They end when the command's standard error
-  closes, so the output the command writes while it handles the signal reaches the terminal, and
-  the counts survive. A hangup, quit or interrupt that arrives while the layer makes them is
-  lost.
 - **A caller that ignores `SIGCHLD` does not turn a failure into a success.** Such a caller passes
   the setting on across `exec`, and the kernel then reaps every child by itself. A supervisor's
   `waitpid` fails with `ECHILD`, and the status it reads stays 0. The connect guard and the

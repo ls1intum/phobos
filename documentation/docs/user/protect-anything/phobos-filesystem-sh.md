@@ -100,29 +100,12 @@ policies name system paths an image can lack. A task configuration never gets th
 one: the policy program refuses it when it builds the specification. A changeable path that does not exist is kept, so
 `phobos-landlock-filesystem-and-networksystem` refuses it with a clear message rather than the run failing later.
 
-## Counting denials
-
-The layer runs the command as a child rather than replacing itself with it, so that it can
-watch the command's standard error. The output passes through unchanged, and a copy goes to a
-counter that matches two patterns: `Permission denied`, `EACCES` or `EROFS` for the
-filesystem, and the resolver and unreachable-network messages for the network. Where either
-count is above zero, the layer prints `PHB-EDENY` with both.
-
-Nothing is written to a file, so the counts cannot be tampered with from inside the sandbox.
-The command inherits neither descriptor, so it can neither feed the counter nor keep it alive.
-The wait for the counts is bounded, and a run whose counts do not arrive reports none; the exit
-status never changes either way.
-
-A terminal sends a Ctrl+C, a quit or a hangup to the whole run, the pass-through and the counter
-included. Both ignore it and end only when the command's standard error closes, so what the
-command writes while it handles the signal, a Python traceback among it, still reaches you and
-still counts.
-
 ## Reporting what the layer blocks
 
-With the network layer off (`-nnr`), or with this layer on its own, the layer starts a
-report-only supervisor. Standard error then carries, beyond the denial count, one line for each
-distinct blocked action that the supervisor can attribute with certainty, for example:
+The layer runs the command as a child, and the command's standard error is the layer's own:
+nothing copies or counts it. With the network layer off (`-nnr`), or with this layer on its own,
+the layer starts a report-only supervisor. Standard error then carries one line for each distinct
+blocked action that the supervisor can attribute with certainty, for example:
 
 ```
 Phobos Security Error: the program tried to illegally read the File '/etc/shadow' but was blocked by Phobos.
@@ -131,6 +114,15 @@ Phobos Security Error: the program tried to illegally read the File '/etc/shadow
 - The lines cover the refusals of Landlock that the supervisor can attribute with certainty. When
   the timeout layer applies a timeout, they cover the `setsid`, `setpgid` and foreign-ABI calls
   that the group lock refuses.
+- When the run ends, one `Phobos Security Summary` line counts what the supervisor decided, per
+  layer. The line appears only after a blocked action, and the words a command prints itself count
+  for nothing.
+- The layer words a resource limit that the command hit. Status 153 gives `... exceed the File
+  Size Limit of 1 MB ...`. Status 137 gives `... exceed the CPU Time Limit of 5 seconds ...`, but
+  only when the processes the layer waited for used the whole CPU budget, because the kernel ends
+  a command at its CPU limit with that status. A command that exits with 153 by itself gets the
+  file size line too, which a shell cannot tell apart from the signal. The process, open file and
+  memory limits show as errors the command handles, so they get no line.
 - Every doubt ends in silence, so a run without such a line can still have been refused
   something.
 - The supervisor quotes each path the way bash quotes it, and a run prints at most 100 such lines.
@@ -141,8 +133,8 @@ Phobos Security Error: the program tried to illegally read the File '/etc/shadow
   names what goes unreported and why, such as `Phobos: filesystem denial reporting is off for
   this run, because ...`. The layer enforces the run all the same. On a kernel older than Linux
   6.6 the supervisor says once that it cannot wake synchronously, which only slows reporting down.
-- With the network layer on, the connect guard is the run's one supervisor, and these lines do not
-  appear.
+- With the network layer on, the connect guard is the run's one supervisor and prints these lines
+  itself, together with its own, so the layer starts no second supervisor.
 
 If the supervisor cannot read the command's exit status, the run ends with `PHB-ESTATUS` (16)
 instead of reporting a success that it cannot vouch for.

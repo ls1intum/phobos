@@ -42,7 +42,7 @@ usually makes writable.
 | `phobos-paths.sh` | the two canonical forms a path is compared in |
 | `phobos-time.sh` | how a timeout is spelled, merged and compared |
 | `phobos-constants.sh` | the exit statuses and the other shared numbers |
-| `phobos-log.sh` | reporting, and the denial counter |
+| `phobos-log.sh` | reporting, and the line for a resource limit the command hit |
 | `phobos-signals.sh` | passing a caller's signals on to the command a layer waits for |
 | `phobos-environment.sh` | the startup environment made safe: `PATH` and the other lookup variables keep only what is absolute, sourced by each entry point itself before anything else |
 | `phobos-common.sh` | the aggregate every caller sources, which sources every file above but `phobos-policysystem.sh` and `phobos-environment.sh` |

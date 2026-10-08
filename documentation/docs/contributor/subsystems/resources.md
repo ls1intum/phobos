@@ -34,7 +34,7 @@ phobos-filesystem.sh -> phobos-resourcesystem.sh -> phobos-landlock-filesystem-a
 ```
 
 That is the whole design. A limit set any earlier would bind the helpers too: the layer shells,
-the standard error pass-through, the denial counter and the connect guard's supervisor. A
+the connect guard's supervisor and the report-only supervisor. A
 helper that met the command's file-size, memory or processor-time limit would die, and the
 command's output would go with it.
 

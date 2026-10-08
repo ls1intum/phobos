@@ -33,8 +33,8 @@ up. A command that ignores the signal goes on until its time limit. `SIGKILL` ca
 on, so a caller that must stop a run at once kills the whole process group. A run whose clean-up
 fails ends with `15` even if the command succeeded.
 
-`PHB-EDENY` carries no status of its own. It is a count of lines in the command's own standard
-error that look like denials, printed as a hint, and it never changes the exit status.
+`PHB-EDENY` carries no status of its own. It is the code at the end of the closing summary line,
+and it never changes the exit status.
 
 ## PHB-EPOLICY: the policy cannot be enforced as written
 
@@ -258,16 +258,20 @@ least its limit. A command's own exit status 124, and a `SIGKILL` from the out-o
 killer, pass through unchanged, so a run that ends with 137 and no `PHB-ETIMEOUT` was killed by
 something other than the timeout.
 
-## PHB-EDENY: the command was refused something
+## PHB-EDENY: Phobos blocked something
 
 ```
-Sandbox denials: network=3, filesystem=12. (PHB-EDENY)
+Phobos Security Summary: Phobos blocked 15 actions of the program, 12 in the filesystem layer, 3 in the network layer and 0 in the timeout layer; 4 were shown above, 11 repeats and 0 beyond the limit of 100 lines were not. (PHB-EDENY)
 ```
 
-The filesystem layer counted lines in the command's standard error matching
-`Permission denied`, `EACCES` or `EROFS`, and the resolver and unreachable-network messages.
-It is a hint, not a verdict: a build that prints one of those phrases for its own reasons is
-counted too, and the exit status never changes.
+One such line closes a run in which Phobos blocked anything. It counts what the supervisor
+decided, per layer, and it counts every blocked action whether or not a line shows it. The
+words a command prints itself, such as `Permission denied`, count for nothing, and a run with no
+blocked action prints no summary. The exit status never changes.
+
+A search of a log for blocked runs looks for `Phobos Security Summary` or for the code
+`PHB-EDENY`. Earlier versions printed `Sandbox denials: network=<n>, filesystem=<n>.
+(PHB-EDENY)`, counted from the command's own output; that line is gone.
 
 Where the count is high and the run failed, the next step is `--debug`, which prints the whole
 effective policy each layer was given.
@@ -278,14 +282,21 @@ effective policy each layer was given.
 Phobos Security Error: the program tried to illegally read the File '/etc/shadow' but was blocked by Phobos.
 ```
 
-With the network layer off, or the filesystem layer on its own, the layer's report-only supervisor
-prints one such line for each distinct blocked action it can attribute with certainty. A run
-prints at most 100. The supervisor is exact where it speaks and silent where it is in doubt, so a
-run without a line can still have been refused something. When it cannot report, it says so in a
-notice that names what goes unreported. With the network layer on, the connect guard is the one
-supervisor, and these lines do not appear. The
+The run's supervisor prints one such line for each distinct blocked action it can attribute with
+certainty, and a run prints at most 100. With the network layer on, the supervisor is the connect
+guard. Its lines cover the filesystem refusals, its own connect, datagram, socket and listen
+refusals, the ports Landlock refuses to bind, and the host names the egress broker refuses. They
+cover the calls a Phobos filter refuses outright too: `io_uring`, `setsid`, `setpgid`, and any call
+through a foreign application binary interface. With the network layer off, or the filesystem
+layer on its own, the supervisor is the filesystem layer's report-only supervisor. The timeout layer words the
+time limit, and the filesystem layer words a CPU or file size limit that a command hit. The supervisor is exact where it speaks and silent where it is in doubt, so a run
+without a line can still have been refused something. When it cannot report, it says so in a
+notice that names what goes unreported. The
 [filesystem layer page](protect-anything/phobos-filesystem-sh.md#reporting-what-the-layer-blocks)
 describes what the lines cover.
+
+A line is evidence for a reader and not proof. The command writes to the same standard error and
+can print a line that looks the same. The counts in the summary are Phobos's own.
 
 ### The command's exit status could not be read
 

@@ -69,6 +69,10 @@ A run is reported as `PHB-ETIMEOUT` with exit status 14 only where the status is
 **and** the run lasted at least its timeout. Anything else passes through unchanged, including
 a command's own 124 or 137.
 
+The layer prints one more line before the `PHB-ETIMEOUT` one when it reports a timeout, in the
+words of every blocked action: `Phobos Security Error: the program tried to illegally exceed the
+Time Limit of 600 seconds but was blocked by Phobos.`
+
 The elapsed time is wall clock, read from `EPOCHREALTIME`. A clock stepped backwards during a
 run can make a real expiry look too short, in which case the status passes through without the
 timeout label; the run itself is never extended by it.

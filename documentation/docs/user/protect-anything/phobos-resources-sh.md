@@ -51,8 +51,8 @@ The resource layer is not a link of the chain the entry point assembles. The fil
 starts it as the last step before `phobos-landlock-filesystem-and-networksystem`, which is what keeps the limits on the
 command alone.
 
-Everything Phobos runs beside the command stays outside them: the layer shells, the standard
-error pass-through, the denial counter, and the connect guard's supervisor. A helper that met
+Everything Phobos runs beside the command stays outside them: the layer shells, the connect
+guard's supervisor and the report-only supervisor. A helper that met
 the command's file-size, memory or processor-time limit would die, and the command's output
 would go with it.
 

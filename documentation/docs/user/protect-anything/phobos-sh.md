@@ -224,10 +224,10 @@ A run whose clean-up fails, because the specification directory or the run's `/e
 cannot be removed, ends with `15` even where the command succeeded. A command that ignores the
 signal goes on until its time limit, and `SIGKILL` cannot be passed on.
 
-One more report carries no status of its own. Where the command's own standard error contained
-lines that look like denials, the filesystem layer counts them and prints
-`Sandbox denials: network=<n>, filesystem=<n>. (PHB-EDENY)`. It is a hint for a reader, never a
-verdict: the count never changes the exit status.
+One more report carries no status of its own. When a run blocked anything, a closing line,
+`Phobos Security Summary: Phobos blocked <n> actions of the program, ... (PHB-EDENY)`, counts per
+layer what the supervisor decided. The words a command prints itself count for nothing, and the
+count never changes the exit status.
 
 ## Further reading
 

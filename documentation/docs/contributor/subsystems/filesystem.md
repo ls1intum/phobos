@@ -1,21 +1,21 @@
 ---
 title: "Filesystem"
 sidebar_position: 2
-description: "The layer that turns path sets into Landlock rules, runs the command and counts what it was denied."
+description: "The layer that turns path sets into Landlock rules and runs the command."
 ---
 
 :::tip[Simple Story]
 The last layer in, and the one that starts the work.
 
 It works out which rights each path holds in the end, hands them to the kernel, and then
-stays behind to watch what the work was refused.
+stays behind until the work is done.
 :::
 
 ## What it does
 
 `phobos-filesystem.sh` is the end of the chain. It builds the `--rights=` arguments, starts the
-resource layer, runs `phobos-landlock-filesystem-and-networksystem`, and waits for the command so that it can report the
-denials.
+resource layer, runs `phobos-landlock-filesystem-and-networksystem`, and waits for the command so that it can word
+a resource limit the command hit.
 
 It is the layer that runs the command itself as a **child**, through the resource layer and
 `phobos-landlock-filesystem-and-networksystem`. The timeout layer and the network layer wait
@@ -26,8 +26,8 @@ programs hand over with `exec`.
 
 | File | Purpose |
 | --- | --- |
-| `phobos-filesystem.sh` | the layer: arguments, the report-only supervisor, the resource-layer prefix, the run, the denial report |
-| `phobos-seccomp-filesystem/` | the report-only supervisor, a C program started only when the network layer is off |
+| `phobos-filesystem.sh` | the layer: arguments, the report-only supervisor, the resource-layer prefix, the run, the line for a resource limit |
+| `phobos-seccomp-filesystem/` | the denial reporter: the wording, the counts and the mirror of Landlock, which the connect guard links too; its main is the report-only supervisor, started only when the network layer is off |
 | `phobos-rights.sh` | the translation from path sets to `--rights=` arguments |
 | `phobos-landlock-filesystem-and-networksystem.c` | the sequence of stages, and nothing else |
 | `phobos-landlock-filesystem-and-networksystem-options.c` | the command line, read into one object |
@@ -90,21 +90,6 @@ Two details in `add_path_rule` are worth keeping:
 The open flags follow the same reasoning: a rule that may change something is opened with
 `O_NOFOLLOW`, and a purely reading rule is not, because system paths legitimately are links.
 
-## The denial report
-
-The command's standard error passes through `tee` unchanged, and a copy goes to an `awk`
-counter in a process substitution. The counts come back over an anonymous pipe.
-
-Nothing is written to a file, so the counts cannot be tampered with from inside the sandbox and
-no helper fills a disk. The command inherits neither descriptor, so it sees only its standard
-three and can neither feed the counter directly nor keep it alive through a hidden one.
-`tee -p` keeps passing the output through should the counter die at its own limits, which only
-means no counts.
-
-The wait is bounded and stays below the timeout's kill escalation, because a process the
-command left behind can hold its standard error open indefinitely. A run whose counts do not
-arrive reports none, and the exit status never changes either way.
-
 ## The blocked-action report
 
 With the network layer off the layer starts `phobos-seccomp-filesystem` in front of the resource
@@ -138,23 +123,18 @@ timeout's escalation reaches the command rather than this layer. The command run
 that restores the default disposition and then execs, which is what makes it the process the
 escalation finds.
 
-The pass-through and the counter share the run's process group, and a terminal sends a Ctrl+C,
-a quit or a hangup to that whole group. The layer therefore sets `SIGTERM`, `SIGHUP`, `SIGINT`
-and `SIGQUIT` to ignored, makes the two helpers, which inherit that, and puts its own
-dispositions back straight afterwards with `restore_signal_traps`. The helpers end only when the
-last writer of the command's standard error closes it. Whatever the command writes while it
-handles the signal, a Python traceback among it, still passes through and still counts. The
-layer discards a hangup, quit or interrupt that arrives in the brief interval while it makes the
-helpers. The helpers do not set the
-dispositions for themselves, because that leaves them a gap once the command has started.
+The command's standard error is the layer's own, so a terminal's Ctrl+C, quit or hangup, which
+reaches the whole process group, finds no helper between the command and the terminal that it
+could kill. Whatever the command writes while it handles the signal, a Python traceback among it,
+reaches the terminal.
 
 ## Known gaps
 
-**A denial count is a text match.** The filesystem count matches `Permission denied`, `EACCES`
-and `EROFS`. The network count matches `EAI_AGAIN`, `EAI_FAIL`, `EAI_NONAME`,
-`Network is unreachable` and `Connection timed out`. A build that prints one of those phrases for its own reasons
-is counted, so the report is a hint rather than a verdict, which is why it never touches the
-exit status.
+**A resource limit is read from a status.** The layer words a CPU or file size limit that the
+command hit. It reads the exit status. Status 153 means the file size limit. Status 137 means the
+CPU limit, when the processes the layer waited for used the whole CPU budget. A command that exits
+with 153 by itself gets the file size line too, because a shell cannot tell the signal from the
+number. The process, open file and memory limits leave no such status.
 
 **The `i` right has no section.** `phobos-landlock-filesystem-and-networksystem` accepts the letter, and no configuration
 file can produce it. A policy that needs `ioctl` on a device has no way to ask.

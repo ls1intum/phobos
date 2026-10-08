@@ -143,6 +143,37 @@ addresses, more than 64 names need resolving, or the addresses add up to more ru
 guard keeps, 256. A name written in two
 cases is resolved once. The lookup needs a networked container, as a stream name does.
 
+## What the layer reports
+
+The connect guard is the run's one supervisor when this layer is on, so it prints the
+`Phobos Security Error` lines for the whole run, at most 100 per run, and a closing
+`Phobos Security Summary` line.
+
+- **Its own refusals.** A connect or datagram to a destination no `[connect]` rule names gives
+  `connect to the Endpoint 93.184.216.34:443 over TCP` or `send to the Endpoint ... over UDP`. A
+  socket the guard refuses to open gives `open the Socket Type raw (AF_INET, SOCK_RAW)`, and a
+  listen on a socket bound to no port gives `listen on the Port chosen by the kernel over TCP`.
+- **A UNIX socket.** The guard refuses every connect to a UNIX socket. It prints `connect to the
+  Socket File '<path>'` only for the command and what the command started. Each layer's shell asks
+  the name service cache for the user at start-up, and the guard refuses that as well, but those
+  are Phobos's own helpers and they get no line. With the filesystem layer off the guard prints
+  no UNIX connect.
+- **A port Landlock refuses to bind.** The guard sees the `bind` call, judges the port against the
+  network ruleset, and words a refusal as `bind the Port 8080 over TCP`.
+- **The egress broker.** The broker logs each TLS host name it refuses, or each connection with no
+  name to an address no rule allows, to an anonymous pipe that no path names. Only HAProxy and the
+  guard hold it, and the guard words each as `connect to the Host 'example.org' on Port 443`. The
+  host name is hex in the log, so a name the program chose cannot inject anything into the line.
+  With the filesystem layer off, a command that runs as the same user can still write to the pipe
+  through `/proc` and forge such a line. A forged line changes the output and never the broker's
+  decisions.
+- **The calls its filter refuses outright.** `io_uring`, `setsid`, `setpgid` and a call through a
+  foreign application binary interface (ABI) fail with `EACCES`, as before, and each prints a line.
+
+Reporting decides nothing. If the guard dies, every call it watches fails with `ENOSYS`, and no
+call gains a right. If the kernel cannot have the reporting traps, the guard keeps the filter it
+had before and says once what goes unreported.
+
 ## The inbound filter
 
 An `[accept]` rule starts a second HAProxy that binds the public port, rejects a connection
