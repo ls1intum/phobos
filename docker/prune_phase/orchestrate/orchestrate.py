@@ -90,7 +90,7 @@ ABI10_CFG_SUFFIX = '.abi10.cfg'
 # one kind of rule a sidecar may hold: a UDP bind on a port from 1 to 65535, in ASCII digits.
 ABI10_RECORD_SCHEMA = 1
 ABI10_LANDLOCK_VERSION = 10
-UDP_BIND_ROW = re.compile(r'allow ([1-9][0-9]{0,4}) udp', re.ASCII)
+UDP_BIND_ROW = re.compile(r'allow (0|[1-9][0-9]{0,4}) udp', re.ASCII)
 PORT_MAXIMUM = 65535
 # The artefact the retired Bubblewrap pruner wrote, which nothing reads any more.
 RETIRED_SUFFIX = '.paths'

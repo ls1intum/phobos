@@ -115,9 +115,19 @@ def test_a_udp_bind_the_kernel_names_gives_exactly_one_row(parsed):
 
 def test_a_rule_the_kernel_did_not_name_or_that_is_not_a_udp_bind_is_never_a_row(parsed):
     records, _ = parsed
-    rows, other = audit.abi10_rows(["allow 6000 udp", "allow 5000", "allow 127.0.0.1:*", "allow 0 udp"], records, [])
+    rows, other = audit.abi10_rows(["allow 6000 udp", "allow 5000", "allow 127.0.0.1:*"], records, [])
     assert rows == []
-    assert other == ["allow 6000 udp", "allow 5000", "allow 127.0.0.1:*", "allow 0 udp"]
+    assert other == ["allow 6000 udp", "allow 5000", "allow 127.0.0.1:*"]
+
+
+def test_a_bind_to_port_zero_the_kernel_names_without_a_port_gives_the_row_allow_zero_udp():
+    records, _ = audit.parse(["audit: type=1423 audit(1.0:1): domain=a blockers=net.bind_udp"])
+    assert audit.abi10_rows(["allow 0 udp"], records, []) == (["allow 0 udp"], [])
+
+
+def test_without_a_record_for_it_allow_zero_udp_is_never_a_row():
+    records, _ = audit.parse(["audit: type=1423 audit(1.0:1): domain=a blockers=net.bind_udp lport=5000"])
+    assert audit.abi10_rows(["allow 0 udp"], records, []) == ([], ["allow 0 udp"])
 
 
 def test_a_row_the_policy_already_holds_is_not_added_again(parsed):
@@ -131,9 +141,9 @@ def test_a_quoted_path_is_taken_as_written_and_only_a_bare_one_is_decoded_from_h
     assert quoted[0].path == "AB" and bare[0].path == "/etc"
 
 
-@pytest.mark.parametrize("rule", ["allow 0 udp", "allow 65536 udp", "allow 99999 udp", "allow 007 udp",
+@pytest.mark.parametrize("rule", ["allow 65536 udp", "allow 99999 udp", "allow 007 udp",
                                   "allow \u0665000 udp", "allow 5000 tcp", "allow 5000", "allow 5000 udp extra"])
-def test_a_rule_that_is_not_a_udp_bind_on_a_port_from_1_to_65535_is_never_a_row_even_when_the_kernel_names_it(rule):
+def test_a_rule_that_is_not_a_udp_bind_on_a_port_from_0_to_65535_is_never_a_row_even_when_the_kernel_names_it(rule):
     records, _ = audit.parse(["audit: type=1423 audit(1.0:1): domain=a blockers=net.bind_udp lport=5000",
                               "audit: type=1423 audit(1.0:2): domain=a blockers=net.bind_udp lport=0",
                               "audit: type=1423 audit(1.0:3): domain=a blockers=net.bind_udp lport=65536"])
