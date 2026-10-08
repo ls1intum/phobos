@@ -4,9 +4,12 @@
 # compiled, in a stage of their own, and it is what an exercise actually runs in. They are built
 # here so that the acceptance suites run against them on every change rather than by hand.
 #
-# The image is built and exercised in ONE job on purpose. Loading an image populates
-# the Docker daemon of that runner and no other, so a separate acceptance job would
-# quietly build a second image and test that instead.
+# An image is built and exercised in the SAME job on purpose. Loading an image populates
+# the Docker daemon of that runner and no other, so a separate test job would quietly build a
+# second image and test that instead. The suites are therefore split into groups that run in
+# parallel jobs, and every job builds its own image from the same context (about a minute);
+# a group is a matrix entry, so one job names the suites that broke and the wall time of a run
+# is that of its longest group, not of all the suites one after the other.
 name: Build
 
 on:
@@ -128,14 +131,16 @@ jobs:
   # there, and runs the whole acceptance suite against that exact image, so both
   # architectures are proven before the image is published by hand (see AGENTS.md).
   run-phase:
-    name: Build the run-phase image (${{ matrix.platform }}) and hold it to the acceptance suites
+    name: Build the run-phase image (${{ matrix.platform }}) and hold it to the ${{ matrix.group }} suites
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 100
+    timeout-minutes: 45
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
+        platform: [amd64, arm64]
+        group: [acceptance, matrix-a, matrix-b, recorder, pruner]
         include:
           - platform: amd64
             runner: ubuntu-26.04
@@ -181,13 +186,13 @@ jobs:
       # `mvn clean` steps in the phase test then fail for want of a plugin, which looks
       # like a sandbox failure and is not one.
       - name: The five guarantees
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/run-tests.sh
 
       - name: Inheritance, non-root and the control probe
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/extra-tests.sh
@@ -196,7 +201,7 @@ jobs:
       # failure here is a dependency problem rather than a Landlock regression. It still
       # fails the job: naming the cause is for diagnosis, not for excusing it.
       - name: Tightening and widening rights across phases
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/phase-test.sh
@@ -205,7 +210,7 @@ jobs:
       # tight test policy, so a regression that breaks an ordinary run under it, or widens it,
       # fails here. The image bakes core/config/BaseLanguage-java.cfg, so this exercises it.
       - name: The shipped policy runs an exercise both ways
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -215,7 +220,7 @@ jobs:
       # image ships: both tests pass, and a file the base does not name, or the dependency repository to a
       # run with no Ares 2 policy, stays refused. The exercise is mounted read-only, as grading copies it.
       - name: The Maven base runs the Maven reference exercise under every Maven configuration
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
             -v "${PWD}/var/tmp/testing-dir/java-maven/maven-reference:/exercise:ro" \
@@ -225,7 +230,7 @@ jobs:
       # The kernel-enforced network boundary holds against a raw connect() syscall, which is
       # what makes concrete Landlock ports the network boundary alongside the connect guard.
       - name: The network port rule holds against a raw-syscall bypass
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -235,7 +240,7 @@ jobs:
       # names, the public port an [accept] rule fronts included, against a raw bind and a
       # kernel-chosen ephemeral port. This is the port containment the inbound filter relies on.
       - name: The Landlock bind-port rule holds against a raw-syscall bind
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -246,7 +251,7 @@ jobs:
       # cover. It confines rather than forbidding, so a process inside the sandbox is still
       # reachable.
       - name: A sandboxed process cannot reach out of the sandbox with a signal
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/scoping-test.sh
@@ -256,7 +261,7 @@ jobs:
       # allow-list by host and port. This is both the availability check (the filter installs
       # unprivileged here) and the boundary check (both directions), in the image an exercise gets.
       - name: The connect guard enforces the allow-list in the run-phase image
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -267,7 +272,7 @@ jobs:
       # layer on its own, after a timeout that escalates to SIGKILL, and between concurrent runs.
       # It is the one step that runs HAProxy inside the image, the one an exercise gets.
       - name: The network layer leaves nothing behind in the run-phase image
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -281,7 +286,7 @@ jobs:
       # unprotected control and a run with only that layer off, and the limits the documentation
       # admits are pinned.
       - name: The filesystem layer holds, right by right, and its documented limits stay as documented
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-a' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -291,7 +296,7 @@ jobs:
       # must not reach a forbidden receiver, bind and listen closed, the inbound filter, and the
       # egress broker against a decoy.
       - name: The network layer holds for TCP, UDP, bind, listen, accept and host names
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-a' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -300,7 +305,7 @@ jobs:
       # The timeout layer through phobos.sh: the run ends at its limit with the timeout status
       # and no descendant outlives it or escapes the process group.
       - name: The timeout layer ends a run and everything it started
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-a' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -310,7 +315,7 @@ jobs:
       # on a bounded behaviour and inherited. This is the suite that wants the memory and
       # process caps below, which are cgroup limits and not privileges.
       - name: The resource layer sets, enforces and inherits every limit
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -319,7 +324,7 @@ jobs:
       # Every subset of switched-off layers with one witness per layer, the flag spellings,
       # concurrent runs and a nested phobos.sh.
       - name: Every combination of the four layers holds exactly where each is on
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -328,7 +333,7 @@ jobs:
       # The manual, usage errors, the command line and streams, the override options, the tail
       # flags and policy files that are odd or empty.
       - name: The command line and odd policy files behave as the manual says
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-a' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -337,7 +342,7 @@ jobs:
       # Nothing is left behind after any way a run can end, the hosts file is restored and its
       # lock is bounded, and what a signal sent to phobos.sh does.
       - name: A run leaves nothing behind, whichever way it ends
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -346,7 +351,7 @@ jobs:
       # Every shape of a policy line through phobos.sh: what is accepted, what is refused with
       # which status, the spelling of a timeout and every limit read back from the kernel.
       - name: Every shape of a policy line is judged as the parser should
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -356,7 +361,7 @@ jobs:
       # addresses, IPv6 spellings, non-blocking connects, socket kinds and a destination
       # rewritten during a TCP connect.
       - name: The network layer holds at the edges of ranges, ports and socket kinds
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -365,7 +370,7 @@ jobs:
       # The filesystem layer at its edges: links, dot-dot, magic links, path descriptors, rights
       # on files and the root, odd names and a link swapped while it is opened.
       - name: The filesystem layer holds against links, dot-dot, magic links and swaps
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -373,7 +378,7 @@ jobs:
 
       # Each limit met through the call that meets it, and the limits Phobos does not set.
       - name: Each resource limit holds through the call that meets it
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -382,7 +387,7 @@ jobs:
       # Every blocked action is reported once and every result is the one Landlock alone gives,
       # and the group lock's refusals are reported while they stay refused in every state.
       - name: The reporter reports each blocked action and changes no outcome
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-a' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -394,7 +399,7 @@ jobs:
       # repository root, since the probe's source lives under tests/.
       - name: Build the prune image on the run-phase image
         id: prune-build
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && contains(fromJSON('["recorder","pruner"]'), matrix.group) }}
         run: |
           docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci \
             -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers:ci .
@@ -403,7 +408,7 @@ jobs:
       # still works, and the parser and attribution turn the record into exactly that one denial. An
       # ordinary container, as for every suite above: ptrace of one's own child needs no privilege.
       - name: The prune image's observer sees what the layers refuse, and only that
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
             -v "${PWD}/tests:/tests:ro" -v "${PWD}/var/tmp/helpers:/var/tmp/helpers:ro" \
@@ -416,7 +421,7 @@ jobs:
       # (record_generate.sh); from outside, the run-phase image holds no strace and refuses the
       # recorder. Every container is ordinary.
       - name: The recording pruner records with the terminal passed through and replays under the layers
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder' }}
         timeout-minutes: 40
         run: bash tests/integration/record_host.sh phobos-prune-layers:ci phobos-run-phase:ci
 
@@ -425,7 +430,7 @@ jobs:
       # ClientHello, and the replay under the egress broker passes while the neighbouring port stays
       # refused. Every container is ordinary; the network has no route out.
       - name: The recording pruner writes a host name rule and replays it through the egress broker
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder' }}
         timeout-minutes: 15
         run: bash tests/integration/record_networked.sh phobos-prune-layers:ci
 
@@ -434,7 +439,7 @@ jobs:
       # variant aborts without a policy. The repository is mounted read-only; the suite copies what
       # it prunes.
       - name: The layer pruner derives a policy that holds in both directions
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner' }}
         timeout-minutes: 50
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
@@ -444,7 +449,7 @@ jobs:
       # dropped. A stand-in resolver and a TLS server on loopback stand in for the external host, so
       # this needs no network either.
       - name: The layer pruner keeps exactly the declared hosts a build needs
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner' }}
         timeout-minutes: 30
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
@@ -459,14 +464,16 @@ jobs:
   # pruner is then built on this image and prunes the fixture on it, so the pruner is proven on the
   # image it prunes Python exercises in.
   run-phase-python:
-    name: Build the Python run-phase image (${{ matrix.platform }}) and hold it to the language-neutral suites
+    name: Build the Python run-phase image (${{ matrix.platform }}) and hold it to the ${{ matrix.group }} suites
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 100
+    timeout-minutes: 45
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
+        platform: [amd64, arm64]
+        group: [pruner-a, pruner-b, suites-a, suites-b]
         include:
           - platform: amd64
             runner: ubuntu-26.04
@@ -497,8 +504,8 @@ jobs:
       # the acceptance suites here too, which only bounds them. One step per suite would repeat the
       # Java job's seventeen; a loop that names every suite it runs, and fails when any one does,
       # says the same.
-      - name: The language-neutral acceptance suites and the protection matrix
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      - name: The language-neutral acceptance suites and the first half of the protection matrix
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'suites-a' }}
         run: |
           failed=0
           for suite in \
@@ -507,11 +514,33 @@ jobs:
               landlock-filesystem-and-networksystem-acceptance/scoping-test.sh \
               landlock-filesystem-and-networksystem-acceptance/seccomp-networksystem-test.sh \
               landlock-filesystem-and-networksystem-acceptance/network-cleanup-test.sh \
-              protection-matrix/filesystem.sh protection-matrix/network.sh protection-matrix/timeout.sh \
-              protection-matrix/resources.sh protection-matrix/combinations.sh protection-matrix/cli.sh \
-              protection-matrix/lifecycle.sh protection-matrix/policy-syntax.sh \
-              protection-matrix/network-edge.sh protection-matrix/filesystem-edge.sh \
-              protection-matrix/resources-edge.sh protection-matrix/reporting.sh; do
+              protection-matrix/reporting.sh \
+              protection-matrix/network.sh \
+              protection-matrix/timeout.sh \
+              protection-matrix/filesystem.sh \
+              protection-matrix/cli.sh; do
+            echo "::group::${suite}"
+            if ! docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+                phobos-run-phase-python:ci bash "/tests/integration/${suite}"; then
+              failed=1
+              echo "::error::${suite} failed"
+            fi
+            echo "::endgroup::"
+          done
+          exit "${failed}"
+
+      - name: The language-neutral acceptance suites and the second half of the protection matrix
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'suites-b' }}
+        run: |
+          failed=0
+          for suite in \
+              protection-matrix/network-edge.sh \
+              protection-matrix/combinations.sh \
+              protection-matrix/lifecycle.sh \
+              protection-matrix/policy-syntax.sh \
+              protection-matrix/filesystem-edge.sh \
+              protection-matrix/resources.sh \
+              protection-matrix/resources-edge.sh; do
             echo "::group::${suite}"
             if ! docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
                 phobos-run-phase-python:ci bash "/tests/integration/${suite}"; then
@@ -527,7 +556,7 @@ jobs:
       # the working directory and an unnamed address are refused. Without it a stale base would go
       # unnoticed, as the previous one did.
       - name: The shipped Python base runs the Python reference exercise both ways
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'suites-a' }}
         run: |
           docker run --rm --network none -v "${PWD}/tests:/tests:ro" \
             -v "${PWD}/var/tmp/testing-dir/python/python-reference:/exercise:ro" \
@@ -536,27 +565,27 @@ jobs:
 
       - name: Build the prune image on the Python run-phase image
         id: prune-build
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && contains(fromJSON('["pruner-a","pruner-b"]'), matrix.group) }}
         run: |
           docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase-python:ci \
             -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers-python:ci .
 
       - name: The prune image's observer on the Python image sees what the layers refuse, and only that
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner-a' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
             -v "${PWD}/tests:/tests:ro" -v "${PWD}/var/tmp/helpers:/var/tmp/helpers:ro" \
             phobos-prune-layers-python:ci bash /tests/integration/layer_prune_observer.sh
 
       - name: The layer pruner on the Python image derives a policy that holds in both directions
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner-a' }}
         timeout-minutes: 50
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
             -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci bash /repo/tests/integration/layer_prune.sh
 
       - name: The layer pruner on the Python image keeps exactly the declared hosts a build needs
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner-b' }}
         timeout-minutes: 30
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
@@ -565,7 +594,7 @@ jobs:
       # The Python reference exercise, pruned as Compose's prune_python prunes it: pytest under the
       # layers, and every stage ending in a policy rather than an abort.
       - name: The layer pruner prunes the Python reference exercise on the Python image
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner-a' }}
         timeout-minutes: 30
         run: |
           output="$(mktemp -d)"
