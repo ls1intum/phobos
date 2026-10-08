@@ -100,10 +100,15 @@ no port.
 
 ## Which ports may be left out
 
-A loopback host may omit its port, and no other host may. Landlock enforces ports rather than
-hosts, so an external host with no port cannot be expressed at all, and the run is refused with
-`PHB-EPOLICY` rather than started with a rule nothing enforces. Phobos accepts a concrete port
-beside a loopback wildcard in the same section. Landlock cannot keep loopback open on every
+Only a host that is exactly one loopback address can omit its port: `localhost`, one address in
+`127.0.0.0/8`, `::1` in any spelling, or its IPv4-mapped form `::ffff:127.x.y.z`, each optionally
+with `/32` or `/128`. Phobos refuses a range such as `127.0.0.1/1`, a name such as
+`127.evil.example` and any other host with no port, and names the file and the line. Without a
+port, nothing but the connect guard holds the host, and the guard holds a range to every address
+in it, so a range opens far more than loopback. Landlock enforces ports rather than hosts, so it
+cannot express an external host with no port. Phobos refuses that run with `PHB-EPOLICY` rather
+than start it with a rule that nothing enforces. Phobos accepts a concrete port beside a loopback
+wildcard in the same section. Landlock cannot keep loopback open on every
 port and close the rest, so the layer stays off for that transport. The connect guard alone
 enforces the port, by host and port, and the network layer logs the ports concerned.
 
@@ -165,6 +170,18 @@ name three loopback rules with no port. Phobos accepts `allow 192.0.2.10:443` on
 them, and the connect guard alone enforces the port, by host and port, while the network layer
 is on. The run's log names the port. A udp rule that names a port beside a udp loopback
 wildcard needs no Landlock version 10 either.
+
+**An IPv4-mapped destination is the IPv4 endpoint it maps.** A program that opens an IPv6 socket to reach an
+IPv4 peer, as a Java virtual machine does by default, connects to `::ffff:192.0.2.10`. That is the
+same endpoint as `192.0.2.10`, so the guard judges it as that address. A literal IPv4 rule,
+`localhost` and an IPv4 range cover it exactly as they cover the IPv4 spelling, on the same ports
+and the same transport, and no rule covers more through it. An IPv6 literal rule still covers
+only the IPv6 address it names. Landlock enforces ports only, from the socket address's port
+whatever its family, so its view stays the same.
+
+**The guard names what it refuses under `--debug`.** Run verbosely, it prints each destination the
+allow-list does not name by address and port, an IPv6 address in brackets, for example
+`refusing connect to a destination the allow-list does not name: [2001:db8::1]:443`.
 
 **There is no separate toggle for opening, sending and receiving.** A rule names a host, a port
 and a transport, or it does not.

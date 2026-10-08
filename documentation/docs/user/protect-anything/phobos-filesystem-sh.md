@@ -118,6 +118,35 @@ included. Both ignore it and end only when the command's standard error closes, 
 command writes while it handles the signal, a Python traceback among it, still reaches you and
 still counts.
 
+## Reporting what the layer blocks
+
+With the network layer off (`-nnr`), or with this layer on its own, the layer starts a
+report-only supervisor. Standard error then carries, beyond the denial count, one line for each
+distinct blocked action that the supervisor can attribute with certainty, for example:
+
+```
+Phobos Security Error: the program tried to illegally read the File '/etc/shadow' but was blocked by Phobos.
+```
+
+- The lines cover the refusals of Landlock that the supervisor can attribute with certainty. When
+  the timeout layer applies a timeout, they cover the `setsid`, `setpgid` and foreign-ABI calls
+  that the group lock refuses.
+- Every doubt ends in silence, so a run without such a line can still have been refused
+  something.
+- The supervisor quotes each path the way bash quotes it, and a run prints at most 100 such lines.
+- The supervisor never lets a refused call succeed, and it never makes a permitted call fail. The
+  one difference is that the group lock's refusals fail with `EACCES` instead of `ENOSYS`. If the
+  supervisor dies, the calls it watches fail with `ENOSYS`, and nothing gains a right.
+- When the kernel or the setup cannot support reporting, the supervisor prints a notice that
+  names what goes unreported and why, such as `Phobos: filesystem denial reporting is off for
+  this run, because ...`. The layer enforces the run all the same. On a kernel older than Linux
+  6.6 the supervisor says once that it cannot wake synchronously, which only slows reporting down.
+- With the network layer on, the connect guard is the run's one supervisor, and these lines do not
+  appear.
+
+If the supervisor cannot read the command's exit status, the run ends with `PHB-ESTATUS` (16)
+instead of reporting a success that it cannot vouch for.
+
 ## Further reading
 
 - [Filesystem subsystem](/contributor/subsystems/filesystem): the same layer from the inside

@@ -16,7 +16,11 @@ offline, and its output is the `BaseLanguage-<lang>.cfg` a protected run applies
 named. Everything about the sandbox therefore rests on whether this phase measured the right
 thing.
 
-## The algorithm
+Two pruners exist side by side. [The layer pruner](#the-layer-pruner) prunes Java. It runs the
+reference exercise through the grading layers themselves and grants only what a recorded refusal
+proves. Python still uses the Bubblewrap walk that the next sections describe.
+
+## The Bubblewrap algorithm
 
 `var/tmp/pruning/detect_minimal_fs.sh` takes a tree to prune and a script to run. The entry
 point is `run_minimal_fs_all.sh <lang>`, which copies each reference exercise to a scratch
@@ -105,23 +109,35 @@ in any change here:
 
 ## From path sets to a shipped policy
 
-Each prune container works independently on its own language and writes into a shared mount;
-nothing passes between containers except through that directory.
+Each prune container works independently on its own language and writes into the shared
+`var/tmp/path_sets` directory; nothing passes between containers except through that directory.
 
 ```bash
 docker compose -f docker-compose.yaml up --build
 ```
 
+The Java container runs on an image built from the run-phase image `phobos-run-phase-java`, so
+build that first (`docker/run_phase/java/docker-compose.yaml` says how). It writes a complete
+`java_<exercise>.cfg` and its record per exercise. The Python container writes a
+`python_<exercise>.paths` path set and its record.
+
 `docker/prune_phase/orchestrate/orchestrate.py` then merges the per-workload artefacts. It
-holds each path set to the record written beside it in the same run before it merges anything,
-so a language that failed, one that produced nothing, and one whose artefacts disagree with
-their record each stop the merge rather than shrinking it.
+holds each artefact to the record written beside it in the same run (a `.cfg` to the SHA-256 its
+record carries) before it merges anything, so a language that failed, one that produced
+nothing, and one whose artefacts disagree with their record each stop the merge rather than
+shrinking it. It stops the merge when an exercise aborted or when a language has artefacts
+of both kinds.
 
 | Output | What it is |
 | --- | --- |
-| `BaseLanguage-<lang>.cfg` | the full binding set for one language |
+| `BaseLanguage-<lang>.cfg` | the union of the language's exercises, without limits |
+| `exercises/java_<exercise>.cfg` | for each Java exercise, its limits and whatever the base lacks. The base is the union of every exercise, so in practice only the limits. Passed with `--config`. |
 | `BasePhobos.cfg` | the union across every language, for a runtime that cannot tell which is running |
 | `TailPhobos.cfg` | the tail flags, which today is the working directory alone |
+
+Everything goes under `var/tmp/opt/core/config` of the shared mount. A last container,
+`verify_java`, runs every Java exercise once more under exactly that pair, the base and the
+exercise file, as grading applies them, and writes its records to `path_sets/verify/`.
 
 The Bubblewrap mount and namespace flags of the prune are dropped: they belong to the
 measurement rather than to the policy.
@@ -150,13 +166,14 @@ intersection is taken over whole `mode path` lines.
 
 ## The asymmetry that catches people
 
-The two phases do not deny in the same way. While pruning, a hidden directory is an empty,
+For the Bubblewrap prune, the two phases do not deny in the same way. While pruning, a hidden directory is an empty,
 **writable** temporary filesystem, because Landlock cannot make a path look empty. During a
 protected run, a path the policy does not name is refused with `EACCES`.
 
 A tool that only needs some writable scratch directory therefore passes its prune with that
 directory hidden and is refused at run time. That is the first thing to check when a freshly
-pruned policy fails a run that passed its prune.
+pruned policy fails a run that passed its prune. The layer pruner has no such difference, because
+it measures under the grading layers.
 
 ## Review before you trust
 
@@ -165,33 +182,101 @@ allow-list is only as tight as the reference workloads that produced it, and
 `tests/policy-redundancy-probe.sh` reports which entries grant Landlock nothing an ancestor
 already grants, which is worth reading while judging a fresh one.
 
-## Two pruners under construction
+## The layer pruner
 
-Two further pruners are taking shape beside the Bubblewrap walk. Neither has an entry point
-yet, and nothing under `core/` reaches either of them.
+The layer pruner replaces that difference with the grading layers themselves. It runs the
+reference exercise through the shipped `phobos.sh` and starts from a policy that grants nothing.
+It records every call the layers refuse under `strace`, which needs ptrace and no privilege. It
+then grants exactly what each recorded refusal proves: a file the run read, a directory it
+created in, a loopback server it talked to.
 
-- **The layer pruner**, in `var/tmp/helpers/layer_prune/`, reads a `strace -f` log of the
-  reference workload run through the shipped `phobos.sh` chain, and its design grants only what a
-  recorded refusal proves. `strace`, an observer that needs no privilege, writes that log.
-  `strace_parse.py` turns the log into the system calls made inside the command's Landlock
-  domain, and `record.py` holds the call and denial records the other modules share. `attribute.py` assigns each refusal to
-  a layer and to the configuration sections that grant it. `control.py` replays each candidate
-  outside every Landlock domain, so a refusal Landlock did not cause never becomes a grant.
-- **The recording pruner**, in `var/tmp/helpers/layer_record/`, holds the parts of a recorder
-  for scripted interactive sessions of a reference program. Its design grants everything while
-  it records, so it is for a reference program only and never for an untrusted one. So far it holds its own
-  refusals (`guard.py`), the listing of a container's starting state (`snapshot.py`) and
-  scripted terminal sessions (`pty_script.py`). Beside them sit the host names a session sent or
-  received (`names.py`) and the check that refuses a replay in a container that is not fresh
-  (`check.py`).
+Four steps follow the first grants:
 
-The layer pruner has an image of its own, `docker/prune_phase/layers/Dockerfile`: the run-phase
-image plus `strace` and `python3`. Its only base, `BasePrune.cfg`, grants nothing, so every
-grant in a policy it prunes is one it had a refusal for. The `run-phase` job of `build.yml`
-builds it on top of the run-phase image the same job tested, and runs
-`tests/integration/layer_prune_observer.sh` inside it. That suite proves both directions:
-`strace` sees a Landlock refusal made inside the chain, a permitted read beside it works, and the
-parser and attribution turn the record into exactly that one denial.
+1. It removes every grant that two runs show the build did not need.
+2. It measures the limits and adds margins.
+3. It verifies the result with every layer on.
+4. It proves the forbidden direction with canary files, an unnamed host and port, and a probe
+   that exceeds each limit it can reach.
+
+The record lists any limit the pruner could not reach, and why. Each filesystem and limit check
+first runs without Phobos, so only the sandbox's refusal counts.
+
+A run that fails without a refusal the pruner can attribute never becomes a grant. The pruner
+aborts that exercise instead. Before every layered run it removes whatever earlier runs added
+outside the working directory, so each run starts as a fresh grading container does. That deletes
+files, so the pruner runs only in the prune image, which sets `PHOBOS_PRUNE_CONTAINER=1`.
+
+The code is in `var/tmp/helpers/layer_prune/`:
+
+- `strace_parse.py` turns the log into the calls made inside the command's Landlock domain.
+- `record.py` holds the shared records.
+- `attribute.py` assigns each refusal to a layer and to the configuration sections that grant it.
+- `control.py` replays each candidate outside every Landlock domain, so a refusal that Landlock
+  did not cause never becomes a grant.
+- `search.py` grows and minimises the policy.
+- `generalise.py` decides when a file becomes its directory.
+- `cfgfile.py` writes the result as a policy the parser accepts.
+
+The image, `docker/prune_phase/layers/Dockerfile`, adds `strace` and `python3` to the run-phase
+image. Its only base, `BasePrune.cfg`, grants nothing, so every grant in a pruned policy has a
+refusal behind it.
+
+Compose runs the layer pruner for Java. Build the prune image on a run-phase image and prune every
+exercise under one key by hand, in an ordinary container:
+
+```bash
+docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers .
+docker run --rm --network none \
+  -v "$PWD/var/tmp/testing-dir:/srv/phobos-prune-exercises:ro" -v "$PWD/var/tmp/helpers:/var/tmp/helpers:ro" \
+  -v "$PWD/var/tmp/path_sets:/var/tmp/path_sets" phobos-prune-layers \
+  python3 /var/tmp/helpers/layer_prune/main.py <key>
+```
+
+Each exercise gets `<key>_<exercise>.cfg`, a complete Phobos configuration, and
+`<key>_<exercise>.json`. The record lists every run, every denial with the grant it produced or
+the reason it produced none, every widening and every containment check. An exercise that aborts
+gets `<key>_<exercise>.aborted.json` and no configuration. The policy stays only as good as the
+reference: the grading layers refuse a code path that the reference never took.
+
+Four rules for an exercise are worth knowing:
+
+- A Gradle build must run without a daemon, because the timeout's group lock refuses the `setsid`
+  that a daemon needs.
+- The pruner derives the memory limit only for an exercise whose `prune.json` declares
+  `"heap_pinned": true`.
+- An exercise that needs an external host declares it in `prune.json`
+  (`"declared_hosts": ["api.example.org:443"]`). The opt-in Compose service `prune_java_egress`
+  prunes it under the key `java-egress`, and that is the only layer-pruner service with a network.
+  The service keeps a declared rule only when the build needs it, drops the others, and aborts on
+  any host that nobody declared.
+- The pruner reports a write on a name that changes from run to run, such as a process number
+  under `/proc`, and never grants it. It never widens `[execute]` to a directory that holds a
+  write-class right as well.
+
+## The recording pruner
+
+The recording pruner lives in `var/tmp/helpers/layer_record/`. It records the reference program of
+an exercise while a person uses it, with the terminal passed through, so the paths the program
+touches and the endpoints it reaches become known without a scripted workload. Only
+`phobos-record` in the prune image starts it. Nothing under `core/` names it, and the run-phase
+image does not hold it. While it records, the program runs with no sandbox at all, so use it for
+the instructor's reference program and never for an untrusted one.
+
+`phobos-record record` writes a session under `/var/tmp/recordings/<name>`.
+`phobos-record check` replays that session under `phobos.sh` with the recording's policy, in a new
+container, and fails on every refusal of something the recording did. The check refuses to run in
+the container that recorded, or in one whose starting state differs, unless you give
+`--same-container`.
+
+Five modules sit around them:
+
+- `guard.py` refuses to start where grading could be meant.
+- `snapshot.py` lists a container's starting state.
+- `pty_script.py` types scripted terminal sessions.
+- `names.py` recovers the host names a session sent or received.
+- `needs.py` maps each call to the sections of a policy.
+
+The recorder does not turn a recording into a policy yet.
 
 ## Further reading
 

@@ -93,11 +93,15 @@ environment too, so a command that relied on `.` in `PATH` has to be named by it
 a lookup through an empty `PATH` searches the current directory. Where the environment had no `PATH` at
 all, the command still gets none. `phobos.sh --help` describes this under ENVIRONMENT.
 
+The interpreter is not looked up either. Every script under `core/` begins with `#!/bin/bash`.
+An entry point started as a program therefore runs the system's bash whatever the caller's `PATH`
+holds, and so does every layer it starts afterwards by its absolute path. The run-phase image, and
+every image built on it, has bash at `/bin/bash`.
+
 :::warning[Some variables act before the first line of Phobos]
-No script can clean what takes effect before it runs. Start `phobos.sh` with a `PATH` of
-absolute directories, or through an absolute interpreter (`/bin/bash ${PHOBOS_HOME}/phobos.sh`),
-and without `BASH_ENV`, `LD_LIBRARY_PATH`, `LD_PRELOAD` or `LD_AUDIT`. A minimal environment
-of absolute values meets all of these:
+No script can clean what takes effect before it runs. Start `phobos.sh` without `BASH_ENV`,
+`LD_LIBRARY_PATH`, `LD_PRELOAD` or `LD_AUDIT`. A minimal environment of absolute values meets all
+of them:
 `env -i PATH=/usr/local/bin:/usr/bin:/bin ${PHOBOS_HOME}/phobos.sh --config exercise.cfg -- ./gradlew test`,
 adding back only what the command needs, such as `HOME` or `JAVA_HOME`.
 :::
@@ -150,7 +154,7 @@ only the resource limits and `-nr` switches off the entire sandbox.
 | Option | What it is for |
 | --- | --- |
 | `--help` | Print the manual and end with status 0. Every script here, `phobos.sh` and each layer alike, has one: it names every flag the script parses with its default, both operating modes, the specification files it reads and the exit statuses it can end with. |
-| `--debug` | Print on standard error what each layer does and runs, and have `phobos-landlock-filesystem-and-networksystem` and the connect guard report verbosely too. It prints the whole effective policy, so it is for diagnosis rather than for a production log. |
+| `--debug` | Print on standard error what each layer does and runs, and have `phobos-landlock-filesystem-and-networksystem` and the connect guard report verbosely too; the guard then names each destination the allow-list does not name, by address and port. It prints the whole effective policy, so it is for diagnosis rather than for a production log. |
 | `--resolver <ip[:port]>` | The Domain Name System (DNS) resolver the egress broker resolves an exact `[connect]` host name through. The default DNS port is added where no port is given. |
 | `--spec-parent <path>` | Where the run's specification directory is made. The default is `/var/tmp`, and it must lie outside every write path. |
 | `--landlock-bin`, `--connect-guard-bin`, `--pgroup-lock-bin` | Which program each layer uses. The default for each is the one beside the script. |
@@ -196,6 +200,7 @@ goes to standard error, and the exit status is the contract to read.
 | `11` | `PHB-EPOLICY`: the policy is invalid or cannot be enforced as written |
 | `14` | `PHB-ETIMEOUT`: the run passed its timeout and was stopped |
 | `15` | `PHB-ERUNTIME`: something Phobos needs is missing or cannot be started |
+| `16` | `PHB-ESTATUS`: the command ran, but its exit status could not be read, so the run cannot say whether it succeeded |
 | `125` | `phobos-landlock-filesystem-and-networksystem`, the connect guard or the group lock refused to set the sandbox up |
 | `127` | the command itself could not be executed |
 

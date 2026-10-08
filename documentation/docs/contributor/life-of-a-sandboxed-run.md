@@ -22,6 +22,7 @@ phobos.sh
             -> phobos-seccomp-networksystem   (forks a supervisor, the child execs on)
             -> phobos-landlock-filesystem-and-networksystem        (--no-filesystem: the port rules only)
             -> phobos-filesystem.sh   (runs the command as a child and waits)
+                 -> phobos-seccomp-filesystem (only with the network layer off: the report-only supervisor, forks, then the rest of the chain follows)
                  -> phobos-resourcesystem.sh  (sets the rlimits, then execs)
                  -> phobos-landlock-filesystem-and-networksystem      (the filesystem ruleset, then execs)
                  -> the command
@@ -124,9 +125,20 @@ command as a **child** rather than replacing itself with it, so that it can watc
 command's standard error for denials. Between itself and `phobos-landlock-filesystem-and-networksystem` it starts
 `phobos-resourcesystem.sh`, which sets the rlimits and execs on.
 
+With the network layer off there is no connect guard. The filesystem layer then puts the
+report-only supervisor `phobos-seccomp-filesystem` in front of the resource layer and the
+enforcer, whichever of them is in the chain. The supervisor forks before the limits and Landlock
+exist, so its supervising half is bound by neither, and the half that goes on becomes the rest of
+the chain. It prints a `Phobos Security Error` line on standard error for each distinct blocked
+action it can attribute with certainty. It answers every file call with `CONTINUE`, so Landlock
+alone decides. It ends with `PHB-ESTATUS` (16) if it cannot read the command's exit status. With
+the network layer on, the connect guard is the run's one supervisor and does this work, and
+`phobos.sh` tells the filesystem layer so with `--no-own-reporter`.
+
 That ordering is the whole reason the resource layer is not a link of the outer chain: the
 limits reach `phobos-landlock-filesystem-and-networksystem` and the command and nothing else. The layer shells, the standard
-error pass-through, the denial counter and the connect guard's supervisor all run without them.
+error pass-through, the denial counter, the connect guard's supervisor and the report-only supervisor
+all run without them.
 
 `phobos-landlock-filesystem-and-networksystem` then adds one `LANDLOCK_RULE_PATH_BENEATH` rule per path, enters the working
 directory the tail flags named, sets `PR_SET_NO_NEW_PRIVS`, calls `landlock_restrict_self` and
@@ -163,6 +175,13 @@ Five properties hold the chain together, and each is easy to break:
   closes, so the output the command writes while it handles the signal reaches the terminal, and
   the counts survive. A hangup, quit or interrupt that arrives while the layer makes them is
   lost.
+- **A caller that ignores `SIGCHLD` does not turn a failure into a success.** Such a caller passes
+  the setting on across `exec`, and the kernel then reaps every child by itself. A supervisor's
+  `waitpid` fails with `ECHILD`, and the status it reads stays 0. The connect guard and the
+  report-only supervisor therefore set `SIGCHLD` back to its default before they fork, and they
+  give the command the disposition its caller chose. If the status still cannot be read, they end
+  with `PHB-ESTATUS` (16) rather than 0. They send an answer to the kernel again when a signal
+  interrupts it.
 - **A timeout is a timeout only where the status and the clock agree.** GNU `timeout` passes a
   command's own status through, and a command killed by the out-of-memory killer ends with the
   same 137 as the escalation.
@@ -173,6 +192,11 @@ Every layer that waits has an `EXIT` trap that removes it. The first to end does
 the others find the directory gone. After a group `SIGKILL` only the timeout layer, which sits
 outside the group, still removes it. `phobos.sh` itself ends with `exec`, so its own trap fires
 only where the policy program refuses first.
+
+Every temporary file of a run lives in that directory's scratch folder, never in `/tmp` or any
+other shared directory, where the command of a concurrent run could read or race it. Each layer
+sets its own `PHOBOS_SCRATCH` and ignores one it inherits, and a helper called without a
+scratch directory ends the run with `PHB-ERUNTIME` instead of falling back to `mktemp -t`.
 
 The removal is conservative: it deletes only the files `write_spec` wrote, the scratch
 subdirectory and the marker, then the directory itself. A directory that has gained anything

@@ -26,7 +26,8 @@ programs hand over with `exec`.
 
 | File | Purpose |
 | --- | --- |
-| `phobos-filesystem.sh` | the layer: arguments, the resource-layer prefix, the run, the denial report |
+| `phobos-filesystem.sh` | the layer: arguments, the report-only supervisor, the resource-layer prefix, the run, the denial report |
+| `phobos-seccomp-filesystem/` | the report-only supervisor, a C program started only when the network layer is off |
 | `phobos-rights.sh` | the translation from path sets to `--rights=` arguments |
 | `phobos-landlock-filesystem-and-networksystem.c` | the sequence of stages, and nothing else |
 | `phobos-landlock-filesystem-and-networksystem-options.c` | the command line, read into one object |
@@ -103,6 +104,32 @@ means no counts.
 The wait is bounded and stays below the timeout's kill escalation, because a process the
 command left behind can hold its standard error open indefinitely. A run whose counts do not
 arrive reports none, and the exit status never changes either way.
+
+## The blocked-action report
+
+With the network layer off the layer starts `phobos-seccomp-filesystem` in front of the resource
+layer and the enforcer. The supervisor forks before the limits and Landlock exist, so its
+supervising half is bound by neither, and the half that goes on becomes the rest of the chain.
+
+The supervising half holds a seccomp user-notification listener on the path calls. It mirrors the
+Landlock decision, using the rules on the enforcer's own command line, only to decide whether to
+print. It answers every file call with `CONTINUE`, so Landlock alone decides. A race on the path
+it read can make a line wrong or missing, and it can never change a decision.
+
+The kernel refuses a second seccomp listener under an existing one, so a run has one supervisor.
+With the network layer on that is the connect guard, and `phobos.sh` tells the filesystem layer
+so with `--no-own-reporter`.
+
+The group lock's refusals are the one exception to "never decides". The filter that refuses
+`setsid`, `setpgid` and foreign-ABI calls hands them to the supervisor, which answers `EACCES`
+itself and prints the line. With no supervisor listening the kernel refuses them on its own with
+`ENOSYS`, so a dead supervisor never grants one.
+
+The reporter keeps one line per distinct blocked action and prints at most 100. It quotes a path
+the way bash does. It ends with `PHB-ESTATUS` (16) when it cannot read the command's exit status.
+A caller that ignores `SIGCHLD` makes that status read as 0. The supervisor therefore sets
+`SIGCHLD` back to its default before it forks, and it gives the command the disposition its caller
+chose.
 
 ## Signals
 

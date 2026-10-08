@@ -68,7 +68,7 @@ allow repo.example.org
 
 An external host with no port cannot be enforced, because Landlock enforces ports rather than
 hosts. The run is refused with `PHB-EPOLICY` rather than started with a rule nothing holds.
-Only a loopback host may omit its port.
+Only a host that is exactly one loopback address can omit its port.
 
 The second tempting version passes and grants far more than it reads as:
 

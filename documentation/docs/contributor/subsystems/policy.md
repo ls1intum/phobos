@@ -33,8 +33,9 @@ usually makes writable.
 | --- | --- |
 | `phobos-policysystem.sh` | the program: base discovery, the merge, the checks, the write |
 | `phobos-policy-parse.sh` | one configuration in, the parsed state and the per-right files out |
-| `phobos-language-configuration.sh` | a programming language configuration in, the base policies it names and, on first use, the value of each of its placeholders out; sourced, and called by no layer yet |
-| `phobos-policy-yaml.sh` | a strict subset of YAML in, flat records with line numbers out, the first step towards reading an Ares 2 policy; sourced, and called by no layer yet |
+| `phobos-language-configuration.sh` | a programming language configuration in; the base policies it names, its `[connect]` rows and the value of each placeholder on first use out. Sourced, and used whenever a run imports an Ares 2 policy |
+| `phobos-policy-yaml.sh` | a strict subset of YAML in, flat records with line numbers out; sourced, and used by `phobos-policy-ares.sh` |
+| `phobos-policy-ares.sh` | an Ares 2 security policy in, the same parsed state a configuration gives out |
 | `phobos-rights.sh` | a parsed policy to the `--rights=` arguments `phobos-landlock-filesystem-and-networksystem` takes |
 | `phobos-network-args.sh` | `[connect]` and `[bind]` to the Landlock port rules, and the refusals |
 | `phobos-spec-dir.sh` | the specification directory, its marker, and its lifetime |
@@ -103,8 +104,8 @@ It writes one record per node, `<line>\t<path>\t<type>\t<value>`, in document or
 two YAML readers could read differently ends the run with `PHB-EPOLICY`, the file and the line.
 Among those are an anchor, an alias, a tag, a block scalar, a second document, a duplicate key,
 and a boolean or number a reader could take for a string. The reader can therefore be wrong only by refusing.
-Nothing in a run calls it yet; `tests/unit/phobos-tools-policysystem/yaml_subset.sh` holds it to
-both directions.
+`phobos-policy-ares.sh` reads an Ares 2 policy through it, and
+`tests/unit/phobos-tools-policysystem/yaml_subset.sh` holds it to both directions.
 
 ## Programming language configurations
 
@@ -117,7 +118,30 @@ value: `environment`, `command-ancestor`, `fixed` or `password-database home`.
 `phobos-language-configuration.sh` reads it, knows no language itself, and determines a
 placeholder only when it is first used, so a source a run never needs cannot refuse it.
 `tests/unit/phobos-tools-policysystem/no_language_in_code.sh` holds the code under `core/` to
-naming no language. Nothing in a run loads a configuration yet.
+naming no language. A run loads one when it imports an Ares 2 policy, and a run with `.cfg` files
+only never does. A configuration can hold a `[connect]` section that accepts loopback rules
+without a port and nothing else. The shipped Gradle configurations add `allow localhost udp`.
+
+## The Ares 2 import
+
+`phobos-policysystem.sh` picks the reader of a `--config` file by its name. `.yaml` and `.yml`
+go to `phobos-policy-ares.sh`, every other file goes to `phobos-policy-parse.sh`, and each
+reader refuses the other's format.
+
+The importer reads the document through `read_yaml_subset` and checks it against version 1 of the
+schema (`ares_check_schema`). It selects the programming language configuration that the policy
+names (`ares_select_language_configuration`) and refuses a name with no file. It then maps the
+policy to the parsed state a configuration gives. [The Ares 2 policy file](/user/ares-2-policy)
+describes the mapping, the refusals and the summary line for users.
+
+Three properties are worth knowing from the inside:
+
+- `determine_language_placeholder` determines a placeholder only when a path uses it.
+- The project root comes from `--project-root`, otherwise from the last `--chdir` of the tail
+  flags. The importer refuses a root that is not the real path of a project directory.
+- The importer refuses a path that reaches the project root through a symbolic link and so
+  resolves elsewhere than it reads, because the submission's checkout can put a link there. It
+  writes no row that the base already grants.
 
 ## The merge
 

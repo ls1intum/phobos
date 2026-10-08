@@ -65,7 +65,10 @@ configuration.
 `onThisPathAndAllPathsBelow` starts at the project root. That is `--project-root` where you give
 it, otherwise the last `--chdir` of the tail flags. With neither, Phobos refuses a relative path
 and `${PROJECT_ROOT}`. The project root must be the directory the build tool starts the test JVM
-in, because Ares resolves the same paths from there.
+in, because Ares resolves the same paths from there. It must be the real path of a project
+directory as well. Phobos refuses `/`, a root that reaches its directory through a symbolic link
+and a root with a `..` segment. The rule applies to `--project-root` always, and to the last
+`--chdir` of the tail flags where a path needs the root.
 
 ## What Phobos refuses
 
@@ -75,6 +78,11 @@ Each refusal names the file and the line.
 - a placeholder the configuration does not name
 - a path that does not exist, in every section, since Ares does not say whether a path is a file
   or a directory
+- a path that reaches the project root through a symbolic link, or through another name for the
+  root, and so resolves to somewhere other than where it reads. The submission's checkout usually
+  sits at the project root, and a link it commits there steers the grant to a place the policy
+  never named. Write the real path instead. A link that leads away from the root, such as `/bin`
+  to `/usr/bin`, stays allowed.
 - a network entry that grants only some of its three flags
 - a host name that ends in a dot
 - a host other than loopback with port 0
@@ -85,7 +93,7 @@ Each refusal names the file and the line.
 ## Phobos adds, Ares narrows
 
 Phobos writes nothing for an entry the base already grants on the same path or an ancestor, after
-it resolves both through their symbolic links, because Landlock would add nothing for it. The
+it resolves both through their symbolic links, because Landlock adds nothing for it. The
 summary line counts it. Ares enforces the narrower intent of such an entry, "this one file and
 nothing else", inside the JVM, and Phobos does not.
 

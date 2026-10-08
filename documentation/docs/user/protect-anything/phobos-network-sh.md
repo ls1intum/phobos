@@ -174,9 +174,11 @@ a refusal. A missing Landlock program ends the run with `PHB-ERUNTIME`.
 
 Two details are worth knowing before a policy surprises you:
 
-- **A rule that names no port cannot be expressed.** Only a loopback host may omit its port. A
-  section that holds one leaves that transport's port layer off, and the layer says so; the
-  guard still filters the run. An external host with no port is refused with `PHB-EPOLICY`.
+- **A rule that names no port cannot be expressed.** Only a host that is exactly one loopback
+  address can omit its port: `localhost`, one address in `127.0.0.0/8`, or `::1`, each optionally
+  with `/32` or `/128`. A section that holds one leaves that transport's port layer off, and the
+  layer says so; the guard still filters the run. Phobos refuses a range such as `127.0.0.1/1`, a
+  name such as `127.evil.example` and an external host with no port with `PHB-EPOLICY`.
 - **A concrete port beside such a rule gets no Landlock rule either.** Landlock cannot keep
   loopback open on every port and close the rest, so the guard alone enforces that port, by
   host and port, and the layer logs the ports this applies to. For udp the rule

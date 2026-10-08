@@ -33,11 +33,12 @@ the status is 124 or 137 **and** the wall clock says the run lasted at least its
 
 ## The process-group lock
 
-`phobos-seccomp-timeoutsystem` is eleven Berkeley Packet Filter instructions on x86-64, nine on
-aarch64, and one `execvp`. It refuses
-`setsid` and `setpgid` with `EACCES`, refuses every non-native application binary interface
-(ABI) so that an alternate entry cannot reach those calls with different numbers, and allows
-everything else.
+`phobos-seccomp-timeoutsystem` is a handful of Berkeley Packet Filter instructions and one
+`execvp`. It refuses `setsid` and `setpgid`, refuses every non-native application binary interface (ABI) so that an alternate entry cannot reach those calls with different numbers, and
+allows everything else. The refusal is a user notification to a listener the lock does not have,
+so the kernel itself answers it with `ENOSYS`. A supervisor further down the chain, the connect
+guard or the filesystem layer's report-only supervisor, traps the same calls with a listener of
+its own, answers `EACCES` and reports them. In no state does the call run.
 
 It is the first process under `timeout`, so its filter is inherited by the whole group and
 nothing in the group can leave it. Without it, a command could call `setsid`, detach from the

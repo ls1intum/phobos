@@ -22,6 +22,7 @@ goes to standard error, so whatever reads the run can take one stream and a pers
 | `11` | `PHB-EPOLICY` | the policy is invalid, or cannot be enforced as written |
 | `14` | `PHB-ETIMEOUT` | the run passed its timeout and was stopped |
 | `15` | `PHB-ERUNTIME` | something Phobos needs is missing or cannot be started |
+| `16` | `PHB-ESTATUS` | the command ran, but its exit status could not be read, so the run cannot say whether it succeeded |
 | `125` | no `PHB-` code | `phobos-landlock-filesystem-and-networksystem`, the connect guard or the group lock refused to set the sandbox up |
 | `127` | no `PHB-` code | the command itself could not be executed |
 | anything else | no `PHB-` code | the command's own status. Phobos did not stop the run. |
@@ -62,7 +63,9 @@ not hosts, so an external host with no port cannot be enforced. Name a concrete 
 on a no-network container as the outer boundary. (PHB-EPOLICY)
 ```
 
-Name a concrete port. Only a loopback host may leave it out.
+Name a concrete port. Only a host that is exactly one loopback address can leave it out. Phobos
+refuses a range such as `127.0.0.1/1` and a name such as `127.evil.example` too, and names the file
+and the line.
 
 ### A loopback wildcard sits beside a concrete port
 
@@ -196,8 +199,9 @@ The connect guard '/var/tmp/opt/core/phobos-seccomp-networksystem' is missing or
 refusing to run without connect supervision. (PHB-ERUNTIME)
 ```
 
-The three compiled programs are built inside the run-phase image and never committed. A bare
-checkout therefore cannot run. Build the image.
+The four compiled programs (the enforcer, the connect guard, the report-only supervisor and the
+group lock) are built inside the run-phase image and never committed. A bare checkout therefore
+cannot run. Build the image.
 
 ### The process-group lock is missing
 
@@ -267,6 +271,35 @@ counted too, and the exit status never changes.
 
 Where the count is high and the run failed, the next step is `--debug`, which prints the whole
 effective policy each layer was given.
+
+### A `Phobos Security Error` line
+
+```
+Phobos Security Error: the program tried to illegally read the File '/etc/shadow' but was blocked by Phobos.
+```
+
+With the network layer off, or the filesystem layer on its own, the layer's report-only supervisor
+prints one such line for each distinct blocked action it can attribute with certainty. A run
+prints at most 100. The supervisor is exact where it speaks and silent where it is in doubt, so a
+run without a line can still have been refused something. When it cannot report, it says so in a
+notice that names what goes unreported. With the network layer on, the connect guard is the one
+supervisor, and these lines do not appear. The
+[filesystem layer page](protect-anything/phobos-filesystem-sh.md#reporting-what-the-layer-blocks)
+describes what the lines cover.
+
+### The command's exit status could not be read
+
+If the supervisor cannot read the command's own exit status, the run ends with `PHB-ESTATUS` and
+status 16 instead of reporting a success it cannot vouch for. The supervisors set `SIGCHLD` back to
+its default before they fork, so a caller that ignored `SIGCHLD` cannot cause this on its own.
+The message is:
+
+```
+the command's exit status could not be read, so the run cannot say whether it succeeded (PHB-ESTATUS)
+```
+
+A grader that treats every non-zero status as a failure needs no change. A grader that lists
+Phobos's own statuses must add 16.
 
 ## A server cannot listen, or a warning says bind stays open
 

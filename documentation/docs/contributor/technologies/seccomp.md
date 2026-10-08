@@ -1,7 +1,7 @@
 ---
 title: "Seccomp"
 sidebar_position: 2
-description: "The syscall filter behind the connect guard and the process-group lock, and the two ways Phobos uses it."
+description: "The syscall filter behind the connect guard, the process-group lock and the report-only supervisor, and the ways Phobos uses it."
 ---
 
 :::tip[Simple Story]
@@ -9,7 +9,7 @@ A filter sits between the program and the kernel and reads every request before 
 does.
 
 It can answer a request itself, and it can pass the request to somebody outside who answers on
-the program's behalf. Phobos uses both, for two different jobs.
+the program's behalf. Phobos uses both, for different jobs.
 :::
 
 ## What it is
@@ -29,19 +29,25 @@ the chain and have it hold all the way down to the command.
 of the chain:
 
 ```
-if arch != <native>            -> EACCES
-if syscall is setsid           -> EACCES
-if syscall is setpgid          -> EACCES
+if arch != <native>            -> refuse
+if syscall is setsid           -> refuse
+if syscall is setpgid          -> refuse
 otherwise                      -> allow
 ```
+
+"Refuse" is a user notification to a listener the lock does not have, so the kernel itself
+answers it with `ENOSYS`. A supervisor further down the chain traps the same calls with a
+listener of its own. That supervisor is the connect guard or the report-only supervisor of the
+filesystem layer. It is the newer filter, so it wins the tie, answers `EACCES` and reports the
+call. Used on its own, the lock refuses with `ENOSYS` and reports nothing.
 
 The first line matters as much as the other two. Syscall numbers differ between one
 application binary interface (ABI) and another, so a `setsid` made through an alternate one, the 32-bit entry on
 x86-64 or x32, would slip past a comparison written against the native numbers. Refusing every
 non-native ABI outright closes that.
 
-The refusal is `EACCES`, the answer an ordinary denied call gives, rather than a kill: the
-command sees a permission error and can report it.
+The refusal is an error, `ENOSYS` from the kernel alone or `EACCES` from a supervisor, rather
+than a kill: the command sees an error and can report it.
 
 Why those two calls: the timeout layer bounds a run by signalling a whole process group, and a
 process that starts a new session or group leaves that group. Without the lock, a timed command
@@ -96,6 +102,16 @@ runs outside Landlock.
 
 Reading the destination out of the child's memory uses `process_vm_readv`, which a parent may
 do to its own child in an ordinary container. No capability, no container flag.
+
+## Use three: the report-only supervisor
+
+`phobos-seccomp-filesystem` uses the same mechanism as the guard for a different purpose. It traps
+the path calls of the command with a user notification and reads the path from the command's
+memory. It mirrors the Landlock decision only to decide whether to print a `Phobos Security Error`
+line, and it always answers `CONTINUE`, so the kernel and Landlock decide. When the group lock is
+present, the supervisor takes over the lock's refusals as well. A run has one effective listener,
+so the supervisor runs only when the network layer is off. With the network layer on, the connect
+guard is the run's one supervisor and does this work too.
 
 ## Where seccomp sits relative to Landlock
 

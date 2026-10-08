@@ -27,14 +27,20 @@ non-zero on a failure.
 | Integration suites | `tests/integration/*.sh` | a shell, `gcc-14`, Bubblewrap, `haproxy`, `openssl` | the `Shell suites` job of `test.yml`, in continuous integration (CI) |
 | Shell unit suites | `tests/unit/<core component>/*.sh` | a shell | the `Shell suites` job of `test.yml` |
 | Python suites | `tests/python/` | pytest | the `Python helpers` job of `test.yml` |
-| C unit suites | `tests/unit/phobos-landlock-filesystem-and-networksystem/`, `tests/unit/phobos-seccomp-networksystem/` | `gcc-14`, no kernel feature | the `unit` job of `build.yml` |
+| C unit suites | `tests/unit/phobos-landlock-filesystem-and-networksystem/`, `tests/unit/phobos-seccomp-networksystem/`, `tests/unit/phobos-seccomp-filesystem/` | `gcc-14`, no kernel feature | the `unit` job of `build.yml` |
 | Acceptance suites | `tests/integration/landlock-filesystem-and-networksystem-acceptance/` | the run-phase image, an ordinary container | the `run-phase` job of `build.yml`, on amd64 and arm64 |
 | Protection matrix | `tests/integration/protection-matrix/` | the run-phase image, an ordinary container | the `run-phase` job of `build.yml`, on amd64 and arm64 |
 
-One integration suite runs elsewhere. `layer_prune_observer.sh` needs the prune image that the
-`run-phase` job of `build.yml` builds on the run-phase image, so that job runs it, in an
-ordinary container. The Python suites cover the layer pruner's and the recording pruner's
-modules too, from a recorded `strace` log and captured packets under `tests/python/fixtures/`.
+Four integration suites run elsewhere. They need the prune image that the `run-phase` job of
+`build.yml` builds on the run-phase image, so that job runs them, in an ordinary container:
+
+- `layer_prune_observer.sh`
+- `layer_prune.sh`, the whole layer pruner on its fixture exercise, in both directions
+- `layer_prune_egress.sh`, the declared hosts
+- `record_host.sh`, which starts the recording pruner's own suites
+
+The Python suites cover the modules of both pruners too, from a recorded `strace` log and
+captured packets under `tests/python/fixtures/`.
 
 Each shell suite is a CI step of its own, so one run names every suite that broke rather than
 the first alone. `tests/README.md` is the table of every suite, what it proves and what makes it
@@ -63,11 +69,12 @@ The C unit suites compile the code under test and interpose every system call it
 they need no kernel feature and no privilege. That is what lets them exercise a Landlock
 version the runner does not have, and a failure path the kernel would never produce to order.
 
-Only one of them carries a coverage gate:
+Two of them carry a coverage gate:
 
 | Suite | Gate |
 | --- | --- |
 | `tests/unit/phobos-seccomp-networksystem/seccomp_networksystem_run.sh` | every line, with `--coverage` |
+| `tests/unit/phobos-seccomp-filesystem/seccomp_filesystem_run.sh` | every line of the report-only supervisor's sources, with `--coverage`, and its quoting held to bash's own over a corpus of names |
 | `tests/unit/phobos-landlock-filesystem-and-networksystem/run.sh` | none. `mutation.sh` in the same folder reports a mutation score for it instead, because the coverage runtime disturbs the calls the suite interposes |
 
 The mutation score answers a different question from coverage: coverage says a line ran, and
