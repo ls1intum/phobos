@@ -270,3 +270,9 @@ jobs:
       # from, so a defect in either is a defect in a security policy.
       - name: Run the helper tests
         run: python -m pytest pruner/test/python -q
+
+      # The script that lays out what a prune container and the KVM guest are both given asks the pruner's own
+      # discovery which exercises a key has, so it is held to that here, and to leaving an earlier staging alone.
+      - name: The staging of the prune inputs
+        if: ${{ !cancelled() }}
+        run: bash pruner/test/integration/stage_prune_inputs.sh

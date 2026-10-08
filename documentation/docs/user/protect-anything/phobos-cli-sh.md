@@ -90,7 +90,7 @@ the Docker socket, and no option or option value can add them.
 
 | Key | What runs on a host |
 | --- | --- |
-| `java`, `java-maven`, `python` | The Compose service `prune_java`, `prune_java_maven` or `prune_python`. |
+| `java-gradle`, `java-maven`, `python` | The Compose service `prune_java_gradle`, `prune_java_maven` or `prune_python`. |
 | `java-egress` | The service `prune_java_egress`, under the `egress` profile. |
 | `all` | The seven jobs of the layer pruner in order: the three prunes, the merge, and the three verifications. It stops at the first job that fails and ends with that job's status. |
 

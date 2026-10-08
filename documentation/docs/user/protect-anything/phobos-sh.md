@@ -139,7 +139,7 @@ below the base, which is exactly why it is trusted input.
 
 :::warning[Ship exactly one `Base*.cfg` per runtime environment]
 The base files are found by a glob and unioned. A `BasePhobos.cfg` left beside a
-`BaseLanguage-java.cfg` gives a Java run the paths of every other language too, which is a
+`BaseLanguage-java-gradle.cfg` gives a Java run the paths of every other language too, which is a
 wider sandbox that looks like a working one. The discovery phase writes every alternative into
 one directory on purpose; choosing between them is the packaging step.
 :::

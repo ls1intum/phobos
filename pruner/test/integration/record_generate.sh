@@ -179,7 +179,7 @@ assert all("evidence" in grant for grant in record["grants"])
 print("record.json lists", len(record["grants"]), "grants")
 PYTHON
   check "record.json is complete and lists the calls behind every grant" 0 "$?"
-  local base="/repo/protecter/src/config/BaseLanguage-java.cfg"
+  local base="/repo/protecter/src/config/BaseLanguage-java-gradle.cfg"
   local before
   before="$(sha256sum "${RECORDING}/policy.cfg" "${RECORDING}/record.json")"
   recorder diff diff --name gen --policy "${base}"

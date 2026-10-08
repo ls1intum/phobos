@@ -87,7 +87,7 @@ phobos-cli.sh - run a command under Phobos, prune or record a reference program,
 
 USAGE
   phobos-cli.sh [--mode host|image] [--dry-run] run [options] [--] <command> [args...]
-  phobos-cli.sh [--mode host|image] [--dry-run] prune <java|java-maven|python|java-egress|all>
+  phobos-cli.sh [--mode host|image] [--dry-run] prune <java-gradle|java-maven|python|java-egress|all>
   phobos-cli.sh [--mode host|image] [--dry-run] record [options] <record|generate|check|diff> [args...]
   phobos-cli.sh [--mode host|image] [--dry-run] build <java|python>
   phobos-cli.sh --help
@@ -561,11 +561,12 @@ require_helper() {
 prune_service() {
   PROFILE=""
   case "$1" in
-    java) REPLY="prune_java" ;;
+    java) fail_usage "the prune key java is now java-gradle" ;;
+    java-gradle) REPLY="prune_java_gradle" ;;
     java-maven) REPLY="prune_java_maven" ;;
     python) REPLY="prune_python" ;;
     java-egress) REPLY="prune_java_egress"; PROFILE="egress" ;;
-    *) fail_usage "prune takes java, java-maven, python, java-egress or all, not '$1'" ;;
+    *) fail_usage "prune takes java-gradle, java-maven, python, java-egress or all, not '$1'" ;;
   esac
 }
 
@@ -595,7 +596,7 @@ command_prune() {
       *) [[ -z "$key" ]] || fail_usage "prune takes one key"; key="$1"; shift ;;
     esac
   done
-  [[ -n "$key" ]] || fail_usage "prune needs a key: java, java-maven, python, java-egress or all"
+  [[ -n "$key" ]] || fail_usage "prune needs a key: java-gradle, java-maven, python, java-egress or all"
   if [[ "$MODE" == "image" ]]; then
     prune_in_image "$key" "$resolver"
   else
@@ -609,7 +610,8 @@ prune_in_image() {
   local key="$1"
   local resolver="$2"
   case "$key" in
-    java | java-maven | python)
+    java) fail_usage "the prune key java is now java-gradle" ;;
+    java-gradle | java-maven | python)
       [[ -z "$resolver" ]] || fail_usage "--resolver belongs to java-egress"
       require_helper "${IMAGE_HELPERS}/layer_prune/main.py"
       hand_over python3 "${IMAGE_HELPERS}/layer_prune/main.py" --stage all "$key" ;;
@@ -618,7 +620,7 @@ prune_in_image() {
       require_helper "${IMAGE_HELPERS}/layer_prune/main.py"
       hand_over python3 "${IMAGE_HELPERS}/layer_prune/main.py" --resolver "$resolver" --output-dir /var/tmp/path_sets/egress java-egress ;;
     all) fail_usage "prune all needs a host: the merge and the verification are separate images" ;;
-    *) fail_usage "prune takes java, java-maven, python, java-egress or all, not '$key'" ;;
+    *) fail_usage "prune takes java-gradle, java-maven, python, java-egress or all, not '$key'" ;;
   esac
 }
 
@@ -630,7 +632,7 @@ prune_on_host() {
   require_docker
   compose_prefix "$CHECKOUT_ROOT" "${CHECKOUT_ROOT}/docker-compose.yaml"
   if [[ "$key" == "all" ]]; then
-    for service in prune_java prune_java_maven prune_python orchestrate verify_java verify_java_maven verify_python; do
+    for service in prune_java_gradle prune_java_maven prune_python orchestrate verify_java_gradle verify_java_maven verify_python; do
       compose_run "$service" ""
     done
     return 0

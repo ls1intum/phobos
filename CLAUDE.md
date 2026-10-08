@@ -172,7 +172,7 @@ docker compose -f docker/protecter/python/docker-compose.yaml up --build
 Each prune container works independently on its language and writes its result into the
 shared `build/pruner/path_sets` directory; nothing passes between containers except through
 `build/pruner`. Each language's prune needs its run-phase image (`phobos-run-phase-java`,
-`phobos-run-phase-python`) built first, and `verify_java` and `verify_python` re-run the
+`phobos-run-phase-python`) built first, and `verify_java_gradle` and `verify_python` re-run the
 exercises under the merged configuration at the end.
 
 ### The host

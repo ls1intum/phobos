@@ -2,7 +2,7 @@
 # Prunes the Maven reference exercise on the grading layers, reads the result, and shows the wrong
 # reasons it must not be fooled by (Task 14.1 of the prune plan).
 #
-# The exercise is exercises/java-maven/maven-reference: Artemis's Maven test template with
+# The exercise is exercises/java/maven-reference: Artemis's Maven test template with
 # Ares 2, built offline from the repository pre-loaded into the run-phase image. The suite
 #   input      re-hashes every file the committed manifest lists first (the image build already held the
 #              whole repository to it), since a prune that observed other artefacts than grading reads
@@ -70,7 +70,7 @@ set_up() {
   fi
   rm -rf "${EXERCISES}" "${HELPERS}"
   mkdir -p "${EXERCISES}/${KEY}"
-  cp -r "${REPO}/exercises/${KEY}/${EXERCISE}" "${EXERCISES}/${KEY}/${EXERCISE}"
+  cp -r "${REPO}/exercises/java/${EXERCISE}" "${EXERCISES}/${KEY}/${EXERCISE}"
   cp -r "${REPO}/pruner/src" "${HELPERS}"
 }
 
@@ -225,6 +225,12 @@ check_merged_and_verified() {
   fi
 }
 
+# Removes the key the exercise declares from the copy in the directory $1. The cases below prune copies
+# under keys of their own, which are the folders the copies sit in, so a declared key would hide them.
+drop_declared_key() {
+  sed -i 's|, "key": "[^"]*"||' "$1/prune.json"
+}
+
 # Prunes a changed copy of the exercise under another key and checks that it aborts for the reason and
 # writes no policy. $1 names the case, $2 the key suffix, $3 the reason the abort must name, $4 the
 # field of the baseline verdict it must show, then the command that changes the copy.
@@ -238,6 +244,7 @@ check_wrong_reason() {
   rm -rf "${EXERCISES:?}/${key}"
   mkdir -p "${EXERCISES}/${key}"
   cp -r "${EXERCISES}/${KEY}/${EXERCISE}" "${EXERCISES}/${key}/${EXERCISE}"
+  drop_declared_key "${EXERCISES}/${key}/${EXERCISE}"
   (cd "${EXERCISES}/${key}/${EXERCISE}" && "$@")
   local out
   out="$(prune "${key}" "${WORK}/${key}" 2>&1)"
@@ -269,6 +276,7 @@ check_tampered_manifest() {
   rm -rf "${EXERCISES:?}/${key}"
   mkdir -p "${EXERCISES}/${key}"
   cp -r "${EXERCISES}/${KEY}/${EXERCISE}" "${EXERCISES}/${key}/${EXERCISE}"
+  drop_declared_key "${EXERCISES}/${key}/${EXERCISE}"
   sed -i "s|${manifest_directory}/[^\"]*|${tampered}|" "${EXERCISES}/${key}/${EXERCISE}/prune.json"
   local out
   out="$(prune "${key}" "${WORK}/${key}" 2>&1)"
@@ -296,6 +304,7 @@ check_no_seed() {
   rm -rf "${EXERCISES:?}/${key}"
   mkdir -p "${EXERCISES}/${key}"
   cp -r "${EXERCISES}/${KEY}/${EXERCISE}" "${EXERCISES}/${key}/${EXERCISE}"
+  drop_declared_key "${EXERCISES}/${key}/${EXERCISE}"
   sed -i 's|, "seed": "java.cfg"||' "${EXERCISES}/${key}/${EXERCISE}/prune.json"
   local out
   out="$(prune "${key}" "${WORK}/${key}" 2>&1)"

@@ -55,7 +55,7 @@ REAP_SECONDS = 10
 REAP_INTERVAL_SECONDS = 0.05
 # The keys prune.json may hold, with the type each value must have (A.6.8).
 SETTING_TYPES = {"report_globs": list, "declared_hosts": list, "heap_pinned": bool, "pinned_read_roots": list,
-                 "seed": str}
+                 "seed": str, "key": str}
 
 
 class PrunerDefect(Exception):

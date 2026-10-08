@@ -11,7 +11,7 @@ CORE=/var/tmp/opt/core
 # The image carries the constants beside the scripts under test.
 # shellcheck source=/dev/null
 source "${CORE}/phobos-tools-common/phobos-constants.sh"
-# The loopback ports of the network checks: BaseLanguage-java.cfg beside this suite allows the
+# The loopback ports of the network checks: BaseLanguage-java-gradle.cfg beside this suite allows the
 # first and not the second, so the two must stay in step with it;
 # how often and how far apart the servers' start is awaited; how many lines of a failing
 # command's output a failure shows; and the timeout spin-timeout.cfg sets, with the latest a
@@ -42,7 +42,8 @@ echo "TOP-SECRET-TESTCASE" > /var/tmp/secret/secret.txt
 mkdir -p /root && echo "home-secret" > /root/secret-home.txt
 
 javac -d "$TD/probe" ${HERE}/PhobosProbe.java ${HERE}/NetServers.java || exit 1
-cp ${HERE}/BaseLanguage-java.cfg "$CORE/BaseLanguage-java.cfg"
+cp ${HERE}/BaseLanguage-java-gradle.cfg "$CORE/BaseLanguage-java-gradle.cfg"
+check_base_set "$CORE" BaseLanguage-java-gradle.cfg
 
 # A run given no exercise configuration reaches no network at all, loopback included, so the
 # [connect] rule these probes rely on is given as one rather than left to the base. The base
