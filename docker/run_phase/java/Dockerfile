@@ -107,7 +107,7 @@ RUN printf '%s  %s\n' 238e777fcddd7e34f9708186085def2abd6e08e658505b38718d79d74c
 # binutils supplies the readelf the build-time hardening check below runs over the four compiled
 # binaries. haproxy is the egress broker: the connect guard hands an allowed connection to it,
 # and it enforces the allow-list by the TLS host name the guard cannot see;
-# tests/integration/haproxy_broker.sh exercises that path inside this image.
+# protecter/test/integration/haproxy_broker.sh exercises that path inside this image.
 FROM ls1tum/artemis-maven-template:java25-1@sha256:b8393cc0fd728e1645e63380e8470443a691cedf5aaa7b1b86fd33250141de3b
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

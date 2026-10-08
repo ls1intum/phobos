@@ -5,8 +5,8 @@
 #
 #   stage-prune-inputs.sh <fixture|reference> <key> <destination>
 #
-# reference  the exercises of var/tmp/testing-dir/<key>, as the Compose services mount them.
-# fixture    the layer pruner's fixture exercise (tests/integration/layer-prune-fixture) under the key java,
+# reference  the exercises of exercises/<key>, as the Compose services mount them.
+# fixture    the layer pruner's fixture exercise (pruner/test/integration/layer-prune-fixture) under the key java,
 #            with the files it reads laid out by setup.sh and FIXTURE_UDP=1 set in env.sh, so that its
 #            build binds a UDP port that only a Landlock version 10 kernel refuses (A.6.9).
 #
@@ -44,16 +44,16 @@ if [[ -e "${DESTINATION}" ]]; then
   fi
 fi
 mkdir -p "${DESTINATION}/exercises"
-cp -R "${REPOSITORY}/var/tmp/helpers" "${DESTINATION}/helpers"
+cp -R "${REPOSITORY}/pruner/src" "${DESTINATION}/helpers"
 
 if [[ "${KIND}" == reference ]]; then
-  [[ -d "${REPOSITORY}/var/tmp/testing-dir/${KEY}" ]] || { printf 'no exercises for the key %s\n' "${KEY}" >&2; exit 1; }
-  cp -R "${REPOSITORY}/var/tmp/testing-dir/${KEY}" "${DESTINATION}/exercises/${KEY}"
+  [[ -d "${REPOSITORY}/exercises/${KEY}" ]] || { printf 'no exercises for the key %s\n' "${KEY}" >&2; exit 1; }
+  cp -R "${REPOSITORY}/exercises/${KEY}" "${DESTINATION}/exercises/${KEY}"
   : > "${DESTINATION}/setup.sh"
   : > "${DESTINATION}/env.sh"
 else
   mkdir -p "${DESTINATION}/exercises/java"
-  cp -R "${REPOSITORY}/tests/integration/layer-prune-fixture" "${DESTINATION}/exercises/java/fixture"
+  cp -R "${REPOSITORY}/pruner/test/integration/layer-prune-fixture" "${DESTINATION}/exercises/java/fixture"
   cat > "${DESTINATION}/setup.sh" <<'SETUP'
 mkdir -p /srv/prune-fixture/needed /srv/prune-fixture/optional /srv/prune-fixture/unneeded /srv/prune-fixture-secret
 printf 'needed\n' > /srv/prune-fixture/needed/data.txt

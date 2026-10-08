@@ -105,19 +105,19 @@ two YAML readers could read differently ends the run with `PHB-EPOLICY`, the fil
 Among those are an anchor, an alias, a tag, a block scalar, a second document, a duplicate key,
 and a boolean or number a reader could take for a string. The reader can therefore be wrong only by refusing.
 `phobos-policy-ares.sh` reads an Ares 2 policy through it, and
-`tests/unit/phobos-tools-policysystem/yaml_subset.sh` holds it to both directions.
+`protecter/test/unit/phobos-tools-policysystem/yaml_subset.sh` holds it to both directions.
 
 ## Programming language configurations
 
 A programming language configuration is data: one file per Ares 2 configuration name, such as
-`JAVA_USING_GRADLE_ARCHUNIT_AND_ASPECTJ.cfg`, in `core/config/language-configurations/`. The
+`JAVA_USING_GRADLE_ARCHUNIT_AND_ASPECTJ.cfg`, in `protecter/src/config/language-configurations/`. The
 run-phase image copies that folder beside `phobos-policysystem.sh`, where the `Base*.cfg` glob
 does not reach it. A file holds two sections. `[base]` names the base policies a run under that
 configuration folds, and `[placeholders]` says how each placeholder of the language gets its
 value: `environment`, `command-ancestor`, `fixed` or `password-database home`.
 `phobos-language-configuration.sh` reads it, knows no language itself, and determines a
 placeholder only when it is first used, so a source a run never needs cannot refuse it.
-`tests/unit/phobos-tools-policysystem/no_language_in_code.sh` holds the code under `core/` to
+`protecter/test/unit/phobos-tools-policysystem/no_language_in_code.sh` holds the code under `protecter/src/` to
 naming no language. A run loads one when it imports an Ares 2 policy, and a run with `.cfg` files
 only never does. A configuration can hold a `[connect]` section that accepts loopback rules
 without a port and nothing else. The shipped Gradle and Maven configurations add `allow localhost udp`.
@@ -203,7 +203,7 @@ a source is made of the characters an address or a range uses; HAProxy validates
 when the filter starts. A malformed source therefore surfaces as a filter that fails to start
 rather than as a policy error.
 
-**The redundancy probe is not in continuous integration (CI).** `tests/policy-redundancy-probe.sh` reports which entries
+**The redundancy probe is not in continuous integration (CI).** `protecter/test/policy-redundancy-probe.sh` reports which entries
 grant Landlock nothing an ancestor already grants. Those entries are not dead code, so the
 probe reports and never fails, which means a freshly pruned policy is only judged where
 somebody runs it, rather than on every CI run.

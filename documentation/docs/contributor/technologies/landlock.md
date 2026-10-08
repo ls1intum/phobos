@@ -53,7 +53,7 @@ to every ruleset from version 6.
 
 ## The version ladder
 
-`core/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-ruleset.h` names the first version that carries each right. A right the
+`protecter/src/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-ruleset.h` names the first version that carries each right. A right the
 running kernel does not know is **not handled at all**, so it is free on every path, including
 the ones the policy calls read-only.
 

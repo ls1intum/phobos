@@ -79,7 +79,7 @@ aborts that exercise instead. Before every layered run it removes whatever earli
 outside the working directory, so each run starts as a fresh grading container does. That deletes
 files, so the pruner runs only in the prune image, which sets `PHOBOS_PRUNE_CONTAINER=1`.
 
-The code is in `var/tmp/helpers/layer_prune/`:
+The code is in `pruner/src/layer_prune/`:
 
 - `strace_parse.py` turns the log into the calls made inside the command's Landlock domain.
 - `record.py` holds the shared records.
@@ -100,8 +100,8 @@ exercise under one key by hand, in an ordinary container:
 ```bash
 docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers .
 docker run --rm --network none \
-  -v "$PWD/var/tmp/testing-dir:/srv/phobos-prune-exercises:ro" -v "$PWD/var/tmp/helpers:/var/tmp/helpers:ro" \
-  -v "$PWD/var/tmp/path_sets:/var/tmp/path_sets" phobos-prune-layers \
+  -v "$PWD/exercises:/srv/phobos-prune-exercises:ro" -v "$PWD/pruner/src:/var/tmp/helpers:ro" \
+  -v "$PWD/build/pruner/path_sets:/var/tmp/path_sets" phobos-prune-layers \
   python3 /var/tmp/helpers/layer_prune/main.py <key>
 ```
 
@@ -128,13 +128,13 @@ Four rules for an exercise are worth knowing:
 
 ### The Maven prune
 
-The Maven reference exercise, `var/tmp/testing-dir/java-maven/maven-reference/`, is Artemis's
+The Maven reference exercise, `exercises/java-maven/maven-reference/`, is Artemis's
 Maven test template with Ares 2, built offline. It is pruned under its own key, `java-maven`, in
 the same image as the Gradle one, by the Compose service `prune_java_maven`. The service
 `verify_java_maven` verifies it.
 
 The image holds the dependencies Maven resolves, pre-loaded and held to
-`docker/run_phase/java/maven-repository.sha256`, and `tests/integration/layer_prune_maven.sh`
+`docker/run_phase/java/maven-repository.sha256`, and `pruner/test/integration/layer_prune_maven.sh`
 re-hashes every file the manifest lists before it prunes. Maven offline stops at the first
 dependency file it cannot read, so granting that repository file by file would take one prune
 round per file. Inside a fine-grained root such as `/root` a grant is otherwise always file by
@@ -164,18 +164,18 @@ a file beside the prune image's Dockerfile (`docker/prune_phase/layers/seeds/jav
 starts the first policy with `[read]`, `[write]`, `[create]` and `[delete]` on `/tmp`. The
 minimisation drops a row the build does not need, and one comment above the path names the seeded
 rows that stayed. Language-specific rows live only in such a file, never in the pruner or in
-`core/`. The Gradle reference exercise names the same seed, because Ares and Surefire
+`protecter/src/`. The Gradle reference exercise names the same seed, because Ares and Surefire
 write scratch files with random names to `/tmp` too.
 
 Without the Compose setup, the manual workflow `prune-maven.yml` builds both images on amd64 and
-arm64 and runs `tests/integration/layer_prune_maven.sh` in an ordinary container. That prunes,
+arm64 and runs `pruner/test/integration/layer_prune_maven.sh` in an ordinary container. That prunes,
 merges and verifies the exercise. It shows four wrong reasons aborting: no tests, a version the
 repository lacks, a manifest that does not match, and no seed named. The policy, its record and
 the merged base stay as workflow artefacts.
 
 ### The shipped Java and Python bases
 
-`core/config/BaseLanguage-java.cfg` is the prune of the Gradle reference exercise on the
+`protecter/src/config/BaseLanguage-java.cfg` is the prune of the Gradle reference exercise on the
 Java Development Kit (JDK) 25. It joins an x86_64 run on GitHub's runners and an aarch64 run,
 plus twelve machine files a Java Virtual Machine (JVM) reads. Ten under `/proc` and `/sys` are there
 because the denial reporting decided to grant them. The other two are the random devices, and
@@ -188,7 +188,7 @@ The merge adopted one deliberate widening. The base grants write, create and del
 `/var/tmp/testing-dir`, the directory grading runs the exercise in, where the old base named single
 paths beneath it. The old base's `/etc` entry is gone.
 
-`core/config/BaseLanguage-python.cfg` is the same kind of result for the Python reference exercise
+`protecter/src/config/BaseLanguage-python.cfg` is the same kind of result for the Python reference exercise
 on the Python run-phase image. It joins an x86_64 and an aarch64 run, the exercise passes under it in
 CI, and grading refuses a code path the exercise never takes.
 
@@ -224,13 +224,13 @@ so a base that held one would stop every run of the language there. A host known
 A base generated without such a run is complete up to Landlock version 9 and, on a version 10
 kernel, refuses an explicit UDP bind the exercise needs, so it fails closed. Any other difference
 between the two kernels fails the exercise. All of this is unproven until the workflow has run to
-the end. The fixture's audit records under `tests/python/fixtures/audit/` are written in the
+the end. The fixture's audit records under `pruner/test/python/fixtures/audit/` are written in the
 kernel's documented layout, and the first run replaces them with the raw lines it uploads.
 
 ## From exercise policies to a shipped policy
 
 Each prune container works independently on its own language and writes into the shared
-`var/tmp/path_sets` directory; nothing passes between containers except through that directory.
+`build/pruner/path_sets` directory; nothing passes between containers except through that directory.
 Every language is pruned by the layer pruner, on an image built from that language's run-phase
 image, so build the run-phase images first (`docker/run_phase/<language>/docker-compose.yaml`
 says how):
@@ -253,7 +253,7 @@ than shrinking it. An aborted exercise stops the merge as well.
 | `TailPhobos.cfg` | the tail flags, which today is the working directory alone |
 | `Abi10-<lang>.cfg` and `exercises/<lang>_<exercise>.abi10.cfg` | the rows only a kernel with Landlock version 10 can prove, from [the KVM run](#the-kvm-run-a-second-observer-on-x86). Never part of the base. |
 
-Everything goes under `var/tmp/opt/core/config` of the shared mount. A last container per
+Everything goes under `build/pruner/config`, which the orchestrator and the verify services mount. A last container per
 language, `verify_java`, `verify_java_maven` and `verify_python`, runs every exercise once more
 under exactly that pair, the base and the exercise file, as grading applies them, and writes its
 records to `path_sets/verify/`.
@@ -279,9 +279,9 @@ than only inspected:
 
 ## Review before you trust
 
-Copying the result over the shipped `core/config/` is a deliberate step of its own. The
+Copying the result over the shipped `protecter/src/config/` is a deliberate step of its own. The
 allow-list is only as tight as the reference exercises that produced it, and
-`tests/policy-redundancy-probe.sh` reports which entries grant Landlock nothing an ancestor
+`protecter/test/policy-redundancy-probe.sh` reports which entries grant Landlock nothing an ancestor
 already grants, which is worth reading while judging a fresh one. A scratch directory that a
 tool merely needs writable passes the prune and is granted at grading time as well. The pruner
 measures under the grading layers, so the two phases do not differ.
@@ -290,14 +290,14 @@ measures under the grading layers, so the two phases do not differ.
 
 The layer pruner needs a reference that runs on its own. For a program that a person uses, a tool
 clicked through or a REPL typed into, there is the recording pruner, `phobos-record`
-(`var/tmp/helpers/layer_record/`). It blocks nothing: the program runs with no sandbox at all under
+(`pruner/src/layer_record/`). It blocks nothing: the program runs with no sandbox at all under
 `strace`, with the terminal passed through, and every successful call lands in the recording.
 Several sessions can be recorded into one recording and merged.
 
 :::danger[Only for the instructor's own reference program]
 While it records, the program is not sandboxed. Never record an untrusted submission. `--help`
 says so first, and so does the header of every policy it writes. Only the prune image starts the
-recorder: the run-phase image holds no `strace` and refuses it, and nothing under `core/` names it. It refuses the grading options and a command whose words name a file of the layers,
+recorder: the run-phase image holds no `strace` and refuses it, and nothing under `protecter/src/` names it. It refuses the grading options and a command whose words name a file of the layers,
 though a wrapper script that starts them is not caught.
 :::
 
@@ -312,7 +312,7 @@ docker compose --profile record run --rm record check --name tool \
 docker compose --profile record run --rm record diff --name tool --policy /var/tmp/recordings/Base.cfg
 ```
 
-Each recording lands under `./var/tmp/recordings/<name>` on the host, which the service
+Each recording lands under `./build/pruner/recordings/<name>` on the host, which the service
 mounts at `/var/tmp/recordings`. A script and a policy to compare with go there too, because the
 container sees nothing else of the host but the exercise (`RECORD_EXERCISE`, mounted read-only at
 `/srv/phobos-record-exercise`) and the helpers. Each `run` is a new container, which `check`

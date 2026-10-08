@@ -22,7 +22,7 @@ name="$1"
 mode="$2"
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-bash "${HERE}/../../tests/runner-capability-probe.sh" "${mode}"
+bash "${HERE}/../../pruner/test/runner-capability-probe.sh" "${mode}"
 status="$?"
 
 case "${status}" in

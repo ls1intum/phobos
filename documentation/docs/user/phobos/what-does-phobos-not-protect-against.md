@@ -45,7 +45,7 @@ policy that would put it inside one is refused.
 
 Every entry point removes the relative entries of `PATH` and of the C library's search
 variables before it runs anything, so no program it looks up is found in the current
-directory. The interpreter is not looked up through `PATH` either: every script under `core/`
+directory. The interpreter is not looked up through `PATH` either: every script under `protecter/src/`
 begins with `#!/bin/bash`. Two things still take effect before a script's first line, and no
 script can undo them. Keeping them out is the grader's job:
 

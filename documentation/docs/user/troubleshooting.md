@@ -156,7 +156,7 @@ refusing to build a policy. (PHB-EPOLICY)
 ```
 
 You are running from a checkout rather than from the run-phase image. The shipped base
-configurations live in `core/config/`, and `phobos-policysystem.sh` looks for them beside itself.
+configurations live in `protecter/src/config/`, and `phobos-policysystem.sh` looks for them beside itself.
 Build the image. `--no-restriction` (`-nr`) runs the command with no sandbox at all. It is a debugging switch, it is refused together with `--config`, and it does not make a checkout run the sandbox.
 
 ### The specification directory lies under a write path

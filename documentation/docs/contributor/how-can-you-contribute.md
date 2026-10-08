@@ -59,7 +59,7 @@ configuration naming exactly that path is accepted, because a nested entry with 
 of an ancestor's rights is refused. Deleting one changes nothing about what Landlock enforces
 and changes which configurations Phobos accepts.
 
-`tests/integration/filesystem_policy.sh` pins both directions of this, and `tests/policy-redundancy-probe.sh`
+`protecter/test/integration/filesystem_policy.sh` pins both directions of this, and `protecter/test/policy-redundancy-probe.sh`
 reports which entries of a policy are in this position.
 
 ## Line endings are load-bearing
@@ -84,18 +84,18 @@ find . -name '*.sh'  -type f -print0 | xargs -0 shellcheck -x -S warning
 ( failed=0; while IFS= read -r f; do gcc-14 -std=gnu23 -fsyntax-only -Wall -Wextra -Werror -fanalyzer "$f" || failed=1; done < <(find . -name '*.c' -type f); exit "$failed" )
 find . -name '*.c'   -type f -print0 | xargs -0 cppcheck --std=c23 --enable=warning --quiet --error-exitcode=1
 ruff check --no-cache .
-bandit --recursive --ini .bandit --severity-level medium docker/prune_phase/orchestrate var/tmp/helpers
+bandit --recursive --ini .bandit --severity-level medium docker/prune_phase/orchestrate pruner/src
 yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 actionlint
 ec --no-color
-awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print FILENAME":"FNR; e=1}} {p=$0} END{exit e}' core/*.sh core/phobos-tools-*/*.sh
+awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print FILENAME":"FNR; e=1}} {p=$0} END{exit e}' protecter/src/*.sh protecter/src/phobos-tools-*/*.sh
 ```
 
 `shellcheck -x` matters: without it the shared library is analysed in isolation and every
 caller reports findings that are not real, and `.shellcheckrc` (`source-path=SCRIPTDIR`) is what
 lets it find them. The last command is the `conventions` job, which checks that every function in
-`core/*.sh` and `core/phobos-tools-*/*.sh` carries a comment above it.
+`protecter/src/*.sh` and `protecter/src/phobos-tools-*/*.sh` carries a comment above it.
 
 This documentation has a gate of its own, run by `documentation-ci.yml`:
 
@@ -115,7 +115,7 @@ pnpm run test           # Playwright, against the built site
 ## Documenting shell, C and Python
 
 - One field, variable or function declaration per line, in every language.
-- Every function in `core/*.sh` and `core/phobos-tools-*/*.sh` carries a comment saying what it does and what it assumes about
+- Every function in `protecter/src/*.sh` and `protecter/src/phobos-tools-*/*.sh` carries a comment saying what it does and what it assumes about
   the environment it runs in. A sandbox wrapper that assumes a mount, a capability or an
   environment variable and does not say so is a trap for the next reader.
 - No comments inside a function body. A function that needs one is a function that should be

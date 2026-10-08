@@ -20,7 +20,7 @@
 #
 # Manual on purpose: the guest runs the whole of a prune's verification, so it takes far longer than a
 # check belonging to every change. `source: fixture` runs the layer pruner's fixture exercise, which binds
-# a UDP port, and holds the result to both directions (tests/integration/kvm_fixture_result.sh).
+# a UDP port, and holds the result to both directions (pruner/test/integration/kvm_fixture_result.sh).
 name: Prune with the kernel as a second observer
 
 on:
@@ -32,7 +32,7 @@ on:
         default: java
         type: string
       source:
-        description: "fixture: the layer pruner's fixture; reference: the exercises of var/tmp/testing-dir/<key>"
+        description: "fixture: the layer pruner's fixture; reference: the exercises of exercises/<key>"
         required: true
         default: fixture
         type: choice
@@ -136,7 +136,7 @@ jobs:
 
       # First, because a guest that cannot boot under KVM answers nothing and the kernel build is long.
       - name: Assert that a guest boots under KVM
-        run: bash tests/runner-capability-probe.sh --assert-kvm
+        run: bash pruner/test/runner-capability-probe.sh --assert-kvm
 
       - name: Build the pinned Linux 7.2 guest kernel
         run: .github/scripts/build-kvm-kernel.sh "${RUNNER_TEMP}/kernel"
@@ -168,7 +168,7 @@ jobs:
 
       - name: Hold the fixture's result to both directions
         if: ${{ env.PRUNE_SOURCE == 'fixture' }}
-        run: bash tests/integration/kvm_fixture_result.sh "${RUNNER_TEMP}/path_sets"
+        run: bash pruner/test/integration/kvm_fixture_result.sh "${RUNNER_TEMP}/path_sets"
 
       # Kept even when the run failed, since the records and the console are what explain it.
       - name: Keep the artefacts of the guest
@@ -228,7 +228,7 @@ jobs:
           cp -R "${RUNNER_TEMP}/artefacts/default-prune/." "${RUNNER_TEMP}/path_sets/"
           cp "${RUNNER_TEMP}"/artefacts/kvm-ubuntu-26.04/*.abi10.* "${RUNNER_TEMP}/path_sets/"
           python3 docker/prune_phase/orchestrate/orchestrate.py --langs "${PRUNE_KEY}" \
-            --path-dir "${RUNNER_TEMP}/path_sets" --core-dir "${RUNNER_TEMP}/core" --helpers-dir var/tmp/helpers
+            --path-dir "${RUNNER_TEMP}/path_sets" --core-dir "${RUNNER_TEMP}/core" --helpers-dir pruner/src
 
       - name: Keep the merged base
         if: ${{ !cancelled() }}

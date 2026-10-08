@@ -11,13 +11,13 @@ branches.
 Phobos is a sandbox, so parts of it exist to do things a normal project would avoid, and the
 rest exists to take privileges away. None of the following is a vulnerability.
 
-- `core/` applies the sandbox. `phobos.sh` and the scripts beside it, and the
+- `protecter/src/` applies the sandbox. `phobos.sh` and the scripts beside it, and the
   `phobos-landlock-filesystem-and-networksystem` program they run, build a Landlock policy from an allow-list and grant
   back only what the allow-list names, then restrict the process so it and everything it
   starts can only lose access. Code that assembles access rules from a configuration file
   looks like path injection, and is the mechanism. It needs no privilege: a task may always
   restrict itself further.
-- `core/phobos-seccomp-networksystem/phobos-seccomp-networksystem.c` is the connect guard. When the network layer is on it
+- `protecter/src/phobos-seccomp-networksystem/phobos-seccomp-networksystem.c` is the connect guard. When the network layer is on it
   supervises every `connect()` with a seccomp user-notification and makes an allowed
   connection itself from outside the sandboxed process, so for `connect` it is a boundary a
   raw system call cannot step around, enforcing the `[connect]` allow-list by host and port.
@@ -63,15 +63,15 @@ rest exists to take privileges away. None of the following is a vulnerability.
   networked one, so a name in a udp rule assumes the same posture as one in a tcp rule.
 - `docker/prune_phase/` runs the discovery phase, which deliberately runs a reference under a
   policy that refuses too much, over and over: the layer pruner (`docker/prune_phase/layers/`,
-  `var/tmp/helpers/layer_prune/`) records the grading layers' refusals with `strace` and grants
+  `pruner/src/layer_prune/`) records the grading layers' refusals with `strace` and grants
   what each refusal proves, and its orchestrator merges the result into the allow-list the
   sandbox later trusts. strace and the containment probe are installed in the prune image only,
   never in the run-phase image a submission is graded in, and the prune container needs no
-  privilege. The recording pruner (`var/tmp/helpers/layer_record/`) is the exception to "the reference
+  privilege. The recording pruner (`pruner/src/layer_record/`) is the exception to "the reference
   runs under a policy": while it records, the program runs with no sandbox at all, and it is for the
   instructor's own reference program, never for an untrusted submission. The run-phase image does not
   hold it, it is started only in the prune image, which the helpers are mounted into, and nothing under
-  `core/` names it. It refuses the grading options and a command whose words name a file of the layers
+  `protecter/src/` names it. It refuses the grading options and a command whose words name a file of the layers
   (a wrapper script that starts them is not caught); the policy it generates covers only what the
   recorded sessions did, and says so.
   Nothing in either phase uses Bubblewrap any more.
@@ -85,7 +85,7 @@ rest exists to take privileges away. None of the following is a vulnerability.
 The four C products, `phobos-landlock-filesystem-and-networksystem`, the connect guard, the
 timeout's group lock and the report-only supervisor `phobos-seccomp-filesystem`, are not
 committed. The connect guard carries the denial reporter's sources, so that it can word what it
-and the filesystem layer block when it is the run's one supervisor. They are compiled inside the run-phase image from the source under `core/`, and CI
+and the filesystem layer block when it is the run's one supervisor. They are compiled inside the run-phase image from the source under `protecter/src/`, and CI
 checks the copies the image ships are position-independent with full RELRO. Where the connect guard binary is missing
 the network layer refuses to start rather than run the command without connect supervision, so a
 bare checkout with nothing built does not run. The delivery vehicle is the run-phase image,
@@ -143,7 +143,7 @@ risk as before: grant such a path only where no component of it is the submissio
 A grader may start Phobos with the submission's tree as the current directory, so anything
 Phobos looks up relative to that directory before the sandbox exists is the submission's to
 choose. Every entry point, `phobos.sh` and each layer started on its own alike, therefore
-begins with `clean_startup_environment` (`core/phobos-tools-common/phobos-environment.sh`),
+begins with `clean_startup_environment` (`protecter/src/phobos-tools-common/phobos-environment.sh`),
 before it runs any program or `cd`:
 
 - **PATH keeps only its absolute entries.** `.`, every other relative directory, an empty entry
@@ -169,7 +169,7 @@ before it runs any program or `cd`:
 
 Each entry point says on stderr what it removed from these, CDPATH and an invented PATH aside.
 
-The interpreter is not looked up either. Every script under `core/` begins with `#!/bin/bash`, so
+The interpreter is not looked up either. Every script under `protecter/src/` begins with `#!/bin/bash`, so
 an entry point started as a program runs the system's bash whatever the caller's PATH holds, and
 so does every layer it starts afterwards by its absolute path. With `#!/usr/bin/env bash`, `env`
 would find `bash` through the caller's PATH before the script ran a line, and a relative entry
@@ -294,7 +294,7 @@ the same class as the filesystem or egress layers, and enabling it changes the r
   `sendmsg` with a UNIX address are refused; and a blocking socket that cannot take a datagram is
   waited on for a second at most before the answer is `EAGAIN`. The guard serves one notification
   at a time, so a slow socket delays every other call of the command by that second at most.
-  `tests/integration/seccomp_networksystem.sh` measures all four calls against the rewritten
+  `protecter/test/integration/seccomp_networksystem.sh` measures all four calls against the rewritten
   destination, with a control without the guard that reaches it.
 - **Bind is closed unless a `[bind]` row opens it, as far as the kernel can close it.** The network
   layer always applies a network-only Landlock ruleset that handles TCP and UDP bind with nothing

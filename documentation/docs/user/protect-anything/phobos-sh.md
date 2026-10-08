@@ -19,11 +19,11 @@ each of those layers can be run on its own where you need to isolate a failure.
 A bare checkout cannot run Phobos, deliberately. Two things are missing from it:
 
 - **The compiled programs.** `phobos-landlock-filesystem-and-networksystem`, the connect guard and the process-group lock
-  are built from the source under `core/` and never committed. Where the connect guard, the
+  are built from the source under `protecter/src/` and never committed. Where the connect guard, the
   Landlock program or the process-group lock is missing, the layer that needs it ends the run
   rather than running without it.
 - **The base policy.** `phobos-policysystem.sh` finds it by globbing `Base*.cfg` beside itself, and a
-  checkout keeps those files in `core/config/` rather than in `core/`. A run from a checkout is
+  checkout keeps those files in `protecter/src/config/` rather than in `protecter/src/`. A run from a checkout is
   refused with `PHB-EPOLICY` instead of running unprotected.
 
 The delivery vehicle is the run-phase image, which compiles both and puts the shipped policy
@@ -40,7 +40,7 @@ link to the same script.
 There is one image per language. The Java image is built on Artemis's default Java image,
 `ls1tum/artemis-maven-template:java25-1` (Java Development Kit (JDK) 25, Maven 3.9.16, Gradle
 9.8.0), pinned by digest. It carries the dependencies of the two reference exercises under
-`var/tmp/testing-dir/`. They are checked against `docker/run_phase/java/*-repository.sha256` when
+`exercises/`. They are checked against `docker/run_phase/java/*-repository.sha256` when
 the image is built, so a prune and a grading run read the same bytes and a build is offline. A Gradle wrapper before 9.1.0 cannot
 run on JDK 25. A Gradle exercise needs `org.gradle.daemon=false`, a matching `org.gradle.jvmargs`
 and `org.gradle.internal.instrumentation.agent=false` in its `gradle.properties`, and the same
@@ -111,7 +111,7 @@ environment too, so a command that relied on `.` in `PATH` has to be named by it
 a lookup through an empty `PATH` searches the current directory. Where the environment had no `PATH` at
 all, the command still gets none. `phobos.sh --help` describes this under ENVIRONMENT.
 
-The interpreter is not looked up either. Every script under `core/` begins with `#!/bin/bash`.
+The interpreter is not looked up either. Every script under `protecter/src/` begins with `#!/bin/bash`.
 An entry point started as a program therefore runs the system's bash whatever the caller's `PATH`
 holds, and so does every layer it starts afterwards by its absolute path. The run-phase image, and
 every image built on it, has bash at `/bin/bash`.

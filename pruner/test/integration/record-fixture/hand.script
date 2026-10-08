@@ -1,0 +1,39 @@
+# Keystrokes of record_replay.sh's phase hand: a person at an interactive bash runs the replay check
+# by hand around python3 -q and types into Python under the layers. @RECORDER@ is replaced with the
+# recorder's path before the script is used.
+#
+# Every step waits for something the session prints, never for a time, so a slow machine only makes the
+# script slower. One thing is not printed: a Ctrl+C reaches Python from the terminal, and again from
+# each layer that passes the signal on (protecter/src/phobos-tools-common/phobos-signals.sh), which a layer does
+# at its next look at the command, every PHB_SIGNAL_POLL_SECONDS, and a starved layer looks late. A
+# pass that lands after the first would interrupt whatever is typed next, or kill a layer that has
+# finished its command. So after Ctrl+C the script goes `idle`: it waits until every process of the
+# job is asleep, which none is while it has a signal to pass on. What is typed after fg waits in the
+# terminal's queue, where only Python reads it, since bash reads nothing while the job it resumed is
+# in the foreground.
+#
+# Markers are printed in two halves, so the echo of the typed line can never satisfy an expectation.
+expect SHELL[$]
+send @RECORDER@ check --name python -- python3 -q
+expect >>>
+send import time
+send print("OK-" + "H1")
+expect OK-H1
+send print("OK-" + "S1", flush=True); time.sleep(30)
+expect OK-S1
+key ctrl-c
+expect KeyboardInterrupt
+idle
+send print("OK-" + "H2")
+expect OK-H2
+key ctrl-z
+expect Stopped
+send fg
+send print("OK-" + "H3")
+expect OK-H3
+send exit(0)
+expect regressions
+expect SHELL[$]
+send echo "STATUS-""$?"
+expect STATUS-0
+send exit

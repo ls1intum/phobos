@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 orchestrate.py - merge & build the Base*.cfg policy files that
-`core/phobos-policysystem.sh` applies at run time.
+`protecter/src/phobos-policysystem.sh` applies at run time.
 
-It reads what the layer pruner (`var/tmp/helpers/layer_prune/main.py`) wrote for every exercise of
+It reads what the layer pruner (`pruner/src/layer_prune/main.py`) wrote for every exercise of
 each requested language: a complete `<lang>_<exercise>.cfg` and its record `<lang>_<exercise>.json`,
 the record carrying the SHA-256 of the .cfg it describes. Each .cfg is held to its record before
 anything is merged. The configuration files are read and written with `layer_prune/cfgfile.py`,
