@@ -47,10 +47,8 @@ fi
 mkdir -p "${DESTINATION}/config"
 cp "${REPOSITORY}"/core/*.sh "${DESTINATION}/"
 # The per-subsystem and shared helpers keep their folders, which the layer scripts source by
-# name, so the context mirrors the repository layout. config_doc.txt is documentation, not
-# runtime, so it is dropped rather than shipped in the image.
+# name, so the context mirrors the repository layout.
 cp -R "${REPOSITORY}"/core/phobos-tools-* "${DESTINATION}/"
-rm -f "${DESTINATION}/phobos-tools-policysystem/config_doc.txt"
 for source_folder in phobos-landlock-filesystem-and-networksystem phobos-seccomp-networksystem \
                      phobos-seccomp-filesystem phobos-seccomp-timeoutsystem; do
   cp -R "${REPOSITORY}/core/${source_folder}" "${DESTINATION}/"

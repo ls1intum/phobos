@@ -8,3 +8,11 @@ rules:
   # Line endings must stay LF: a CRLF compose file breaks tooling on Linux.
   new-lines:
     type: unix
+
+# The documentation site's installed dependencies and its build output are not this
+# repository's YAML, and they are gitignored. CI checks out a fresh tree and never sees them;
+# this keeps `yamllint --strict .` usable locally after `pnpm install` in documentation/.
+ignore: |
+  documentation/node_modules/
+  documentation/build/
+  documentation/.docusaurus/

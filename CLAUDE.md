@@ -56,7 +56,8 @@ environment, offline, and grading itself only applies a fixed configuration.
 - C for `phobos-landlock-filesystem-and-networksystem`, the connect guard, the timeout's group lock and the report-only supervisor `phobos-seccomp-filesystem`, all four compiled inside the run-phase image
 - Python for the prune orchestrator and the artefact helpers
 - Docker for both phases, one image per language environment
-- Java for exactly one file, `.github/scripts/CheckPullRequestTemplate.java`
+- Java for the two template checkers in `.github/scripts/` and for the two acceptance fixtures
+- Docusaurus, Node 24 and pnpm for the documentation site under `documentation/`, tested with Playwright
 
 The filesystem layer is enforced by Landlock, an unprivileged Linux kernel sandbox, applied
 by `phobos-landlock-filesystem-and-networksystem` (the C program under `core/`). The run phase needs no privileges, no
@@ -108,9 +109,10 @@ integration requirement in SECURITY.md.
 
 `lint.yml` runs seven lint jobs, and `actionlint.yml` lints the workflows beside it, weekly
 as well as on a change under `.github`. Neither is the whole of CI: `test.yml` runs the shell and
-Python suites, `build.yml` builds the images and holds the run-phase image to the Landlock
-acceptance suites inside it, `codeql.yml` scans, and `pullrequest-template.yml` checks the
-body. The lint jobs are the ones you can run in full by hand before opening a pull request.
+Python suites, `build.yml` builds the images for amd64 and arm64, runs the two C unit suites
+and holds the run-phase image to the Landlock acceptance suites and the protection matrix inside
+it, `codeql.yml` scans, `pullrequest-template.yml` checks the body, and `documentation-ci.yml`
+holds the documentation site to its own gate (see `documentation/README.md`). The lint jobs are the ones you can run in full by hand before opening a pull request.
 
 ```
 # Same file sets and same flags as CI. Together these are the seven lint.yml jobs plus
@@ -131,8 +133,8 @@ awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print 
 One of those is narrower than it looks: `bandit` runs over exactly two directories, not the
 whole tree, because everything else Python here is fixture. `hadolint` matches `Dockerfile*` at
 any depth, which reaches every one under `docker/`. CI runs
-shellcheck, cppcheck and hadolint inside pinned container images and downloads `actionlint` at a
-pinned version and checksum; the commands above assume the tools are installed locally and will
+shellcheck and hadolint inside pinned container images, installs cppcheck with apt, and
+downloads `actionlint` and `editorconfig-checker` at a pinned version and checksum; the commands above assume the tools are installed locally and will
 differ in version, which is the usual reason a local run and CI disagree.
 
 `.bandit`, `.yamllint` and `.hadolint.yaml` at the repository root carry the thresholds and
@@ -143,7 +145,12 @@ comment saying why.
 
 ```
 docker compose -f docker-compose.yaml up --build        # the prune environments
+.github/scripts/assemble-run-phase-context.sh build/run-phase-context   # the build context the compose file reads
 docker compose -f docker/run_phase/java/docker-compose.yaml up --build
+docker build -f docker/run_phase/java/Dockerfile -t phobos-run-phase:ci build/run-phase-context
+# an acceptance suite, in an ordinary container: no --privileged, no --cap-add, no --security-opt
+docker run --rm --network none -v "$PWD/tests:/tests:ro" phobos-run-phase:ci \
+  bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/run-tests.sh
 docker compose -f docker/run_phase/python/docker-compose.yaml up --build
 ```
 
@@ -174,7 +181,7 @@ core/                      the sandbox itself
   phobos-seccomp-networksystem/  its *.c/.h: the connect guard, supervises connect() and enforces [connect] by host and port; with the network layer on it is also the run's one reporting supervisor
   phobos-seccomp-timeoutsystem/  its *.c: the group lock, a seccomp filter refusing setsid and setpgid, then exec's
   phobos-seccomp-filesystem/     its *.c/.h: the denial reporter (wording, counts, the mirror of Landlock) and, as its main, the report-only supervisor that runs when the network layer is off; the connect guard links the rest
-  phobos-tools-common/     sourced by every layer through phobos-common.sh, which sources the rest here and the three per-subsystem helpers
+  phobos-tools-common/     sourced by every layer through phobos-common.sh, which sources the rest here but phobos-environment.sh, and the per-subsystem helpers
     phobos-environment.sh  sourced first by every entry point: PATH and the other lookup variables made safe before anything is looked up
     phobos-common.sh       the shared entry the layers source; it sources the others
     phobos-constants.sh    the numbers the scripts share, named once, the exit statuses among them
@@ -188,7 +195,6 @@ core/                      the sandbox itself
     phobos-policy-yaml.sh  a strict subset of YAML in, flat records with line numbers out
     phobos-language-configuration.sh  a programming language configuration in, its bases, placeholder values and [connect] rows out
     phobos-policy-ares.sh  an Ares 2 security policy in, the same parsed state a cfg gives out
-    config_doc.txt         the configuration format, documented
   phobos-tools-filesystem/
     phobos-rights.sh       a parsed policy to the --rights= arguments phobos-landlock-filesystem-and-networksystem takes
   phobos-tools-networksystem/
@@ -199,7 +205,9 @@ core/                      the sandbox itself
 docker/prune_phase/        the layer pruner's image and the orchestrator's
   layers/                  the layer pruner's image: the run-phase image, strace, the probe, an empty base
 docker/run_phase/          the images an exercise actually runs in, one per language (java/, python/)
-tests/                     the acceptance and probe suites
+tests/                     unit/ (C and shell units), integration/ (shell suites, the acceptance suites and
+                           protection-matrix/), python/, and two probes
+documentation/             the Docusaurus site, with its own gate
 var/tmp/                   prune inputs, helpers and example outputs
   helpers/layer_prune/     the layer pruner: observe, attribute, grow, minimise, limits, verify, write
   helpers/layer_record/    the recording pruner: record a session unsandboxed, generate a policy, replay it, compare it (prune image only)
