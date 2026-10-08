@@ -140,7 +140,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [amd64, arm64]
-        group: [acceptance, matrix-a, matrix-b, recorder, pruner]
+        group: [acceptance, matrix-a, matrix-b, recorder-and-egress, pruner]
         include:
           - platform: amd64
             runner: ubuntu-26.04
@@ -370,7 +370,7 @@ jobs:
       # The filesystem layer at its edges: links, dot-dot, magic links, path descriptors, rights
       # on files and the root, odd names and a link swapped while it is opened.
       - name: The filesystem layer holds against links, dot-dot, magic links and swaps
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -378,7 +378,7 @@ jobs:
 
       # Each limit met through the call that meets it, and the limits Phobos does not set.
       - name: Each resource limit holds through the call that meets it
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -387,7 +387,7 @@ jobs:
       # Every blocked action is reported once and every result is the one Landlock alone gives,
       # and the group lock's refusals are reported while they stay refused in every state.
       - name: The reporter reports each blocked action and changes no outcome
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-a' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
             phobos-run-phase:ci \
@@ -399,7 +399,7 @@ jobs:
       # repository root, since the probe's source lives under tests/.
       - name: Build the prune image on the run-phase image
         id: prune-build
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && contains(fromJSON('["recorder","pruner"]'), matrix.group) }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && contains(fromJSON('["recorder-and-egress","pruner"]'), matrix.group) }}
         run: |
           docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci \
             -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers:ci .
@@ -408,7 +408,7 @@ jobs:
       # still works, and the parser and attribution turn the record into exactly that one denial. An
       # ordinary container, as for every suite above: ptrace of one's own child needs no privilege.
       - name: The prune image's observer sees what the layers refuse, and only that
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder' }}
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder-and-egress' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
             -v "${PWD}/tests:/tests:ro" -v "${PWD}/var/tmp/helpers:/var/tmp/helpers:ro" \
@@ -421,7 +421,7 @@ jobs:
       # (record_generate.sh); from outside, the run-phase image holds no strace and refuses the
       # recorder. Every container is ordinary.
       - name: The recording pruner records with the terminal passed through and replays under the layers
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder' }}
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder-and-egress' }}
         timeout-minutes: 40
         run: bash tests/integration/record_host.sh phobos-prune-layers:ci phobos-run-phase:ci
 
@@ -430,7 +430,7 @@ jobs:
       # ClientHello, and the replay under the egress broker passes while the neighbouring port stays
       # refused. Every container is ordinary; the network has no route out.
       - name: The recording pruner writes a host name rule and replays it through the egress broker
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder' }}
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder-and-egress' }}
         timeout-minutes: 15
         run: bash tests/integration/record_networked.sh phobos-prune-layers:ci
 
@@ -449,7 +449,7 @@ jobs:
       # dropped. A stand-in resolver and a TLS server on loopback stand in for the external host, so
       # this needs no network either.
       - name: The layer pruner keeps exactly the declared hosts a build needs
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner' }}
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder-and-egress' }}
         timeout-minutes: 30
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
@@ -473,7 +473,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [amd64, arm64]
-        group: [pruner-a, pruner-b, suites-a, suites-b]
+        group: [pruner-a, egress, suites-a, suites-b]
         include:
           - platform: amd64
             runner: ubuntu-26.04
@@ -514,7 +514,6 @@ jobs:
               landlock-filesystem-and-networksystem-acceptance/scoping-test.sh \
               landlock-filesystem-and-networksystem-acceptance/seccomp-networksystem-test.sh \
               landlock-filesystem-and-networksystem-acceptance/network-cleanup-test.sh \
-              protection-matrix/reporting.sh \
               protection-matrix/network.sh \
               protection-matrix/timeout.sh \
               protection-matrix/filesystem.sh \
@@ -551,6 +550,12 @@ jobs:
           done
           exit "${failed}"
 
+      - name: The reporter reports each blocked action on the Python image and changes no outcome
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'egress' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/tests:/tests:ro" \
+            phobos-run-phase-python:ci bash /tests/integration/protection-matrix/reporting.sh
+
       # The Python reference exercise under the Python base the image ships, which the layer pruner
       # derived from this very exercise: the template's two phases pass, and a canary, a write beside
       # the working directory and an unnamed address are refused. Without it a stale base would go
@@ -565,7 +570,7 @@ jobs:
 
       - name: Build the prune image on the Python run-phase image
         id: prune-build
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && contains(fromJSON('["pruner-a","pruner-b"]'), matrix.group) }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && contains(fromJSON('["pruner-a","egress"]'), matrix.group) }}
         run: |
           docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase-python:ci \
             -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers-python:ci .
@@ -585,7 +590,7 @@ jobs:
             -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci bash /repo/tests/integration/layer_prune.sh
 
       - name: The layer pruner on the Python image keeps exactly the declared hosts a build needs
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner-b' }}
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'egress' }}
         timeout-minutes: 30
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
