@@ -65,8 +65,8 @@ pm_setup() {
   if [[ -f "${PM_BASE}" ]] && ! pm_base_is_ours; then
     cp "${PM_BASE}" "$PM/base.original"
   fi
-  pm_install_base
   pm_install_ares_configuration || return 1
+  pm_install_base
   printf -- '--chdir %s/work\n' "$PM" > "$PM/tail.flags"
   return 0
 }
@@ -112,22 +112,29 @@ PM_JAVA_CONFIGURATION="JAVA_USING_GRADLE_ARCHUNIT_AND_ASPECTJ"
 
 # Makes the Ares 2 policies of the suites name a programming language configuration whose base the image has. The Java
 # configurations name BaseLanguage-java.cfg, which a Python image does not ship, so an image with another base gets a
-# configuration of the suites' own: the Java one with its [base] line naming the image's base, which pm_install_base has
-# replaced with the minimal one. Everything else stays what the shipped file says, the loopback UDP rule included, so
-# the cases hold the import to the same rules in every image. An image with the Java base uses the shipped
-# configuration as it is.
+# configuration of the suites' own: the Java one with its [base] line naming the image's base, which pm_install_base
+# replaces with the minimal one. Everything else stays what the shipped file says, the loopback UDP rule included, so the
+# cases hold the import to the same rules in every image. An image with the Java base uses the shipped configuration as
+# it is. The configuration is written before the base is touched and a failure is recorded, so a suite that cannot write
+# it ends with a failure and leaves the image's base as it was.
 pm_install_ares_configuration() {
   local base_name="${PM_BASE##*/}"
+  local source="${PM_CONFIGURATIONS}/${PM_JAVA_CONFIGURATION}.cfg"
+  local target="${PM_CONFIGURATIONS}/${PM_NEUTRAL_CONFIGURATION}.cfg"
   PM_ARES_CONFIGURATION="${PM_JAVA_CONFIGURATION}"
   if [[ "${base_name}" == "BaseLanguage-java.cfg" ]]; then
     return 0
   fi
-  if [[ ! -f "${PM_CONFIGURATIONS}/${PM_JAVA_CONFIGURATION}.cfg" ]]; then
-    bad "the Ares 2 cases have a configuration to start from" "${PM_CONFIGURATIONS}/${PM_JAVA_CONFIGURATION}.cfg is missing"
+  if [[ ! -f "${source}" ]]; then
+    bad "the Ares 2 cases have a configuration to start from" "${source} is missing"
     return 1
   fi
-  sed "s|^BaseLanguage-java\\.cfg\$|${base_name}|" "${PM_CONFIGURATIONS}/${PM_JAVA_CONFIGURATION}.cfg" \
-    > "${PM_CONFIGURATIONS}/${PM_NEUTRAL_CONFIGURATION}.cfg" || return 1
+  if ! PM_IMAGE_BASE="${base_name}" awk '$0 == "BaseLanguage-java.cfg" { print ENVIRON["PM_IMAGE_BASE"]; next } { print }' "${source}" \
+      > "${target}" || ! grep -qxF -- "${base_name}" "${target}"; then
+    rm -f "${target}"
+    bad "the Ares 2 cases have a configuration that names the image's base" "${target} could not be written with ${base_name} as its base"
+    return 1
+  fi
   PM_ARES_CONFIGURATION="${PM_NEUTRAL_CONFIGURATION}"
 }
 
