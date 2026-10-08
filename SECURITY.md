@@ -114,13 +114,22 @@ of the process that runs `phobos.sh`. All of them are fixed before the command i
 grading setup that hands `phobos.sh` an environment the submission influenced breaks this.
 
 A path a policy names is resolved through its symbolic links when the filesystem layer
-applies it, just before the command starts, and by then the submission is in place. A relative
-path in an Ares 2 policy names a place inside the project root, which usually holds the
-submission's checkout. A symbolic link the submission places at any component of a path that is
-only read or executed, or at any component but the last of a path that may be changed (the
-enforcer refuses a changeable path that is itself a link), makes the grant land where the link
-points. The same holds for a path in an exercise configuration that lies in the submission's
-tree. Grant such a path only where no component of it is the submission's to choose.
+applies it, just before the command starts, and by then the submission is in place. A symbolic
+link the submission places at any component of a path that is only read or executed, or at any
+component but the last of a path that may be changed (the enforcer refuses a changeable path
+that is itself a link), makes the grant land where the link points. For an Ares 2 policy this is
+a rule where the import can see the risk: a path the import names that reaches the project root,
+which usually holds the submission's checkout, through a symbolic link, or through a name for the
+root that leads to some other place than the root itself, and so resolves to somewhere other than
+where the path says, is refused with the file and the line. A link before the path enters the root
+that leads away from it, such as `/bin` to `/usr/bin`, stays allowed. The project root itself must
+be the real path of a project directory: `/`, a root that reaches its directory through a symbolic
+link and a root with a `..` segment are refused with PHB-EPOLICY, from `--project-root` always
+and from the last `--chdir` where an imported path needs the root, because what lies below such a root cannot be told from
+a link. The check is made when the specification is built, so a link the submission places between that moment and the start of the command is not
+seen; the grader builds the specification after the submission is in place and starts the command
+right after. A path in an exercise configuration that lies in the submission's tree carries the
+risk as before: grant such a path only where no component of it is the submission's to choose.
 
 ## The environment Phobos is started in
 

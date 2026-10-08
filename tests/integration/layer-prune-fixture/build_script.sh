@@ -12,6 +12,9 @@
 #   FIXTURE_NEEDS_NET=1       a test passes only when the external attempt is not refused by the sandbox
 #   FIXTURE_UNATTRIBUTABLE=1  writesOutput fails once no_new_privs is set, which every layered run sets
 #                             and no refused call shows; the external attempt is left out
+# and one more makes it need a declared host, for tests/integration/layer_prune_egress.sh:
+#   FIXTURE_DECLARED=1        reachesItsDeclaredHost asks https://api.example.org:8443/ over TLS and
+#                             passes only when the answer arrives
 set -u
 
 NEEDED=/srv/prune-fixture/needed/data.txt
@@ -85,6 +88,14 @@ if [[ "${FIXTURE_NEEDS_NET:-0}" == 1 && "$external" == *"Permission denied"* ]];
   external_status=1
 fi
 
+declared_status=0
+if [[ "${FIXTURE_DECLARED:-0}" == 1 ]]; then
+  declared_status=1
+  answer="$(printf 'GET / HTTP/1.0\r\n\r\n' \
+    | openssl s_client -quiet -connect api.example.org:8443 -servername api.example.org 2>/dev/null)"
+  [[ "$answer" == *"200 ok"* ]] && declared_status=0
+fi
+
 setsid_status=0
 if [[ "${FIXTURE_SETSID:-0}" == 1 ]]; then
   setsid true || setsid_status=1
@@ -99,6 +110,7 @@ mkdir -p "$REPORT_DIRECTORY"
   testcase talksToItsServer "$server_status"
   testcase reachesTheNetworkWhenItMust "$external_status"
   testcase startsASession "$setsid_status"
+  [[ "${FIXTURE_DECLARED:-0}" == 1 ]] && testcase reachesItsDeclaredHost "$declared_status"
   printf '</testsuite>\n'
 } > "${REPORT_DIRECTORY}/TEST-fixture.xml"
 exit 0

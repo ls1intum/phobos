@@ -12,10 +12,14 @@ finish without producing anything, and where to write artefacts.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import pathlib
 import subprocess
 import sys
+
+import pytest
 
 # How long the orchestrator may run before the test gives up on it.
 ORCHESTRATOR_TIMEOUT_SECONDS = 120
@@ -280,3 +284,221 @@ def test_a_record_without_its_paths_stops_the_merge(tmp_path):
     result = run_orchestrator(tmp_path, skip_prune=True)
     assert result.returncode == 1, result.stdout + result.stderr
     assert "java_exercise1.json has no java_exercise1.paths" in result.stdout
+
+
+JAVA_ONE = """[read]
+/usr
+/var/tmp/testing-dir
+
+[execute]
+/usr
+
+[write]
+/var/tmp/testing-dir
+
+[connect]
+allow 127.0.0.1:*
+
+[limits]
+timeout=60
+cpu=30
+"""
+
+JAVA_TWO = """[read]
+/srv/data
+/usr/lib
+
+[bind]
+allow 0
+
+[limits]
+timeout=90
+"""
+
+
+def write_layer_artefacts(path_dir: pathlib.Path, exercise: str, text: str, key: str = "java",
+                          stage: str = "all") -> None:
+    """Writes one exercise's .cfg and the record the layer pruner writes beside it."""
+    path_dir.mkdir(parents=True, exist_ok=True)
+    (path_dir / f"{key}_{exercise}.cfg").write_text(text)
+    record = {"schema_version": 2, "key": key, "exercise": exercise, "stage": stage,
+              "cfg_sha256": hashlib.sha256(text.encode()).hexdigest()}
+    (path_dir / f"{key}_{exercise}.json").write_text(json.dumps(record))
+
+
+def layer_pruned_java(tmp_path: pathlib.Path) -> subprocess.CompletedProcess:
+    """Merges two layer-pruned Java exercises beside a Python language from the Bubblewrap stub."""
+    run_orchestrator(tmp_path, langs="python")
+    write_layer_artefacts(tmp_path / "path_sets", "one", JAVA_ONE)
+    write_layer_artefacts(tmp_path / "path_sets", "two", JAVA_TWO)
+    return run_orchestrator(tmp_path, langs="java,python", skip_prune=True)
+
+
+def test_layer_pruned_exercises_are_merged_into_one_base_without_limits(tmp_path):
+    result = layer_pruned_java(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    base = (tmp_path / "core" / "BaseLanguage-java.cfg").read_text()
+    assert base == (
+        "[read]\n/srv/data\n/usr\n/usr/lib\n/var/tmp/testing-dir\n\n"
+        "[execute]\n/usr\n/usr/lib\n\n"
+        "[write]\n/var/tmp/testing-dir\n\n"
+        "[connect]\nallow 127.0.0.1:*\n\n"
+        "[bind]\nallow 0\n"
+    ), "exactly the union, the nested /usr/lib raised to its ancestor's rights, and no [limits]"
+    assert "/usr/lib/python" in (tmp_path / "core" / "BasePhobos.cfg").read_text()
+
+
+def test_each_exercise_keeps_its_limits_and_nothing_the_base_grants(tmp_path):
+    result = layer_pruned_java(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    exercises = tmp_path / "core" / "exercises"
+    assert (exercises / "java_one.cfg").read_text() == "[limits]\ntimeout=60\ncpu=30\n"
+    assert (exercises / "java_two.cfg").read_text() == "[limits]\ntimeout=90\n"
+    assert not list(exercises.glob("python_*"))
+
+
+def test_an_exercise_that_is_gone_leaves_no_configuration_behind(tmp_path):
+    exercises = tmp_path / "core" / "exercises"
+    exercises.mkdir(parents=True)
+    (exercises / "java_removed.cfg").write_text("[limits]\ntimeout=1\n")
+    result = layer_pruned_java(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (exercises / "java_removed.cfg").exists()
+
+
+def test_a_cfg_its_record_does_not_vouch_for_stops_the_merge(tmp_path):
+    write_layer_artefacts(tmp_path / "path_sets", "one", JAVA_ONE)
+    (tmp_path / "path_sets" / "java_one.cfg").write_text(JAVA_ONE.replace("/usr\n", "/\n"))
+    result = run_orchestrator(tmp_path, langs="java", skip_prune=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "java_one.cfg is not the file java_one.json records" in result.stdout
+    assert not base_policy(tmp_path).exists()
+
+
+def test_a_cfg_without_its_record_and_a_record_without_its_cfg_stop_the_merge(tmp_path):
+    write_layer_artefacts(tmp_path / "path_sets", "one", JAVA_ONE)
+    write_layer_artefacts(tmp_path / "path_sets", "two", JAVA_TWO)
+    (tmp_path / "path_sets" / "java_one.json").unlink()
+    (tmp_path / "path_sets" / "java_three.json").write_text("{}")
+    result = run_orchestrator(tmp_path, langs="java", skip_prune=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "java_one.cfg has no java_one.json" in result.stdout
+    assert "java_three.json has no java_three.cfg" in result.stdout
+
+
+def test_a_record_naming_another_exercise_stops_the_merge(tmp_path):
+    write_layer_artefacts(tmp_path / "path_sets", "one", JAVA_ONE)
+    record = tmp_path / "path_sets" / "java_one.json"
+    record.write_text(record.read_text().replace('"exercise": "one"', '"exercise": "two"'))
+    result = run_orchestrator(tmp_path, langs="java", skip_prune=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "java_one.json records java/two, not java_one" in result.stdout
+
+
+@pytest.mark.parametrize("record, reason", [
+    (b"[1, 2]", "is not a layer pruner record of schema version 2"),
+    (b'{"schema_version": 1, "key": "java", "exercise": "one", "stage": "all"}',
+     "is not a layer pruner record of schema version 2"),
+    (b'{"schema_version": 2, "key": "python", "exercise": "one", "stage": "all"}',
+     "records python/one, not java_one"),
+    (b"\xff\xfe not text", "is not readable as JSON"),
+])
+def test_a_record_that_is_not_the_layer_pruners_for_this_cfg_stops_the_merge(tmp_path, record, reason):
+    write_layer_artefacts(tmp_path / "path_sets", "one", JAVA_ONE)
+    (tmp_path / "path_sets" / "java_one.json").write_bytes(record)
+    result = run_orchestrator(tmp_path, langs="java", skip_prune=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert reason in result.stdout
+    assert "Traceback" not in result.stderr
+
+
+def test_an_aborted_exercise_stops_the_merge_and_is_named_with_its_reason(tmp_path):
+    write_layer_artefacts(tmp_path / "path_sets", "one", JAVA_ONE)
+    (tmp_path / "path_sets" / "java_two.aborted.json").write_text(json.dumps({"aborted": "flaky reference"}))
+    result = run_orchestrator(tmp_path, langs="java", skip_prune=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "java_two was aborted: flaky reference" in result.stdout
+    assert not base_policy(tmp_path).exists()
+
+
+def test_artefacts_of_both_producers_for_one_language_stop_the_merge(tmp_path):
+    run_orchestrator(tmp_path, langs="java")
+    write_layer_artefacts(tmp_path / "path_sets", "one", JAVA_ONE)
+    result = run_orchestrator(tmp_path, langs="java", skip_prune=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "java has both .cfg and .paths artefacts" in result.stdout
+
+
+def test_a_cfg_the_run_time_parser_would_read_differently_stops_the_merge(tmp_path):
+    write_layer_artefacts(tmp_path / "path_sets", "one", "[read]\nrelative/path\n")
+    result = run_orchestrator(tmp_path, langs="java", skip_prune=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "cannot be read" in result.stdout
+    assert not base_policy(tmp_path).exists()
+
+
+def test_a_record_of_a_prune_stopped_after_an_earlier_stage_stops_the_merge(tmp_path):
+    write_layer_artefacts(tmp_path / "path_sets", "one", JAVA_ONE, stage="network")
+    result = run_orchestrator(tmp_path, langs="java", skip_prune=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "stopped after its network stage" in result.stdout
+
+
+def test_a_union_that_puts_execute_beside_another_exercise_s_write_stops_the_merge(tmp_path):
+    write_layer_artefacts(tmp_path / "path_sets", "one", "[read]\n/srv/tool\n\n[execute]\n/srv/tool\n")
+    write_layer_artefacts(tmp_path / "path_sets", "two", "[write]\n/srv/tool/cache\n")
+    result = run_orchestrator(tmp_path, langs="java", skip_prune=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "java: /srv/tool" in result.stdout
+    assert not (tmp_path / "core" / "BaseLanguage-java.cfg").exists()
+
+
+def test_a_union_that_puts_execute_under_another_exercise_s_write_on_an_ancestor_stops_the_merge(tmp_path):
+    write_layer_artefacts(tmp_path / "path_sets", "one", "[write]\n/srv/tool\n")
+    write_layer_artefacts(tmp_path / "path_sets", "two", "[read]\n/srv/tool/bin\n\n[execute]\n/srv/tool/bin\n")
+    result = run_orchestrator(tmp_path, langs="java", skip_prune=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "java: /srv/tool/bin" in result.stdout
+
+
+def test_one_exercise_s_external_rules_reach_the_base_and_not_its_exercise_file(tmp_path):
+    write_layer_artefacts(tmp_path / "path_sets", "one",
+                          "[connect]\nallow api.example.org:443\n\n[limits]\ntimeout=60\n")
+    write_layer_artefacts(tmp_path / "path_sets", "two", "[read]\n/srv/data\n")
+    result = run_orchestrator(tmp_path, langs="java", skip_prune=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "allow api.example.org:443" in (tmp_path / "core" / "BaseLanguage-java.cfg").read_text()
+    assert (tmp_path / "core" / "exercises" / "java_one.cfg").read_text() == "[limits]\ntimeout=60\n"
+
+
+def test_an_execute_one_exercise_already_had_beside_its_own_write_is_merged(tmp_path):
+    own = "[read]\n/srv/app\n\n[execute]\n/srv/app/run.sh\n\n[write]\n/srv/app\n"
+    write_layer_artefacts(tmp_path / "path_sets", "one", own)
+    write_layer_artefacts(tmp_path / "path_sets", "two", "[read]\n/srv/data\n")
+    result = run_orchestrator(tmp_path, langs="java", skip_prune=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_a_cross_language_execute_beside_a_write_leaves_base_phobos_out_and_writes_the_rest(tmp_path):
+    run_orchestrator(tmp_path, langs="python")
+    stale = tmp_path / "core" / "BasePhobos.cfg"
+    assert stale.exists()
+    write_layer_artefacts(tmp_path / "path_sets", "one", "[write]\n/usr/lib/python\n")
+    result = run_orchestrator(tmp_path, langs="java,python", skip_prune=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "BasePhobos.cfg is not written" in result.stdout
+    assert not stale.exists()
+    assert (tmp_path / "core" / "BaseLanguage-java.cfg").exists()
+    assert (tmp_path / "core" / "BaseLanguage-python.cfg").exists()
+
+
+def test_a_policy_render_refuses_at_write_time_stops_everything_and_leaves_earlier_files(tmp_path):
+    exercises = tmp_path / "core" / "exercises"
+    exercises.mkdir(parents=True)
+    (exercises / "java_earlier.cfg").write_text("[limits]\ntimeout=1\n")
+    write_layer_artefacts(tmp_path / "path_sets", "one", "[read]\n/usr\n\n[bind]\nallow 70000\n")
+    result = run_orchestrator(tmp_path, langs="java", skip_prune=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "cannot be written" in result.stdout
+    assert not (tmp_path / "core" / "BaseLanguage-java.cfg").exists()
+    assert (exercises / "java_earlier.cfg").exists()

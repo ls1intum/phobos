@@ -82,6 +82,11 @@ c_udp="$(cfg udp <<EOF2
 allow 127.0.0.1 udp
 EOF2
 )"
+c_slash32="$(cfg slash32 <<EOF2
+[connect]
+allow 127.0.0.1/32
+EOF2
+)"
 c_none="$(cfg none <<EOF2
 [read]
 $PM/ro
@@ -103,6 +108,8 @@ deny_case "and refuses one outside it on the same port" net "$c_range" connect "
 allow_case "the name localhost allows the loopback" "$c_localhost" connect -- "$P" tcp 127.0.0.1 "$PORT_A"
 allow_case "the star host allows any host on its port" "$c_star" connect -- "$P" tcp 127.0.0.2 "$PORT_A"
 deny_case "and still refuses another port" net "$c_star" connect "$DENIED_ERRNOS" -- "$P" tcp 127.0.0.1 "$PORT_B"
+allow_case "a single loopback address written /32 with no port lets every port of it connect" "$c_slash32" connect -- "$P" tcp 127.0.0.1 "$PORT_B"
+deny_case "and not another loopback address, since /32 is one address and not a range" net "$c_slash32" connect "$DENIED_ERRNOS" -- "$P" tcp 127.0.0.2 "$PORT_A"
 run_pm --config "$c_v6" -- "$P" tcp6 ::1 "$PORT_A"
 if op_failed_with connect6 ECONNREFUSED; then ok "an allowed IPv6 destination passes the guard (nothing listens there, so the target refuses, not the sandbox)"; else bad "an allowed IPv6 destination passes the guard" "$(pm_describe)"; fi
 run_pm --config "$c_v6" -- "$P" tcp6 ::1 "$PORT_B"
@@ -378,10 +385,19 @@ accept_client() {
   PM_OUT="$PM/out/accept-client.out"
   run_direct "$P" tcpfrom "$1" 127.0.0.1 "$PUBLIC_PORT" "from-$1"
 }
+# Whether the last accept_client run was closed by the filter without an answer. The filter turns a source its rule
+# does not name away with a reset right after the handshake, and a client sees that in one of two ways, depending on
+# whether it has woken from its blocking connect() before the reset arrives: connect() succeeds and the first read then
+# ends (CLOSED), or connect() itself fails with ECONNRESET. A slow runner produces the second about once in a hundred
+# runs, so both are the filter refusing the connection. What is never accepted: any reply, a refusal because nothing
+# listens (ECONNREFUSED, which would mean the filter was not up), a timeout, or silence.
+accept_closed_without_answer() {
+  ! grep -q '^REPLY' "$PM_OUT" && { { op_ok connect && grep -q '^CLOSED' "$PM_OUT"; } || op_failed_with connect ECONNRESET; }
+}
 c_accept_one="$(accept_cfg acceptone "from 127.0.0.1")"
 accept_start "$c_accept_one"
 accept_client 127.0.0.2
-if op_ok connect && grep -q '^CLOSED' "$PM_OUT"; then ok "a connection from a source the rule does not name is closed by the filter without an answer"; else bad "a source the rule does not name is closed" "$(pm_describe)"; fi
+if accept_closed_without_answer; then ok "a connection from a source the rule does not name is closed by the filter without an answer"; else bad "a source the rule does not name is closed" "$(pm_describe)"; fi
 accept_client 127.0.0.1
 if grep -q '^REPLY pong' "$PM_OUT"; then ok "a connection from the named source reaches the sandboxed server and is answered"; else bad "the named source reaches the server" "$(pm_describe)"; fi
 wait "$ACCEPT_PID"
@@ -394,7 +410,7 @@ wait "$ACCEPT_PID"
 c_accept_nosrc="$(accept_cfg acceptnosrc "from")"
 accept_start "$c_accept_nosrc"
 accept_client 127.0.0.1
-if op_ok connect && grep -q '^CLOSED' "$PM_OUT"; then ok "a rule that names no source admits nobody, not even the loopback"; else bad "a rule with no source admits nobody" "$(pm_describe)"; fi
+if accept_closed_without_answer; then ok "a rule that names no source admits nobody, not even the loopback"; else bad "a rule with no source admits nobody" "$(pm_describe)"; fi
 wait "$ACCEPT_PID"
 if [[ "$(grep -c 'SERVER-GOT' "$ACCEPT_OUT")" == 0 ]]; then ok "and the server never saw a connection"; else bad "the server saw no connection" "$(cat "$ACCEPT_OUT")"; fi
 c_accept_nofrom="$(accept_cfg acceptnofrom "")"

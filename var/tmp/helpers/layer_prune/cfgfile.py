@@ -245,7 +245,9 @@ def remainder(exercise: Policy, base: Policy) -> Policy:
 
     A filesystem entry keeps only the sections whose rights the base does not already grant along
     its ancestors; an entry left with none is dropped. Network rules the base names are dropped, and
-    the limits stay, since the base holds none.
+    the limits stay, since the base holds none. Against a base that is the union of every exercise, as
+    the orchestrator's is, everything but the limits is dropped, since the base holds the exercise's own
+    entries.
     """
     fs: dict[str, frozenset[str]] = {}
     for path, sections in exercise.fs.items():
@@ -290,5 +292,10 @@ def permissive_policy(root: pathlib.Path, declared_hosts: tuple[str, ...] = ()) 
     fs: dict[str, frozenset[str]] = {"/": frozenset({"read", "execute"}), "/dev/null": frozenset({"read", "write"})}
     for path in [*writable_top_level(root), TESTING_DIR]:
         fs[path] = frozenset(WRITE_SECTIONS)
-    return Policy(fs=fs, connect=PERMISSIVE_CONNECT + network.seed_rules(declared_hosts),
-                  bind=PERMISSIVE_BIND, limits={})
+    return with_permissive_network(Policy(fs=fs, connect=(), bind=(), limits={}), declared_hosts)
+
+
+def with_permissive_network(policy: Policy, declared_hosts: tuple[str, ...]) -> Policy:
+    """The policy with the permissive run's network rules: loopback, port 0, and one rule per declared host."""
+    return dataclasses.replace(policy, connect=PERMISSIVE_CONNECT + network.seed_rules(declared_hosts),
+                               bind=PERMISSIVE_BIND)
