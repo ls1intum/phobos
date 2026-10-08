@@ -5,10 +5,10 @@ description: "The discovery phase: how it measures what a program needs, which w
 ---
 
 :::tip[Simple Story]
-Somebody takes one drawer away and asks the work to run again.
+Somebody locks every drawer and lets the work run.
 
-Nothing changed, so the drawer was never needed. The run broke, so it was. Doing that
-repeatedly, from the top of the tree downwards, is the whole algorithm.
+Each time the work reaches for a drawer it cannot open, that is written down, and exactly that
+drawer is unlocked. Then the work runs again with the drawers it did not touch locked once more.
 :::
 
 The discovery phase decides what a policy permits. It runs once per runtime environment,
@@ -16,80 +16,28 @@ offline, and its output is the `BaseLanguage-<lang>.cfg` a protected run applies
 named. Everything about the sandbox therefore rests on whether this phase measured the right
 thing.
 
-Two pruners exist side by side. [The layer pruner](#the-layer-pruner) prunes Java. It runs the
-reference exercise through the grading layers themselves and grants only what a recorded refusal
-proves. Python still uses the Bubblewrap walk that the next sections describe.
-
-## The Bubblewrap algorithm
-
-`var/tmp/pruning/detect_minimal_fs.sh` takes a tree to prune and a script to run. The entry
-point is `run_minimal_fs_all.sh <lang>`, which copies each reference exercise to a scratch
-directory, sets `HOST_WORKDIR`, calls `detect_minimal_fs.sh` on it and turns `final_bindings.txt`
-into per-exercise path sets with `emit_artifacts.py`. Each language's `make_lang_sets.py` then
-writes the union and the intersection. Called on its own, `detect_minimal_fs.sh` needs
-`HOST_WORKDIR` when the script is a path inside the sandbox:
-
-```bash
-HOST_WORKDIR=/srv/exercise detect_minimal_fs.sh --target / --script /var/tmp/build.sh --lang java
-```
-
-It starts by making every child of the target writable and running the script once. A failure
-there ends the run: nothing can be learned from a workload that does not work unrestricted.
-
-Then it descends. For each directory, in order:
-
-| Attempt | The directory becomes | Reading |
-| --- | --- | --- |
-| 1 | an empty writable temporary filesystem (`--tmpfs`) | the run still works, so it was never needed. Stop, and do not descend. |
-| 2 | read-only (`--ro-bind`) | the run works read-only. Keep it so, and descend into it. |
-| 3 | writable (`--bind`) | the run needs to write there. Keep it so, and descend into it. |
-| after 3 | it fails even writable | keep it writable and carry on; the cause lies elsewhere. |
-
-The walk is top-down, so an unused subtree is dropped in one step rather than file by file, and
-a directory that is hidden is never descended into.
-
-Two compaction passes follow, and neither may fail the prune:
-
-- **`demote_writable_parents`** turns a writable directory read-only where nothing beneath it
-  is writable, so a parent does not carry a right only one child needed.
-- **`collapse_readonly_parents`** removes the children of a read-only directory whose known
-  children are all read-only, since the parent's entry already covers them.
-
-## What the sandbox around a prune looks like
-
-The measurement runs under Bubblewrap, which is the one place Phobos still uses it: a protected
-run is enforced by Landlock and needs no namespace at all.
-
-- The root is a temporary filesystem, and `/tmp` is a fresh one with nothing bound over it.
-  Binding the host's `/tmp` there would let the sandbox read whatever any other process on the
-  machine left in it.
-- The environment is cleared and rebuilt. Only `PATH`, `HOME`, `LANG`, `LC_ALL` and `TERM`
-  survive, plus `BUILD_HOME` and `BUILD_OPTS` where given, and anything else a caller names with `--env`, so nothing arrives merely because it
-  was set in the shell that started the prune.
-- `--new-session` detaches the sandbox from the controlling terminal. Without it, and with no
-  seccomp filter, a process inside could push characters back into that terminal with `TIOCSTI`
-  and have them run outside.
-- `--unshare-user` is deliberately absent. What is generated has to be the sandbox the
-  measurement was made in; adding an option the prune never ran under would produce a policy
-  nobody has tested.
-- The invocation is an argument vector rather than a string for `bash -c`, so a directory whose
-  name holds a quote, a dollar or a semicolon is a path rather than a command waiting for its
-  turn.
+Two programs do the measuring, and neither uses Bubblewrap any more. [The layer
+pruner](#the-layer-pruner) prunes every language: it runs the reference exercise through the
+grading layers themselves and grants only what a recorded refusal proves, so pruning and
+grading deny in the same way. [The recording pruner](#the-recording-pruner) records a person
+using the reference program and checks a policy against that session.
 
 ## What counts as a successful run
 
-An exit status is not a result. `build_outcome` reads the status together with the log, against
-three patterns:
+An exit status is not a result. `verdict.py` reads the status together with the log and the
+JUnit reports the tests wrote, and two runs agree only when the same tests ran with the same
+outcomes:
 
-| Pattern | Effect |
-| --- | --- |
-| `IGNORABLE_FAILURE_PATTERNS` | a non-zero status whose log matches counts as success. Failing tests are a result, not a broken run. |
-| `INFRA_FAILURE_PATTERNS` | a zero status whose log matches counts as failure. The toolchain itself broke. |
-| `UNIGNORABLE_SUCCESS_PATTERNS` | a zero status whose log matches counts as failure. Gradle reports `NO-SOURCE` with status zero for a build that compiled nothing. |
+- Gradle reports `NO-SOURCE` with status zero for a build that compiled nothing, and Maven
+  skips its tests with status zero (`No tests to run.`, `Tests are skipped.`). Pytest says
+  `no tests ran` and ends with status 5. All of these count as a run that ran no tests.
+- A line that shows the build's own machinery broke, such as a Python traceback before any test
+  or `ModuleNotFoundError`, counts as an infrastructure failure, whatever the status.
+- Maven's line for a pinned artefact the offline repository lacks aborts the unsandboxed
+  baseline.
 
-All three are environment variables. The defaults of the first and third are shaped for a Gradle
-build and the default of the second for a Python one. Pruning anything else means setting them.
-Getting them wrong is the failure mode this phase is most exposed to: a run that fails for an unrelated reason is written into the allow-list as a dependency.
+Getting this wrong is the failure mode this phase is most exposed to: a run that fails for an
+unrelated reason must never be written into the allow-list as a dependency.
 
 ## Which way it errs
 
@@ -97,94 +45,19 @@ A pruning heuristic that treats an ambiguous outcome as "needed" produces a larg
 which is a weaker sandbox that still looks like it works. Three consequences are worth stating
 in any change here:
 
-- **A prune must not reach the network for anything it did not intend to.** A registry outage
-  arriving as a sandbox regression is exactly this failure. Pin the versions a probe build
-  resolves.
+- **A prune must not reach the network for anything it did not intend to.** A registry
+  outage arriving as a sandbox regression is exactly this failure. Pin the versions a probe
+  build resolves.
 - **Prune with a cold cache.** A build that finds its dependencies, its wrapper distribution or
-  its policy files already cached never touches the paths that fetch or unpack them, so the
-  pruner hides those paths and the first run on a fresh machine fails.
-- **Re-prune a layer when what it rests on changes**, and not otherwise: the base policy when
-  the operating system of the image changes, a language policy when its toolchain changes, an
-  exercise policy when the exercise changes.
-
-## From path sets to a shipped policy
-
-Each prune container works independently on its own language and writes into the shared
-`var/tmp/path_sets` directory; nothing passes between containers except through that directory.
-
-```bash
-docker compose -f docker-compose.yaml up --build
-```
-
-The Java container runs on an image built from the run-phase image `phobos-run-phase-java`, so
-build that first (`docker/run_phase/java/docker-compose.yaml` says how). It writes a complete
-`java_<exercise>.cfg` and its record per exercise. The Python container writes a
-`python_<exercise>.paths` path set and its record.
-
-`docker/prune_phase/orchestrate/orchestrate.py` then merges the per-workload artefacts. It
-holds each artefact to the record written beside it in the same run (a `.cfg` to the SHA-256 its
-record carries) before it merges anything, so a language that failed, one that produced
-nothing, and one whose artefacts disagree with their record each stop the merge rather than
-shrinking it. It stops the merge when an exercise aborted or when a language has artefacts
-of both kinds.
-
-| Output | What it is |
-| --- | --- |
-| `BaseLanguage-<lang>.cfg` | the union of the language's exercises, without limits |
-| `exercises/java_<exercise>.cfg` | for each Java exercise, its limits and whatever the base lacks. The base is the union of every exercise, so in practice only the limits. Passed with `--config`. |
-| `BasePhobos.cfg` | the union across every language, for a runtime that cannot tell which is running |
-| `TailPhobos.cfg` | the tail flags, which today is the working directory alone |
-
-Everything goes under `var/tmp/opt/core/config` of the shared mount. A last container,
-`verify_java`, runs every Java exercise once more under exactly that pair, the base and the
-exercise file, as grading applies them, and writes its records to `path_sets/verify/`.
-
-The Bubblewrap mount and namespace flags of the prune are dropped: they belong to the
-measurement rather than to the policy.
-
-:::warning[Ship exactly one `Base*.cfg` per runtime environment]
-`phobos-policysystem.sh` applies every `Base*.cfg` it finds beside itself. A `BasePhobos.cfg` left
-next to a `BaseLanguage-java.cfg` gives a Java run the paths of every other language too. The
-orchestrator writes every alternative into one directory on purpose, because they are
-alternatives rather than parts of one policy; choosing between them is the packaging step, and
-`docker/run_phase/java/Dockerfile` does the choosing by naming one file.
-:::
-
-## The three files written for reading
-
-They go to `debug/` and are never applied. They exist so that a policy can be judged rather
-than only inspected:
-
-| File | What it names |
-| --- | --- |
-| `BasePhobosIntersect.cfg` | what every language needed |
-| `Base<Lang>Only.cfg` | what no other language needed, which is where a policy grows when one language's prune goes wrong |
-| `Base<Lang>Common.cfg` | what every workload of that language needed with the same right |
-
-A path two workloads needed with different rights is absent from the last of these, because the
-intersection is taken over whole `mode path` lines.
-
-## The asymmetry that catches people
-
-For the Bubblewrap prune, the two phases do not deny in the same way. While pruning, a hidden directory is an empty,
-**writable** temporary filesystem, because Landlock cannot make a path look empty. During a
-protected run, a path the policy does not name is refused with `EACCES`.
-
-A tool that only needs some writable scratch directory therefore passes its prune with that
-directory hidden and is refused at run time. That is the first thing to check when a freshly
-pruned policy fails a run that passed its prune. The layer pruner has no such difference, because
-it measures under the grading layers.
-
-## Review before you trust
-
-Copying the result over the shipped `core/config/` is a deliberate step of its own. The
-allow-list is only as tight as the reference workloads that produced it, and
-`tests/policy-redundancy-probe.sh` reports which entries grant Landlock nothing an ancestor
-already grants, which is worth reading while judging a fresh one.
+  its policy files already cached never touches the paths that fetch or unpack them. The pruner
+  then never learns that they are needed, and the first run on a fresh machine fails.
+- **Re-prune a layer when what it rests on changes**, and not otherwise. Re-prune the base
+  policy when the operating system of the image changes, a language policy when its toolchain
+  changes, and an exercise policy when the exercise changes.
 
 ## The layer pruner
 
-The layer pruner replaces that difference with the grading layers themselves. It runs the
+The layer pruner prunes on the grading layers themselves. It runs the
 reference exercise through the shipped `phobos.sh` and starts from a policy that grants nothing.
 It records every call the layers refuse under `strace`, which needs ptrace and no privilege. It
 then grants exactly what each recorded refusal proves: a file the run read, a directory it
@@ -218,10 +91,10 @@ The code is in `var/tmp/helpers/layer_prune/`:
 - `cfgfile.py` writes the result as a policy the parser accepts.
 
 The image, `docker/prune_phase/layers/Dockerfile`, adds `strace` and `python3` to the run-phase
-image. Its only base, `BasePrune.cfg`, grants nothing, so every grant in a pruned policy has a
+image of the language being pruned (`phobos-run-phase-java` or `phobos-run-phase-python`). Its only base, `BasePrune.cfg`, grants nothing, so every grant in a pruned policy has a
 refusal behind it.
 
-Compose runs the layer pruner for Java. Build the prune image on a run-phase image and prune every
+Compose runs the layer pruner for every language. Build the prune image on a run-phase image and prune every
 exercise under one key by hand, in an ordinary container:
 
 ```bash
@@ -253,6 +126,144 @@ Four rules for an exercise are worth knowing:
   under `/proc`, and never grants it. It never widens `[execute]` to a directory that holds a
   write-class right as well.
 
+### The Maven prune
+
+The Maven reference exercise, `var/tmp/testing-dir/java-maven/maven-reference/`, is Artemis's
+Maven test template with Ares 2, built offline. It is pruned under its own key, `java-maven`, in
+the same image as the Gradle one, by the Compose service `prune_java_maven`. The service
+`verify_java_maven` verifies it.
+
+The image holds the dependencies Maven resolves, pre-loaded and held to
+`docker/run_phase/java/maven-repository.sha256`, and `tests/integration/layer_prune_maven.sh`
+re-hashes every file the manifest lists before it prunes. Maven offline stops at the first
+dependency file it cannot read, so granting that repository file by file would take one prune
+round per file. Inside a fine-grained root such as `/root` a grant is otherwise always file by
+file, apart from names that change from run to run. This one tree is the exception, because the
+image build fixed its files by checksum:
+
+- The exercise's `prune.json` declares it, `"pinned_read_roots": [{"path":
+  "/root/.m2/repository", "manifest": "/srv/phobos-manifest/maven-repository.sha256"}]`, and the
+  declaration is checked strictly: an absolute, normalised path beneath a fine-grained root, a
+  manifest directly in `/srv/phobos-manifest`, and no field that could name a right.
+- The pruner re-hashes every listed file by the rule of `pin-repository.sh` before any run and
+  refuses the exercise on a mismatch.
+- A `[read]` of anything beneath the tree is then granted as that one directory, `[read]` only,
+  never widened to `/root/.m2` or `/root`, with a comment in the policy saying why.
+- Every other grant under `/root` is a single file, writes stay file by file, and no write-class
+  right is granted under `/root/.m2`.
+
+This errs wider than the reference for that tree alone: a graded build can read any file in it.
+The manifest lists what the pre-load added, 59 files; the rest of the tree comes with the
+digest-pinned base image, and the record counts it. The result is
+`BaseLanguage-java-maven.cfg` and `exercises/java-maven_maven-reference.cfg`, a base to review and
+adopt in a pull request of its own that lists every widening.
+
+The build writes scratch files with random names in `/tmp` (Ares, Surefire), which the pruner never
+grants from a refusal. The exercise's `prune.json` therefore names a seed, `"seed": "java.cfg"`,
+a file beside the prune image's Dockerfile (`docker/prune_phase/layers/seeds/java.cfg`) that
+starts the first policy with `[read]`, `[write]`, `[create]` and `[delete]` on `/tmp`. The
+minimisation drops a row the build does not need, and one comment above the path names the seeded
+rows that stayed. Language-specific rows live only in such a file, never in the pruner or in
+`core/`. The Gradle reference exercise names the same seed, but no Gradle prune has run on the
+layers since the move to the Java Development Kit (JDK) 25, so that is unobserved.
+
+Without the Compose setup, the manual workflow `prune-maven.yml` builds both images on amd64 and
+arm64 and runs `tests/integration/layer_prune_maven.sh` in an ordinary container. That prunes,
+merges and verifies the exercise. It shows four wrong reasons aborting: no tests, a version the
+repository lacks, a manifest that does not match, and no seed named. The policy, its record and
+the merged base stay as workflow artefacts.
+
+### The KVM run, a second observer on x86
+
+The container kernels the prune runs on offer Landlock version 8 at most. They never refuse what
+versions 9 and 10 add, in particular a UDP bind to an explicit port, and they give no access to
+Landlock's own audit records. The manual workflow `prune-kvm.yml` therefore takes what the default
+prune wrote. It runs the same layers, in the root file system of the same prune image, on a
+pinned Linux 7.2 kernel in a QEMU guest under KVM, where the pruner owns the kernel. It runs on
+x86 runners only, in three jobs: the default prune in an ordinary container, the audit observer
+in the guest, and the orchestrator over both.
+
+The observer, `main.py --kernel-observer audit`, writes nothing a prune writes. It proves first,
+inside the guest, that the kernel offers Landlock version 10 and that one deliberate refusal
+produces exactly one record it can read. Otherwise it ends as indeterminate (status 3), never as
+a pass. Then, per exercise, it compares each Landlock refusal strace attributed with the kernel's
+record, and verifies the policy on this kernel. A mismatch fails the job and means the mapping from
+call to right is wrong for that call.
+
+The one thing it can add is a `[bind] allow <port> udp` row for a UDP bind the kernel's record
+names as refused. The row goes in `<key>_<exercise>.abi10.cfg`, beside
+`<key>_<exercise>.abi10.json`, which names the SHA-256 of the `.cfg` it verified and of the
+sidecar. The orchestrator refuses a record
+or a sidecar that is not the one it names and writes the rows to `Abi10-<lang>.cfg`, never into
+the base. The enforcer refuses a UDP rule that names a port on a kernel below Landlock version 10,
+so a base that held one would stop every run of the language there. A host known to have version
+10 passes the file with `--config`.
+
+A base generated without such a run is complete up to Landlock version 9 and, on a version 10
+kernel, refuses an explicit UDP bind the exercise needs, so it fails closed. Any other difference
+between the two kernels fails the exercise. All of this is unproven until the workflow has run to
+the end. The fixture's audit records under `tests/python/fixtures/audit/` are written in the
+kernel's documented layout, and the first run replaces them with the raw lines it uploads.
+
+## From exercise policies to a shipped policy
+
+Each prune container works independently on its own language and writes into the shared
+`var/tmp/path_sets` directory; nothing passes between containers except through that directory.
+Every language is pruned by the layer pruner, on an image built from that language's run-phase
+image, so build the run-phase images first (`docker/run_phase/<language>/docker-compose.yaml`
+says how):
+
+```bash
+docker compose -f docker-compose.yaml up --build
+```
+
+Each container writes a complete `<lang>_<exercise>.cfg` and its record per exercise.
+`docker/prune_phase/orchestrate/orchestrate.py` then merges them. It holds each `.cfg` to the
+SHA-256 its record carries before it merges anything. A language that failed, one that
+produced nothing, and one whose `.cfg` its record does not vouch for each stop the merge rather
+than shrinking it. An aborted exercise stops the merge as well.
+
+| Output | What it is |
+| --- | --- |
+| `BaseLanguage-<lang>.cfg` | the union of the language's exercises, without limits |
+| `exercises/<lang>_<exercise>.cfg` | for each exercise, its limits and whatever the base lacks. The base is the union of every exercise, so in practice only the limits. Passed with `--config`. |
+| `BasePhobos.cfg` | the union across every language, for a runtime that cannot tell which is running |
+| `TailPhobos.cfg` | the tail flags, which today is the working directory alone |
+| `Abi10-<lang>.cfg` and `exercises/<lang>_<exercise>.abi10.cfg` | the rows only a kernel with Landlock version 10 can prove, from [the KVM run](#the-kvm-run-a-second-observer-on-x86). Never part of the base. |
+
+Everything goes under `var/tmp/opt/core/config` of the shared mount. A last container per
+language, `verify_java`, `verify_java_maven` and `verify_python`, runs every exercise once more
+under exactly that pair, the base and the exercise file, as grading applies them, and writes its
+records to `path_sets/verify/`.
+
+:::warning[Ship exactly one `Base*.cfg` per runtime environment]
+`phobos-policysystem.sh` applies every `Base*.cfg` it finds beside itself. A `BasePhobos.cfg` left
+next to a `BaseLanguage-java.cfg` gives a Java run the paths of every other language too. The
+orchestrator writes every alternative into one directory on purpose, because they are
+alternatives rather than parts of one policy. Choosing between them is the packaging step, and
+`docker/run_phase/java/Dockerfile` does the choosing by naming one file.
+:::
+
+## The three files written for reading
+
+They go to `debug/` and are never applied. They exist so that a policy can be judged rather
+than only inspected:
+
+| File | What it names |
+| --- | --- |
+| `BasePhobosIntersect.cfg` | what every language needed |
+| `Base<Lang>Only.cfg` | what no other language needed, which is where a policy grows when one language's prune goes wrong |
+| `Base<Lang>Common.cfg` | what every exercise of that language needed: the sections every exercise granted a path, raised as the base is |
+
+## Review before you trust
+
+Copying the result over the shipped `core/config/` is a deliberate step of its own. The
+allow-list is only as tight as the reference exercises that produced it, and
+`tests/policy-redundancy-probe.sh` reports which entries grant Landlock nothing an ancestor
+already grants, which is worth reading while judging a fresh one. A scratch directory that a
+tool merely needs writable passes the prune and is granted at grading time as well. The pruner
+measures under the grading layers, so the two phases do not differ.
+
 ## The recording pruner
 
 The recording pruner lives in `var/tmp/helpers/layer_record/`. It records the reference program of
@@ -280,7 +291,6 @@ The recorder does not turn a recording into a policy yet.
 
 ## Further reading
 
-- [Bubblewrap](technologies/bubblewrap.md): the mechanism the measurement uses
 - [What does Phobos not protect against](/user/phobos/what-does-phobos-not-protect-against):
   what an empirical allow-list can and cannot promise
 - [`CONTRIBUTING.md`](https://github.com/ls1intum/phobos/blob/main/CONTRIBUTING.md): the rules

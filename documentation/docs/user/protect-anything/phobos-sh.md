@@ -37,6 +37,22 @@ docker compose -f docker/run_phase/java/docker-compose.yaml up --build
 Inside that image `PHOBOS_HOME` is `/var/tmp/opt/core`, and `phobos` on `PATH` is a symbolic
 link to the same script.
 
+There is one image per language. The Java image is built on Artemis's default Java image,
+`ls1tum/artemis-maven-template:java25-1` (Java Development Kit (JDK) 25, Maven 3.9.16, Gradle
+9.8.0), pinned by digest. It carries the dependencies of the two reference exercises under
+`var/tmp/testing-dir/`. They are checked against `docker/run_phase/java/*-repository.sha256` when
+the image is built, so a prune and a grading run read the same bytes and a build is offline. A Gradle wrapper before 9.1.0 cannot
+run on JDK 25. A Gradle exercise needs `org.gradle.daemon=false`, a matching `org.gradle.jvmargs`
+and `org.gradle.internal.instrumentation.agent=false` in its `gradle.properties`, and the same
+heap in `gradlew`. Otherwise Gradle forks a daemon, and the timeout's group lock refuses the
+`setsid` the daemon needs.
+
+The Python image is built from `docker/run_phase/python/docker-compose.yaml` in the same way.
+It starts from the official Python image, not from Artemis's `ls1tum/artemis-python-docker`,
+whose release is too old for the C products, so an Artemis Python exercise graded under Phobos
+must select this image. Its shipped `BaseLanguage-python.cfg` still names the paths of the old
+Artemis image, so a Python base has to be pruned for the new image before it grades.
+
 ## Running a command
 
 ```bash

@@ -42,9 +42,11 @@ The key `theFollowingProgrammingLanguageConfigurationIsUsed` names a file,
 | can add `[connect]` rules | loopback rules without a port, and nothing else |
 
 This file is the one place a programming language enters Phobos. The image ships the four
-`JAVA_USING_GRADLE_*` configurations. Phobos refuses a configuration with no file, the
-`JAVA_USING_MAVEN_*` ones among them for now. Every Ares policy of one run must name the same
-configuration.
+`JAVA_USING_GRADLE_*` configurations, which name the Java base, and the four `JAVA_USING_MAVEN_*`
+ones, which name the Maven base `language-configurations/bases/BaseLanguage-java-maven.cfg`. That
+base was pruned from the Maven reference exercise and is never folded by a run without an Ares
+policy. Phobos refuses a configuration with no file. Every Ares policy of one run must name the
+same configuration.
 
 ## What each key becomes
 

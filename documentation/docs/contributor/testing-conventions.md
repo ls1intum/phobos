@@ -24,7 +24,7 @@ non-zero on a failure.
 
 | Family | Where | What it needs | Run by |
 | --- | --- | --- | --- |
-| Integration suites | `tests/integration/*.sh` | a shell, `gcc-14`, Bubblewrap, `haproxy`, `openssl` | the `Shell suites` job of `test.yml`, in continuous integration (CI) |
+| Integration suites | `tests/integration/*.sh` | a shell, `gcc-14`, `haproxy`, `openssl` | the `Shell suites` job of `test.yml`, in continuous integration (CI) |
 | Shell unit suites | `tests/unit/<core component>/*.sh` | a shell | the `Shell suites` job of `test.yml` |
 | Python suites | `tests/python/` | pytest | the `Python helpers` job of `test.yml` |
 | C unit suites | `tests/unit/phobos-landlock-filesystem-and-networksystem/`, `tests/unit/phobos-seccomp-networksystem/`, `tests/unit/phobos-seccomp-filesystem/` | `gcc-14`, no kernel feature | the `unit` job of `build.yml` |
@@ -55,10 +55,8 @@ seccomp user notification.
 ## A skipped check is not a passing one
 
 Where a suite can skip, its row in `tests/README.md` says what makes it skip and what turns
-that skip into a failure. Two examples carry the principle:
+that skip into a failure. The example that carries the principle:
 
-- `prune_sandbox.sh` skips where Bubblewrap cannot create a user namespace.
-  `PHOBOS_REQUIRE_BWRAP=1`, which CI sets, turns that skip into a failure.
 - `timeout_escalation.sh` skips where GNU `timeout` or a compiler is absent. A probe that does
   not compile is a failure rather than a skip, because a probe that fails to build proves
   nothing about the escalation it was meant to measure.
@@ -146,8 +144,7 @@ Two scripts under `tests/` report for themselves and gate no pull request:
 
 - `runner-capability-probe.sh` answers what a machine can do, and is run by
   `runner-capabilities.yml` on request. Each assert mode answers 0 for yes, 1 for no and 3 for
-  cannot tell. `--assert-landlock` and `--assert-bwrap` ask whether Landlock enforces and
-  whether Bubblewrap builds a sandbox. `--assert-kvm` asks whether a guest kernel boots under
+  cannot tell. `--assert-landlock` asks whether Landlock enforces. `--assert-kvm` asks whether a guest kernel boots under
   KVM, and `runner-capabilities.yml` asks it on each hosted runner image. `--assert-ptrace` asks whether a tracer without privileges sees
   a traced Landlock refusal inside an ordinary container, which the layer pruner's observer
   relies on. `runner-capabilities.yml` fails only where a probe cannot tell.
@@ -159,7 +156,6 @@ Two scripts under `tests/` report for themselves and gate no pull request:
 
 | Variable | Read by | Meaning |
 | --- | --- | --- |
-| `PHOBOS_REQUIRE_BWRAP` | `prune_sandbox.sh` | any non-empty value turns a Bubblewrap skip into a failure |
 | `COMPILER` | the unit runners | the compiler to build the C under test with, `gcc-14` by default |
 | `COVERAGE_TOOL` | the unit runners | the gcov matching that compiler, `gcov-14` by default |
 | `PHOBOS_HOME` | the acceptance suites | where Phobos is installed in the image, `/var/tmp/opt/core` by default |

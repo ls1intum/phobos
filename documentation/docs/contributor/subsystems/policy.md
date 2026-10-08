@@ -120,7 +120,7 @@ placeholder only when it is first used, so a source a run never needs cannot ref
 `tests/unit/phobos-tools-policysystem/no_language_in_code.sh` holds the code under `core/` to
 naming no language. A run loads one when it imports an Ares 2 policy, and a run with `.cfg` files
 only never does. A configuration can hold a `[connect]` section that accepts loopback rules
-without a port and nothing else. The shipped Gradle configurations add `allow localhost udp`.
+without a port and nothing else. The shipped Gradle and Maven configurations add `allow localhost udp`.
 
 ## The Ares 2 import
 
