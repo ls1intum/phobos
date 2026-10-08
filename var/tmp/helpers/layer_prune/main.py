@@ -1,7 +1,7 @@
 """The layer pruner's command line: prune every exercise of one language key and write its artefacts (A.9).
 
     python3 main.py [--stage filesystem|network|limits|all] [--testing-root DIR] [--output-dir DIR]
-                    [--resolver ADDRESS] <key>
+                    [--resolver ADDRESS] [--verify MERGED_DIR] <key>
 
 For each exercise under <testing-root>/<key> it writes <key>_<exercise>.cfg, the policy, and
 <key>_<exercise>.json, the record (schema version 2), each to a temporary file renamed into place, and
@@ -11,6 +11,11 @@ orchestrator never looks, with the stage named in the header. An exercise that a
 reason including a defect of the pruner, gets <key>_<exercise>.aborted.json with the reason and no
 .cfg, and the command then ends with status 1 naming each. Earlier artefacts of the key are removed
 first, so no stale file survives a prune.
+
+With --verify it prunes nothing: it runs every exercise of the key under the orchestrator's merged
+BaseLanguage-<key>.cfg and exercises/<key>_<exercise>.cfg in MERGED_DIR, as grading will apply them,
+writes verify/<key>_<exercise>.json beneath the output directory, and ends with status 1 naming each
+exercise that did not match its reference. It touches no artefact of the prune.
 """
 
 from __future__ import annotations
@@ -47,6 +52,8 @@ LANDLOCK_CREATE_RULESET_VERSION = 1
 EXIT_ABORTED = 1
 # Where the artefacts of a run stopped after an earlier stage go, beneath the output directory.
 PARTIAL_DIRECTORY = "partial"
+# Where the verification of the merged base writes its records, beneath the output directory.
+VERIFY_DIRECTORY = "verify"
 
 
 def landlock_version() -> int:
@@ -92,9 +99,13 @@ def write_atomically(path: pathlib.Path, text: str) -> None:
 
 
 def remove_stale(output: pathlib.Path, key: str) -> None:
-    """Removes every earlier artefact of this key, partial ones included, so none survives into a merge."""
-    for directory in (output, output / PARTIAL_DIRECTORY):
-        for pattern in (f"{key}_*.cfg", f"{key}_*.json"):
+    """Removes every earlier artefact of this key, partial ones, verifications and the `.paths` of the retired
+    Bubblewrap pruner included, so none survives a prune.
+
+    Meant for the keys the layer pruner owns: a key still produced as path sets would lose them.
+    """
+    for directory in (output, output / PARTIAL_DIRECTORY, output / VERIFY_DIRECTORY):
+        for pattern in (f"{key}_*.cfg", f"{key}_*.json", f"{key}_*.paths"):
             for path in directory.glob(pattern):
                 path.unlink()
 
@@ -151,6 +162,8 @@ def arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--testing-root", default=DEFAULT_TESTING_ROOT)
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--resolver", default=None, help="the resolver phobos.sh is given for declared hosts")
+    parser.add_argument("--verify", default=None, metavar="MERGED_DIR",
+                        help="verify the orchestrator's merged configuration in MERGED_DIR instead of pruning")
     parser.add_argument("key")
     return parser.parse_args(argv)
 
@@ -162,9 +175,47 @@ def overlaps(path: pathlib.Path, other: pathlib.Path) -> bool:
     return first == second or first.is_relative_to(second) or second.is_relative_to(first)
 
 
+def verify_one(directory: pathlib.Path, key: str, environment: runner.Environment, merged: pathlib.Path,
+               output: pathlib.Path, pristine: generalise.Snapshot, origin: dict[str, str | int]) -> str | None:
+    """Verifies one exercise under the merged configuration and writes its record; the reason it failed, or None.
+
+    Both files must be there: the orchestrator writes one per exercise it merged, so an exercise
+    without one was not merged, and grading would never apply the base to it alone. The broad except
+    writes any failure, a defect of the pruner included, as the exercise's result.
+    """
+    configs = (merged / f"BaseLanguage-{key}.cfg", merged / "exercises" / f"{key}_{directory.name}.cfg")
+    entry: dict = {"schema_version": SCHEMA_VERSION, "key": key, "exercise": directory.name,
+                   "configs": [str(config) for config in configs], "provenance": origin}
+    if all(config.is_file() for config in configs):
+        entry["configs_sha256"] = [hashlib.sha256(config.read_bytes()).hexdigest() for config in configs]
+    reason = None
+    try:
+        missing = [str(config) for config in configs if not config.is_file()]
+        if missing:
+            raise search.PruneAbort(f"the merged configuration lacks {', '.join(missing)}: was it merged before "
+                                    "this exercise was pruned?")
+        entry["log"] = stages.jsonable(stages.verify_merged(runner.read_exercise(directory), configs, environment,
+                                                            pristine))
+    except Exception as failure:  # noqa: BLE001
+        aborted = abort_record(failure)
+        entry |= aborted
+        reason = aborted["aborted"]
+    entry["verified"] = reason is None
+    (output / VERIFY_DIRECTORY).mkdir(parents=True, exist_ok=True)
+    write_atomically(output / VERIFY_DIRECTORY / f"{key}_{directory.name}.json", json.dumps(entry, indent=2, sort_keys=True) + "\n")
+    return reason
+
+
 def main(argv: list[str]) -> int:
-    """Prunes every exercise of the key; 0 when all succeeded, EXIT_ABORTED naming each that aborted."""
+    """Prunes, or with --verify verifies, every exercise of the key; 0 when all succeeded, EXIT_ABORTED otherwise."""
     options = arguments(argv)
+    if options.verify is not None and options.stage != "all":
+        print("--verify checks the merged configuration of a whole prune; it takes no --stage", file=sys.stderr)
+        return EXIT_ABORTED
+    if os.environ.get(stages.PRUNE_CONTAINER_VARIABLE) != "1":
+        print(f"the pruner removes what its runs leave behind, so it runs only in the prune container, which sets "
+              f"{stages.PRUNE_CONTAINER_VARIABLE}=1", file=sys.stderr)
+        return EXIT_ABORTED
     environment = runner.Environment(resolver=options.resolver, kept=(options.output_dir,))
     root = pathlib.Path(options.testing_root) / options.key
     for name, given in (("testing root", options.testing_root), ("output directory", options.output_dir)):
@@ -177,14 +228,24 @@ def main(argv: list[str]) -> int:
         return EXIT_ABORTED
     output = pathlib.Path(options.output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    remove_stale(output, options.key)
+    if options.verify is None:
+        remove_stale(output, options.key)
+    else:
+        for stale in (output / VERIFY_DIRECTORY).glob(f"{options.key}_*.json"):
+            stale.unlink()
     exercises = sorted(path for path in root.iterdir() if path.is_dir() and not path.name.startswith("."))
     origin = provenance(environment)
     pristine = stages.pristine_index(environment)
     aborted = {}
     for directory in exercises:
-        reason = prune_one(directory, options.key, options.stage, environment, output, origin, pristine)
-        print(f"{options.key}/{directory.name}: {'pruned' if reason is None else 'aborted: ' + reason}", flush=True)
+        if options.verify is None:
+            reason = prune_one(directory, options.key, options.stage, environment, output, origin, pristine)
+            done = "pruned"
+        else:
+            reason = verify_one(directory, options.key, environment, pathlib.Path(options.verify), output, pristine,
+                                origin)
+            done = "verified"
+        print(f"{options.key}/{directory.name}: {done if reason is None else 'aborted: ' + reason}", flush=True)
         if reason is not None:
             aborted[directory.name] = reason
     if not exercises:

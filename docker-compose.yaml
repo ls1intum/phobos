@@ -1,3 +1,20 @@
+# What every service of the layer pruner shares. The network is set per service: none for the prune
+# and its verification, and the project's own network for the opt-in egress service only.
+x-prune-layers: &prune_layers
+  build:
+    context: .
+    dockerfile: docker/prune_phase/layers/Dockerfile
+    args:
+      RUN_PHASE_IMAGE: ${RUN_PHASE_IMAGE:-phobos-run-phase-java}
+  image: phobos-prune-layers
+  entrypoint: ["python3", "/var/tmp/helpers/layer_prune/main.py"]
+  mem_limit: 3g
+  pids_limit: 1024
+  volumes:
+    - ./var/tmp/testing-dir:/srv/phobos-prune-exercises:ro
+    - ./var/tmp/helpers:/var/tmp/helpers:ro
+    - ./var/tmp/path_sets:/var/tmp/path_sets
+
 services:
   prune_python:
     build: docker/prune_phase/python
@@ -7,13 +24,15 @@ services:
         target: /var/tmp
     command: ["--verbose", "--cache-dir", "/home/sandboxuser/.cache/pip", "python"]
 
+  # Java is pruned on the grading layers themselves (docker/prune_phase/layers, README "The layer
+  # pruner"). The image is built on the run-phase image docker/run_phase/java/docker-compose.yaml
+  # builds. The exercises are mounted read-only and only the artefacts' directory is writable, since
+  # every run replaces /var/tmp/testing-dir with a fresh copy of the exercise (A.6.1). No network, no
+  # privilege and no capability: strace traces only the pruner's own children.
   prune_java:
-    build: docker/prune_phase/java
-    volumes:
-      - type: bind
-        source: ./var/tmp
-        target: /var/tmp
-    command: ["--verbose", "--cache-dir", "/home/sandboxuser/.gradle", "java" ]
+    <<: *prune_layers
+    network_mode: none
+    command: ["--stage", "all", "java"]
 
   # The recording pruner: records the instructor's reference program while a person uses it, with
   # no sandbox at all, and replays it under the layers with `check`. Started only on purpose, as
@@ -46,6 +65,18 @@ services:
     <<: *record
     network_mode: bridge
 
+  # Opt-in, for the Java exercises under var/tmp/testing-dir/java-egress whose prune.json declares
+  # hosts (A.6.5): unlike the other layer-pruner services it has a network, and it keeps or drops
+  # declared rules but never adds one. The project's own network gives the container Docker's
+  # resolver at 127.0.0.11, which the egress broker resolves the declared names through. Its
+  # artefacts go to path_sets/egress, which the orchestrator does not merge; adopting a declared rule
+  # is a reviewed step of its own. Run it with
+  #   docker compose --profile egress run --rm prune_java_egress
+  prune_java_egress:
+    <<: *prune_layers
+    profiles: ["egress"]
+    command: ["--resolver", "127.0.0.11", "--output-dir", "/var/tmp/path_sets/egress", "java-egress"]
+
   orchestrate:
     build: docker/prune_phase/orchestrate
     volumes:
@@ -62,3 +93,19 @@ services:
         "--langs", "python,java",
         "--path-dir", "/var/tmp/path_sets", "--skip-prune"
       ]
+
+  # Runs every Java exercise once more under what grading will apply: the merged
+  # BaseLanguage-java.cfg and the exercise's own file under exercises/, as the orchestrator wrote them.
+  # Its records go to path_sets/verify/; it changes no artefact of the prune.
+  verify_java:
+    <<: *prune_layers
+    network_mode: none
+    volumes:
+      - ./var/tmp/testing-dir:/srv/phobos-prune-exercises:ro
+      - ./var/tmp/helpers:/var/tmp/helpers:ro
+      - ./var/tmp/path_sets:/var/tmp/path_sets
+      - ./var/tmp/opt/core/config:/srv/phobos-merged:ro
+    depends_on:
+      orchestrate:
+        condition: service_completed_successfully
+    command: ["--verify", "/srv/phobos-merged", "java"]

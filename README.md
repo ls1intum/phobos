@@ -58,7 +58,7 @@ core/                      the sandbox itself
     phobos-network-args.sh [connect] and [bind] to the TCP and UDP port rules Landlock enforces
   config/                  BaseLanguage-<lang>.cfg and TailPhobos.cfg, the shipped policy
     language-configurations/  one file per Ares 2 programming language configuration: its bases, placeholders and [connect] rows
-docker/prune_phase/        one image per language, plus the orchestrator
+docker/prune_phase/        one image per language, the layer pruner's, and the orchestrator
   layers/                  the layer pruner's image: the run-phase image, python3, strace, the probe, an empty base
 docker/run_phase/          the image an exercise actually runs in
 tests/                     the acceptance and probe suites; tests/README.md maps each one to its CI step
@@ -107,23 +107,23 @@ A layer switched off is left out of the chain rather than entered and skipped. T
 
 ## Running the pruning phase
 
-The pruning environments are built and run with Compose, one container per language, each writing its result into a shared `var/tmp` mount:
+The pruning environments are built and run with Compose, one container per language, each writing its result into the shared `var/tmp/path_sets` directory. Java is pruned by the layer pruner below, on an image built from the run-phase image `phobos-run-phase-java`, so build that first (`docker/run_phase/java/docker-compose.yaml` says how); Python is still pruned with Bubblewrap:
 
 ```
 docker compose -f docker-compose.yaml up --build
 ```
 
-Each prune container runs the reference exercise for its language under the discovery algorithm and drops a `<lang>` path set into the shared `path_sets` directory. The orchestrator (`docker/prune_phase/orchestrate/orchestrate.py`) then merges the per-exercise results into `BaseLanguage-<lang>.cfg`, the cross-language `BasePhobos.cfg` and `TailPhobos.cfg` under `var/tmp/opt/core/config` of the shared mount. Copying them over the shipped `core/config/` is a deliberate step of its own: review the result before trusting it, since the allow-list is only as tight as the reference exercises that produced it. Ship exactly one `Base*.cfg` per runtime environment, for the reason above.
+The Java container writes a complete `java_<exercise>.cfg` and its record per exercise, the Python container a `python_<exercise>.paths` path set and its record. The orchestrator (`docker/prune_phase/orchestrate/orchestrate.py`) holds each artefact to its record (a `.cfg` to the SHA-256 its record carries), refuses the merge when an exercise was aborted or a language has artefacts of both kinds, and then writes `BaseLanguage-<lang>.cfg` (the union of the language's exercises, without limits), the cross-language `BasePhobos.cfg`, `TailPhobos.cfg`, and for each Java exercise `exercises/java_<exercise>.cfg`, its limits and whatever the base lacks (the base is the union of every exercise, so in practice only the limits), to be passed with `--config`, all under `var/tmp/opt/core/config` of the shared mount. A last container, `verify_java`, runs every Java exercise once more under exactly that pair and writes its records to `path_sets/verify/`. Copying them over the shipped `core/config/` is a deliberate step of its own: review the result before trusting it, since the allow-list is only as tight as the reference exercises that produced it. Ship exactly one `Base*.cfg` per runtime environment, for the reason above.
 
-Three more files are written into `var/tmp/opt/core/config/debug/` and are never applied. They exist to be read while judging a policy: `BasePhobosIntersect.cfg` names what every language needed, `Base<Lang>Only.cfg` what no other language needed, which is where a policy grows when one language's prune goes wrong, and `Base<Lang>Common.cfg` what every exercise of that language needed with the same right.
+Three more files are written into `var/tmp/opt/core/config/debug/` and are never applied. They exist to be read while judging a policy: `BasePhobosIntersect.cfg` names what every language needed, `Base<Lang>Only.cfg` what no other language needed, which is where a policy grows when one language's prune goes wrong, and `Base<Lang>Common.cfg` what every exercise of that language needed: for Java, the sections every exercise granted a path, raised as the base is; for Python, the paths every exercise needed with the same right.
 
-Pruning and grading do not deny in the same way. While pruning, a hidden directory is an empty, writable tmpfs, because Landlock cannot make a path look empty; while grading, a path the policy does not name is refused with `EACCES`. A tool that only needs some writable scratch directory can therefore pass its prune with that directory hidden and still be refused when graded, which is worth checking first when a freshly pruned policy fails a run that passed its prune.
+For the Bubblewrap prune, pruning and grading do not deny in the same way. While pruning, a hidden directory is an empty, writable tmpfs, because Landlock cannot make a path look empty; while grading, a path the policy does not name is refused with `EACCES`. A tool that only needs some writable scratch directory can therefore pass its prune with that directory hidden and still be refused when graded, which is worth checking first when a freshly pruned policy fails a run that passed its prune.
 
 ### The layer pruner
 
 The layer pruner replaces that difference with the grading layers themselves. It runs the reference exercise through the shipped `phobos.sh`, starting from a policy that grants nothing, records under `strace` (ptrace, no privilege) every call the layers refuse, and grants exactly what each recorded refusal proves: a file it read, a directory it created in, a loopback server it talked to. It then removes every grant two runs show was not needed, measures the limits with margins, verifies the result with every layer on, and proves the forbidden direction with canary files, an unnamed host and port, and a probe that exceeds each limit it can reach (the record lists any limit it could not, and why). Each filesystem and limit check is first made without Phobos, so that only the sandbox's refusal counts. A run that fails without a refusal it can attribute is never turned into a grant; the exercise is aborted instead. Before every layered run the pruner removes whatever earlier runs added outside the working directory, so that each run starts as a fresh grading container would; it therefore runs only in the prune image, which sets `PHOBOS_PRUNE_CONTAINER=1`.
 
-Build the prune image on a run-phase image and prune every exercise under one key, in an ordinary container:
+Compose runs it for Java as above. To build the prune image on a run-phase image and prune every exercise under one key by hand, in an ordinary container:
 
 ```
 docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers .
@@ -133,7 +133,7 @@ docker run --rm --network none \
   python3 /var/tmp/helpers/layer_prune/main.py <key>
 ```
 
-Each exercise gets `<key>_<exercise>.cfg`, a complete Phobos configuration, and `<key>_<exercise>.json`, the record of every run, every denial with the grant it produced or the reason it produced none, every widening and every containment check. An exercise that aborts gets `<key>_<exercise>.aborted.json` and no configuration. The policy is still only as good as the reference: a code path the reference never took is refused when graded. Exercises that build with Gradle must build without a daemon, since the timeout's group lock refuses the `setsid` a daemon needs, and the memory limit is derived only for an exercise whose `prune.json` declares `"heap_pinned": true`.
+Each exercise gets `<key>_<exercise>.cfg`, a complete Phobos configuration, and `<key>_<exercise>.json`, the record of every run, every denial with the grant it produced or the reason it produced none, every widening and every containment check. An exercise that aborts gets `<key>_<exercise>.aborted.json` and no configuration. The policy is still only as good as the reference: a code path the reference never took is refused when graded. Exercises that build with Gradle must build without a daemon, since the timeout's group lock refuses the `setsid` a daemon needs, and the memory limit is derived only for an exercise whose `prune.json` declares `"heap_pinned": true`. An exercise that needs an external host declares it in `prune.json` (`"declared_hosts": ["api.example.org:443"]`) and is pruned under the key `java-egress` by the opt-in Compose service `prune_java_egress`, the only layer-pruner service with a network (the recorder's networked service aside): it keeps a declared rule only when the build needs it, drops the others, and aborts on any host nobody declared.
 
 ## Running an exercise under Phobos
 

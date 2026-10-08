@@ -36,6 +36,7 @@ def pruned(monkeypatch):
             raise search.PruneAbort("flaky reference", {"record": [{"stage": "baseline"}]})
         return cfgfile.Policy(fs={"/usr": frozenset({"read"})}, connect=(), bind=(), limits={"cpu": 30}), [{"stage": stage}]
     monkeypatch.setattr(stages, "prune_exercise", fake)
+    monkeypatch.setenv(stages.PRUNE_CONTAINER_VARIABLE, "1")
     monkeypatch.setattr(stages, "pristine_index", lambda environment: generalise.Snapshot(
         existing=frozenset(), directories=frozenset(), scanned=()))
     monkeypatch.setattr(main, "provenance", lambda environment: ORIGIN)
@@ -62,6 +63,18 @@ def test_earlier_artefacts_of_the_key_are_removed_and_other_keys_kept(tmp_path, 
     (output / "python_kept.cfg").write_text("[read]\n/x\n")
     main.main(["--testing-root", str(root), "--output-dir", str(output), "java"])
     assert sorted(path.name for path in output.iterdir()) == ["java_alpha.cfg", "java_alpha.json", "python_kept.cfg"]
+
+
+def test_the_path_sets_of_the_retired_pruner_are_removed_for_the_key_only(tmp_path, pruned):
+    root = exercise_tree(tmp_path / "exercises", "alpha")
+    output = tmp_path / "out"
+    output.mkdir()
+    for name in ("java_old.paths", "java_union.paths", "java_intersection.paths", "python_old.paths",
+                 "java-egress_old.paths"):
+        (output / name).write_text("/x\n")
+    main.main(["--testing-root", str(root), "--output-dir", str(output), "java"])
+    assert sorted(path.name for path in output.iterdir()) == ["java-egress_old.paths", "java_alpha.cfg",
+                                                              "java_alpha.json", "python_old.paths"]
 
 
 def test_an_aborted_exercise_writes_no_cfg_and_the_command_names_it(tmp_path, pruned, capsys):
@@ -140,3 +153,79 @@ def test_an_output_directory_that_overlaps_the_working_directory_is_refused(tmp_
     working = runner.Environment().testing_dir
     assert main.main(["--testing-root", str(root), "--output-dir", working + "/out", "java"]) == main.EXIT_ABORTED
     assert "output directory" in capsys.readouterr().err
+
+
+def test_outside_the_prune_container_main_refuses_before_it_touches_an_artefact(tmp_path, pruned, monkeypatch, capsys):
+    monkeypatch.delenv(stages.PRUNE_CONTAINER_VARIABLE)
+    root = exercise_tree(tmp_path / "exercises", "alpha")
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / "java_alpha.cfg").write_text("[read]\n/usr\n")
+    assert main.main(["--testing-root", str(root), "--output-dir", str(output), "java"]) == main.EXIT_ABORTED
+    assert (output / "java_alpha.cfg").exists()
+    assert "only in the prune container" in capsys.readouterr().err
+
+
+def test_verify_runs_each_exercise_under_the_merged_pair_and_leaves_the_prune_artefacts(tmp_path, pruned, monkeypatch):
+    seen = []
+
+    def fake(exercise, configs, environment, pristine):
+        seen.append((exercise.name, [config.name for config in configs]))
+        if exercise.name == "beta":
+            raise search.PruneAbort("a run under the merged base and its exercise file did not match the reference")
+        return [{"stage": "merged verification"}]
+    monkeypatch.setattr(stages, "verify_merged", fake)
+    root = exercise_tree(tmp_path / "exercises", "alpha", "beta")
+    merged = tmp_path / "merged"
+    (merged / "exercises").mkdir(parents=True)
+    (merged / "BaseLanguage-java.cfg").write_text("[read]\n/usr\n")
+    (merged / "exercises" / "java_alpha.cfg").write_text("[limits]\ntimeout=60\n")
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / "java_alpha.cfg").write_text("kept")
+    status = main.main(["--verify", str(merged), "--testing-root", str(root), "--output-dir", str(output), "java"])
+    assert status == main.EXIT_ABORTED
+    assert seen == [("alpha", ["BaseLanguage-java.cfg", "java_alpha.cfg"])]
+    assert (output / "java_alpha.cfg").read_text() == "kept"
+    alpha = json.loads((output / "verify" / "java_alpha.json").read_text())
+    beta = json.loads((output / "verify" / "java_beta.json").read_text())
+    assert alpha["verified"] is True
+    assert alpha["provenance"] == ORIGIN
+    assert alpha["configs_sha256"] == [hashlib.sha256(b"[read]\n/usr\n").hexdigest(),
+                                       hashlib.sha256(b"[limits]\ntimeout=60\n").hexdigest()]
+    assert "configs_sha256" not in beta
+    assert beta["verified"] is False
+    assert "java_beta.cfg" in beta["aborted"]
+
+
+def test_verify_without_a_merged_base_fails_every_exercise(tmp_path, pruned, monkeypatch):
+    monkeypatch.setattr(stages, "verify_merged", lambda *arguments: pytest.fail("nothing to verify against"))
+    root = exercise_tree(tmp_path / "exercises", "alpha")
+    output = tmp_path / "out"
+    status = main.main(["--verify", str(tmp_path / "empty"), "--testing-root", str(root), "--output-dir", str(output),
+                        "java"])
+    assert status == main.EXIT_ABORTED
+    assert "lacks" in json.loads((output / "verify" / "java_alpha.json").read_text())["aborted"]
+
+
+def test_a_prune_clears_earlier_verifications_and_a_verification_its_own_key_s_earlier_ones(tmp_path, pruned,
+                                                                                            monkeypatch):
+    root = exercise_tree(tmp_path / "exercises", "alpha")
+    output = tmp_path / "out"
+    (output / "verify").mkdir(parents=True)
+    (output / "verify" / "java_gone.json").write_text('{"verified": true}')
+    (output / "verify" / "python_kept.json").write_text("{}")
+    main.main(["--testing-root", str(root), "--output-dir", str(output), "java"])
+    assert not (output / "verify" / "java_gone.json").exists()
+    (output / "verify" / "java_gone.json").write_text('{"verified": true}')
+    monkeypatch.setattr(stages, "verify_merged", lambda *arguments: [])
+    main.main(["--verify", str(tmp_path / "merged"), "--testing-root", str(root), "--output-dir", str(output), "java"])
+    assert not (output / "verify" / "java_gone.json").exists()
+    assert (output / "verify" / "python_kept.json").exists()
+
+
+def test_verify_takes_no_stage(tmp_path, pruned, capsys):
+    root = exercise_tree(tmp_path / "exercises", "alpha")
+    assert main.main(["--verify", str(tmp_path), "--stage", "network", "--testing-root", str(root), "--output-dir",
+                      str(tmp_path / "out"), "java"]) == main.EXIT_ABORTED
+    assert "no --stage" in capsys.readouterr().err

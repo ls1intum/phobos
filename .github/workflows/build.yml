@@ -423,6 +423,16 @@ jobs:
           docker run --rm --network none --memory 3g --pids-limit 1024 \
             -v "${PWD}:/repo:ro" phobos-prune-layers:ci bash /repo/tests/integration/layer_prune.sh
 
+      # Declared hosts: of two the fixture declares, the one it needs keeps its rule and the other is
+      # dropped. A stand-in resolver and a TLS server on loopback stand in for the external host, so
+      # this needs no network either.
+      - name: The layer pruner keeps exactly the declared hosts a build needs
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        timeout-minutes: 30
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}:/repo:ro" phobos-prune-layers:ci bash /repo/tests/integration/layer_prune_egress.sh
+
   # Mutation testing installs clang and mull into a container and then runs the suite
   # once per mutant. It runs on every change like the other jobs, and a run that does
   # not reach a score fails it, so a toolchain that stops compiling the sources is

@@ -270,18 +270,29 @@ def write_candidate(text: str, cfg: pathlib.Path, log_path: pathlib.Path) -> Non
         candidate.write(text)
 
 
-def gate(text: str, cfg: pathlib.Path, environment: Environment, log_path: pathlib.Path) -> None:
-    """Writes the candidate and has phobos-policysystem.sh build a specification from it; raises PrunerDefect if it refuses."""
-    write_candidate(text, cfg, log_path)
+def config_arguments(configs: tuple[pathlib.Path, ...]) -> list[str]:
+    """One --config per configuration file, in the order given, as phobos.sh and phobos-policysystem.sh take them."""
+    return [argument for config in configs for argument in ("--config", str(config))]
+
+
+def gate_configs(configs: tuple[pathlib.Path, ...], environment: Environment, log_path: pathlib.Path) -> None:
+    """Has phobos-policysystem.sh build a specification from the configuration files; PrunerDefect if it refuses."""
     spec = tempfile.mkdtemp(prefix="layer-prune-gate.", dir=environment.spec_parent)
     try:
-        argv = [os.path.join(environment.phobos_home, "phobos-policysystem.sh"), "--spec-dir", spec, "--config", str(cfg)]
+        argv = [os.path.join(environment.phobos_home, "phobos-policysystem.sh"), "--spec-dir", spec,
+                *config_arguments(configs)]
         checked = subprocess.run(argv, capture_output=True, text=True, check=False)  # nosec B603
     finally:
         shutil.rmtree(spec, ignore_errors=True)
     if checked.returncode != 0:
         log_path.write_text(checked.stdout + checked.stderr)
         raise PrunerDefect(checked.returncode, log_path, "phobos-policysystem.sh refused the candidate")
+
+
+def gate(text: str, cfg: pathlib.Path, environment: Environment, log_path: pathlib.Path) -> None:
+    """Writes the candidate and has phobos-policysystem.sh build a specification from it; raises PrunerDefect if it refuses."""
+    write_candidate(text, cfg, log_path)
+    gate_configs((cfg,), environment, log_path)
 
 
 def render_candidate(policy: cfgfile.Policy, shape: RunShape, log_path: pathlib.Path) -> str:
@@ -294,10 +305,10 @@ def render_candidate(policy: cfgfile.Policy, shape: RunShape, log_path: pathlib.
         raise PrunerDefect(-1, log_path, f"render refused the candidate: {refusal}") from refusal
 
 
-def phobos_argv(cfg: pathlib.Path, shape: RunShape, exercise: Exercise, environment: Environment,
+def phobos_argv(configs: tuple[pathlib.Path, ...], shape: RunShape, exercise: Exercise, environment: Environment,
                 sentinel: str, trace_path: pathlib.Path) -> list[str]:
     """The argument vector of one layered run, strace outermost when the run is observed."""
-    argv = [os.path.join(environment.phobos_home, "phobos.sh"), "--config", str(cfg)]
+    argv = [os.path.join(environment.phobos_home, "phobos.sh"), *config_arguments(configs)]
     if not shape.network:
         argv.append("-nnr")
     if environment.resolver:
@@ -317,18 +328,27 @@ def run_layers(exercise: Exercise, policy: cfgfile.Policy, shape: RunShape,
     reporter's PHB-ESTATUS, which Phobos prints after the command ended.
     """
     files = log_paths(environment, "layers")
-    log_path = files[0]
-    trace_path = files[1]
-    text = render_candidate(policy, shape, log_path)
-    cfg = pathlib.Path(environment.candidate_dir) / f"{log_path.stem}.cfg"
+    text = render_candidate(policy, shape, files[0])
+    cfg = pathlib.Path(environment.candidate_dir) / f"{files[0].stem}.cfg"
     try:
-        gate(text, cfg, environment, log_path)
-        workdir = restore(exercise, environment)
-        sentinel = f"phobos-layer-prune: the command starts {uuid.uuid4().hex}"
-        argv = phobos_argv(cfg, shape, exercise, environment, sentinel, trace_path)
-        executed = execute(argv, workdir, log_path, environment, shape.sample)
+        gate(text, cfg, environment, files[0])
+        return run_configured(exercise, (cfg,), shape, environment, files)
     finally:
         cfg.unlink(missing_ok=True)
+
+
+def run_configured(exercise: Exercise, configs: tuple[pathlib.Path, ...], shape: RunShape, environment: Environment,
+                   files: tuple[pathlib.Path, pathlib.Path]) -> RunResult:
+    """One run through phobos.sh under configuration files already gated, logged and traced to `files`.
+
+    Raises PrunerDefect as run_layers states.
+    """
+    log_path = files[0]
+    trace_path = files[1]
+    workdir = restore(exercise, environment)
+    sentinel = f"phobos-layer-prune: the command starts {uuid.uuid4().hex}"
+    argv = phobos_argv(configs, shape, exercise, environment, sentinel, trace_path)
+    executed = execute(argv, workdir, log_path, environment, shape.sample)
     status = executed.status
     log_text = log_path.read_text(errors="replace")
     marker = verdict.phobos_stopped(status, log_text.split(sentinel, 1)[0])
