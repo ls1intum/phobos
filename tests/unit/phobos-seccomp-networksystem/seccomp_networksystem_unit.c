@@ -47,6 +47,9 @@
 #ifndef PHOBOS_CONNECT_GUARD_UNIT_TEST
 #define PHOBOS_CONNECT_GUARD_UNIT_TEST
 #endif
+#ifndef PHOBOS_REPORTER_UNIT_TEST
+#define PHOBOS_REPORTER_UNIT_TEST
+#endif
 #define main sut_main
 #include "../../../core/phobos-seccomp-networksystem/phobos-seccomp-networksystem.c"
 #undef main
