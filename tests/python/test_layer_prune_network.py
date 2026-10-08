@@ -176,3 +176,9 @@ def test_the_ephemeral_port_of_a_client_socket_is_not_a_server():
          'inet_pton(AF_INET6, "::", &sin6_addr), sin6_scope_id=0}, [28]) = 0'),
     ]
     assert network.bound_ports(strace_parse.parse_trace(lines)) == frozenset({("AF_INET6", 43000, "tcp")})
+
+
+def test_both_loopback_families_are_localhost_and_udp_keeps_its_marker():
+    assert network.loopback_wildcard(frozenset({"inet", "inet6"}), "tcp") == "allow localhost"
+    assert network.loopback_wildcard(frozenset({"inet"}), "udp") == "allow 127.0.0.1:* udp"
+    assert network.loopback_wildcard(frozenset({"inet6"}), "tcp") == "allow [::1]"

@@ -410,12 +410,24 @@ jobs:
             phobos-prune-layers:ci bash /tests/integration/layer_prune_observer.sh
 
       # The recording pruner, in the prune image just built: its refusals (record_safety.sh), a real
-      # terminal with Ctrl+C, Ctrl+Z and fg (record_interactive.sh), and its replay check in both
-      # directions, each phase in a new container (record_replay.sh); from outside, the run-phase
-      # image holds no strace and refuses the recorder. Every container is ordinary.
+      # terminal with Ctrl+C, Ctrl+Z and fg (record_interactive.sh), its replay check in both
+      # directions, each phase in a new container (record_replay.sh), and the policy it generates from
+      # recorded sessions, merged, replayed, held to the forbidden direction and given derived limits
+      # (record_generate.sh); from outside, the run-phase image holds no strace and refuses the
+      # recorder. Every container is ordinary.
       - name: The recording pruner records with the terminal passed through and replays under the layers
         if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        timeout-minutes: 40
         run: bash tests/integration/record_host.sh phobos-prune-layers:ci phobos-run-phase:ci
+
+      # The recording pruner on a host name: a stand-in server on a Docker network with no route out
+      # serves TLS and DNS for api.phobos.test; the recorded session's policy names the host from the
+      # ClientHello, and the replay under the egress broker passes while the neighbouring port stays
+      # refused. Every container is ordinary; the network has no route out.
+      - name: The recording pruner writes a host name rule and replays it through the egress broker
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        timeout-minutes: 15
+        run: bash tests/integration/record_networked.sh phobos-prune-layers:ci
 
       # The whole pipeline on the fixture exercise: the derived policy passes the build with every
       # layer on, refuses what the build did not need, bounds each limit, and every wrong-reason

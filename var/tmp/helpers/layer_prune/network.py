@@ -77,6 +77,17 @@ def address_wildcard(address: str, transport: str) -> str:
     return f"allow {address}:*" + transport_marker(transport)
 
 
+def loopback_wildcard(families: frozenset[str], transport: str) -> str:
+    """The rule that opens every loopback port of the given families: localhost for both, else one address.
+
+    `families` is a non-empty subset of {"inet", "inet6"}; both give `allow localhost`, inet alone
+    `allow 127.0.0.1:*` and inet6 alone `allow [::1]`, each with ` udp` for a datagram transport.
+    """
+    if families == frozenset({"inet", "inet6"}):
+        return "allow localhost" + transport_marker(transport)
+    return address_wildcard("::1" if families == frozenset({"inet6"}) else "127.0.0.1", transport)
+
+
 def exact_loopback(address: str, port: int, transport: str | None) -> str:
     """The rule naming one loopback destination exactly, an IPv6 address in brackets."""
     host = f"[{address}]" if ":" in address else address
@@ -169,7 +180,7 @@ def connect_rules(collected: Collected) -> set[str]:
     for transport in sorted({kind for _, kind in collected.wildcards}):
         addresses = {address for address, kind in collected.wildcards if kind == transport}
         if {loopback_kind(address) for address in addresses} == {"inet", "inet6"}:
-            rules.add("allow localhost" + transport_marker(transport))
+            rules.add(loopback_wildcard(frozenset({"inet", "inet6"}), transport))
             covered.add(("*", transport))
             continue
         rules.update(address_wildcard(address, transport) for address in addresses)
