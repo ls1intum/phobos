@@ -212,9 +212,12 @@ PR_BODY="$(cat body.md)" java .github/scripts/CheckPullRequestTemplate.java
 ```
 
 The checker is a single-file Java program, run through the source-code launcher of JDK 11 or
-newer, so it needs no build step and adds no language to the repository. It is the only Java
-here, which is why the CodeQL workflow analyses `java-kotlin`: the checker reads a pull
-request body that an outsider writes verbatim.
+newer, so it needs no build step and adds no language to the repository. Beside the release
+checker it is the only Java of Phobos itself, which is why the CodeQL workflow analyses
+`java-kotlin`: the checker reads a pull request body that an outsider writes verbatim, and
+CodeQL's manual build compiles it. The two reference exercises under `var/tmp/testing-dir/` are
+Java too, but they are inputs, built in the run-phase image's stages and by the prune phase, not
+code of the sandbox.
 
 **Only the template's own headings.** The check reports every line it reads as a heading that
 the template does not define, sub-headings included. Whatever sits under an invented heading
