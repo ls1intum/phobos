@@ -54,6 +54,7 @@ has "the name is held to the port the rule names" "$out" "acl exact_port_p443 ds
 has "the broker resolves the name rather than trust the header" "$out" "do-resolve(txn.hostip,phobosdns,ipv4) req.ssl_sni if exact_port_p443 exact_sni_p443"
 has "the destination is set to the resolved address" "$out" "set-dst var(txn.hostip) if exact_port_p443 exact_sni_p443 { var(txn.hostip) -m found }"
 has "a name that does not resolve is refused" "$out" "reject if exact_port_p443 exact_sni_p443 !{ var(txn.hostip) -m found }"
+has "and marked as unresolved first, so the guard does not word it as a policy refusal" "$out" "set-var(txn.marker) str(PHB-BROKER-UNRESOLVED) if exact_port_p443 exact_sni_p443 !{ var(txn.hostip) -m found }"
 has "an allowed SNI routes to the destination backend" "$out" "use_backend to_dst if exact_port_p443 exact_sni_p443"
 has "everything else is refused" "$out" "default_backend refuse"
 has "the port is tested before the TLS name, so a connection to another port is decided without waiting for a ClientHello" "$out" "!exact_sni_p443 exact_port_p443"
@@ -190,7 +191,8 @@ build_haproxy_conf "$WORK/net.rules" "$WORK/haproxy.cfg" "127.0.0.1:3128" "127.0
 conf="$(cat "$WORK/haproxy.cfg")"
 has "it logs raw lines to the descriptor given" "$conf" "log fd@11 format raw local0"
 has "it does not log a connection that completed normally" "$conf" "option dontlog-normal"
-has "and logs machine fields only: backend, termination state, hex host name, destination" "$conf" 'log-format "PHB-BROKER %b %ts %[var(txn.sni),hex] %[dst] %[dst_port]"'
+has "and logs machine fields only: marker, backend, termination state, hex host name, destination" "$conf" 'log-format "%[var(txn.marker)] %b %ts %[var(txn.sni),hex] %[dst] %[dst_port]"'
+has "the marker is the broker's own constant" "$conf" "tcp-request content set-var(txn.marker) str(PHB-BROKER)"
 has "taking the host name from a variable set while the ClientHello is inspected" "$conf" "tcp-request content set-var(txn.sni) req.ssl_sni"
 build_haproxy_conf "$WORK/net.rules" "$WORK/haproxy.cfg" "127.0.0.1:3128" "127.0.0.11:53"
 conf="$(cat "$WORK/haproxy.cfg")"
