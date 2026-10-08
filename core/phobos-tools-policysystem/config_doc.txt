@@ -61,8 +61,12 @@ the rest. A rule that names a port beside it, such as `allow dns.example.org:53 
 by host and port, and the network layer logs which ports that applies to. That holds for udp on every
 kernel, so a udp rule that names a port beside a loopback wildcard for udp does not need Landlock
 version 10, while the same rule on its own does. The guard enforces them only while the network layer
-is on, as it does everything else: with --no-networksystem-restriction nothing is enforced. A host
-other than loopback may not omit its port.
+is on, as it does everything else: with --no-networksystem-restriction nothing is enforced. Only
+exactly one loopback address may omit its port: localhost, one address in 127.0.0.0/8, ::1 in any
+spelling or its IPv4-mapped form ::ffff:127.x.y.z, each optionally with /32 or /128. Any other host
+may not, a range such as 127.0.0.1/1 and a name such as 127.evil.example included, and the line is
+refused with its file and line, because without a port nothing but the connect guard holds the host,
+and it holds a range to every address in it.
 
 There is no `openConnections` / `sendData` / `receiveData` toggle: a rule names a
 host, a port and a transport, or it does not.
@@ -133,9 +137,15 @@ The path is resolved in this order, and refused at the first step that fails: '*
 backslash, a placeholder (${PROJECT_ROOT} is the project root, every other one the value the
 programming language configuration determines on its first use), a '..' segment, a relative
 path without an absolute project root (--project-root, else the tail flags' last --chdir),
-then the checks of a cfg path, existence included in every section. A row the folded base
-already grants on the same path or an ancestor, both resolved through their symbolic links,
-is not written and is counted in the summary line.
+then the checks of a cfg path, existence included in every section, and then a refusal of a
+path that reaches the project root through a symbolic link, or through a name for the root that
+leads to some other place than the root, so that it resolves to somewhere else than it is written
+(a link before the root that leads away from it stays allowed). The project root must be the real
+path of a project directory: "/", a root that reaches its directory through a symbolic link and
+a root with a '..' segment are refused ("--project-root" always, the tail flags' --chdir where a
+path needs it). A row the folded base already
+grants on the same path or an ancestor, both resolved through their symbolic links, is not
+written and is counted in the summary line.
 
 Network, per regardingNetworkConnections entry:
   all three flags true     the rule below for TCP and the same rule with udp

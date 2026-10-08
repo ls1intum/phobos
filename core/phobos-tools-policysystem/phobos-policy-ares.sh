@@ -453,11 +453,97 @@ ares_expand_placeholders() {
   ares_expanded+="$rest"
 }
 
+# Says why a project root cannot be trusted as the place a policy's paths start from, or says nothing.
+# The project root must be a real project directory: not "/", which would make the whole file system
+# count as the submission's, and not a path that reaches its directory through a symbolic link, which
+# the submission or whoever wrote the link could aim elsewhere. A root that does not exist is left to the
+# callers that refuse it. Prints the reason and returns 0 when the root is unusable, and prints nothing
+# and returns 1 when it is fine. Takes the project root. Assumes GNU realpath, which
+# refuse_missing_realpath has established.
+unreal_project_root_reason() {
+  local project_root="$1"
+  local canonical
+  local resolved
+  canonical="$(realpath --canonicalize-missing --no-symlinks -- "$project_root")"
+  if [[ "$canonical" == "/" ]]; then
+    printf '%s' "it is the root of the file system, which no project directory is"
+    return 0
+  fi
+  resolved="$(realpath -e -- "$project_root" 2>/dev/null)" || return 1
+  if [[ "$resolved" != "$canonical" ]]; then
+    printf '%s' "it reaches its directory through a symbolic link and resolves to ${resolved@Q}"
+    return 0
+  fi
+  return 1
+}
+
+# Refuses an imported path that reaches the project root by any way but its real path. The project root
+# usually holds the submission's checkout, so a link the submission placed there would make the grant land
+# where the link points, which the policy does not say. The path is walked one component at a time, each
+# prefix resolved through its links. The first prefix that resolves to the project root's resolved name, or
+# below it, is where the path enters the root: it must resolve to the root itself, under whatever name the
+# path spells it, or be the real path already, and every component after it must be a real directory or
+# file, resolving to exactly its parent plus its own name. A link before that point that leads away from
+# the root, such as /bin to /usr/bin, is not the submission's to place and stays allowed. The project root
+# itself must be a real directory, which unreal_project_root_reason decides: "/" and a root that reaches
+# its directory through a link are refused, as is a root with a '..' segment, since what lies below it
+# cannot be told from a link. A path that never enters the root, every path when there is no project root, and every path under
+# a project root that does not exist, which no existing path can lie under, is not refused here. The check is made when the specification is built; the residual is
+# stated in SECURITY.md. Takes the absolute path, which exists, the project root, which may be empty, and
+# the value as written for the message. Assumes GNU realpath, which refuse_missing_realpath has
+# established, and PARSE_LOCATION naming the value's line, and that it is called plainly, so that a
+# refusal ends the run.
+refuse_link_inside_project_root() {
+  local path="$1"
+  local project_root="$2"
+  local value="$3"
+  local canonical
+  local resolved_root
+  local component
+  local prefix=""
+  local current
+  local previous=""
+  local entered=0
+  local reason
+  local -a components=()
+  [[ -n "$project_root" ]] || return 0
+  if [[ "/${project_root}/" == */../* ]]; then
+    refuse_cfg "the project root ${project_root@Q} holds a '..' segment, so what lies below it cannot be told from a link; give it without one"
+  fi
+  if reason="$(unreal_project_root_reason "$project_root")"; then
+    refuse_cfg "the project root ${project_root@Q} must be the real path of a project directory: ${reason}"
+  fi
+  resolved_root="$(realpath -e -- "$project_root" 2>/dev/null)" || return 0
+  canonical="$(realpath --canonicalize-missing --no-symlinks -- "$path")"
+  IFS=/ read -ra components <<< "${canonical#/}"
+  for component in "${components[@]}"; do
+    [[ -n "$component" ]] || continue
+    prefix="${prefix}/${component}"
+    current="$(realpath -e -- "$prefix" 2>/dev/null)" || refuse_cfg "onThisPathAndAllPathsBelow ${value@Q} cannot be resolved"
+    if (( ! entered )); then
+      if [[ "$current" == "$resolved_root" || "$current" == "${resolved_root%/}/"* ]]; then
+        if [[ "$current" != "$resolved_root" && "$current" != "$prefix" ]]; then
+          refuse_cfg "onThisPathAndAllPathsBelow ${value@Q} reaches the project root ${project_root@Q}, which the submission can influence, through the symbolic link ${prefix@Q}, which resolves to ${current@Q}, so the grant would land where the link points and not where the policy says; write the real path"
+        fi
+        entered=1
+      fi
+      previous="$current"
+      continue
+    fi
+    if [[ "$current" != "${previous%/}/${component}" ]]; then
+      refuse_cfg "onThisPathAndAllPathsBelow ${value@Q} reaches the project root ${project_root@Q}, which the submission can influence, through the symbolic link ${prefix@Q}, which resolves to ${current@Q}, so the grant would land where the link points and not where the policy says; write the real path"
+    fi
+    previous="$current"
+  done
+}
+
 # Sets ares_path to the absolute path an onThisPathAndAllPathsBelow value names, or refuses it: "*",
 # which would mean the whole file system, a backslash, a placeholder that cannot be expanded, a ".."
 # segment, a relative path when the run has no absolute project root, a wildcard character, and a
 # path that does not exist, in every section, because Ares does not say whether a path is a file or
-# a directory and the filesystem layer would create a missing changeable one as an empty file.
+# a directory and the filesystem layer would create a missing changeable one as an empty file, and a
+# path that reaches the project root through a symbolic link or another name for it, so that it
+# resolves somewhere else than it is written.
 # Takes the value, the project root and the section the row is for. Assumes PARSE_LOCATION names the
 # value's line, and that it is called plainly, so that a refusal ends the run.
 ares_resolve_policy_path() {
@@ -483,6 +569,7 @@ ares_resolve_policy_path() {
   refuse_relative_path "$ares_path" "$section"
   refuse_wildcard_path "$ares_path" "$section"
   refuse_missing_path "$ares_path" "$section"
+  refuse_link_inside_project_root "$ares_path" "$project_root" "$value"
 }
 
 # Whether the folded base already grants this section's right on the imported path: the base's
