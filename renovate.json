@@ -8,7 +8,8 @@
     "pinDigests keeps every managed image reference as tag@sha256:..., so a build resolves to the bytes that were reviewed rather than to whatever the tag points at that day. Phobos is a sandbox: the image is the boundary, and a base image that moves under its tag moves the boundary with it. A pinned digest does go stale, which is the point, because Renovate then opens the pull request that moves it and a reviewer sees the change.",
     "helpers:pinGitHubActionDigests does the same for actions. This organisation already refuses an action that is not pinned to a full-length commit SHA, so the preset changes nothing today; it is here so that a tag added by hand is corrected rather than merged.",
     "The two lint container images are named in env values of a run step, and Renovate's github-actions manager reads only uses: docker://, container: and services:, so pinDigests would leave both digests frozen for good. The custom manager below extracts them as docker dependencies. It matches image:tag@sha256:... rather than any string, so it cannot claim an unrelated value, and it is scoped to the workflow directory.",
-    "The second custom manager exists for the same reason as the first: Renovate reads no Python dependency out of a shell command, so the versions pinned in the lint workflow's pip install lines and in the Python run-phase image would rot exactly as a lock nobody could regenerate would. It matches name==version only where there is no space around the ==, which is what keeps it off the workflow expressions that compare with == and spaces."
+    "The second custom manager exists for the same reason as the first: Renovate reads no Python dependency out of a shell command, so the versions pinned in the lint workflow's pip install lines and in the Python run-phase image would rot exactly as a lock nobody could regenerate would. It matches name==version only where there is no space around the ==, which is what keeps it off the workflow expressions that compare with == and spaces.",
+    "The Gradle reference exercise names the Gradle distribution the run-phase image carries (the base image ships gradle-9.8.0-bin), because the exercise runs offline. A Renovate bump of its wrapper to a newer Gradle made the wrapper try to download it and the reference prune fail, so its wrapper is left alone; moving it is a change of the base image and of the pinned repository, made by hand."
   ],
   "pinDigests": true,
   "customManagers": [
@@ -33,6 +34,14 @@
       ],
       "datasourceTemplate": "pypi",
       "versioningTemplate": "pep440"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchFileNames": [
+        "var/tmp/testing-dir/java/gradle-reference/gradle/wrapper/gradle-wrapper.properties"
+      ],
+      "enabled": false
     }
   ]
 }
