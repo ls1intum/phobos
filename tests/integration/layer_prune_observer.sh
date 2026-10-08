@@ -209,7 +209,8 @@ check_attribution_of_the_permitted_run() {
 
 # Writes into the file named by $2 what cfgfile.render makes of the policy named by $1: "permissive",
 # the permissive policy of this image's own root; "small", a policy with every filesystem section, a
-# comment, network rules and limits; or "subset", a nested strict subset, which render must refuse,
+# comment, network rules and limits; "commented", the same with a header, trailing notes, rule comments
+# and a comment rule, some holding what would end a line if written unescaped; or "subset", a nested strict subset, which render must refuse,
 # in which case it writes "refused" instead. Assumes the helpers are mounted at ${HELPERS}.
 rendered_policy() {
   HELPERS="${HELPERS}" python3 - "$1" >"$2" 2>"$2.err" <<'PY'
@@ -230,7 +231,13 @@ small = cfgfile.Policy(
     comments={"/proc": "per-run name: /proc/<pid>/status, observed as /proc/7/status; granted on /proc"})
 subset = cfgfile.Policy(fs={"/usr": frozenset({"read", "execute"}), "/usr/bin": frozenset({"read"})},
                         connect=(), bind=(), limits={})
-policies = {"permissive": cfgfile.permissive_policy(pathlib.Path("/")), "small": small, "subset": subset}
+commented = cfgfile.Policy(
+    fs=small.fs,
+    connect=(cfgfile.Rule("allow 127.0.0.1:*", "seen as evil\n[write]\n/"), cfgfile.Rule("# not granted: allow x:53 udp")),
+    bind=(cfgfile.Rule("allow 0", "a comment above a rule"),), limits={},
+    header=("Recorded by a test.", "a header\r\n[read]\n/"), notes=("a trailing note\u2028[write]",))
+policies = {"permissive": cfgfile.permissive_policy(pathlib.Path("/")), "small": small, "commented": commented,
+            "subset": subset}
 try:
     sys.stdout.write(cfgfile.render(policies[sys.argv[1]]))
 except ValueError:
@@ -245,7 +252,7 @@ check_rendered_policies_meet_the_parser() {
   local name
   local spec
   local status
-  for name in permissive small; do
+  for name in permissive small commented; do
     rendered_policy "${name}" "${WORK}/${name}.cfg"
     spec="$(mktemp -d /var/tmp/phobos-spec-check.XXXXXX)" || { bad "a specification directory can be made"; continue; }
     "${PHOBOS_HOME}/phobos-policysystem.sh" --spec-dir "${spec}" --config "${WORK}/${name}.cfg" >"${WORK}/${name}.log" 2>&1

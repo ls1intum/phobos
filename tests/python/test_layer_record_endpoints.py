@@ -269,3 +269,10 @@ def test_a_call_that_reaches_no_internet_endpoint_asks_for_no_rule(call):
     rules = rules_of(call)
     assert rules.connect == ()
     assert rules.bind == ()
+
+
+def test_a_loopback_resolver_is_a_lookup_like_any_other_and_not_an_exact_loopback_rule():
+    rules = rules_of(f"16 connect(5<UDP:[9]>, {inet('127.0.0.11', 53)}, 16) = 0",
+                     "16 send(5<UDP:[10.0.0.2:40000->127.0.0.11:53]>, \"q\", 1, 0) = 1")
+    assert "allow 127.0.0.11:53 udp" not in texts(rules.connect)
+    assert any(text.startswith("# not granted: allow 127.0.0.11:53 udp") for text in texts(rules.connect))

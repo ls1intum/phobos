@@ -202,6 +202,7 @@ docker/run_phase/          the images an exercise actually runs in, one per lang
 tests/                     the acceptance and probe suites
 var/tmp/                   prune inputs, helpers and example outputs
   helpers/layer_prune/     the layer pruner: observe, attribute, grow, minimise, limits, verify, write
+  helpers/layer_record/    the recording pruner: record a session unsandboxed, generate a policy, replay it, compare it (prune image only)
 ```
 
 ## Coding conventions

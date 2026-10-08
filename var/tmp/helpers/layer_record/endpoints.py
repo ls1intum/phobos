@@ -125,10 +125,10 @@ def rules(sessions: list[NetworkNeeds], hosts: dict[str, str]) -> NetworkRules:
     for endpoint in destinations:
         reached.append(endpoint)
         kind = network.loopback_kind(endpoint.address)
-        if kind is not None:
-            _loopback(endpoint, kind, merged, wildcards, exact)
-        elif endpoint.transport == "udp" and endpoint.port == DNS_PORT:
+        if endpoint.transport == "udp" and endpoint.port == DNS_PORT:
             lookups.append(endpoint)
+        elif kind is not None:
+            _loopback(endpoint, kind, merged, wildcards, exact)
         elif endpoint.transport == "tcp":
             rule, by_address = _external_stream(endpoint, merged, hosts, rejected)
             connect.setdefault(rule.text, rule)

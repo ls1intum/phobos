@@ -145,8 +145,16 @@ def _run(given: list[str]) -> int:
 
 
 def _generate(options: argparse.Namespace, home: pathlib.Path) -> int:
-    """Writes policy.cfg and record.json for a recording and answers generate's status."""
+    """Writes policy.cfg and record.json for a recording and answers generate's status.
+
+    The parser's gate refuses a [read] or [execute] path that does not exist, so in a container that
+    never ran a session the working directory is prepared first, as record prepares it; a working
+    directory that exists is left exactly as it is.
+    """
     recording = RECORDINGS / _recording_name(options.name)
+    workdir = _workdir(home)
+    if not workdir.exists():
+        observe.copy_exercise(DEFAULT_EXERCISE if DEFAULT_EXERCISE.is_dir() else None, workdir)
     try:
         return generate.write(recording, options.limits, options.memory_pinned, generate.policysystem_gate(home))
     except (generate.ImageMismatch, ValueError, OSError) as error:
