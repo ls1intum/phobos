@@ -54,6 +54,7 @@ has "the name is held to the port the rule names" "$out" "acl exact_port_p443 ds
 has "the broker resolves the name rather than trust the header" "$out" "do-resolve(txn.hostip,phobosdns,ipv4) req.ssl_sni if exact_port_p443 exact_sni_p443"
 has "the destination is set to the resolved address" "$out" "set-dst var(txn.hostip) if exact_port_p443 exact_sni_p443 { var(txn.hostip) -m found }"
 has "a name that does not resolve is refused" "$out" "reject if exact_port_p443 exact_sni_p443 !{ var(txn.hostip) -m found }"
+has "and marked as unresolved first, so the guard does not word it as a policy refusal" "$out" "set-var(txn.marker) str(PHB-BROKER-UNRESOLVED) if exact_port_p443 exact_sni_p443 !{ var(txn.hostip) -m found }"
 has "an allowed SNI routes to the destination backend" "$out" "use_backend to_dst if exact_port_p443 exact_sni_p443"
 has "everything else is refused" "$out" "default_backend refuse"
 has "the port is tested before the TLS name, so a connection to another port is decided without waiting for a ClientHello" "$out" "!exact_sni_p443 exact_port_p443"
@@ -184,6 +185,23 @@ has "it has a destination backend" "$conf" "backend to_dst"
 has "it has a refuse backend" "$conf" "backend refuse"
 
 echo
+echo "== the broker logs its refusals to a descriptor only when it is given one =="
+printf 'repo.maven.apache.org 443\n' > "$WORK/net.rules"
+build_haproxy_conf "$WORK/net.rules" "$WORK/haproxy.cfg" "127.0.0.1:3128" "127.0.0.11:53" 11
+conf="$(cat "$WORK/haproxy.cfg")"
+has "it logs raw lines to the descriptor given" "$conf" "log fd@11 format raw local0"
+has "it does not log a connection that completed normally" "$conf" "option dontlog-normal"
+has "and logs machine fields only: marker, backend, termination state, hex host name, destination" "$conf" 'log-format "%[var(txn.marker)] %b %ts %[var(txn.sni),hex] %[dst] %[dst_port]"'
+has "the marker is the broker's own constant" "$conf" "tcp-request content set-var(txn.marker) str(PHB-BROKER)"
+has "taking the host name from a variable set while the ClientHello is inspected" "$conf" "tcp-request content set-var(txn.sni) req.ssl_sni"
+build_haproxy_conf "$WORK/net.rules" "$WORK/haproxy.cfg" "127.0.0.1:3128" "127.0.0.11:53"
+conf="$(cat "$WORK/haproxy.cfg")"
+has "with no descriptor it logs nothing at all" "$conf" "!log "
+has "and sets no log format" "$conf" "!log-format"
+has "nor keeps the host name in a variable" "$conf" "!set-var(txn.sni)"
+has "nor dontlog-normal" "$conf" "!dontlog-normal"
+
+echo
 echo "== a bare ip resolver gets the default DNS port, and no resolver emits no section =="
 build_haproxy_conf "$WORK/net.rules" "$WORK/haproxy.cfg" "127.0.0.1:3128" "192.0.2.53"
 has "a bare resolver ip is given the default port" "$(cat "$WORK/haproxy.cfg")" "nameserver dns1 192.0.2.53:53"
@@ -204,6 +222,13 @@ if command -v haproxy >/dev/null 2>&1; then
       bad "a generated config for '$(printf '%s' "$body" | tr '\n' ',')' is valid to haproxy" "$(haproxy -c -f "$WORK/haproxy.cfg" 2>&1 | tail -3)"
     fi
   done
+  printf 'repo.example.org 443\n192.0.2.10 443\n' > "$WORK/net.rules"
+  build_haproxy_conf "$WORK/net.rules" "$WORK/haproxy.cfg" "127.0.0.1:3128" "127.0.0.11:53" 11
+  if (exec 11<>/dev/null; haproxy -c -f "$WORK/haproxy.cfg" >/dev/null 2>&1); then
+    ok "a generated config that logs its refusals to a descriptor is valid to haproxy"
+  else
+    bad "a generated config that logs its refusals to a descriptor is valid to haproxy" "$( (exec 11<>/dev/null; haproxy -c -f "$WORK/haproxy.cfg" 2>&1) | tail -3)"
+  fi
   printf 'repo.maven.apache.org 443\n' > "$WORK/net.rules"
   build_haproxy_conf "$WORK/net.rules" "$WORK/haproxy.cfg" "127.0.0.1:3128"
   if haproxy -c -f "$WORK/haproxy.cfg" >/dev/null 2>&1; then

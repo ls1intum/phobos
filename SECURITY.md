@@ -84,7 +84,8 @@ rest exists to take privileges away. None of the following is a vulnerability.
 
 The four C products, `phobos-landlock-filesystem-and-networksystem`, the connect guard, the
 timeout's group lock and the report-only supervisor `phobos-seccomp-filesystem`, are not
-committed. They are compiled inside the run-phase image from the source under `core/`, and CI
+committed. The connect guard carries the denial reporter's sources, so that it can word what it
+and the filesystem layer block when it is the run's one supervisor. They are compiled inside the run-phase image from the source under `core/`, and CI
 checks the copies the image ships are position-independent with full RELRO. Where the connect guard binary is missing
 the network layer refuses to start rather than run the command without connect supervision, so a
 bare checkout with nothing built does not run. The delivery vehicle is the run-phase image,
@@ -204,6 +205,41 @@ environment, and a helper called without one refuses with `PHB-ERUNTIME` rather 
 `TMPDIR`, or to `/tmp`, which the shipped policies make writable, so the command of a concurrent
 run in the same container could see such a file, and as the same user replace it, while another
 run still reads its rules from it.
+
+## What Phobos says about a blocked action, and what that proves
+
+Every blocked action Phobos can attribute with certainty is worded on stderr, once per distinct
+action and run, and one `Phobos Security Summary` line closes a run that blocked anything. This is
+a report and never a decision: a supervisor answers the calls it watches for observation only with
+"continue", so Landlock alone decides them, and the calls a Phobos filter refuses outright
+(`io_uring`, `setsid`, `setpgid`, a foreign ABI) are answered with `EACCES` by a handler that has
+no way to let a call through. While a supervisor serves, the errno a program sees for those calls
+depends on it answering correctly where it once depended on the kernel alone; if the supervisor
+dies, the kernel refuses them with `ENOSYS`, and every other watched call fails with `ENOSYS` too.
+Nothing is granted in any state.
+
+What a line proves is limited, and is meant for the person reading a log:
+
+- The command writes to the same standard error, so it can print a line that looks the same. The
+  counts in the summary are Phobos's own decisions; the lines are text.
+- The egress broker reports the TLS host names it refuses through an anonymous pipe that only
+  HAProxy, the connect guard and the network layer's own shell hold, so no path names it and no
+  policy can grant the command access. A command that could open the guard's descriptor through
+  `/proc/<pid>/fd` could write a forged broker line, which changes what is printed and what the
+  network count says, and nothing the broker allows or refuses. Against the bare guard, with no
+  Landlock domain at all, it can. Under `phobos.sh` it could not in the measured runs, with every
+  layer on and with `-nfr`, but what stops it is the kernel's own access rule for another process's
+  `/proc` entries, not something Phobos enforces, so nothing here relies on it.
+- A connect to a UNIX socket is worded only for the command and what it started. Every layer's shell
+  asks the name service cache for the user at start-up and is refused by the guard too; those are
+  Phobos's own helpers, not the program, and are not worded. With the filesystem layer off there is
+  no domain to tell them apart by, so no UNIX connect is worded.
+- Some blocked actions are never worded: a call another filter refuses first (the container's own
+  profile), an `openat2` with resolve flags, an `O_TMPFILE` open, a call relative to a deleted
+  directory, the interpreter the kernel opens for an `execve`, a `connect` to a UNIX socket under
+  `-nnr`, process, open file and memory limits (they surface as errors the command handles), a
+  refused inbound connection (the actor is an outside client) and a broker line lost to a full
+  pipe. A doubt always ends in silence, so a run without a line may still have been refused something.
 
 ## Inbound filtering assumes a networked container, and is defence in depth, not a boundary
 

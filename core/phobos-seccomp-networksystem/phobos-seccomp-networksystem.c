@@ -17,7 +17,8 @@
  * Usage:
  *   phobos-seccomp-networksystem [--verbose] [--rules FILE] [--broker ADDRESS:PORT]
  *                                [--allow-ephemeral-listen] [--allow-ephemeral-udp-bind]
- *                                -- COMMAND [ARGUMENTS...]
+ *                                [--landlock-bin PATH] [--report-filesystem] [--group-lock-above]
+ *                                [--broker-log-fd N] -- COMMAND [ARGUMENTS...]
  *
  * It is one process that becomes two. It forks: the child is the sandboxed
  * lineage and the parent is the supervisor beside it.
@@ -75,6 +76,18 @@
  *   phobos-seccomp-networksystem-socket-types.h    the type of every socket, remembered by inode
  *   phobos-seccomp-networksystem-seccomp-compat.h  the seccomp names older headers lack
  *   phobos-seccomp-networksystem-diagnostics.h     the setup exit status and the --verbose lines
+ *   phobos-seccomp-networksystem-report.h          the lines it prints for the refusals it makes
+ *   phobos-seccomp-networksystem-broker-log.h      the egress broker's refusals, read from a pipe
+ *   ../phobos-seccomp-filesystem/                  the denial reporter it carries: the observation
+ *                                                  traps, the refusal answers, the lines and counts
+ *
+ * It is the run's one supervisor when the network layer is on, because a seccomp filter tree can
+ * have one listener, so it also carries the denial reporter's traps (A.5 of the denial-reporting
+ * plan): bind, to report a refused port, and with --report-filesystem the path calls, to report what
+ * Landlock refuses. Those are answered with CONTINUE and decide nothing. The calls its own filter
+ * refuses outright are answered with EACCES and reported. When the kernel cannot have the
+ * observation traps (no Landlock, or no way to continue a supervised call) the filter is exactly
+ * the one the guard had before it reported anything, and a notice says what goes unreported.
  *
  * It fails closed. If the filter cannot be installed, or the supervisor cannot be
  * handed the notification descriptor, the run is refused rather than left to run
@@ -84,6 +97,7 @@
  */
 
 #define _GNU_SOURCE
+#include "phobos-seccomp-networksystem-broker-log.h"
 #include "phobos-seccomp-networksystem-child.h"
 #include "phobos-seccomp-networksystem-datagram.h"
 #include "phobos-seccomp-networksystem-diagnostics.h"
@@ -93,8 +107,13 @@
 #include "phobos-seccomp-networksystem-rules.h"
 #include "phobos-seccomp-networksystem-supervisor.h"
 
+#include "../phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-policy.h"
+#include "../phobos-seccomp-filesystem/phobos-seccomp-filesystem-handoff.h"
+#include "../phobos-seccomp-filesystem/phobos-seccomp-filesystem-message.h"
+
 #include <errno.h>
 #include <signal.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -102,6 +121,51 @@
 #include <sys/wait.h>
 
 /* ------------------------------------------------------------------ the call */
+
+/* Says once what goes unreported in this run, and why. With --report-filesystem the filesystem
+ * denials are lost with the bind ports; without it only the bind ports are. */
+static void say_reporting_off(bool report_filesystem, const char *reason) {
+    fprintf(stderr, "Phobos: %s not reported in this run, because %s.\n",
+            report_filesystem ? "filesystem denials and bind ports are" : "bind ports are", reason);
+}
+
+/* Decides which observation traps the filter carries, and tells the reporter what it needs. A guard
+ * that was not told the enforcer's path (no --landlock-bin) has nothing to arm on and adds none.
+ * Otherwise the traps are added only when the kernel has Landlock, since without it there is no Landlock refusal
+ * to report, and when a supervised call is proved to continue, because a refused CONTINUE would
+ * leave a trapped call failed, which is a change of outcome a reporter must never make. When either
+ * fails the guard keeps the filter it had before it reported anything. */
+static enum guard_report_mode decide_report_mode(const struct guard_options *options,
+                                                 int landlock_version) {
+    if (options->landlock_bin == nullptr) {
+        return GUARD_REPORT_NONE;
+    }
+    if (landlock_version < 1) {
+        say_reporting_off(options->report_filesystem, "this kernel has no Landlock");
+        return GUARD_REPORT_NONE;
+    }
+    if (!continue_supported()) {
+        say_reporting_off(options->report_filesystem, "this kernel cannot continue a supervised call");
+        return GUARD_REPORT_NONE;
+    }
+    return options->report_filesystem ? GUARD_REPORT_FILESYSTEM : GUARD_REPORT_NETWORK;
+}
+
+/* Refuses a --broker-log-fd that is not a pipe, since the layer asked for the broker's refusals and
+ * would otherwise run without them. Answers whether the run can go on. */
+static bool adopt_broker_log_from(const struct guard_options *options) {
+    if (options->broker_log_descriptor == NO_BROKER_LOG) {
+        return true;
+    }
+    if (!adopt_broker_log(options->broker_log_descriptor)) {
+        report_failure("--broker-log-fd %d is not an open pipe this guard can read; refusing to run "
+                       "rather than lose the broker's refusals",
+                       options->broker_log_descriptor);
+        return false;
+    }
+    configure_broker_log(options->broker_log_descriptor);
+    return true;
+}
 
 /* Loads the rules, forks the sandboxed child and supervises it until it is gone, then ends
  * with its status. The supervisor passes SIGTERM, SIGHUP, SIGINT and SIGQUIT on to the command
@@ -129,6 +193,16 @@ int main(int argument_count, char *arguments[]) {
                        options.broker_endpoint);
         return EXIT_CODE_SETUP_ERROR;
     }
+    if (!adopt_broker_log_from(&options)) {
+        return EXIT_CODE_SETUP_ERROR;
+    }
+
+    struct sigaction inherited_child_signal;
+    take_default_child_signal(&inherited_child_signal);
+    int landlock_version = options.landlock_bin != nullptr ? query_landlock_version() : 0;
+    enum guard_report_mode mode = decide_report_mode(&options, landlock_version);
+    configure_reporting(options.landlock_bin, landlock_version);
+    configure_group_lock_attribution(options.group_lock_above && group_lock_present());
 
     int pair[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) {
@@ -138,8 +212,6 @@ int main(int argument_count, char *arguments[]) {
 
     sigset_t forwarded;
     sigset_t before_fork;
-    struct sigaction inherited_child_signal;
-    take_default_child_signal(&inherited_child_signal);
     block_forwarded_signals(&forwarded, &before_fork);
     pid_t child = fork();
     if (child < 0) {
@@ -150,7 +222,7 @@ int main(int argument_count, char *arguments[]) {
         restore_child_signal(&inherited_child_signal);
         sigprocmask(SIG_SETMASK, &before_fork, nullptr);
         close(pair[0]);
-        run_child(pair[1], options.command);
+        run_child(pair[1], options.command, mode);
     }
 
     forward_signals_to(child);
@@ -171,7 +243,9 @@ int main(int argument_count, char *arguments[]) {
     close(notify_descriptor);
 
     int status = 0;
-    if (!reap_command(child, &forwarded, &status)) {
+    bool reaped = reap_command(child, &forwarded, &status);
+    report_summary();
+    if (!reaped) {
         report_failure("the command's exit status could not be read, so the run cannot say "
                        "whether it succeeded (PHB-ESTATUS)");
         return EXIT_CODE_STATUS_UNREAD;

@@ -153,4 +153,73 @@ else
   bad "a run given no --config drops the bind rule, so no server opens at all" "$output"
 fi
 
+# What a JVM reads at start-up is granted file by file in the shipped Java base: eleven static or aggregate
+# files of the machine. A JVM under the shipped base therefore prints no line for any of them, each is
+# readable, and a neighbour of each in the same directory is still refused and reported. The six refusals
+# the base leaves in place, which the JVM tolerates, are still refused and still reported. A file the
+# running kernel does not have is skipped, saying so.
+JVM_GRANTED=(/proc/cpuinfo /proc/meminfo /proc/stat /proc/cgroups /proc/filesystems
+  /proc/sys/vm/overcommit_memory /sys/devices/system/cpu/possible /sys/devices/system/cpu/online
+  /sys/kernel/mm/transparent_hugepage/enabled /sys/kernel/mm/transparent_hugepage/hpage_pmd_size /dev/random)
+JVM_NEIGHBOURS=(/proc/version /proc/sys/vm/swappiness /sys/devices/system/cpu/present
+  /sys/kernel/mm/transparent_hugepage/defrag /dev/zero)
+PREFIX='Phobos Security Error: the program tried to illegally '
+SUFFIX=' but was blocked by Phobos.'
+output="$("$CORE/phobos.sh" -- /opt/java/openjdk/bin/java -version 2>&1)"
+for path in "${JVM_GRANTED[@]}"; do
+  if [[ ! -e "$path" ]]; then
+    skip "the JVM's read of ${path}" "this kernel does not have it, so the base grants nothing there"
+    continue
+  fi
+  if [[ "$(grep -cF "illegally read the File '${path}'" <<<"$output")" == 0 ]]; then
+    ok "the JVM's start-up read of ${path} prints no line"
+  else
+    bad "the JVM's start-up read of ${path} prints no line" "$output"
+  fi
+  head_output="$("$CORE/phobos.sh" -- head -c 1 "$path" 2>&1)"
+  if [[ "$(grep -c 'Permission denied' <<<"$head_output")" == 0 && "$(grep -cF "illegally read the File '${path}'" <<<"$head_output")" == 0 ]]; then
+    ok "${path} is readable under the shipped base"
+  else
+    bad "${path} is readable under the shipped base" "$head_output"
+  fi
+done
+for path in "${JVM_NEIGHBOURS[@]}"; do
+  [[ -e "$path" ]] || { skip "a neighbour of the granted files, ${path}" "this kernel does not have it"; continue; }
+  head_output="$("$CORE/phobos.sh" -- head -c 1 "$path" 2>&1)"
+  if [[ "$(grep -c 'Permission denied' <<<"$head_output")" -ge 1 && "$(grep -cxF "${PREFIX}read the File '${path}'${SUFFIX}" <<<"$head_output")" == 1 ]]; then
+    ok "${path}, beside the granted files, is still refused and reported"
+  else
+    bad "${path}, beside the granted files, is still refused and reported" "$head_output"
+  fi
+done
+# The six the base leaves refused. Each is judged by the path the kernel resolved, so a link or /proc/self
+# shows as the process's own entry, and the line is matched by the part that names the file.
+refused_and_reported() {
+  local label="$1"
+  local fragment="$2"
+  local script="$3"
+  local combined
+  combined="$("$CORE/phobos.sh" -- sh -c "$script" 2>&1)"
+  if [[ "$(grep -c 'Permission denied' <<<"$combined")" -ge 1 ]] \
+    && [[ "$(grep -cE "^${PREFIX}(read|write) the (File|Directory) .*${fragment}.*${SUFFIX}\$" <<<"$combined")" -ge 1 ]]; then
+    ok "${label} is still refused and reported"
+  else
+    bad "${label} is still refused and reported" "$combined"
+  fi
+}
+refused_and_reported "a write of /proc/self/coredump_filter" "coredump_filter" 'echo 1 > /proc/self/coredump_filter'
+refused_and_reported "a read of /proc/mounts" "mounts" 'head -c 1 /proc/mounts'
+if [[ -e /proc/net/if_inet6 ]]; then
+  refused_and_reported "a read of /proc/net/if_inet6" "if_inet6" 'head -c 1 /proc/net/if_inet6'
+else
+  skip "a read of /proc/net/if_inet6" "this kernel has no IPv6, so the file does not exist"
+fi
+refused_and_reported "a read of another process's /proc/<pid>/stat" "/proc/1/stat" 'head -c 1 /proc/1/stat'
+refused_and_reported "a read of /proc/self/fd" "/fd" 'ls /proc/self/fd'
+if [[ -e /dev/tty ]]; then
+  refused_and_reported "a write of /dev/tty" "tty" 'echo x > /dev/tty'
+else
+  skip "a write of /dev/tty" "this container has no /dev/tty"
+fi
+
 finish

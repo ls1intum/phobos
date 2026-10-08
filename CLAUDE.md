@@ -41,11 +41,11 @@ enforces the `[connect]` allow-list by host and port from outside the process; a
 rule that names a host is enforced by the egress broker (an HAProxy that checks the TLS host
 name), which the network layer starts automatically for such a rule; an exact-name rule is
 refused when no resolver is given. A timeout and resource limits bound the run, and the
-container around it supplies `--network none` and the cgroup caps. With the network layer
-off, a report-only supervisor prints a `Phobos Security Error` line on stderr for each
-distinct action it can attribute with certainty to Landlock or the timeout's group lock,
-staying silent wherever it is in doubt. It never lets a refused call succeed nor a permitted
-one fail.
+container around it supplies `--network none` and the cgroup caps. A supervisor, the connect
+guard when the network layer is on and a report-only one when it is off, prints a
+`Phobos Security Error` line on stderr for each distinct action it can attribute with
+certainty to Landlock, the guard or the timeout's group lock, staying silent wherever it is
+in doubt. It never lets a refused call succeed nor a permitted one fail.
 
 The point of the split is that the expensive, fragile part happens once per language
 environment, offline, and grading itself only applies a fixed configuration.
@@ -171,14 +171,14 @@ core/                      the sandbox itself
   phobos-timeoutsystem.sh  the timeout layer, which applies the group lock when a timeout is set
   phobos-resourcesystem.sh the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
   phobos-landlock-filesystem-and-networksystem/  its *.c/.h: the C program that applies the Landlock policy, then exec's
-  phobos-seccomp-networksystem/  its *.c/.h: the connect guard, supervises connect() and enforces [connect] by host and port
+  phobos-seccomp-networksystem/  its *.c/.h: the connect guard, supervises connect() and enforces [connect] by host and port; with the network layer on it is also the run's one reporting supervisor
   phobos-seccomp-timeoutsystem/  its *.c: the group lock, a seccomp filter refusing setsid and setpgid, then exec's
-  phobos-seccomp-filesystem/     its *.c/.h: the report-only supervisor, reports what Landlock and the group lock block when the network layer is off
+  phobos-seccomp-filesystem/     its *.c/.h: the denial reporter (wording, counts, the mirror of Landlock) and, as its main, the report-only supervisor that runs when the network layer is off; the connect guard links the rest
   phobos-tools-common/     sourced by every layer through phobos-common.sh, which sources the rest here and the three per-subsystem helpers
     phobos-environment.sh  sourced first by every entry point: PATH and the other lookup variables made safe before anything is looked up
     phobos-common.sh       the shared entry the layers source; it sources the others
     phobos-constants.sh    the numbers the scripts share, named once, the exit statuses among them
-    phobos-log.sh          reporting, and counting what a run was denied
+    phobos-log.sh          reporting, and wording the resource limit that ended a run
     phobos-paths.sh        the two canonical forms a path is compared in
     phobos-time.sh         the timeout contract: how a value is spelled and compared
     phobos-spec-dir.sh     the specification directory and its lifetime

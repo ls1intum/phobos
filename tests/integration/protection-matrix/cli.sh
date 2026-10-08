@@ -124,15 +124,13 @@ if [[ "$(tail -c +7 "$PM_OUT" | cksum)" == "$(cksum < "$PM/out/stdin-big")" ]]; 
 run_pm --config "$c_ro" -- /bin/sh -c 'echo to-out; echo to-err >&2'
 if grep -q '^to-out$' "$PM_OUT" && ! grep -q 'to-err' "$PM_OUT" && grep -q '^to-err$' "$PM_ERR"; then ok "the command's two streams stay separate"; else bad "the streams stay separate" "$(pm_describe)"; fi
 run_pm --config "$c_ro" -- /bin/sh -c 'echo "x: Permission denied" >&2; exit 0'
-if (( PM_STATUS == 0 )) && grep -q 'Sandbox denials: network=0, filesystem=1. (PHB-EDENY)' "$PM_ERR"; then ok "a denial the command reports on standard error is counted and does not change its status"; else bad "a denial is counted" "$(pm_describe)"; fi
+if (( PM_STATUS == 0 )) && grep -q '^x: Permission denied$' "$PM_ERR" && ! grep -q 'Phobos Security' "$PM_ERR"; then ok "words the command prints on standard error itself are not a denial: no line, no summary, and its status 0 stands"; else bad "words the command prints itself are not a denial" "$(pm_describe)"; fi
 run_pm --config "$c_ro" -- /bin/cat "$PM/none/secret.txt"
-if (( PM_STATUS == 1 )) && grep -q 'Sandbox denials: network=0, filesystem=1' "$PM_ERR" && ! grep -q 'TOP-SECRET' "$PM_OUT" "$PM_ERR"; then ok "a real refusal is counted as one filesystem denial and the secret stays out of both streams"; else bad "a real refusal is counted" "$(pm_describe)"; fi
+if (( PM_STATUS == 1 )) && grep -qxF 'Phobos Security Summary: Phobos blocked 1 action of the program, 1 in the filesystem layer, 0 in the network layer and 0 in the timeout layer; 1 was shown above, 0 repeats and 0 beyond the limit of 100 lines were not. (PHB-EDENY)' "$PM_ERR" && ! grep -q 'TOP-SECRET' "$PM_OUT" "$PM_ERR"; then ok "a real refusal is counted exactly once, as one filesystem action, and the secret stays out of both streams"; else bad "a real refusal is counted exactly once" "$(pm_describe)"; fi
 run_pm --config "$c_ro" -- /bin/sh -c 'echo "a: Permission denied" >&2; echo "b: EACCES" >&2; echo "c: Network is unreachable" >&2; exit 3'
-if (( PM_STATUS == 3 )) && grep -q 'Sandbox denials: network=1, filesystem=2' "$PM_ERR"; then ok "network and filesystem denials are counted apart, and the command's own status 3 passes through"; else bad "denials are counted apart" "$(pm_describe)"; fi
+if (( PM_STATUS == 3 )) && ! grep -q 'Phobos Security' "$PM_ERR"; then ok "three words of refusal the command prints itself count for nothing, and its own status 3 passes through"; else bad "the command's words count for nothing" "$(pm_describe)"; fi
 run_pm --config "$c_ro" -- /bin/sh -c 'echo "Permission denied"; exit 0'
-gap_case "a line the command prints on standard output is not counted as a denial" "README.md of this suite, limits found, observation 3" "$(holds_if bash -c "! grep -q 'Sandbox denials' '$PM_ERR'")"
-run_pm --config "$c_ro" -- /bin/sh -c 'echo "I will say Permission denied by myself" >&2'
-gap_case "but the count is only a hint: a command that prints those words on standard error itself is counted too" "README.md of this suite, limits found, observation 3" "$(holds_if bash -c "grep -q 'Sandbox denials: network=0, filesystem=1' '$PM_ERR'")"
+if ! grep -q 'Phobos Security' "$PM_ERR"; then ok "a line the command prints on standard output is no denial either"; else bad "a line on standard output is no denial" "$(pm_describe)"; fi
 run_pm --config "$c_ro" -- "$P" openfds
 if grep -q '^OPENFDS 0$' "$PM_OUT"; then ok "the command inherits no descriptor above standard error from phobos.sh or its layers"; else bad "no leaked descriptors" "$(pm_describe)"; fi
 

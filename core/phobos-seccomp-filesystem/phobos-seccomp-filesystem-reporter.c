@@ -226,6 +226,13 @@ static void arm(struct task_view *task) {
     }
 }
 
+/* Whether the task is inside the filesystem domain: the model is armed and the task carries more
+ * seccomp filters than the count recorded at arming. Reads the task's status into the view. */
+static bool task_in_domain(struct task_view *task) {
+    return filesystem_reporting && read_task_status(task)
+           && filter_count_in(task->status) > armed_filter_count;
+}
+
 /* Judges one observed call: a bind by its port against the network model, when the guard's socket
  * table can name its transport, and any call of a task inside the filesystem domain against the
  * filesystem model. */
@@ -233,10 +240,17 @@ static void observe(struct task_view *task, const struct access_request *request
     if (request->kind == ACCESS_BIND && network_reporting) {
         judge_bind_port(task, request, &network_model, socket_types);
     }
-    if (filesystem_reporting && read_task_status(task)
-        && filter_count_in(task->status) > armed_filter_count) {
+    if (task_in_domain(task)) {
         judge_and_report(task, request, &filesystem_model);
     }
+}
+
+bool reporter_task_in_domain(int notify_descriptor, const struct seccomp_notif *request) {
+    struct task_view task = {.pid = (pid_t)request->pid,
+                             .notify_descriptor = notify_descriptor,
+                             .id = request->id,
+                             .status = ""};
+    return task_in_domain(&task);
 }
 
 void reporter_service(int notify_descriptor, const struct seccomp_notif *request,

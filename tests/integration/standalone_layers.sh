@@ -45,7 +45,15 @@ rm -f "$CORE_X"/Base*.cfg
 for c in landlock-filesystem-and-networksystem seccomp-networksystem seccomp-timeoutsystem; do
   case "$c" in
     landlock-filesystem-and-networksystem) src=("$CORE_X"/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem*.c) ;;
-    seccomp-networksystem) src=("$CORE_X"/phobos-seccomp-networksystem/phobos-seccomp-networksystem*.c) ;;
+    seccomp-networksystem)
+      # The guard carries the denial reporter and the enforcer's model, and their headers are found by
+      # paths relative to the sources. The enforcer's folder is already a binary in $CORE_X by now, so the
+      # whole guard is built from the checkout.
+      src=("$CORE"/phobos-seccomp-networksystem/phobos-seccomp-networksystem*.c
+        "$CORE"/phobos-seccomp-filesystem/phobos-seccomp-filesystem-*.c
+        "$CORE"/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-policy.c
+        "$CORE"/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-path-rule.c
+        "$CORE"/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-model.c) ;;
     seccomp-timeoutsystem) src=("$CORE_X"/phobos-seccomp-timeoutsystem/phobos-seccomp-timeoutsystem.c) ;;
   esac
   if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/phobos-$c" "${src[@]}" 2>"$WORK/cc.log"; then

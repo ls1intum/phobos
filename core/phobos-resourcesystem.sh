@@ -140,8 +140,8 @@ read_limits_conf "${SPEC_DIR}/limits.conf" limits
 
 # Set the limits in this shell, then exec on, so phobos-landlock-filesystem-and-networksystem and the command it finally
 # runs inherit them, and nothing else does: the filesystem layer starts this layer as the last
-# step before phobos-landlock-filesystem-and-networksystem, so the helpers around the command (the layer shell, the stderr
-# pass-through and the denial counter, the connect guard's supervisor) never run under the
+# step before phobos-landlock-filesystem-and-networksystem, so the helpers around the command (the layer shell, the
+# connect guard's supervisor) never run under the
 # command's limits. rlimits are self-imposed and unprivileged, exactly as Landlock is, so they
 # hold inside the ordinary container an exercise runs in. The hard caps a machine needs against
 # a determined submission (a fork bomb filling the process table, a run filling the disk) are
