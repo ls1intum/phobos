@@ -94,7 +94,9 @@ The image, `docker/prune_phase/layers/Dockerfile`, adds `strace` and `python3` t
 image of the language being pruned (`phobos-run-phase-java` or `phobos-run-phase-python`). Its only base, `BasePrune.cfg`, grants nothing, so every grant in a pruned policy has a
 refusal behind it.
 
-Compose runs the layer pruner for every language. Build the prune image on a run-phase image and prune every
+`phobos-cli.sh prune <key>` runs one Compose service of the layer pruner, rebuilt first, and `phobos-cli.sh prune all`
+runs the seven jobs of the pipeline in order and stops at the first that fails (see
+[`phobos-cli.sh`](/user/protect-anything/phobos-cli-sh)). Compose itself runs the layer pruner for every language. Build the prune image on a run-phase image and prune every
 exercise under one key by hand, in an ordinary container:
 
 ```bash
@@ -302,6 +304,9 @@ though a wrapper script that starts them is not caught.
 :::
 
 ### The four commands
+
+`phobos-cli.sh record` is the shorter spelling of the Compose commands below: it sets `RECORD_EXERCISE`
+from `--exercise`, the image from `--language`, and rebuilds the recorder image first.
 
 ```bash
 RECORD_EXERCISE=<exercise directory> docker compose --profile record run --rm record \

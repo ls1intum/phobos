@@ -105,6 +105,21 @@ under `protecter/src/` begins with `#!/bin/bash`, so bash itself is never looked
 (AGENTS.md states the rule). What no script can clean, `BASH_ENV` and the loader's `LD_*`, is an
 integration requirement in SECURITY.md.
 
+### The command line
+
+```
+# On a host: build the image, run a command in an ordinary container with limits, prune and record
+./phobos-cli.sh build java
+./phobos-cli.sh run --exercise ./my-exercise --config exercise.cfg -- ./gradlew test
+./phobos-cli.sh prune python        # one Compose service, rebuilt first; "prune all" runs the seven jobs in order
+./phobos-cli.sh record generate --name tool
+./phobos-cli.sh --dry-run run --exercise ./my-exercise -- true    # print the commands, start nothing
+```
+
+Inside an image the same `run`, `prune` and `record` start `phobos.sh` and the helpers of the pruners
+directly. `run` refuses every `--no-*` switch and every `--*-bin` override in both places; to debug with a
+layer off, call `phobos.sh` directly.
+
 ### The linters, which are the gate
 
 `lint.yml` runs seven lint jobs, and `actionlint.yml` lints the workflows beside it, weekly
@@ -214,6 +229,8 @@ docker/prune_phase/        the layer pruner's image and the orchestrator's
   layers/                  the layer pruner's image: the run-phase image, strace, the probe, an empty base
 docker/run_phase/          the images an exercise actually runs in, one per language (java/, python/)
 exercises/                 the reference exercises: the pruners' input and the protecter's acceptance fixtures
+phobos-cli.sh              one command line for phobos.sh, the layer pruner, the recording pruner and the image build; on a host it
+                           starts Docker, in an image it starts what the image holds, and it refuses every switch that turns a layer off
 documentation/             the Docusaurus site, with its own gate
 build/                     generated and ignored: the assembled image context, and pruner/ with path sets, recordings and the merged config
 ```

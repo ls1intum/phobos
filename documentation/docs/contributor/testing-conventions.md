@@ -51,6 +51,11 @@ them, in an ordinary container:
 - `record_networked.sh`, which runs the recorder against a stand-in server on a Docker network
   with no route out and replays the generated host name rule through the egress broker
 
+Two suites cover `phobos-cli.sh`. `phobos_cli.sh` needs no Docker. It reads the commands a dry run prints
+and answers with a stand-in `docker`. That holds the option contract and the dispatch of `run`, `prune`,
+`record` and `build`. The same suite pins the claim that nothing the script builds gives a container a privilege.
+`phobos_cli_docker.sh` starts real containers in the `matrix-b` group of the `run-phase` job and inspects them.
+
 The Python suites cover the modules of both pruners too, from a recorded `strace` log and
 captured packets under `pruner/test/python/fixtures/`.
 
