@@ -404,6 +404,15 @@ jobs:
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/reporting.sh
 
+      # The repository's command line on the image this job just built, with a real Docker: the file the
+      # policy does not name stays refused and the one a configuration names is readable, the container
+      # it starts has the limits and none of the privileges, the status and the signals of the command
+      # reach the caller, an Ares 2 policy of the Maven reference exercise passes through the staged
+      # copy and the translated project root, and Compose accepts what prune and record build.
+      - name: The repository's command line starts an ordinary container and the sandbox holds in it
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
+        run: bash protecter/test/integration/phobos_cli_docker.sh phobos-run-phase:ci
+
       # The prune image is the run-phase image this job just built plus strace, python3 and the
       # protection matrix's probe, with a base that grants nothing. It is built on top of that exact
       # image, so the layer pruner is held to the layers this job has just proven. Built from the

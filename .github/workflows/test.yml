@@ -42,7 +42,7 @@ jobs:
           for script in protecter/src/phobos.sh protecter/src/phobos-policysystem.sh \
                         protecter/src/phobos-filesystem.sh protecter/src/phobos-networksystem.sh \
                         protecter/src/phobos-resourcesystem.sh protecter/src/phobos-timeoutsystem.sh \
-                        pruner/src/layer_record/phobos-record; do
+                        pruner/src/layer_record/phobos-record phobos-cli.sh; do
             if [ ! -x "${script}" ]; then
               echo "::error file=${script}::not executable, so it cannot be started as a program"
               exit 1
@@ -120,6 +120,15 @@ jobs:
       - name: The command-line contract
         if: ${{ !cancelled() }}
         run: bash protecter/test/integration/cli_flags.sh
+
+      # The command line of the repository, phobos-cli.sh: the options it accepts and the ones it refuses
+      # in both places, the commands it builds for run, prune, record and build, and that nothing it
+      # builds can give a container more than the policy says. It starts no container: it reads the
+      # commands a dry run prints and answers a stand-in docker.
+      - name: The repository's command line starts nothing it should refuse
+        if: ${{ !cancelled() }}
+        run: bash protecter/test/integration/phobos_cli.sh
+
       # No entry point finds a program through a relative or empty PATH entry, which names the
       # current directory, and the submission's tree when a grader starts Phobos there.
       - name: No entry point looks a program up in the current directory

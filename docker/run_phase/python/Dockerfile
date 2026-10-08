@@ -92,5 +92,6 @@ RUN readelf -h ${PHOBOS_HOME}/phobos-landlock-filesystem-and-networksystem > /tm
 RUN chmod +x ${PHOBOS_HOME}/phobos.sh ${PHOBOS_HOME}/phobos-policysystem.sh \
       ${PHOBOS_HOME}/phobos-filesystem.sh ${PHOBOS_HOME}/phobos-networksystem.sh \
       ${PHOBOS_HOME}/phobos-resourcesystem.sh ${PHOBOS_HOME}/phobos-timeoutsystem.sh \
+      ${PHOBOS_HOME}/phobos-cli.sh \
  && ln -sf phobos.sh ${PHOBOS_HOME}/phobos
 ENV PATH=${PHOBOS_HOME}:$PATH

@@ -161,10 +161,12 @@ RUN readelf -h ${PHOBOS_HOME}/phobos-landlock-filesystem-and-networksystem > /tm
  && grep -q 'Type:[[:space:]]*DYN' /tmp/reporter-header.txt \
  && grep -q 'BIND_NOW' /tmp/reporter-dynamic.txt \
  && rm -f /tmp/wrapper-header.txt /tmp/wrapper-dynamic.txt /tmp/guard-header.txt /tmp/guard-dynamic.txt /tmp/lock-header.txt /tmp/lock-dynamic.txt /tmp/reporter-header.txt /tmp/reporter-dynamic.txt
-# The six entry points, and not the helpers under phobos-tools-*, which are only ever sourced: a
-# mode on those would say they can be run, which is what the check in test.yml states they cannot.
+# The six entry points and the command line that starts them, and not the helpers under phobos-tools-*,
+# which are only ever sourced: a mode on those would say they can be run, which is what the check in
+# test.yml states they cannot.
 RUN chmod +x ${PHOBOS_HOME}/phobos.sh ${PHOBOS_HOME}/phobos-policysystem.sh \
       ${PHOBOS_HOME}/phobos-filesystem.sh ${PHOBOS_HOME}/phobos-networksystem.sh \
       ${PHOBOS_HOME}/phobos-resourcesystem.sh ${PHOBOS_HOME}/phobos-timeoutsystem.sh \
+      ${PHOBOS_HOME}/phobos-cli.sh \
  && ln -sf phobos.sh ${PHOBOS_HOME}/phobos
 ENV PATH=${PHOBOS_HOME}:$PATH
