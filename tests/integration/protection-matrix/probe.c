@@ -1343,6 +1343,25 @@ static int cmd_trapterm(int argc, char **argv) {
     return STATUS_OK;
 }
 
+/* Calls getpid through the 32-bit interface, int 0x80, which a Phobos filter refuses and a kernel with that
+ * interface otherwise answers. Only x86-64 has it; elsewhere the call is reported as not implemented. */
+static int cmd_int80(void) {
+#if defined(__x86_64__)
+    int result;
+    __asm__ volatile("int $0x80" : "=a"(result) : "a"(20) : "memory");
+    long returned = result;
+    if (result < 0 && result > -4096) {
+        errno = -result;
+        returned = -1;
+    }
+    op("int80", returned, NULL);
+#else
+    errno = ENOSYS;
+    op("int80", -1, NULL);
+#endif
+    return finish();
+}
+
 static int cmd_setsid(void) {
     pid_t result = setsid();
     op("setsid", result, NULL);
@@ -1751,6 +1770,7 @@ int main(int argc, char **argv) {
         strcmp(name, "sctp") == 0 || strcmp(name, "netlink") == 0) return cmd_socket_kind(name);
     if (strcmp(name, "io_uring") == 0) return cmd_io_uring();
     if (strcmp(name, "listen_unbound") == 0) return cmd_listen_unbound();
+    if (strcmp(name, "int80") == 0) return cmd_int80();
     if (strcmp(name, "setsid") == 0) return cmd_setsid();
     if (strcmp(name, "setpgid") == 0) return cmd_setpgid();
     if (strcmp(name, "getrlimit") == 0) return cmd_getrlimit();

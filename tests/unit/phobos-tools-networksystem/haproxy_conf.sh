@@ -184,6 +184,22 @@ has "it has a destination backend" "$conf" "backend to_dst"
 has "it has a refuse backend" "$conf" "backend refuse"
 
 echo
+echo "== the broker logs its refusals to a descriptor only when it is given one =="
+printf 'repo.maven.apache.org 443\n' > "$WORK/net.rules"
+build_haproxy_conf "$WORK/net.rules" "$WORK/haproxy.cfg" "127.0.0.1:3128" "127.0.0.11:53" 11
+conf="$(cat "$WORK/haproxy.cfg")"
+has "it logs raw lines to the descriptor given" "$conf" "log fd@11 format raw local0"
+has "it does not log a connection that completed normally" "$conf" "option dontlog-normal"
+has "and logs machine fields only: backend, termination state, hex host name, destination" "$conf" 'log-format "PHB-BROKER %b %ts %[var(txn.sni),hex] %[dst] %[dst_port]"'
+has "taking the host name from a variable set while the ClientHello is inspected" "$conf" "tcp-request content set-var(txn.sni) req.ssl_sni"
+build_haproxy_conf "$WORK/net.rules" "$WORK/haproxy.cfg" "127.0.0.1:3128" "127.0.0.11:53"
+conf="$(cat "$WORK/haproxy.cfg")"
+has "with no descriptor it logs nothing at all" "$conf" "!log "
+has "and sets no log format" "$conf" "!log-format"
+has "nor keeps the host name in a variable" "$conf" "!set-var(txn.sni)"
+has "nor dontlog-normal" "$conf" "!dontlog-normal"
+
+echo
 echo "== a bare ip resolver gets the default DNS port, and no resolver emits no section =="
 build_haproxy_conf "$WORK/net.rules" "$WORK/haproxy.cfg" "127.0.0.1:3128" "192.0.2.53"
 has "a bare resolver ip is given the default port" "$(cat "$WORK/haproxy.cfg")" "nameserver dns1 192.0.2.53:53"
@@ -204,6 +220,13 @@ if command -v haproxy >/dev/null 2>&1; then
       bad "a generated config for '$(printf '%s' "$body" | tr '\n' ',')' is valid to haproxy" "$(haproxy -c -f "$WORK/haproxy.cfg" 2>&1 | tail -3)"
     fi
   done
+  printf 'repo.example.org 443\n192.0.2.10 443\n' > "$WORK/net.rules"
+  build_haproxy_conf "$WORK/net.rules" "$WORK/haproxy.cfg" "127.0.0.1:3128" "127.0.0.11:53" 11
+  if (exec 11<>/dev/null; haproxy -c -f "$WORK/haproxy.cfg" >/dev/null 2>&1); then
+    ok "a generated config that logs its refusals to a descriptor is valid to haproxy"
+  else
+    bad "a generated config that logs its refusals to a descriptor is valid to haproxy" "$( (exec 11<>/dev/null; haproxy -c -f "$WORK/haproxy.cfg" 2>&1) | tail -3)"
+  fi
   printf 'repo.maven.apache.org 443\n' > "$WORK/net.rules"
   build_haproxy_conf "$WORK/net.rules" "$WORK/haproxy.cfg" "127.0.0.1:3128"
   if haproxy -c -f "$WORK/haproxy.cfg" >/dev/null 2>&1; then

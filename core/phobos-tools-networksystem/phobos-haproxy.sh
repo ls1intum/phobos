@@ -451,7 +451,10 @@ haproxy_allow_rules() {
 # when one is needed and none was given.
 # Assumes phobos-common.sh was sourced, so PHB_SPEC_SCRATCH is set. Takes the specification
 # directory, the rules, the haproxy binary, the resolver (empty for none), then the names of the
-# variables that receive the endpoint and the process id.
+# variables that receive the endpoint and the process id, and last, optionally, the number of the
+# descriptor the broker logs its refusals to. That descriptor is inherited from the caller, which
+# opened it, and nothing else is passed: no path is written for the log, so no policy can grant
+# the command access to it.
 # The two results are only assigned here, through namerefs, and read by the caller, which the
 # linter cannot follow, so it reports them as unused.
 # shellcheck disable=SC2034
@@ -462,6 +465,7 @@ start_egress_broker() {
   local resolver="$4"
   local -n endpoint_out="$5"
   local -n pid_out="$6"
+  local log_descriptor="${7:-}"
   local scratch="${spec_dir}/${PHB_SPEC_SCRATCH}"
   local cfg
   local log
@@ -475,7 +479,7 @@ start_egress_broker() {
     if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
       continue
     fi
-    build_haproxy_conf "$rules" "$cfg" "127.0.0.1:${port}" "$resolver"
+    build_haproxy_conf "$rules" "$cfg" "127.0.0.1:${port}" "$resolver" "$log_descriptor"
     ( trap - TERM; exec "$haproxy_bin" -f "$cfg" -db ) > "$log" 2>&1 &
     pid=$!
     for _ in $(seq 1 60); do
@@ -515,8 +519,16 @@ emit_broker_resolvers() {
 # PROXY header and the ClientHello, the allow-list rules haproxy_allow_rules builds, and the two
 # backends, one that connects to the destination in force and one that refuses. Takes the
 # net.rules file, the output path, the "address:port" the broker listens on, and the upstream
-# resolver ("ip" or "ip:port", empty when no exact-name rule needs one). An exact-name rule needs
+# resolver ("ip" or "ip:port", empty when no exact-name rule needs one), and optionally the number
+# of the descriptor to log refusals to. An exact-name rule needs
 # the resolvers section; the network layer guarantees a resolver is given whenever one is present.
+# With a descriptor, the frontend logs each connection it does not complete normally to it as one
+# raw line of machine fields, "PHB-BROKER <backend> <termination state> <hex host name> <address>
+# <port>", which the connect guard reads and words as a blocked action. The host name is hex, so
+# a name the program chose cannot inject anything into the line, and a connection that completed
+# normally is not logged. The name is kept in a variable while the ClientHello is inspected,
+# because HAProxy cannot read the request buffer when the line is written, at the end of the
+# connection; a connection that sent no name logs a dash.
 # A wildcard host name ends the run before anything is written, so a half-written config never
 # stands for a refusal. Assumes phobos-common.sh was sourced and that it is called plainly, so
 # the refusal ends the run.
@@ -525,6 +537,7 @@ build_haproxy_conf() {
   local out="$2"
   local listen="$3"
   local resolver="${4:-}"
+  local log_descriptor="${5:-}"
   refuse_wildcard_connect_names "$rules"
   {
     if [[ -n "$resolver" ]]; then
@@ -535,11 +548,21 @@ build_haproxy_conf() {
     printf '    timeout connect 5s\n'
     printf '    timeout client 30s\n'
     printf '    timeout server 30s\n'
+    if [[ -n "$log_descriptor" ]]; then
+      printf '    log fd@%s format raw local0\n' "$log_descriptor"
+    fi
     printf 'frontend broker\n'
+    if [[ -n "$log_descriptor" ]]; then
+      printf '    option dontlog-normal\n'
+      printf '    log-format "PHB-BROKER %%b %%ts %%[var(txn.sni),hex] %%[dst] %%[dst_port]"\n'
+    fi
     printf '    bind %s accept-proxy\n' "$listen"
     printf '    tcp-request inspect-delay 5s\n'
     printf '    tcp-request content set-dst dst\n'
     printf '    tcp-request content set-dst-port dst_port\n'
+    if [[ -n "$log_descriptor" ]]; then
+      printf '    tcp-request content set-var(txn.sni) req.ssl_sni\n'
+    fi
     haproxy_allow_rules "$rules"
     printf 'backend to_dst\n'
     printf '    server original 0.0.0.0:0\n'
@@ -599,6 +622,8 @@ build_inbound_conf() {
 # public port and connects to the backend on loopback on the run's behalf. Returns non-zero if the
 # filter cannot start, having stopped its own attempt, so the caller can refuse the run. Assumes
 # phobos-common.sh was sourced, so PHB_SPEC_SCRATCH is set, and that accept_rules is not empty.
+# Takes, last and optionally, the number of a descriptor the caller holds that the filter must not
+# inherit, such as the pipe the egress broker logs to, and closes it before haproxy starts.
 # The result is only assigned here, through a nameref, and read by the caller, which the linter
 # cannot follow, so it reports it as unused.
 # shellcheck disable=SC2034
@@ -607,6 +632,7 @@ start_inbound_haproxy() {
   local accept_rules="$2"
   local haproxy_bin="$3"
   local -n inbound_pid_out="$4"
+  local close_descriptor="${5:-}"
   local scratch="${spec_dir}/${PHB_SPEC_SCRATCH}"
   local cfg="${scratch}/inbound.cfg"
   local log="${scratch}/inbound.log"
@@ -616,7 +642,7 @@ start_inbound_haproxy() {
   mkdir -p "$scratch"
   build_inbound_conf "$accept_rules" "$cfg" "$scratch"
   first_port="$(awk 'NF>=2 {print $1; exit}' "$accept_rules")"
-  ( trap - TERM; exec "$haproxy_bin" -f "$cfg" -db ) > "$log" 2>&1 &
+  ( trap - TERM; if [[ -n "$close_descriptor" ]]; then exec {close_descriptor}<&-; fi; exec "$haproxy_bin" -f "$cfg" -db ) > "$log" 2>&1 &
   pid=$!
   for _ in $(seq 1 60); do
     kill -0 "$pid" 2>/dev/null || break

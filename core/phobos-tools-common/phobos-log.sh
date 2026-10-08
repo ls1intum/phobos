@@ -1,6 +1,6 @@
 #!/bin/bash
 # shellcheck shell=bash
-# Reporting, and counting what a run was denied.
+# Reporting.
 #
 # A component of phobos-common.sh, which sources this file after phobos-constants.sh
 # and is what every caller sources. It sets no shell option and sources nothing, so
@@ -8,9 +8,6 @@
 # Every variable here is read by the scripts that source the aggregate, never in
 # this file, so SC2034 would fire on all of them by design.
 # shellcheck disable=SC2034
-# What the denial report counts in the command's stderr, one extended regular expression each.
-PHB_NETWORK_DENIAL_PATTERN='EAI_AGAIN|EAI_FAIL|EAI_NONAME|Network is unreachable|Connection timed out'
-PHB_FILESYSTEM_DENIAL_PATTERN='Permission denied|EACCES|EROFS'
 # Prints one line on stderr, prefixed with the UTC time, for the operator reading the run's log.
 _log()   { printf '%s\n' "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*" >&2; }
 # Logs the message and ends the shell with the given status, 1 when none is given.
@@ -39,16 +36,44 @@ debug_log() {
   printf '[phobos] %s: %s%s\n' "$layer" "$message" "${quoted% }" >&2
 }
 
-# Reads a command's stderr on standard input and prints one line, "<network> <filesystem>",
-# the number of lines matching each denial pattern, counted as grep -c would, a last line
-# without a newline included. Assumes it runs in a process of its own, a process substitution,
-# since it sets that process's rlimits to the counter's own bounds and then becomes awk. The
-# counter's own errors, its out-of-memory message when one endless line exceeds its bound
-# among them, go nowhere: they are not the command's output, and a counter that fails only
-# means the run reports no counts.
-count_denials() {
-  ulimit -v "$PHB_DENIAL_COUNTER_MEMORY_KB"
-  ulimit -t "$PHB_DENIAL_COUNTER_CPU_SECONDS"
-  LC_ALL=C exec awk -v network="$PHB_NETWORK_DENIAL_PATTERN" -v filesystem="$PHB_FILESYSTEM_DENIAL_PATTERN" \
-    '$0 ~ network { n++ } $0 ~ filesystem { f++ } END { printf "%d %d\n", n, f }' 2>/dev/null
+# Sets REPLY to the processor time, in clock ticks, that the processes this shell has waited for used,
+# and the processes they waited for in turn, read from the shell's own /proc entry (the cutime and
+# cstime fields) without forking, since a subshell would have waited for nothing. Assumes /proc is
+# mounted; without it REPLY is 0, which can only mean no line is worded.
+waited_children_cpu_ticks() {
+  local stat=""
+  local -a fields=()
+  REPLY=0
+  read -r -d '' stat < "/proc/${BASHPID}/stat" || true
+  stat="${stat##*) }"
+  read -r -a fields <<< "$stat"
+  REPLY=$(( ${fields[PHB_STAT_CUTIME_INDEX]:-0} + ${fields[PHB_STAT_CSTIME_INDEX]:-0} ))
+}
+
+# Prints the line for a resource limit the command's exit status shows it hit. The file size limit
+# is SIGXFSZ, status 153, and is worded when the limits file names it and does not switch it off with
+# 0. The CPU limit cannot be told from its status alone: the resource layer sets the soft and the
+# hard limit to the same value, so the kernel ends the command with SIGKILL, 137, at the limit, as
+# it ends one that a timeout or the out-of-memory killer stopped. So it is worded for 137, and for a
+# 152 that only a command lowering its own soft limit can cause, only when the processes this shell
+# waited for used at least the limit in processor time, which the command did if the limit ended it.
+# Takes the status, the CPU limit in seconds and the file size limit in megabytes, either empty when
+# not set. A command that exits with 153 by itself gets the file size line, which a shell cannot
+# tell apart from the signal; the process, open file and memory limits are not detectable from a
+# status at all, since they surface as an error the command handles.
+report_resource_limit_hit() {
+  local status="$1"
+  local cpu="$2"
+  local fsize_mb="$3"
+  if (( status == PHB_STATUS_SIGXFSZ )) && [[ -n "$fsize_mb" ]] && (( 10#$fsize_mb != 0 )); then
+    report "Phobos Security Error: the program tried to illegally exceed the File Size Limit of $(( 10#$fsize_mb )) MB but was blocked by Phobos."
+    return 0
+  fi
+  if (( status != PHB_STATUS_SIGKILL && status != PHB_STATUS_SIGXCPU )) || [[ -z "$cpu" ]] || (( 10#$cpu == 0 )); then
+    return 0
+  fi
+  waited_children_cpu_ticks
+  if (( REPLY >= 10#$cpu * PHB_CLOCK_TICKS_PER_SECOND )); then
+    report "Phobos Security Error: the program tried to illegally exceed the CPU Time Limit of $(( 10#$cpu )) seconds but was blocked by Phobos."
+  fi
 }

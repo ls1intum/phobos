@@ -23,7 +23,7 @@ phobos-filesystem.sh - the filesystem layer: apply the Landlock policy and run t
 
 This is the last layer of a Phobos run and the one that actually starts the command. It
 turns the specification's path sets into one Landlock rule per path, applies them, runs the
-command as its child and afterwards reports how many accesses were denied.
+command as its child. The reporter in front of it words each action Landlock refuses.
 
 USAGE
   phobos-filesystem.sh [options] <SPEC_DIR> -- <command> [args...]
@@ -37,7 +37,7 @@ USAGE
 
 OPTIONS
   --no-landlock               Run the command without applying Landlock at all. The layer
-                              still runs the command and still counts the denials.
+                              still runs the command, and still words a resource limit it hit.
   --landlock-bin <path>       The Landlock enforcer
                               (default: "${HERE}/phobos-landlock-filesystem-and-networksystem").
   --resources-layer <path>    Apply the specification's resource limits by starting that
@@ -84,10 +84,14 @@ WHAT IT REPORTS
   the kernel cannot support it, a notice names what goes unreported and why, and the run is
   enforced all the same.
 
-  When the command's stderr carried lines that look like a refusal, the layer prints
-  "Sandbox denials: network=N, filesystem=N. (PHB-EDENY)" after the command has ended. That
-  is a report, never a status: the command's own exit status is passed through unchanged,
-  unless it could not be read at all (16, below).
+  When the command ends with the status of a CPU or file size limit it was given (152 for
+  SIGXCPU, 153 for SIGXFSZ), the layer prints the matching line, "... exceed the CPU Time Limit
+  of N seconds ..." or "... exceed the File Size Limit of N MB ...". A command that ends with
+  152 or 153 by itself gets the same line, which a shell cannot tell apart from the signal. At
+  the end of a run that blocked anything, the reporter prints one "Phobos Security Summary"
+  line that counts per layer what it decided, never the words in the command's own output.
+  None of this is a status: the command's own exit status is passed through unchanged, unless
+  it could not be read at all (16, below).
 
 EXIT STATUS
   0 to 255  the command's own status, passed through unchanged
@@ -198,17 +202,16 @@ LANDLOCK="${LANDLOCK_BIN_OPT:-${HERE}/phobos-landlock-filesystem-and-networksyst
 
 # With --resources-layer the command's resource limits are set by that layer, started as the
 # very last step before phobos-landlock-filesystem-and-networksystem (or the command), so they reach phobos-landlock-filesystem-and-networksystem and the
-# command and nothing else: this layer's shell, the stderr pass-through and the denial counter
-# below run without them. A limit set any earlier would also bind those helpers, and a helper
+# command and nothing else: this layer's shell runs without them. A limit set any earlier would also bind those helpers, and a helper
 # that dies of the command's file-size, memory or CPU limit takes the command's output with it.
 # The limits are validated here, before any write path is materialised, so a malformed one is
 # refused before this layer changes anything; the resource layer checks them again.
 limit_prefix=()
+# read_limits_conf fills the array by name. This layer needs its refusal, and, after the command,
+# the CPU and file size limits to word a command that hit one; the resource layer reads the
+# values again when it applies them. The array stays empty when there is no resource layer.
+declare -A validated_limits=()
 if [[ -n "$RESOURCES_LAYER_OPT" ]]; then
-  # read_limits_conf fills the array by name; this layer only needs its refusal, the resource
-  # layer reads the values again when it applies them.
-  # shellcheck disable=SC2034
-  declare -A validated_limits
   read_limits_conf "${SPEC_DIR}/limits.conf" validated_limits
   limit_prefix=( "$RESOURCES_LAYER_OPT" )
   if (( PHB_DEBUG_ENABLED )); then limit_prefix+=( --debug ); fi
@@ -248,6 +251,7 @@ if (( NO_LANDLOCK )); then
   run_forwarding_signals "${reporter_prefix[@]}" "${limit_prefix[@]}" "${CMD[@]}"
   rc=$?
   set -e
+  report_resource_limit_hit "$rc" "${validated_limits[cpu]:-}" "${validated_limits[fsize_mb]:-}"
   exit "$rc"
 fi
 
@@ -282,63 +286,18 @@ fi
 
 debug_log filesystem "run" "${reporter_prefix[@]}" "${limit_prefix[@]}" "${LANDLOCK}" "${args[@]}" -- "${CMD[@]}"
 
-# The command's stderr passes through tee to this layer's stderr unchanged, and a copy goes to
-# count_denials, whose counts come back over an anonymous pipe. Nothing is written to a file, so
-# the counts cannot be tampered with from inside the sandbox and no helper fills a disk. The
-# command inherits neither descriptor, so it sees only its standard three and can neither feed
-# the counter directly nor keep it alive through a hidden descriptor. tee -p keeps passing the
-# output through should the counter die at its own limits, which only means no counts.
-# The pass-through and the counter are started with SIGTERM, SIGHUP, SIGINT and SIGQUIT ignored,
-# and inherit that from this shell at the moment they are made, so no signal can reach them first.
-# They share the run's process group, and a terminal sends a Ctrl+C, a quit or a hangup to that
-# whole group: at their default action they died with the command, which then lost everything it
-# wrote while it handled the signal, its traceback among it, and the counts went with them. They
-# end when the last writer of the command's stderr has closed it, which is the only ending they
-# need. This shell's own dispositions are put back straight afterwards, so this layer discards a
-# hangup, quit or interrupt that reaches it in the brief interval while the pass-through is made;
-# whatever else the signal reaches acts on it as it otherwise would, GNU timeout above this layer
-# among them when a timeout is set. SIGTERM is ignored outside run_forwarding_signals anyway.
-# Setting the dispositions inside the pass-through instead would leave it a gap after the command
-# has started, which is the failure this exists to remove.
-exec {denial_counts}<> <(:)
-saved_term="$(trap -p TERM)"
-saved_hup="$(trap -p HUP)"
-saved_int="$(trap -p INT)"
-saved_quit="$(trap -p QUIT)"
-trap '' TERM HUP INT QUIT
-exec {filtered_stderr}> >(tee -p >(count_denials >&"$denial_counts") >&2)
-restore_signal_traps "$saved_term" "$saved_hup" "$saved_int" "$saved_quit"
-
-# The command runs as this layer's child, started through the resource layer, when there is one,
-# and phobos-landlock-filesystem-and-networksystem, which exec's it, so they and the command are
-# one process that an outer timeout's kill escalation and the signals passed on reach directly,
-# while this layer ignores SIGTERM between them and waits so it can report the denials. The
-# reporter, when there is one, comes first and forks: its supervising half is this layer's child,
-# passes every signal it receives on to that process and ends with its status, and the kill
-# escalation reaches both, since they share the run's process group. The
-# timeout itself, when set, is phobos-timeoutsystem.sh's. The two variables hand the helper the
-# command's standard error and the descriptors it must not inherit, instead of a redirection on
-# the call: that would be this shell's own standard error for as long as the helper runs, and
-# bash reports a child that died of a signal there, into a pipe whose reader the same signal
-# may have killed, and so ends this layer with SIGPIPE.
+# The command runs as this layer's child, started through the reporter, when there is one, then the
+# resource layer, when there is one, and phobos-landlock-filesystem-and-networksystem, which exec's
+# it, so the last two and the command are one process that an outer timeout's kill escalation and
+# the signals passed on reach directly, while this layer ignores SIGTERM between them and waits so
+# it can word a limit the command hit. The reporter comes first and forks: its supervising half is
+# this layer's child, passes every signal it receives on to that process and ends with its status,
+# and the kill escalation reaches both, since they share the run's process group. The command's
+# standard error is this layer's own; the reporter words what it decided on that stream, once, at
+# the end. The timeout itself, when set, is phobos-timeoutsystem.sh's.
 set +e
-PHB_FORWARD_STDERR_FD="$filtered_stderr" PHB_FORWARD_CLOSE_FDS="$filtered_stderr $denial_counts" run_forwarding_signals "${reporter_prefix[@]}" "${limit_prefix[@]}" "${LANDLOCK}" "${args[@]}" -- "${CMD[@]}"
+run_forwarding_signals "${reporter_prefix[@]}" "${limit_prefix[@]}" "${LANDLOCK}" "${args[@]}" -- "${CMD[@]}"
 rc=$?
 set -e
-exec {filtered_stderr}>&-
-
-# The counts arrive once every writer of the command's stderr has gone. A process the command
-# left behind can hold it open indefinitely, so the wait is bounded, and a run whose counts do
-# not arrive in time, or whose counter died, reports none. Neither ever changes the exit status.
-net_denials=0
-fs_denials=0
-if read -r -t "$PHB_DENIAL_COUNT_GRACE_SECONDS" -u "$denial_counts" net_denials fs_denials; then
-  if (( net_denials > 0 || fs_denials > 0 )); then
-    report "Sandbox denials: network=${net_denials}, filesystem=${fs_denials}. (PHB-EDENY)"
-  fi
-else
-  debug_log filesystem "no denial counts within ${PHB_DENIAL_COUNT_GRACE_SECONDS}s; a process the command left behind may still hold its stderr"
-fi
-exec {denial_counts}<&-
-
+report_resource_limit_hit "$rc" "${validated_limits[cpu]:-}" "${validated_limits[fsize_mb]:-}"
 exit "$rc"

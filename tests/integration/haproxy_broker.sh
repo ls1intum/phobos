@@ -34,6 +34,8 @@ cleanup() {
   stop_haproxy_child "${broker_pid:-}"
   stop_haproxy_child "${lh_broker_pid:-}"
   stop_haproxy_child "${sf_broker_pid:-}"
+  stop_haproxy_child "${log_broker_pid:-}"
+  stop_haproxy_child "${flood_broker_pid:-}"
   [[ -n "${speaker_pid:-}" ]] && kill "$speaker_pid" 2>/dev/null
   [[ -n "${ungranted_pid:-}" ]] && kill "$ungranted_pid" 2>/dev/null
   [[ -n "${real_pid:-}" ]] && kill "$real_pid" 2>/dev/null
@@ -58,7 +60,11 @@ if ! command -v openssl >/dev/null 2>&1; then
   skip "the egress broker" "openssl is not installed here, so no ClientHello can be sent"
   finish
 fi
-if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/guard" "${CORE}"/phobos-seccomp-networksystem/phobos-seccomp-networksystem*.c 2>"$WORK/cc.log"; then
+if ! "$compiler" -std=gnu23 -O2 -Wall -Wextra -Werror -o "$WORK/guard" "${CORE}"/phobos-seccomp-networksystem/phobos-seccomp-networksystem*.c \
+  "${CORE}"/phobos-seccomp-filesystem/phobos-seccomp-filesystem-*.c \
+  "${CORE}"/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-policy.c \
+  "${CORE}"/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-path-rule.c \
+  "${CORE}"/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-model.c 2>"$WORK/cc.log"; then
   bad "the connect guard builds" "$(cat "$WORK/cc.log")"
   finish
 fi
@@ -594,6 +600,146 @@ if [[ -w /etc/hosts ]]; then
   [[ ! -e "$spec_e2e" ]] && ok "and so is the run's specification directory" || bad "and so is the run's specification directory" "$(ls -A "$spec_e2e")"
 else
   skip "the network layer maps the name end to end" "/etc/hosts is not writable here"
+fi
+
+# The broker's refusals reach the guard through an anonymous pipe, and the guard words each of them. HAProxy
+# logs a refusal to a descriptor it inherited, in the machine fields the guard reads; the host name is hex,
+# so a name the program chose cannot inject anything into the line. First what the broker logs for a
+# refused host name, a refused plain connection and an allowed name; then that the command inherits no
+# descriptor of the pipe and cannot reach it through the guard's descriptors with the filesystem layer on;
+# then, with the filesystem layer off, the limit the layer's manual states, that a command running as the
+# same user can write to the pipe through /proc and forge a line; last, that a broker whose log nobody
+# reads is not stalled by it.
+REFUSED_NAME_LINE="Phobos Security Error: the program tried to illegally connect to the Host 'forbidden.example' on Port ${UPORT} but was blocked by Phobos."
+REFUSED_PLAIN_LINE="Phobos Security Error: the program tried to illegally connect to the Endpoint ${REAL_IP}:${UPORT} over TCP but was blocked by Phobos."
+spec_log="$WORK/spec-log"
+mkdir -p "$spec_log"
+printf 'allowed.example %s\n' "$UPORT" > "$spec_log/net.rules"
+exec {broker_log}<> <(:)
+log_endpoint=""
+log_broker_pid=""
+start_egress_broker "$spec_log" "$spec_log/net.rules" "$haproxy_bin" "127.0.0.1:${DNSPORT}" log_endpoint log_broker_pid "$broker_log"
+if [[ -z "$log_endpoint" || -z "$log_broker_pid" ]]; then
+  bad "a broker that logs to a descriptor starts" "endpoint=${log_endpoint} pid=${log_broker_pid}"
+else
+  ok "a broker that logs its refusals to a descriptor starts"
+  guard_with_log() {
+    "$WORK/guard" --rules "$spec_log/net.rules" --broker "$log_endpoint" --broker-log-fd "$broker_log" "$@"
+  }
+
+  rm -f "$WORK/real.marker" "$WORK/decoy.marker"
+  guard_with_log -- timeout 3 openssl s_client -connect "${REAL_IP}:${UPORT}" -servername forbidden.example -quiet \
+    < /dev/null > "$WORK/log.client.out" 2>&1 || true
+  sleep 0.6
+  if [[ "$(grep -cxF -- "$REFUSED_NAME_LINE" "$WORK/log.client.out")" == 1 && ! -f "$WORK/real.marker" ]]; then
+    ok "a ClientHello for a host no rule names is still refused and prints one line naming the host and the port"
+  else
+    bad "a ClientHello for a host no rule names is refused and printed once" "$(cat "$WORK/log.client.out"); broker=$(cat "$spec_log/${PHB_SPEC_SCRATCH}/broker.log" 2>/dev/null)"
+  fi
+
+  rm -f "$WORK/real.marker" "$WORK/decoy.marker"
+  guard_with_log -- timeout 3 openssl s_client -connect "${REAL_IP}:${UPORT}" -servername allowed.example -quiet \
+    < /dev/null > "$WORK/log.client.out" 2>&1 || true
+  sleep 0.6
+  if [[ -f "$WORK/real.marker" && "$(grep -cE 'illegally connect to the (Host|Endpoint)' "$WORK/log.client.out")" == 0 ]]; then
+    ok "an allowed host name still connects and prints no connect line (timeout's own setpgid and openssl's netlink socket are worded, being refused too)"
+  else
+    bad "an allowed host name still connects and prints nothing" "$(cat "$WORK/log.client.out")"
+  fi
+
+  guard_with_log -- timeout 3 "$WORK/client" "$REAL_IP" "$UPORT" > "$WORK/log.client.out" 2>&1 || true
+  sleep 0.6
+  if [[ "$(grep -cxF -- "$REFUSED_PLAIN_LINE" "$WORK/log.client.out")" == 1 ]]; then
+    ok "a plain connection to an address no rule names prints one line naming the endpoint"
+  else
+    bad "a plain connection to an address no rule names prints one line naming the endpoint" "$(cat "$WORK/log.client.out")"
+  fi
+
+  guard_with_log -- bash -c 'for descriptor in /proc/self/fd/*; do readlink "$descriptor"; done' \
+    > "$WORK/log.fds.out" 2>&1 || true
+  if [[ "$(grep -c '^pipe:' "$WORK/log.fds.out")" == 0 ]]; then
+    ok "the command inherits no descriptor of the pipe, nor any other pipe"
+  else
+    bad "the command inherits no descriptor of the pipe" "$(cat "$WORK/log.fds.out")"
+  fi
+  guard_with_log -- bash -c 'for descriptor in $(seq 3 1023); do echo "PHB-BROKER refuse PR 666f72676564 1.2.3.4 80" >&"$descriptor"; done' \
+    > "$WORK/log.forge.out" 2>&1 || true
+  if [[ "$(grep -c "the Host 'forged'" "$WORK/log.forge.out")" == 0 ]]; then
+    ok "a command that writes a forged broker line to every descriptor it holds produces no line"
+  else
+    bad "a command that writes a forged broker line to every descriptor it holds produces no line" "$(cat "$WORK/log.forge.out")"
+  fi
+  guard_with_log -- bash -c 'for descriptor in /proc/$PPID/fd/*; do
+      if [[ "$(readlink "$descriptor")" == pipe:* ]]; then echo "PHB-BROKER refuse PR 666f72676564 1.2.3.4 80" > "$descriptor" 2>/dev/null; fi
+    done; sleep 0.5' > "$WORK/log.reach.out" 2>&1 || true
+  if [[ "$(grep -c "the Host 'forged'" "$WORK/log.reach.out")" -ge 1 ]]; then
+    ok "the limit the manual states: with no filesystem layer a command can reach the pipe through the guard's /proc entry and forge a line"
+  else
+    bad "the limit the manual states: with no filesystem layer a command can forge a line through /proc" "the forged line did not print; $(cat "$WORK/log.reach.out")"
+  fi
+  ls "$spec_log" "$spec_log/${PHB_SPEC_SCRATCH}" > "$WORK/log.listing" 2>&1
+  if ! grep -qE 'broker[-.]?log[^.]|\.pipe|\.fifo' "$WORK/log.listing" && [[ -z "$(find "$spec_log" -type p)" ]]; then
+    ok "no file or pipe on a file system carries the log: the specification directory holds none"
+  else
+    bad "no file or pipe on a file system carries the log" "$(cat "$WORK/log.listing")"
+  fi
+fi
+
+# A broker whose log nobody reads. The pipe holds 64 KiB, about 1300 lines; the guard makes the shared
+# description non-blocking, so HAProxy's write fails with EAGAIN and it drops the line instead of waiting.
+# The description is made non-blocking here by a helper, and then 3000 refused connections are made without
+# anyone reading, after which an allowed connection and a refused one are both still decided.
+cat > "$WORK/nonblock.c" <<'C'
+#include <fcntl.h>
+#include <stdlib.h>
+int main(int argc, char **argv) {
+    if (argc < 2) {
+        return 2;
+    }
+    int descriptor = atoi(argv[1]);
+    int flags = fcntl(descriptor, F_GETFL);
+    return flags < 0 || fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) != 0;
+}
+C
+if ! "$compiler" -O2 -o "$WORK/nonblock" "$WORK/nonblock.c" 2>"$WORK/nonblock-cc.log"; then
+  bad "the non-blocking helper builds" "$(cat "$WORK/nonblock-cc.log")"
+else
+  spec_flood="$WORK/spec-flood"
+  mkdir -p "$spec_flood"
+  printf 'allowed.example %s\n' "$UPORT" > "$spec_flood/net.rules"
+  exec {flood_log}<> <(:)
+  "$WORK/nonblock" "$flood_log"
+  flood_endpoint=""
+  flood_broker_pid=""
+  start_egress_broker "$spec_flood" "$spec_flood/net.rules" "$haproxy_bin" "127.0.0.1:${DNSPORT}" flood_endpoint flood_broker_pid "$flood_log"
+  flood_port="${flood_endpoint##*:}"
+  FLOOD_REFUSALS=3000
+  for _ in $(seq 1 "$FLOOD_REFUSALS"); do
+    exec 3<>"/dev/tcp/127.0.0.1/${flood_port}"
+    printf 'PROXY TCP4 127.0.0.1 93.184.216.34 40000 443\r\njunk\r\n' >&3
+    exec 3>&-
+  done
+  sleep 1
+  rm -f "$WORK/real.marker" "$WORK/decoy.marker"
+  "$WORK/guard" --rules "$spec_flood/net.rules" --broker "$flood_endpoint" --broker-log-fd "$flood_log" -- \
+    timeout 3 openssl s_client -connect "${REAL_IP}:${UPORT}" -servername allowed.example -quiet < /dev/null \
+    > "$WORK/flood.client.out" 2>&1 || true
+  sleep 0.6
+  if kill -0 "$flood_broker_pid" 2>/dev/null && [[ -f "$WORK/real.marker" ]]; then
+    ok "after ${FLOOD_REFUSALS} refusals nobody read, the broker is not stalled: an allowed connection still completes"
+  else
+    bad "after ${FLOOD_REFUSALS} refusals nobody read, an allowed connection still completes" "broker alive=$(kill -0 "$flood_broker_pid" 2>/dev/null && echo yes || echo no); $(cat "$WORK/flood.client.out")"
+  fi
+  rm -f "$WORK/real.marker" "$WORK/decoy.marker"
+  "$WORK/guard" --rules "$spec_flood/net.rules" --broker "$flood_endpoint" --broker-log-fd "$flood_log" -- \
+    timeout 3 openssl s_client -connect "${REAL_IP}:${UPORT}" -servername forbidden.example -quiet < /dev/null \
+    > "$WORK/flood.client.out" 2>&1 || true
+  sleep 0.6
+  if [[ ! -f "$WORK/real.marker" && "$(grep -cxF -- "$REFUSED_NAME_LINE" "$WORK/flood.client.out")" -le 1 ]]; then
+    ok "and a refused one is still refused (its line may be lost to the full pipe, never the refusal)"
+  else
+    bad "a refused connection after the flood is still refused" "$(cat "$WORK/flood.client.out")"
+  fi
 fi
 
 stopped_pid="$broker_pid"

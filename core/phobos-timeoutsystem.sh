@@ -69,7 +69,13 @@ HOW THE KILL WORKS
   kill reaches the command's children too. A command that ignores SIGTERM is ended by the
   escalation to SIGKILL that follows. A run is reported as timed out only when GNU timeout's
   own status says so and the run really lasted at least the bound, so a command's own 124 or
-  137 passes through unchanged.
+  137 passes through unchanged. A run that is reported as timed out prints
+    Phobos Security Error: the program tried to illegally exceed the Time Limit of N seconds but was blocked by Phobos.
+  before the "Timed out after Ns. (PHB-ETIMEOUT)" line, once.
+
+  Run on its own, this layer starts no supervisor, so the group lock refuses setsid, setpgid and
+  a foreign ABI with ENOSYS and reports nothing of them; phobos.sh puts a supervisor in the chain
+  that answers them with EACCES and words them.
 
 EXIT STATUS
   0 to 255  the command's own status, passed through unchanged
@@ -188,6 +194,7 @@ elapsed_microseconds=$(( $(epoch_realtime_microseconds "$EPOCHREALTIME") - start
 # A timeout only when GNU timeout's status says so and the run lasted at least the timeout;
 # any other status, a 124 or 137 of the command's own included, passes through unchanged.
 if run_reached_timeout "$rc" "$elapsed_microseconds" "$timeout_sec"; then
+  report "Phobos Security Error: the program tried to illegally exceed the Time Limit of ${timeout_sec} seconds but was blocked by Phobos."
   report "Timed out after ${timeout_sec}s. (PHB-ETIMEOUT)"
   exit "${PHB_ETIMEOUT}"
 fi

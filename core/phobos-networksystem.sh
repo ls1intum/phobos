@@ -58,6 +58,14 @@ OPTIONS
                               connect supervision unnoticed.
   --landlock-bin <path>       The enforcer that applies the port rules
                               (default: "${HERE}/phobos-landlock-filesystem-and-networksystem").
+                              The connect guard is told the same path, so it can arm its reporter
+                              on that enforcer and report the ports it refuses to bind.
+  --report-filesystem         Have the connect guard report the filesystem layer's denials too.
+                              phobos.sh passes it when the filesystem layer is in the chain.
+  --group-lock-above          The timeout layer's group lock is above this layer, so the connect
+                              guard counts the calls it refuses outright, setsid, setpgid and a
+                              foreign ABI, for the timeout layer. phobos.sh passes it when the
+                              timeout layer applies the lock.
   --haproxy-bin <path>        The egress broker and the inbound filter (default: haproxy).
   --resolver <ip[:port]>      The resolver the broker resolves an exact [connect] host name
                               through, and the one a udp [connect] host name is resolved
@@ -79,6 +87,21 @@ WHAT IT READS FROM THE SPECIFICATION DIRECTORY
   accept.rules  the public ports an inbound filter fronts
 
   An empty net.rules is a policy, not a gap: it denies every outbound connection.
+
+WHAT IT REPORTS
+  The connect guard is the run's one supervisor, so it prints a line on stderr for each distinct
+  action it blocks, at most 100 per run, such as
+    Phobos Security Error: the program tried to illegally connect to the Endpoint 93.184.216.34:443 over TCP but was blocked by Phobos.
+  It words the connections and datagrams it refuses, the sockets it will not open, a listen on a
+  socket bound to no port, the ports Landlock refuses to bind, and the calls its filter refuses
+  outright (io_uring, setsid, setpgid, a foreign ABI). With a [connect] rule that names a host, the
+  egress broker logs each TLS host name it refuses to an anonymous pipe that only it and the guard
+  hold, and the guard words those too. When the run ends, one line, Phobos Security Summary,
+  counts what was blocked per layer. Every line is evidence for a person reading the log, not
+  proof, because the command writes to the same stderr; and with the filesystem layer off a
+  command running as the same user can reach the pipe through /proc and forge a broker line.
+  Reporting never changes an outcome. When the kernel cannot support it, a notice says what goes
+  unreported and why, and the run is enforced all the same.
 
 WHEN A CONTAINER MUST HAVE A NETWORK
   Both the egress broker and the inbound filter need one, so a [connect] rule that names a
@@ -130,6 +153,8 @@ GUARD_BIN_OPT=""
 HAPROXY_BIN_OPT=""
 RESOLVER_OPT=""
 LANDLOCK_BIN_OPT=""
+REPORT_FILESYSTEM=0
+GROUP_LOCK_ABOVE=0
 CONFIGS=()
 SPEC_PARENT="/var/tmp"
 TAIL_FLAGS_FILE_OPT=""
@@ -142,6 +167,8 @@ while [[ "${1:-}" == -* ]]; do
     --haproxy-bin) shift; HAPROXY_BIN_OPT="${1:-}"; LAYER_FLAGS+=( --haproxy-bin "${1:-}" ); shift ;;
     --resolver) shift; RESOLVER_OPT="${1:-}"; LAYER_FLAGS+=( --resolver "${1:-}" ); shift ;;
     --landlock-bin) shift; LANDLOCK_BIN_OPT="${1:-}"; LAYER_FLAGS+=( --landlock-bin "${1:-}" ); shift ;;
+    --report-filesystem) REPORT_FILESYSTEM=1; LAYER_FLAGS+=( --report-filesystem ); shift ;;
+    --group-lock-above) GROUP_LOCK_ABOVE=1; LAYER_FLAGS+=( --group-lock-above ); shift ;;
     --config|-c) shift; CONFIGS+=( "${1:-}" ); shift ;;
     --spec-parent) shift; SPEC_PARENT="${1:-}"; shift ;;
     --tail-flags-file) shift; TAIL_FLAGS_FILE_OPT="${1:-}"; shift ;;
@@ -204,6 +231,8 @@ RULES="${SPEC_DIR}/net.rules"
 # on its own may never have met the policy parser, and the helpers below skip UDP rows.
 refuse_wildcard_connect_names "$RULES"
 want_broker=0
+# The pipe the egress broker logs its refusals to, once there is a broker; empty until then.
+broker_log=""
 mapfile -t name_rules < <(name_connect_rules "$RULES")
 if (( ${#name_rules[@]} > 0 )); then want_broker=1; fi
 
@@ -224,6 +253,7 @@ if [[ ! -f "$GUARD_BIN" || ! -x "$GUARD_BIN" ]]; then
 fi
 guard_command=( "$GUARD_BIN" )
 if (( PHB_DEBUG_ENABLED )); then guard_command+=( --verbose ); fi
+LANDLOCK_BIN="${LANDLOCK_BIN_OPT:-${HERE}/phobos-landlock-filesystem-and-networksystem}"
 
 # A udp rule that names a host cannot be held to it at send time, because a datagram carries no TLS
 # host name for the egress broker to read. The name is therefore resolved once, now, before the
@@ -296,11 +326,16 @@ if (( want_broker )); then
   # at run time rather than being refused up front, so say loudly that this run assumes a network.
   _log "NOTICE: the [connect] allow-list names a host (${name_rules[*]}), so the egress broker is started to enforce it by the TLS host name the connect guard cannot see. This assumes a NETWORKED container; in a --network none container the onward connection cannot be made."
   broker_endpoint=""
-  if ! start_egress_broker "$SPEC_DIR" "$RULES" "${HAPROXY_BIN_OPT:-haproxy}" "$RESOLVER_OPT" broker_endpoint BROKER_PID; then
+  # The broker's refusals reach the guard through an anonymous pipe that no path names, so no policy
+  # can grant the command access to it. One read-write descriptor serves both HAProxy, which logs to
+  # it, and the guard, which reads it and makes it close-on-exec and non-blocking before its child
+  # starts the chain down to the command. Every other child of this shell gets it closed.
+  exec {broker_log}<> <(:)
+  if ! start_egress_broker "$SPEC_DIR" "$RULES" "${HAPROXY_BIN_OPT:-haproxy}" "$RESOLVER_OPT" broker_endpoint BROKER_PID "$broker_log"; then
     report "The egress broker could not be started; refusing to run rather than lose the host-name enforcement it was asked for. (PHB-ERUNTIME)"
     exit "${PHB_ERUNTIME}"
   fi
-  guard_command+=( --broker "$broker_endpoint" )
+  guard_command+=( --broker "$broker_endpoint" --broker-log-fd "$broker_log" )
 fi
 
 # Any [accept] rule fronts a student's listener with an inbound filter on a public port. This
@@ -312,7 +347,7 @@ fi
 ACCEPT_RULES="${SPEC_DIR}/accept.rules"
 if [[ -s "$ACCEPT_RULES" ]]; then
   _log "NOTICE: an [accept] rule is present, so this run fronts a listener on a public port and assumes a NETWORKED container with the required isolation (only the public port reachable from outside, no other path to the backend port). This removes the --network none default; the outer network isolation, not Phobos, keeps the backend reachable only through the filter."
-  if ! start_inbound_haproxy "$SPEC_DIR" "$ACCEPT_RULES" "${HAPROXY_BIN_OPT:-haproxy}" INBOUND_PID; then
+  if ! start_inbound_haproxy "$SPEC_DIR" "$ACCEPT_RULES" "${HAPROXY_BIN_OPT:-haproxy}" INBOUND_PID "$broker_log"; then
     report "The inbound filter could not be started; refusing to run rather than expose the listener unfiltered. (PHB-ERUNTIME)"
     exit "${PHB_ERUNTIME}"
   fi
@@ -323,6 +358,12 @@ fi
 if ephemeral_udp_bind_granted "${SPEC_DIR}/bind.rules" "$RULES"; then
   guard_command+=( --allow-ephemeral-udp-bind )
 fi
+# The guard is also the run's denial reporter. Told the enforcer, it arms on it and words the ports
+# the enforcer's network ruleset refuses to bind; --report-filesystem has it word the filesystem
+# layer's denials as well, and --group-lock-above says whose refusals the group lock's are.
+guard_command+=( --landlock-bin "$LANDLOCK_BIN" )
+if (( REPORT_FILESYSTEM )); then guard_command+=( --report-filesystem ); fi
+if (( GROUP_LOCK_ABOVE )); then guard_command+=( --group-lock-above ); fi
 guard_command+=( --rules "$GUARD_RULES" -- )
 
 # The Landlock port rules are the kernel-enforced half of the network boundary, and this
@@ -337,7 +378,6 @@ guard_command+=( --rules "$GUARD_RULES" -- )
 # granted, so only a [bind] row opens a port, and a row for port 0 opens only the kernel's own
 # choice of port. The ruleset is therefore applied on every run, also when the policy names no
 # port at all and in a run given no --config, where it is what keeps a bare run from listening.
-LANDLOCK_BIN="${LANDLOCK_BIN_OPT:-${HERE}/phobos-landlock-filesystem-and-networksystem}"
 command_tail=( "$@" )
 port_args=( --close-bind )
 build_network_args port_args "$RULES"

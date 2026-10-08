@@ -171,9 +171,9 @@ core/                      the sandbox itself
   phobos-timeoutsystem.sh  the timeout layer, which applies the group lock when a timeout is set
   phobos-resourcesystem.sh the resource layer, sets the rlimits the policy names, started by the filesystem layer right before Landlock
   phobos-landlock-filesystem-and-networksystem/  its *.c/.h: the C program that applies the Landlock policy, then exec's
-  phobos-seccomp-networksystem/  its *.c/.h: the connect guard, supervises connect() and enforces [connect] by host and port
+  phobos-seccomp-networksystem/  its *.c/.h: the connect guard, supervises connect() and enforces [connect] by host and port; with the network layer on it is also the run's one reporting supervisor
   phobos-seccomp-timeoutsystem/  its *.c: the group lock, a seccomp filter refusing setsid and setpgid, then exec's
-  phobos-seccomp-filesystem/     its *.c/.h: the report-only supervisor, reports what Landlock and the group lock block when the network layer is off
+  phobos-seccomp-filesystem/     its *.c/.h: the denial reporter (wording, counts, the mirror of Landlock) and, as its main, the report-only supervisor that runs when the network layer is off; the connect guard links the rest
   phobos-tools-common/     sourced by every layer through phobos-common.sh, which sources the rest here and the three per-subsystem helpers
     phobos-environment.sh  sourced first by every entry point: PATH and the other lookup variables made safe before anything is looked up
     phobos-common.sh       the shared entry the layers source; it sources the others
