@@ -88,8 +88,10 @@ OTHER OPTIONS
         and timeout permissions are imported; README.md says how each is mapped.
   --project-root <dir>
         The directory a relative path and \${PROJECT_ROOT} in an Ares 2 policy are resolved
-        against, which must be the one the build tool starts the test JVM in. Without it, the
-        last --chdir of the tail flags is used, and with neither such a path is refused.
+        against, which must be the one the build tool starts the test JVM in, and the real path
+        of a project directory: not "/", and not reached through a symbolic link. Without it,
+        the last --chdir of the tail flags is used, held to the same rule where an imported
+        path needs it, and with neither such a path is refused.
   --debug, -d
         Report on stderr what each layer does and runs, and have the enforcers report
         verbosely too. It prints the whole effective policy, so it is meant for diagnosis
