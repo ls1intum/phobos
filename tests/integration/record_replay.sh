@@ -98,7 +98,9 @@ for reason in report["not_completed"]:
 PYTHON
 }
 
-# Types a script into a command through a pseudo-terminal and prints "<status> <expectations met>".
+# Types a script into a command through a pseudo-terminal and prints "<status> <expectations met>". Each step
+# may take 180 s: the replay's judgement after the last keystroke parses a trace of every process under strace,
+# which took over a minute once on a loaded arm64 runner.
 # Takes the script file, then the command.
 typed() {
   local script="$1"
@@ -112,7 +114,7 @@ from layer_record import pty_script
 
 script = pathlib.Path(sys.argv[2])
 out = pathlib.Path(sys.argv[3])
-outcome = pty_script.drive(sys.argv[4:], pty_script.parse(script.read_text()), out, out / "transcript", 60.0)
+outcome = pty_script.drive(sys.argv[4:], pty_script.parse(script.read_text()), out, out / "transcript", 180.0)
 print(outcome.status, outcome.expectations_met)
 PYTHON
 }
