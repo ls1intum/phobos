@@ -479,3 +479,37 @@ def test_writing_beneath_the_specification_s_parent_or_reading_it_is_still_grant
     assert grants == {"/var/tmp/testing-dir": frozenset({"create"}), "/var/tmp": frozenset({"read"})}
     assert [(item["path"], item["section"]) for item in notes.reported] == [("/", "create")]
     assert generalise.SPECIFICATION_ANCESTORS == ("/var/tmp", "/var", "/")
+
+
+def need(path: str, section: str = "read", tid: int = 300, tgid: int = 300, run: int = 1) -> record.Need:
+    """A need of one section on one path, read from an openat."""
+    return record.Need(objects=(path,), sections=frozenset({section}), run=run, tid=tid, tgid=tgid,
+                       evidence=f"{tid} openat()")
+
+
+def test_a_denial_and_a_need_generalise_alike():
+    refused = read("/usr/lib/jvm/lib/modules")
+    snapshot = snapshot_with("/usr/lib/jvm/lib", "/usr/lib/jvm/lib/modules")
+    assert generalise.grants_for([refused], snapshot, FINE) == generalise.grants_for([refused.need()], snapshot, FINE)
+
+
+def test_another_process_of_the_session_is_a_per_run_name_from_one_run():
+    grants, comments = generalise.per_run_grants([need("/proc/977/status")], own_ids=frozenset({300, 977}))
+    assert grants == {"/proc": frozenset({"read"})}
+    assert comments["/proc"].startswith("per-run name: /proc/<pid>/status")
+
+
+def test_a_process_outside_the_session_seen_once_is_not_taken_as_per_run():
+    grants, _ = generalise.per_run_grants([need("/proc/1/cmdline")], own_ids=frozenset({300}))
+    assert grants == {}
+
+
+def test_a_process_outside_the_session_seen_once_is_granted_file_by_file():
+    snapshot = snapshot_with("/proc/1/cmdline", "/proc/1")
+    grants = generalise.grants_for([need("/proc/1/cmdline")], snapshot, FINE, own_ids=frozenset({300}))
+    assert grants == {"/proc/1/cmdline": frozenset({"read"})}
+
+
+def test_a_session_process_is_left_to_the_per_run_grant_by_grants_for():
+    snapshot = snapshot_with("/proc/977/status", "/proc/977")
+    assert generalise.grants_for([need("/proc/977/status")], snapshot, FINE, own_ids=frozenset({977})) == {}

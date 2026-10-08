@@ -44,8 +44,28 @@ MODULES=(
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-rules.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-socket-types.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-supervisor.c"
+  "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-report.c"
+  "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-broker-log.c"
 )
-UNIT_TEST_DEFINE=-DPHOBOS_CONNECT_GUARD_UNIT_TEST
+# What the guard links from beside it: the denial reporter, whose lines are held to 100 % by its own
+# suite (tests/unit/phobos-seccomp-filesystem), and the enforcer's diagnostics-free model, which the
+# reporter reads the enforcer's rules with. The guard drives the reporter through its public
+# functions only, so these are linked here and not gated here, the way the reporter's suite links the
+# guard's handoff module without gating it.
+LINKED=(
+  "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-message.c"
+  "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-access.c"
+  "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-path.c"
+  "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-judge.c"
+  "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-reporter.c"
+  "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-refusals.c"
+  "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-filter.c"
+  "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-handoff.c"
+  "${CORE}/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-policy.c"
+  "${CORE}/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-path-rule.c"
+  "${CORE}/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-model.c"
+)
+UNIT_TEST_DEFINE=(-DPHOBOS_CONNECT_GUARD_UNIT_TEST -DPHOBOS_REPORTER_UNIT_TEST)
 
 # The commas belong to the -Wl, linker flags, not to the array syntax.
 # shellcheck disable=SC2054
@@ -80,11 +100,16 @@ WRAPS=(
   -Wl,--wrap=process_vm_writev
   -Wl,--wrap=recv
   -Wl,--wrap=getrandom
+  -Wl,--wrap=read
+  -Wl,--wrap=reporter_task_in_domain
+  -Wl,--wrap=query_landlock_version
+  -Wl,--wrap=continue_supported
+  -Wl,--wrap=group_lock_present
 )
 
 if [[ "${1:-}" == "--coverage" ]]; then
-  "$COMPILER" -std=gnu23 -O0 -g --coverage "$UNIT_TEST_DEFINE" -o "$WORK/unit" \
-    "${HERE}/seccomp_networksystem_unit.c" "${MODULES[@]}" "${WRAPS[@]}"
+  "$COMPILER" -std=gnu23 -O0 -g --coverage "${UNIT_TEST_DEFINE[@]}" -o "$WORK/unit" \
+    "${HERE}/seccomp_networksystem_unit.c" "${MODULES[@]}" "${LINKED[@]}" "${WRAPS[@]}"
   ( cd "$WORK" && ./unit )
   ( cd "$WORK" && for notes in unit-*.gcno; do
       "$COVERAGE_TOOL" -b -o "$notes" "${notes%.gcno}" >/dev/null 2>&1
@@ -117,7 +142,7 @@ if [[ "${1:-}" == "--coverage" ]]; then
   fi
   printf 'every line of the connect guard ran\n'
 else
-  "$COMPILER" -std=gnu23 -O0 -g -Wall -Wextra -Werror "$UNIT_TEST_DEFINE" -o "$WORK/unit" \
-    "${HERE}/seccomp_networksystem_unit.c" "${MODULES[@]}" "${WRAPS[@]}"
+  "$COMPILER" -std=gnu23 -O0 -g -Wall -Wextra -Werror "${UNIT_TEST_DEFINE[@]}" -o "$WORK/unit" \
+    "${HERE}/seccomp_networksystem_unit.c" "${MODULES[@]}" "${LINKED[@]}" "${WRAPS[@]}"
   "$WORK/unit"
 fi

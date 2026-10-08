@@ -19,7 +19,8 @@
 # binaries are copied on, so their sources stay out of the image a submission runs in. The
 # final stage below says why the compiler itself stays. Their source folders keep the layout of
 # the repository, because the report-only supervisor links the enforcer's model and the connect
-# guard's handoff module and includes their headers by paths relative to its own folder.
+# guard's handoff module, and the connect guard links the denial reporter and the same model, and
+# each includes the others' headers by paths relative to its own folder.
 #
 # gcc-14 on top of build-essential: the image ships gcc 13, which knows C23 only under its
 # draft name -std=gnu2x. Pinning the language rather than taking whatever the base image
@@ -42,9 +43,16 @@ RUN mkdir -p /build/bin \
  && gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
     -o /build/bin/phobos-landlock-filesystem-and-networksystem \
     /build/phobos-landlock-filesystem-and-networksystem/*.c
-# The connect guard is built the same way and held to the same hardening below.
+# The connect guard is built the same way and held to the same hardening below. It is the run's one
+# supervisor when the network layer is on, so it carries the denial reporter: every source of
+# phobos-seccomp-filesystem but its main (the glob's dash after "filesystem" leaves that file out),
+# and the enforcer's diagnostics-free model, never the enforcer's own diagnostics.
 RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
-    -o /build/bin/phobos-seccomp-networksystem /build/phobos-seccomp-networksystem/*.c
+    -o /build/bin/phobos-seccomp-networksystem /build/phobos-seccomp-networksystem/*.c \
+    /build/phobos-seccomp-filesystem/phobos-seccomp-filesystem-*.c \
+    /build/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-policy.c \
+    /build/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-path-rule.c \
+    /build/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-model.c
 # The timeout's group lock is built the same way and held to the same hardening below.
 RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
     -o /build/bin/phobos-seccomp-timeoutsystem \

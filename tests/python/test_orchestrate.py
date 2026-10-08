@@ -424,7 +424,7 @@ def test_a_sidecar_without_its_record_and_a_record_without_its_cfg_stop_the_merg
 
 
 @pytest.mark.parametrize("rows", ["[read]\n/srv/extra\n", "[connect]\nallow api.example.org:443\n",
-                                  "[bind]\nallow 5000\n", "[limits]\ntimeout=1\n", "[bind]\nallow 0 udp\n",
+                                  "[bind]\nallow 5000\n", "[limits]\ntimeout=1\n", "[bind]\nallow 00 udp\n",
                                   "[bind]\nallow 65536 udp\n", "[bind]\nallow 007 udp\n",
                                   "[bind]\nallow \u0665000 udp\n"])
 def test_a_sidecar_holding_anything_but_udp_bind_rows_stops_the_merge_whatever_its_hash_says(tmp_path, rows):

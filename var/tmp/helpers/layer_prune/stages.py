@@ -524,11 +524,17 @@ def entries_beneath(path: str) -> int:
     return count
 
 
+def udp_ports_enforceable(pruning: Pruning) -> bool:
+    """Whether the kernel the prune runs on handles UDP ports, so that a rule naming one can be enforced."""
+    return pruning.environment.landlock_version >= network.FIRST_UDP_PORT_VERSION
+
+
 def network_decision(pruning: Pruning, result: runner.RunResult) -> network.NetworkDecision:
     """The network rules one observed run's Landlock- or guard-caused network denials ask for."""
     current = [denial for denial in denials_of(pruning, result)
                if denial.layer == record.LAYER_NETWORK and control.landlock_caused(denial)]
-    decision = network.network_rules(current, network.bound_ports(result.trace), pruning.exercise.declared_hosts)
+    decision = network.network_rules(current, network.bound_ports(result.trace), pruning.exercise.declared_hosts,
+                                     udp_ports_enforceable(pruning))
     pruning.note("network denials", decision=jsonable(dataclasses.asdict(decision)))
     return decision
 
@@ -703,7 +709,8 @@ def verify(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
         new_grants = {path: sections for path, sections in grants.items() if path not in survived}
         decision = network.network_rules([denial for denial in found if denial.layer == record.LAYER_NETWORK
                                           and control.landlock_caused(denial)],
-                                         network.bound_ports(diagnosis.trace), pruning.exercise.declared_hosts)
+                                         network.bound_ports(diagnosis.trace), pruning.exercise.declared_hosts,
+                                         udp_ports_enforceable(pruning))
         new_connect = tuple(rule for rule in decision.connect if rule not in current.connect)
         new_bind = tuple(rule for rule in decision.bind if rule not in current.bind)
         pruning.note("verification routing", grants=jsonable(new_grants), connect=list(new_connect),

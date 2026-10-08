@@ -59,3 +59,15 @@ def test_a_sampler_started_and_stopped_returns_its_samples(tmp_path):
     samples = watcher.stop()
     assert samples
     assert all(sample["pid"] == 10 for sample in samples)
+
+
+def test_a_process_named_in_exclude_is_left_out_of_the_samples_and_of_the_task_count(tmp_path):
+    process(tmp_path, 10, [11, 12], vm_peak_kb=2048, utime=0, stime=0, descriptors=[])
+    process(tmp_path, 11, [], vm_peak_kb=4096, utime=900, stime=0, descriptors=[], threads=2)
+    process(tmp_path, 12, [], vm_peak_kb=1024, utime=0, stime=0, descriptors=[])
+    (tmp_path / "10" / "comm").write_text("tool\n")
+    (tmp_path / "11" / "comm").write_text("strace\n")
+    (tmp_path / "12" / "comm").write_text("tool\n")
+    samples = sampler.sample_once(tmp_path, 10, TICKS, 0.0, True, frozenset({"strace"}))
+    assert {sample["pid"] for sample in samples} == {10, 12}
+    assert {sample["tasks"] for sample in samples} == {2}

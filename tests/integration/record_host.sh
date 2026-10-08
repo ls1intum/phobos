@@ -2,10 +2,11 @@
 # Runs the recording pruner's suites, one ordinary container each, and checks the run-phase image.
 #
 # The suites run inside the prune image: record_safety.sh, record_interactive.sh, and
-# record_replay.sh once per phase, each phase in a new container, because a replay check must run
-# in a container other than the one that recorded and one container cannot start another. From
-# here, outside every container, it also checks the run-phase image an exercise is graded in: it
-# holds no strace, and phobos-record started in it with the helpers mounted refuses with status 3.
+# record_replay.sh and record_generate.sh once per phase, each phase in a new container, because a
+# replay check must run in a container other than the one that recorded and one container cannot start
+# another. From here, outside every container, it also checks the run-phase image an exercise is
+# graded in: it holds no strace, and phobos-record started in it with the helpers mounted refuses with
+# status 3.
 #
 #   record_host.sh <prune image> <run-phase image>
 #
@@ -69,5 +70,8 @@ in_container "${PRUNE_IMAGE}" record_safety.sh
 in_container "${PRUNE_IMAGE}" record_interactive.sh
 for phase in record python fresh leftover modified narrowed hand; do
   in_container "${PRUNE_IMAGE}" record_replay.sh "${phase}"
+done
+for phase in record replay contain second merged1 merged2 narrow limits limitscheck; do
+  in_container "${PRUNE_IMAGE}" record_generate.sh "${phase}"
 done
 finish

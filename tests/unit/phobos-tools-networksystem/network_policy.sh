@@ -417,7 +417,7 @@ else
   bad "a policy that names nothing still runs the enforcer with the bind closed, and allows no unbound listen" "--no-filesystem --close-bind, no grant" "$got"
 fi
 got="$(layer_arguments "" $'* 0\n')"
-if [[ "$got" == *"--ephemeral-bind-tcp"* && "$got" == *"--allow-ephemeral-listen --rules "* ]]; then
+if [[ "$got" == *"--ephemeral-bind-tcp"* && "$got" == *"--allow-ephemeral-listen "*"--rules "* ]]; then
   ok "a [bind] port 0 row grants the ephemeral bind and tells the guard an unbound listen is no wider"
 else
   bad "a [bind] port 0 row grants the ephemeral bind and tells the guard an unbound listen is no wider" "--ephemeral-bind-tcp and --allow-ephemeral-listen before --rules" "$got"
@@ -441,13 +441,13 @@ else
   bad "a udp [connect] rule brings the ephemeral udp bind with it, for the source port of a send" "--ephemeral-bind-udp" "$got"
 fi
 got="$(layer_arguments $'127.0.0.1 * udp\n' "")"
-if [[ "$got" == *"--allow-ephemeral-udp-bind --rules "* ]]; then
+if [[ "$got" == *"--allow-ephemeral-udp-bind "*"--rules "* ]]; then
   ok "a udp [connect] rule tells the guard an unbound datagram socket may connect and send"
 else
   bad "a udp [connect] rule tells the guard an unbound datagram socket may connect and send" "--allow-ephemeral-udp-bind before --rules" "$got"
 fi
 got="$(layer_arguments "" $'* 0 udp\n')"
-if [[ "$got" == *"--allow-ephemeral-udp-bind --rules "* ]]; then
+if [[ "$got" == *"--allow-ephemeral-udp-bind "*"--rules "* ]]; then
   ok "a udp port 0 row tells the guard the same"
 else
   bad "a udp port 0 row tells the guard the same" "--allow-ephemeral-udp-bind before --rules" "$got"

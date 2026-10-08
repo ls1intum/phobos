@@ -33,16 +33,23 @@ PHB_KILL_AFTER_SECONDS=5
 # blocks in wait, see run_forwarding_signals.
 PHB_SIGNAL_POLL_SECONDS=0.1
 
-# How long the filesystem layer waits, after the command has ended, for the denial counts. A
-# process the command left behind can keep its stderr, and so the counter, alive; the layer
-# then reports no counts rather than wait for it. Kept below PHB_KILL_AFTER_SECONDS, so GNU
-# timeout never escalates to SIGKILL while the layer is still waiting here.
-PHB_DENIAL_COUNT_GRACE_SECONDS=2
-# The counter's own limits. It runs outside the command's rlimits, so without these a single
-# endless stderr line could grow it without bound. A counter that hits them dies, and the run
-# then reports no counts; the command's output is never affected.
-PHB_DENIAL_COUNTER_MEMORY_KB=65536
-PHB_DENIAL_COUNTER_CPU_SECONDS=60
+# The exit statuses of a command ended by the signal of a resource limit it was given: 128 plus
+# SIGXFSZ (25) for the file size limit, and 128 plus SIGKILL (9) or SIGXCPU (24) for the CPU limit,
+# which ends a command with SIGKILL when its soft and hard limit are the same, on x86-64 and aarch64.
+PHB_STATUS_SIGKILL=137
+PHB_STATUS_SIGXCPU=152
+PHB_STATUS_SIGXFSZ=153
+# The processor time /proc counts in, per second, on every architecture Phobos supports, and the
+# places of the waited-for children's user and system time among the fields of /proc/<pid>/stat
+# after its command name, which is where the fields numbered 3 and up begin.
+PHB_CLOCK_TICKS_PER_SECOND=100
+PHB_STAT_CUTIME_INDEX=13
+PHB_STAT_CSTIME_INDEX=14
+# How far below the limit the waited-for children's time may be and still count as having reached it.
+# The kernel ends a process when its tick-sampled processor time reaches the limit, while /proc reports
+# the precise run time, split into user and system time and truncated twice, so a process killed at the
+# limit shows up to a scheduler tick or two less. A tenth of a second covers that at every tick rate.
+PHB_CPU_LIMIT_SLACK_TICKS=10
 
 # What a run is bounded by when no cfg names a value. They are a fallback, never a cap: a cfg
 # that names a larger value wins, and a cfg that names zero switches that limit off and wins

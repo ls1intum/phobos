@@ -213,6 +213,14 @@ def test_a_udp_bind_the_kernel_refused_becomes_exactly_one_row_and_the_run_then_
     assert len(runs) == 2
 
 
+def test_a_refused_udp_connect_is_no_difference_since_the_guard_refuses_it_on_every_kernel(monkeypatch, tmp_path):
+    decision = type("Decision", (), {"bind": ("allow 5000 udp",), "connect": ("allow 127.0.0.1:53 udp",)})()
+    failing_then_passing(monkeypatch, decision, [UDP_RECORD])
+    final, rows = kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture([], [UDP_RECORD]))
+    assert [row["rule"] for row in rows] == ["allow 5000 udp"]
+    assert final.connect == POLICY.connect
+
+
 @pytest.mark.parametrize("bind, connect, lines", [
     (("allow 5000",), (), [UDP_RECORD]),
     (("allow 6000 udp",), (), [UDP_RECORD]),

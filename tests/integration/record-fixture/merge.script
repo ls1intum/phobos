@@ -1,0 +1,6 @@
+# The second session of record_generate.sh: it reads one file of a fine-grained root the first never
+# touched, so a policy generated from the first alone must lack exactly that row.
+expect >>>
+send print("OK-" + "M1", len(open("/etc/passwd").read()) > 0)
+expect OK-M1
+send exit(0)

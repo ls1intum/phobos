@@ -22,6 +22,10 @@ static constexpr size_t REPORT_FILTER_MAXIMUM = 128;
  * Answers the number of instructions written, or 0 when they do not fit in room. */
 size_t append_report_traps(struct sock_filter *instructions, size_t room);
 
+/* The same for the two calls of REPORT_NETWORK_TRAPPED_CALLS alone, which the connect guard traps
+ * when it reports no filesystem denial. */
+size_t append_network_report_traps(struct sock_filter *instructions, size_t room);
+
 /* Writes the whole filter into instructions: the native-ABI check, the refusal traps when
  * refusal_traps, the observation traps when file_traps, and ALLOW for everything else. A foreign
  * ABI is trapped as a refusal when refusal_traps and allowed otherwise. Answers the number of

@@ -54,13 +54,13 @@ own on exit, so no suite depends on another and none leaves the image changed.
 | `timeout.sh` | a run ended at its limit with the timeout status, children and descendants ended with it, `setsid` and `setpgid` refused by both guards, an orphaned descendant, a caller reading through a pipe released at the limit, merging, zero, milliseconds, defaults, invalid values, and exit statuses passing through |
 | `resources.sh` | every limit set and read back from the kernel, enforced on a bounded behaviour, inherited, merged, defaulted, validated, and the helpers around the command not held to them |
 | `combinations.sh` | all sixteen subsets of switched-off layers, one witness per layer in one run each, `--no-restriction` against all four switches, flag spellings, order and repetition, concurrent runs, and a nested `phobos.sh` that cannot widen its outer sandbox |
-| `cli.sh` | the manual and usage errors, arguments that arrive unchanged, standard streams, the denial report, commands that cannot start, the environment (a program planted in the current directory is never run through a relative `PATH` entry, and the command sees only the absolute entries), the override options, tail flags, the base policy, odd policy files, and the specification directory kept out of the command's reach |
+| `cli.sh` | the manual and usage errors, arguments that arrive unchanged, standard streams, the closing summary and words of refusal the command prints itself, commands that cannot start, the environment (a program planted in the current directory is never run through a relative `PATH` entry, and the command sees only the absolute entries), the override options, tail flags, the base policy, odd policy files, and the specification directory kept out of the command's reach |
 | `lifecycle.sh` | nothing left behind after every way a run can end, none of a run's temporary files visible in `/tmp` to the command of a concurrent run, the hosts file restored, the hosts lock bounded, and what a signal sent to `phobos.sh` does |
 | `policy-syntax.sh` | every shape of a policy line judged through `phobos.sh`: which `[connect]`, `[bind]` and `[accept]` lines are accepted and which are refused with which status, the spelling of a timeout, every limit read back from the kernel, and the section headers |
 | `network-edge.sh` | where a CIDR range ends, the port boundaries, special addresses, IPv6 spellings, non-blocking connects, odd address lengths, which kinds of socket can be made, a TCP destination rewritten while the connect runs, and the rules that are accepted and do not mean what they say |
 | `filesystem-edge.sh` | names that try to leave a granted tree (links, dot-dot, magic links, path descriptors, the working directory), what a right on a file, a directory and the root does, nested and odd policy entries, long and strange names, the calls Landlock does not cover, and a link swapped while it is opened |
 | `resources-edge.sh` | each limit met through the call that meets it (descriptors, pipes, sockets, threads, file mappings, the data segment, growing a file), the limits Phobos does not set, and a sleeping command that uses no processor time |
-| `reporting.sh` | the denial reporter with the network layer off and through the standalone filesystem layer: every filesystem action granted with no line or refused exactly as without the reporter with exactly one line, a repeated refusal printed once, the cap of 100 lines, quoting, only the Landlock domain judged, the group lock's refusals answered with `EACCES` and reported, and `ENOSYS` once the reporter is dead or never installed |
+| `reporting.sh` | the denial reporter in every combination of the layers and through the standalone filesystem layer: every filesystem action granted with no line or refused exactly as without the reporter with exactly one line, a repeated refusal printed once, the cap of 100 lines, quoting, only the Landlock domain judged, the connect guard's refusals, the ports Landlock refuses to bind, the calls a filter refuses outright answered with `EACCES` and reported, the closing summary, and `ENOSYS` once the supervisor is dead or never installed |
 
 ## What each of the eleven promises is checked by
 
@@ -121,8 +121,11 @@ The second group is behaviour nothing documents, found while writing the suites,
 1. **A tail flags file that does not exist is ignored**, so a minimum Landlock version in the real
    file would be lost without a word. The tail flags are operator-trusted input.
 2. **A relative path in a policy is resolved against the directory `phobos.sh` runs in.** Fixed: it is refused.
-3. **The denial report counts text.** A line the command prints on standard error that happens to
-   contain the words is counted, and the report is a hint, not a measure.
+3. **The denial report counts Phobos's own decisions.** It once counted lines of the command's standard
+   error that happened to contain the words, which made it a hint. The closing summary now counts what the
+   supervisor decided, per layer, and words the command prints itself count for nothing (`cli.sh`). A
+   line on standard error is still evidence for a reader and not proof, because the command writes to the
+   same stream.
 4. **A nested `phobos.sh` with its network layer on is refused**, because one process tree can have only
    one connect guard. With `-nnr` it starts and cannot widen what the outer policy hid.
 5. **`chroot` works** for a process that holds `CAP_SYS_CHROOT`, root in a container by default. Landlock

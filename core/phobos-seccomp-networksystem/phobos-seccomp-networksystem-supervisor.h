@@ -8,6 +8,7 @@
 #include <linux/seccomp.h>
 #include <stddef.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 
 /* Point every allowed stream connection at a broker on the given "address:port" instead of at
  * the destination the command named, so the broker can enforce by host name what the guard
@@ -20,6 +21,25 @@ bool configure_broker(const char *endpoint);
  * grants an ephemeral bind; a socket bound to an explicit port, which Landlock already judged,
  * may always listen. */
 void configure_ephemeral_listen(bool allowed);
+
+/* Says which layer the calls the guard's filter refuses, other than io_uring, are counted for in
+ * the summary: the timeout layer when its group lock is above the guard and was found, the network
+ * layer otherwise. This changes what a line counts for and nothing the guard answers. */
+void configure_group_lock_attribution(bool timeout_layer);
+
+/* Gives the guard the pipe the egress broker logs its refusals to, which supervise reads beside the
+ * notification descriptor. A negative descriptor means there is no broker. */
+void configure_broker_log(int descriptor);
+
+/* The transport of one of the command's sockets: SOCK_STREAM or SOCK_DGRAM for a socket this guard
+ * recorded the type of, -1 for any other. The denial reporter asks it to name the transport of a
+ * bind. */
+int tracked_socket_type(pid_t owner, int descriptor);
+
+/* Tells the denial reporter the enforcer's path, if there is one, which it compares with the caller of the arming
+ * call, and the Landlock version its models are built for, and gives it the guard's socket table so
+ * that it can name the transport of a bind. */
+void configure_reporting(const char *landlock_bin, int landlock_version);
 
 /* Complete one trapped connect: tell the kernel the answer for this notification.
  * A negative error is returned to the command as connect()'s errno; error 0 with
@@ -61,6 +81,10 @@ void broker_reset_for_tests(void);
 /* Forgets the ephemeral-listen setting, so each test case starts with an unbound socket refused
  * unless it allows one itself. */
 void ephemeral_listen_reset_for_tests(void);
+
+/* Forgets the reporting configuration, so each case starts with the network layer counting every
+ * refusal and no broker pipe. */
+void reporting_reset_for_tests(void);
 #endif
 
 #endif
