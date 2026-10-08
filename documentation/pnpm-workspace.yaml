@@ -1,4 +1,3 @@
----
 engineStrict: true
 
 preferFrozenLockfile: true
@@ -11,7 +10,7 @@ autoInstallPeers: true
 overrides:
   # GHSA-5c6j-r48x-rmvq (remote code execution through RegExp.flags) and
   # GHSA-qj8w-gfj5-8c6v (processor exhaustion).
-  serialize-javascript: '7.1.1'
+  serialize-javascript: '7.1.2'
   # GHSA-w5hq-g745-h8pq
   uuid: '14.0.2'
 
