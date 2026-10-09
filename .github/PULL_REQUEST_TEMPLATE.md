@@ -228,7 +228,7 @@
 ## 5. Test case coverage regarding this PR
 
 <!--
-  Phobos is tested by the suites under protecter/test/ and pruner/test/. List every suite this pull request adds
+  Phobos is tested by the suites under protecter/test/ and the test folders of pruner/. List every suite this pull request adds
   or changes, and every suite that covers the behaviour it changes, with the result of
   the run you actually did.
 

@@ -110,7 +110,7 @@ jobs:
       # sandbox allow-list, so the security lint is not optional here.
       - name: Run bandit
         run: bandit --recursive --ini .bandit --severity-level medium
-             pruner/src
+             pruner/exercise_pruner/src pruner/runtime_pruner/src pruner/shared/src
 
   yaml:
     name: YAML (yamllint)

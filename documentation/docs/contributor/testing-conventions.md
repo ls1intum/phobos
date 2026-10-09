@@ -13,7 +13,7 @@ workflow summary.
 :::
 
 There is no build system. The shell runs as it is and the C is compiled inside the image, so
-the suites under `protecter/test/` and `pruner/test/` are the checks.
+the suites under `protecter/test/` and the test folders of `pruner/` are the checks.
 
 ## One harness, six families
 
@@ -26,7 +26,7 @@ non-zero on a failure.
 | --- | --- | --- | --- |
 | Integration suites | `protecter/test/integration/*.sh` | a shell, `gcc-14`, `haproxy`, `openssl` | the `Shell suites` job of `test.yml`, in continuous integration (CI) |
 | Shell unit suites | `protecter/test/unit/<core component>/*.sh` | a shell | the `Shell suites` job of `test.yml` |
-| Python suites | `pruner/test/python/` | pytest | the `Python helpers` job of `test.yml` |
+| Python suites | `pruner/` | pytest | the `Python helpers` job of `test.yml` |
 | C unit suites | `protecter/test/unit/phobos-landlock-filesystem-and-networksystem/`, `protecter/test/unit/phobos-seccomp-networksystem/`, `protecter/test/unit/phobos-seccomp-filesystem/` | `gcc-14`, no kernel feature | the `unit` job of `build.yml` |
 | Acceptance suites | `protecter/test/integration/landlock-filesystem-and-networksystem-acceptance/` | the run-phase image, an ordinary container | the groups of the `run-phase` job of `build.yml`, on amd64 and arm64 |
 | Protection matrix | `protecter/test/integration/protection-matrix/` | the run-phase image, an ordinary container | the groups of the `run-phase` job of `build.yml`, on amd64 and arm64 |
@@ -57,15 +57,15 @@ and answers with a stand-in `docker`. That holds the option contract and the dis
 `phobos_cli_docker.sh` starts real containers in the `matrix-b` group of the `run-phase` job and inspects them.
 
 The Python suites cover the modules of both pruners too, from a recorded `strace` log and
-captured packets under `pruner/test/python/fixtures/`.
+captured packets in the `fixtures/` folders beside the unit tests.
 
 Each shell suite is a CI step of its own, so one run names every suite that broke rather than
-the first alone. `protecter/test/README.md` and `pruner/test/README.md` are the tables of every suite, what it
+the first alone. `protecter/test/README.md` and `pruner/README.md` are the tables of every suite, what it
 proves and what makes it skip. `harness_self_test.sh` runs first as a step of its own. A step named "Every suite is started
-by a workflow" fails when a `*.sh` file under `protecter/test/` or `pruner/test/` is named in no workflow, apart from
+by a workflow" fails when a `*.sh` file under `protecter/test/` or `pruner/` is named in no workflow, apart from
 `harness.sh`, `lib.sh`, `run-all.sh` and `policy-redundancy-probe.sh`. It matches on the file
 name, so a suite that nobody wired in cannot sit green by never running. A second step checks
-that the entry points of `protecter/src/` and the recorder's `pruner/src/layer_record/phobos-record` are executable. Some integration suites
+that the entry points of `protecter/src/` and the recorder's `pruner/runtime_pruner/src/interface/phobos-record` are executable. Some integration suites
 skip without `haproxy` or `openssl`, and `seccomp_networksystem.sh` skips without the kernel's
 seccomp user notification.
 
@@ -157,7 +157,7 @@ second.
 
 ## The probes are not suites
 
-Two scripts under `protecter/test/` and `pruner/test/` report for themselves and gate no pull request:
+Two scripts under `protecter/test/` and `pruner/` report for themselves and gate no pull request:
 
 - `runner-capability-probe.sh` answers what a machine can do, and is run by
   `runner-capabilities.yml` on request. Each assert mode answers 0 for yes, 1 for no and 3 for
@@ -183,6 +183,6 @@ Two scripts under `protecter/test/` and `pruner/test/` report for themselves and
 ## Further reading
 
 - [`protecter/test/README.md`](https://github.com/ls1intum/phobos/blob/main/protecter/test/README.md) and
-  [`pruner/test/README.md`](https://github.com/ls1intum/phobos/blob/main/pruner/test/README.md): every
+  [`pruner/README.md`](https://github.com/ls1intum/phobos/blob/main/pruner/README.md): every
   suite, one row each
 - [How can you contribute](how-can-you-contribute.md): the lint gate beside these suites

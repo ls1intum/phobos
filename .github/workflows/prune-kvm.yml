@@ -20,7 +20,8 @@
 #
 # Manual on purpose: the guest runs the whole of a prune's verification, so it takes far longer than a
 # check belonging to every change. `source: fixture` runs the layer pruner's fixture exercise, which binds
-# a UDP port, and holds the result to both directions (pruner/test/integration/kvm_fixture_result.sh).
+# a UDP port, and holds the result to both directions
+# (pruner/exercise_pruner/test/integration/application/kvm_fixture_result.sh).
 name: Prune with the kernel as a second observer
 
 on:
@@ -88,7 +89,7 @@ jobs:
             -v "${RUNNER_TEMP}/inputs/setup.sh:/setup.sh:ro" -v "${RUNNER_TEMP}/inputs/env.sh:/env.sh:ro" \
             -v "${RUNNER_TEMP}/path_sets:/var/tmp/path_sets" \
             --entrypoint bash phobos-prune-layers:ci -c 'source /env.sh && source /setup.sh \
-              && exec python3 /var/tmp/helpers/layer_prune/main.py --stage all "$0"' "${PRUNE_KEY}"
+              && exec python3 /var/tmp/helpers/exercise_pruner/src/interface/main.py --stage all "$0"' "${PRUNE_KEY}"
 
       # The guest runs this very image, not one built again from the same Dockerfiles: the packages the
       # prune image installs are not pinned, so a second build could hold other versions.
@@ -136,7 +137,7 @@ jobs:
 
       # First, because a guest that cannot boot under KVM answers nothing and the kernel build is long.
       - name: Assert that a guest boots under KVM
-        run: bash pruner/test/runner-capability-probe.sh --assert-kvm
+        run: bash pruner/shared/test/integration/infrastructure/runner-capability-probe.sh --assert-kvm
 
       - name: Build the pinned Linux 7.2 guest kernel
         run: .github/scripts/build-kvm-kernel.sh "${RUNNER_TEMP}/kernel"
@@ -168,7 +169,7 @@ jobs:
 
       - name: Hold the fixture's result to both directions
         if: ${{ env.PRUNE_SOURCE == 'fixture' }}
-        run: bash pruner/test/integration/kvm_fixture_result.sh "${RUNNER_TEMP}/path_sets"
+        run: bash pruner/exercise_pruner/test/integration/application/kvm_fixture_result.sh "${RUNNER_TEMP}/path_sets"
 
       # Kept even when the run failed, since the records and the console are what explain it.
       - name: Keep the artefacts of the guest
@@ -227,8 +228,8 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/path_sets"
           cp -R "${RUNNER_TEMP}/artefacts/default-prune/." "${RUNNER_TEMP}/path_sets/"
           cp "${RUNNER_TEMP}"/artefacts/kvm-ubuntu-26.04/*.abi10.* "${RUNNER_TEMP}/path_sets/"
-          python3 pruner/src/orchestrate/orchestrate.py --langs "${PRUNE_KEY}" \
-            --path-dir "${RUNNER_TEMP}/path_sets" --core-dir "${RUNNER_TEMP}/core" --helpers-dir pruner/src
+          python3 pruner/exercise_pruner/src/interface/orchestrate.py --langs "${PRUNE_KEY}" \
+            --path-dir "${RUNNER_TEMP}/path_sets" --core-dir "${RUNNER_TEMP}/core" --helpers-dir pruner
 
       - name: Keep the merged base
         if: ${{ !cancelled() }}

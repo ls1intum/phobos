@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends strace \
 
 RUN rm -f "${PHOBOS_HOME}"/Base*.cfg
 COPY pruner/config/BasePrune.cfg ${PHOBOS_HOME}/BasePrune.cfg
-# The language seeds an exercise's prune.json may name (pruner/src/layer_prune/seed.py): the one place a
+# The language seeds an exercise's prune.json may name (pruner/exercise_pruner/src/domain/seed.py): the one place a
 # language's own needs enter a prune, never its code.
 COPY pruner/config/seeds /usr/local/share/phobos-prune/seeds
 COPY --from=probe /build/phobos-prune-probe /usr/local/libexec/phobos-prune-probe

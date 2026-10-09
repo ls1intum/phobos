@@ -42,7 +42,7 @@ cleanup() {
     rmdir /var/tmp/opt 2> /dev/null || true
   fi
   if [[ "${MADE_HELPERS}" == "yes" ]]; then
-    rm -rf -- "${HELPERS}/layer_prune" "${HELPERS}/layer_record"
+    rm -rf -- "${HELPERS}/exercise_pruner" "${HELPERS}/runtime_pruner"
     rmdir "${HELPERS}" 2> /dev/null || true
   fi
   rm -rf -- "${WORK}"
@@ -540,10 +540,10 @@ if can_stand_in; then
   check "an image without phobos.sh is broken, and never becomes a host" "${PHB_ERUNTIME}" "${STATUS}"
   if [[ ! -e "${HELPERS}" ]] && mkdir "${HELPERS}" 2> /dev/null; then
     MADE_HELPERS="yes"
-    mkdir "${HELPERS}/layer_prune" "${HELPERS}/layer_record"
-    : > "${HELPERS}/layer_prune/main.py"
-    printf '#!/bin/bash\nprintf "record"; for a in "$@"; do printf " [%%s]" "$a"; done; printf "\\n"\n' > "${HELPERS}/layer_record/phobos-record"
-    chmod +x "${HELPERS}/layer_record/phobos-record"
+    mkdir -p "${HELPERS}/exercise_pruner/src/interface" "${HELPERS}/runtime_pruner/src/interface"
+    : > "${HELPERS}/exercise_pruner/src/interface/main.py"
+    printf '#!/bin/bash\nprintf "record"; for a in "$@"; do printf " [%%s]" "$a"; done; printf "\\n"\n' > "${HELPERS}/runtime_pruner/src/interface/phobos-record"
+    chmod +x "${HELPERS}/runtime_pruner/src/interface/phobos-record"
     cli --dry-run prune java-egress --resolver 10.0.0.2
     has_line --stage && bad "java-egress does not run --stage" "${OUT}" || ok "java-egress runs without --stage"
     has_pair --output-dir /var/tmp/path_sets/egress && has_pair --resolver 10.0.0.2 && ok "and keeps its own output directory and its resolver" || bad "and keeps its own output directory and its resolver" "${OUT}"
