@@ -4,6 +4,19 @@
 # the layer's own traps come back afterwards, and a job that is not the command is never signalled.
 set -uo pipefail
 
+# A shell that starts with SIGINT or SIGQUIT ignored keeps them ignored: bash 5.3 can neither trap nor
+# reset them, where 5.2 could. A runner that was itself started as a background job hands them over that
+# way, and then the INT and QUIT cases below signal a shell that never acts on it and wait for ever. So the
+# suite starts again with both at their default, as a terminal would have them. The variable stops a
+# platform where env cannot do that from starting again for ever.
+if [[ -n "$(trap -p INT QUIT)" ]]; then
+  if [[ -n "${PHB_SIGNALS_TEST_RESTARTED:-}" ]]; then
+    echo "cannot give this suite SIGINT and SIGQUIT at their default" >&2
+    exit 1
+  fi
+  PHB_SIGNALS_TEST_RESTARTED=1 exec env --default-signal=INT,QUIT bash "${BASH_SOURCE[0]}" "$@"
+fi
+
 HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../harness.sh
 source "${HERE}/../../harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
