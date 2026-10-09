@@ -1,0 +1,3 @@
+# The reference exercises under exercises/ are inputs to the prune phase and are kept as Artemis's templates
+# write them, so Phobos's own lint rules do not apply to them. Everything else is checked with ruff's defaults.
+extend-exclude = ["exercises"]
