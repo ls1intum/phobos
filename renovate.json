@@ -9,7 +9,8 @@
     "helpers:pinGitHubActionDigests does the same for actions. This organisation already refuses an action that is not pinned to a full-length commit SHA, so the preset changes nothing today; it is here so that a tag added by hand is corrected rather than merged.",
     "The two lint container images are named in env values of a run step, and Renovate's github-actions manager reads only uses: docker://, container: and services:, so pinDigests would leave both digests frozen for good. The custom manager below extracts them as docker dependencies. It matches image:tag@sha256:... rather than any string, so it cannot claim an unrelated value, and it is scoped to the workflow directory.",
     "The second custom manager exists for the same reason as the first: Renovate reads no Python dependency out of a shell command, so the versions pinned in the lint workflow's pip install lines and in the Python run-phase image would rot exactly as a lock nobody could regenerate would. It matches name==version only where there is no space around the ==, which is what keeps it off the workflow expressions that compare with == and spaces.",
-    "The Gradle reference exercise names the Gradle distribution the run-phase image carries (the base image ships gradle-9.8.0-bin), because the exercise runs offline. A Renovate bump of its wrapper to a newer Gradle made the wrapper try to download it and the reference prune fail, so its wrapper is left alone; moving it is a change of the base image and of the pinned repository, made by hand."
+    "The Gradle reference exercise names the Gradle distribution the run-phase image carries (the base image ships gradle-9.8.0-bin), because the exercise runs offline. A Renovate bump of its wrapper to a newer Gradle made the wrapper try to download it and the reference prune fail, so its wrapper is left alone; moving it is a change of the base image and of the pinned repository, made by hand.",
+    "TypeScript stays below 7 for the documentation site. The current typescript-eslint (8.71.1) declares typescript >=4.8.4 <6.1.0 and refuses to load under 7.0, so a bump to 7 turns the lint:code step of the documentation build red. The hold ends when typescript-eslint supports the TypeScript 7 API."
   ],
   "pinDigests": true,
   "customManagers": [
@@ -37,6 +38,12 @@
     }
   ],
   "packageRules": [
+    {
+      "matchPackageNames": [
+        "typescript"
+      ],
+      "allowedVersions": "<7"
+    },
     {
       "matchFileNames": [
         "exercises/java/gradle-reference/gradle/wrapper/gradle-wrapper.properties"
