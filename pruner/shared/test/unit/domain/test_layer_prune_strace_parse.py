@@ -53,6 +53,35 @@ def test_an_unfinished_call_is_joined_with_its_resumption():
     assert strace_parse.path_argument(refused[0], 1) == "a"
 
 
+def test_a_vfork_child_acts_after_the_clone_that_made_it_not_after_the_clone_returned():
+    lines = [
+        "100 clone(child_stack=0x7f, flags=CLONE_VM|CLONE_VFORK|SIGCHLD <unfinished ...>",
+        '101 chdir("../assignment/") = 0',
+        '101 openat(AT_FDCWD</w>, "child", O_RDONLY) = 3',
+        "100 <... clone resumed>) = 101",
+        '100 openat(AT_FDCWD</w>, "after", O_RDONLY) = 3',
+    ]
+    assert [line.split("(")[0] for line in strace_parse.joined_lines(lines)] == ["100 clone", "101 chdir", "101 openat",
+                                                                                 "100 openat"]
+
+
+def test_a_call_that_is_not_a_clone_still_takes_the_position_of_its_resumed_half():
+    lines = [
+        '100 openat(AT_FDCWD</w>, "late", O_RDONLY <unfinished ...>',
+        '101 chdir("/w") = 0',
+        "100 <... openat resumed>) = 3",
+    ]
+    assert [line.split("(")[0] for line in strace_parse.joined_lines(lines)] == ["101 chdir", "100 openat"]
+
+
+def test_a_forking_half_whose_other_half_never_arrives_is_dropped():
+    lines = [
+        "100 clone(child_stack=0x7f, flags=CLONE_VM|CLONE_VFORK|SIGCHLD <unfinished ...>",
+        '101 chdir("/w") = 0',
+    ]
+    assert list(strace_parse.joined_lines(lines)) == ['101 chdir("/w") = 0']
+
+
 def test_a_thread_created_with_clone_thread_belongs_to_its_creators_thread_group():
     lines = [
         "100 clone(child_stack=NULL, flags=SIGCHLD) = 101",

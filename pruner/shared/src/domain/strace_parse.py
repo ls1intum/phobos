@@ -155,24 +155,40 @@ def is_non_call(line: str) -> bool:
 def joined_lines(lines: Iterable[str]) -> Iterable[str]:
     """Yields every line with each `<unfinished ...>` half joined to its `<... resumed>` half.
 
-    The joined line takes the position of the resumed half, which is when the call returned. A half
-    whose other half never arrives (the thread was killed in the call) is dropped.
+    The joined line takes the position of the resumed half, which is when the call returned, except for a
+    call that creates a process or thread (clone, clone3, fork, vfork): that one takes the position of the
+    unfinished half. A vfork parent is suspended until its child has run, so strace prints the child's
+    calls between the two halves; at the position of the resumed half the child would act before it exists
+    for the walk over the trace, and a relative path it uses would be resolved against the wrong working
+    directory. A half whose other half never arrives (the thread was killed in the call) is dropped.
     """
-    pending: dict[int, str] = {}
+    output: list[str | None] = []
+    pending: dict[int, tuple[str, int | None]] = {}
     for raw in lines:
         line = raw.rstrip("\n")
         unfinished = UNFINISHED.match(line)
         if unfinished:
-            pending[int(unfinished.group("pid"))] = unfinished.group("head")
+            head = unfinished.group("head")
+            slot = None
+            if head.split("(", 1)[0] in FORKING_CALLS:
+                slot = len(output)
+                output.append(None)
+            pending[int(unfinished.group("pid"))] = (head, slot)
             continue
         resumed = RESUMED.match(line)
         if resumed:
             pid = int(resumed.group("pid"))
-            head = pending.pop(pid, None)
-            if head is not None:
-                yield f"{pid} {head}{resumed.group('tail')}"
+            half = pending.pop(pid, None)
+            if half is not None:
+                head, slot = half
+                joined = f"{pid} {head}{resumed.group('tail')}"
+                if slot is None:
+                    output.append(joined)
+                else:
+                    output[slot] = joined
             continue
-        yield line
+        output.append(line)
+    yield from (line for line in output if line is not None)
 
 
 def iter_calls(lines: Iterable[str]) -> Iterator[Syscall]:
