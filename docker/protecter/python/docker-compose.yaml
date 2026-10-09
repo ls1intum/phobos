@@ -7,7 +7,7 @@ services:
       # Run this from the repository root before `docker compose build`:
       #   .github/scripts/assemble-run-phase-context.sh build/run-phase-context
       context: ../../../build/run-phase-context
-      dockerfile: ../../docker/run_phase/python/Dockerfile
+      dockerfile: ../../docker/protecter/python/Dockerfile
     image: phobos-run-phase-python
     stdin_open: true
     tty: true

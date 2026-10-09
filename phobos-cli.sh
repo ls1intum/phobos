@@ -716,7 +716,7 @@ command_build() {
   require_checkout build
   require_docker
   step "${CHECKOUT_ROOT}/.github/scripts/assemble-run-phase-context.sh" "${CHECKOUT_ROOT}/build/run-phase-context"
-  compose_prefix "${CHECKOUT_ROOT}/docker/run_phase/${language}" "${CHECKOUT_ROOT}/docker/run_phase/${language}/docker-compose.yaml"
+  compose_prefix "${CHECKOUT_ROOT}/docker/protecter/${language}" "${CHECKOUT_ROOT}/docker/protecter/${language}/docker-compose.yaml"
   step "${COMPOSE_PREFIX[@]}" build
 }
 

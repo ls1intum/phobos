@@ -146,7 +146,7 @@
   which is not yours.
 
   Start from a runnable image, do not make the reviewer build an exercise. docker/
-  run_phase/ holds the language images; point at one of them and describe only the
+  protecter/ holds the language images; point at one of them and describe only the
   delta.
 
   Prerequisites: which branch to build, which base policy and which exercise

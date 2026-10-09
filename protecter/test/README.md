@@ -129,7 +129,7 @@ the kernel lacks, a missing tool or too few processor cores.
 
 ## The Python run-phase image, run by the `run-phase-python` job of `build.yml`
 
-The Python run-phase image (`docker/run_phase/python/`) is held to every suite above that needs no
+The Python run-phase image (`docker/protecter/python/`) is held to every suite above that needs no
 Java: `network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`, `seccomp-networksystem-test.sh`,
 `network-cleanup-test.sh` and the whole protection matrix, in one looped step that names each suite and
 fails when any one does. The four acceptance suites that compile Java probes or run Maven

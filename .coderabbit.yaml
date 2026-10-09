@@ -161,7 +161,7 @@ reviews:
         container invocation that relaxes confinement, in particular privileged mode,
         added capabilities or a custom security profile. Note when a base image change
         alters the kernel-facing requirements of the sandbox.
-    - path: "docker/prune_phase/**"
+    - path: "docker/pruner/**"
       instructions: >-
         The prune phase produces the allow-list a run is later confined by, so a fault
         here widens the sandbox silently. Check that a failed or skipped run cannot be

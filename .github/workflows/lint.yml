@@ -110,7 +110,7 @@ jobs:
       # sandbox allow-list, so the security lint is not optional here.
       - name: Run bandit
         run: bandit --recursive --ini .bandit --severity-level medium
-             docker/prune_phase/orchestrate pruner/src
+             docker/pruner/orchestrate pruner/src
 
   yaml:
     name: YAML (yamllint)

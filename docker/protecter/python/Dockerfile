@@ -4,7 +4,7 @@
 # graded under Phobos must therefore select this image; the suites in build.yml prove exactly it.
 #
 # The four C programs are compiled in a stage of their own, from the same base image, so they are
-# built against the C library they will run with, exactly as docker/run_phase/java/Dockerfile does;
+# built against the C library they will run with, exactly as docker/protecter/java/Dockerfile does;
 # that file says why each flag is there.
 FROM python:3.14-slim-trixie@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2 AS enforcers
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -36,7 +36,7 @@ RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
     /build/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-model.c \
     /build/phobos-seccomp-networksystem/phobos-seccomp-networksystem-handoff.c
 
-# The toolchain, binutils and haproxy stay for the reasons docker/run_phase/java/Dockerfile gives:
+# The toolchain, binutils and haproxy stay for the reasons docker/protecter/java/Dockerfile gives:
 # the suites compile their C probes inside the image they test, readelf checks the hardening below,
 # and haproxy is the egress broker. procps and openssl are in the Java image's base and not in the
 # slim Python one: the suites look for leftover processes with pgrep and send a ClientHello with

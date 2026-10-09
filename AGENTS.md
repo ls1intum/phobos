@@ -153,10 +153,10 @@ CTX="$(mktemp -d)"
 .github/scripts/assemble-run-phase-context.sh "$CTX"
 docker login                 # to the registry the tag below names
 docker buildx build --platform linux/amd64,linux/arm64 \
-  -f docker/run_phase/java/Dockerfile -t <namespace>/phobos:latest --push "$CTX"
+  -f docker/protecter/java/Dockerfile -t <namespace>/phobos:latest --push "$CTX"
 ```
 
-The Python run-phase image is published the same way from `docker/run_phase/python/Dockerfile`,
+The Python run-phase image is published the same way from `docker/protecter/python/Dockerfile`,
 under a tag of its own (for example `<namespace>/phobos-python:latest`).
 
 `buildx --push` builds both architectures and pushes one multi-arch manifest, so a `docker pull`

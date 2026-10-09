@@ -63,9 +63,9 @@ cp -R "${REPOSITORY}"/protecter/src/config/language-configurations "${DESTINATIO
 # that the flat *.sh copy of the layer scripts does not take pin-repository.sh with it. The exercises
 # stay in their stages; only the repositories those stages produce enter the image.
 mkdir -p "${DESTINATION}/pin" "${DESTINATION}/exercises/java-maven" "${DESTINATION}/exercises/java"
-cp "${REPOSITORY}"/docker/run_phase/java/pin-repository.sh "${DESTINATION}/pin/"
-cp "${REPOSITORY}"/docker/run_phase/java/maven-repository.sha256 "${DESTINATION}/pin/"
-cp "${REPOSITORY}"/docker/run_phase/java/gradle-repository.sha256 "${DESTINATION}/pin/"
+cp "${REPOSITORY}"/docker/protecter/java/pin-repository.sh "${DESTINATION}/pin/"
+cp "${REPOSITORY}"/docker/protecter/java/maven-repository.sha256 "${DESTINATION}/pin/"
+cp "${REPOSITORY}"/docker/protecter/java/gradle-repository.sha256 "${DESTINATION}/pin/"
 cp -R "${REPOSITORY}"/exercises/java-maven/maven-reference "${DESTINATION}/exercises/java-maven/"
 cp -R "${REPOSITORY}"/exercises/java/gradle-reference "${DESTINATION}/exercises/java/"
 

@@ -49,7 +49,7 @@ body:
       label: To reproduce
       description: The exact commands, from a clean checkout. Name the image if you used one.
       placeholder: |
-        1. `docker compose -f docker/run_phase/java/docker-compose.yaml up --build`
+        1. `docker compose -f docker/protecter/java/docker-compose.yaml up --build`
         2. `protecter/src/phobos.sh --config protecter/src/config/BaseLanguage-java.cfg -- ./gradlew test`
         3. See the bind failure for `/usr/lib/jvm/...`
     validations:

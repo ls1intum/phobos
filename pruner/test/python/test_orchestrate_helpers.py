@@ -13,7 +13,7 @@ import sys
 import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-ORCHESTRATOR_DIRECTORY = REPO_ROOT / "docker" / "prune_phase" / "orchestrate"
+ORCHESTRATOR_DIRECTORY = REPO_ROOT / "docker" / "pruner" / "orchestrate"
 sys.path.insert(0, str(ORCHESTRATOR_DIRECTORY))
 sys.path.insert(0, str(REPO_ROOT / "pruner" / "src"))
 

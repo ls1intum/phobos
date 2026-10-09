@@ -61,8 +61,8 @@ rest exists to take privileges away. None of the following is a vulnerability.
   the guard keeps. A name written in two cases is resolved once. External
   egress in general is still a container started with `--network none`, and resolving needs a
   networked one, so a name in a udp rule assumes the same posture as one in a tcp rule.
-- `docker/prune_phase/` runs the discovery phase, which deliberately runs a reference under a
-  policy that refuses too much, over and over: the layer pruner (`docker/prune_phase/layers/`,
+- `docker/pruner/` runs the discovery phase, which deliberately runs a reference under a
+  policy that refuses too much, over and over: the layer pruner (`docker/pruner/layers/`,
   `pruner/src/layer_prune/`) records the grading layers' refusals with `strace` and grants
   what each refusal proves, and its orchestrator merges the result into the allow-list the
   sandbox later trusts. strace and the containment probe are installed in the prune image only,

@@ -53,7 +53,7 @@ and the runs are replaced by stand-ins, so these drive the helpers alone.
 
 ## The prune image's observer, run by `build.yml` inside the prune image
 
-`docker/prune_phase/layers/Dockerfile` builds the prune image on the run-phase image the same
+`docker/pruner/layers/Dockerfile` builds the prune image on the run-phase image the same
 job has just tested, adding `strace` and `python3` and replacing the base policy with
 `BasePrune.cfg`, which grants nothing. The suite runs in an ordinary container with
 `--network none`, `--memory` and `--pids-limit`, with `protecter/test/`, `pruner/test/` and `pruner/src/` mounted

@@ -46,12 +46,12 @@ jobs:
       # built, so an image that builds holds the bytes grading will read.
       - name: Build the run-phase image
         run: |
-          docker build -f docker/run_phase/java/Dockerfile -t phobos-run-phase:ci "${RUNNER_TEMP}/run-phase-context"
+          docker build -f docker/protecter/java/Dockerfile -t phobos-run-phase:ci "${RUNNER_TEMP}/run-phase-context"
 
       - name: Build the prune image on the run-phase image
         run: |
           docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci \
-            -f docker/prune_phase/layers/Dockerfile -t phobos-prune-layers:ci .
+            -f docker/pruner/layers/Dockerfile -t phobos-prune-layers:ci .
 
       # An ordinary container, as the Compose service starts it: no network, cgroup limits, and no
       # privilege, capability or security option. The manifest is mounted read-only where Compose
@@ -61,7 +61,7 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/artefacts"
           docker run --rm --network none --memory 3g --pids-limit 1024 \
             -v "${PWD}:/repo:ro" \
-            -v "${PWD}/docker/run_phase/java/maven-repository.sha256:/srv/phobos-manifest/maven-repository.sha256:ro" \
+            -v "${PWD}/docker/protecter/java/maven-repository.sha256:/srv/phobos-manifest/maven-repository.sha256:ro" \
             -v "${RUNNER_TEMP}/artefacts:/artefacts" -e ARTEFACTS_DIR=/artefacts \
             phobos-prune-layers:ci bash /repo/pruner/test/integration/layer_prune_maven.sh
 
