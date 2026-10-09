@@ -65,7 +65,7 @@ trap cleanup EXIT
 # Puts the exercise and the helpers where the prune container has them (A.6.1).
 set_up() {
   if [[ ! -f "${MANIFEST}" ]]; then
-    echo "no manifest at ${MANIFEST}: mount docker/protecter/java/maven-repository.sha256 there, read-only" >&2
+    echo "no manifest at ${MANIFEST}: mount protecter/image/maven-repository.sha256 there, read-only" >&2
     exit 1
   fi
   rm -rf "${EXERCISES}" "${HELPERS}"
@@ -74,7 +74,7 @@ set_up() {
   cp -r "${REPO}/pruner/src" "${HELPERS}"
 }
 
-# Prints the SHA-256 of one file as docker/protecter/java/pin-repository.sh reckons it: of its content
+# Prints the SHA-256 of one file as protecter/image/pin-repository.sh reckons it: of its content
 # without the comment lines for a file named _remote.repositories, which Maven writes beside every
 # artefact with a comment holding the time it was written, and of the whole content for any other file.
 manifest_digest() {
@@ -207,7 +207,7 @@ PY
 # The merged pair passes with every layer on, as grading applies it.
 check_merged_and_verified() {
   [[ -f "${CFG}" ]] || { bad "the merged configuration can be checked" "no policy was written"; return; }
-  if python3 "${REPO}/docker/pruner/orchestrate/orchestrate.py" --langs "${KEY}" --path-dir "${OUTPUT}" \
+  if python3 "${REPO}/pruner/src/orchestrate/orchestrate.py" --langs "${KEY}" --path-dir "${OUTPUT}" \
       --core-dir "${CORE}" --helpers-dir "${HELPERS}" > "${WORK}/merge.log" 2>&1 \
       && [[ -f "${CORE}/BaseLanguage-${KEY}.cfg" && -f "${CORE}/exercises/${KEY}_${EXERCISE}.cfg" ]]; then
     ok "the orchestrator merges the artefact into BaseLanguage-${KEY}.cfg and the exercise's own file"

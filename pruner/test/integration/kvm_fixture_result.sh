@@ -63,7 +63,7 @@ check "the record names the .cfg it verified by its SHA-256" "cfg-hash True" "$(
 check "the record names the sidecar by its SHA-256" "sidecar-hash True" "$(grep '^sidecar-hash' <<<"${summary}")"
 
 merge() {
-  python3 "${REPO}/docker/pruner/orchestrate/orchestrate.py" --langs java --path-dir "$1" --core-dir "$2" \
+  python3 "${REPO}/pruner/src/orchestrate/orchestrate.py" --langs java --path-dir "$1" --core-dir "$2" \
     --helpers-dir "${REPO}/pruner/src" > "${WORK}/merge.log" 2>&1
 }
 if merge "${PATH_SETS}" "${WORK}/core" && grep -q '^allow 5000 udp$' "${WORK}/core/Abi10-java.cfg"; then

@@ -19,7 +19,7 @@ sys.path.insert(0, str(REPO_ROOT / "pruner" / "src"))
 
 from layer_prune import cfgfile, generalise, record, runner, search, seed, stages
 
-SHIPPED = REPO_ROOT / "docker" / "pruner" / "layers" / "seeds"
+SHIPPED = REPO_ROOT / "pruner" / "config" / "seeds"
 NOTHING = ()
 
 

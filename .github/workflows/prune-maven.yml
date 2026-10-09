@@ -61,7 +61,7 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/artefacts"
           docker run --rm --network none --memory 3g --pids-limit 1024 \
             -v "${PWD}:/repo:ro" \
-            -v "${PWD}/docker/protecter/java/maven-repository.sha256:/srv/phobos-manifest/maven-repository.sha256:ro" \
+            -v "${PWD}/protecter/image/maven-repository.sha256:/srv/phobos-manifest/maven-repository.sha256:ro" \
             -v "${RUNNER_TEMP}/artefacts:/artefacts" -e ARTEFACTS_DIR=/artefacts \
             phobos-prune-layers:ci bash /repo/pruner/test/integration/layer_prune_maven.sh
 

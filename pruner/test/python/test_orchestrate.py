@@ -21,7 +21,7 @@ import pytest
 ORCHESTRATOR_TIMEOUT_SECONDS = 120
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-ORCHESTRATOR = REPO_ROOT / "docker" / "pruner" / "orchestrate" / "orchestrate.py"
+ORCHESTRATOR = REPO_ROOT / "pruner" / "src" / "orchestrate" / "orchestrate.py"
 HELPERS = REPO_ROOT / "pruner" / "src"
 
 JAVA_ONE = """[read]

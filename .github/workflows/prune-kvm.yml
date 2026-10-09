@@ -227,7 +227,7 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/path_sets"
           cp -R "${RUNNER_TEMP}/artefacts/default-prune/." "${RUNNER_TEMP}/path_sets/"
           cp "${RUNNER_TEMP}"/artefacts/kvm-ubuntu-26.04/*.abi10.* "${RUNNER_TEMP}/path_sets/"
-          python3 docker/pruner/orchestrate/orchestrate.py --langs "${PRUNE_KEY}" \
+          python3 pruner/src/orchestrate/orchestrate.py --langs "${PRUNE_KEY}" \
             --path-dir "${RUNNER_TEMP}/path_sets" --core-dir "${RUNNER_TEMP}/core" --helpers-dir pruner/src
 
       - name: Keep the merged base

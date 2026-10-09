@@ -2,7 +2,7 @@
 
 Inside a fine-grained root such as /root a grant is otherwise always file by file, so that it names only
 what the reference opened. A dependency repository pre-loaded into the run-phase image is different: the
-image build holds it to a committed manifest of SHA-256 sums (docker/protecter/java/pin-repository.sh), so
+image build holds it to a committed manifest of SHA-256 sums (protecter/image/pin-repository.sh), so
 a file in it is not something a graded run can have changed, and a build that stops at the first file it
 cannot read shows the pruner one file per round. An exercise therefore declares such a tree in its
 prune.json, `"pinned_read_roots": [{"path": "/root/.m2/repository", "manifest": "/srv/phobos-manifest/<name>"}]`,

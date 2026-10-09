@@ -3,8 +3,8 @@
 The pruner derives every grant from a refusal, and never generalises a write-class right on a name that
 differs in every run. A build that writes scratch files with random names in a shared directory cannot be
 granted by refusals alone. Markus decided that such rows come from a seed: a configuration file named by
-the exercise's prune.json, `"seed": "<language>.cfg"`, that lives beside the prune image's Dockerfile
-(docker/pruner/layers/seeds/) and is copied into the image. Language-specific content, and the reason
+the exercise's prune.json, `"seed": "<language>.cfg"`, that lives in pruner/config/seeds/ and is
+copied into the prune image. Language-specific content, and the reason
 for it, is only ever in that file, never in the pruner's code or in core.
 
 The seed is a starting point, not a grant: its rows go into the first policy, so the minimisation drops
