@@ -3,7 +3,7 @@
 #
 # The base is the one the layer pruner derived from this very exercise, so the exercise must pass
 # under it as it ships, with only the limits of an exercise added. Permitted direction: the
-# template's two phases (compileall, then pytest) run, both test cases pass and the JUnit report
+# template's two phases (compileall, then pytest) run, all 13 test cases of the template pass and the JUnit report
 # is written. Containment direction: a canary file outside every directory the base names is refused
 # for read, a write outside the working directory is refused, and a connection to an address no rule
 # names is refused.
@@ -47,16 +47,16 @@ printf 'canary\n' > "${CANARY}/secret"
 
 under_base "${WORK}/exercise.out" bash build_script.sh
 check "the exercise's build script ends with status 0 under the Python base" 0 "$(cat "${WORK}/exercise.out.status")"
-if grep -q "2 passed" "${WORK}/exercise.out"; then
-  ok "both test cases pass"
+if grep -q "13 passed" "${WORK}/exercise.out"; then
+  ok "all 13 test cases pass"
 else
-  bad "both test cases pass" "$(tail -12 "${WORK}/exercise.out")"
+  bad "all 13 test cases pass" "$(tail -12 "${WORK}/exercise.out")"
 fi
-if [[ -s "${EXERCISE}/test-reports/results.xml" ]] && grep -q 'tests="2"' "${EXERCISE}/test-reports/results.xml" \
+if [[ -s "${EXERCISE}/test-reports/results.xml" ]] && grep -q 'tests="13"' "${EXERCISE}/test-reports/results.xml" \
     && grep -q 'failures="0"' "${EXERCISE}/test-reports/results.xml"; then
-  ok "the JUnit report is written and holds two tests and no failure"
+  ok "the JUnit report is written and holds 13 tests and no failure"
 else
-  bad "the JUnit report is written and holds two tests and no failure" "$(head -c 600 "${EXERCISE}/test-reports/results.xml" 2>&1)"
+  bad "the JUnit report is written and holds 13 tests and no failure" "$(head -c 600 "${EXERCISE}/test-reports/results.xml" 2>&1)"
 fi
 
 under_base "${WORK}/canary.out" cat "${CANARY}/secret"
