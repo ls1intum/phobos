@@ -14,14 +14,25 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  shell:
-    name: Shell (shellcheck)
+  # One job that runs every linter in a step of its own, rather than seven jobs and a job that reads
+  # their results. Each lint takes seconds, while a job of its own waited for a free runner, and on the
+  # free plan at most 20 jobs run at once across the organisation, so seven jobs queued for longer than
+  # all of them take to run. Every step runs whatever an earlier one reported, so one run still names
+  # every linter that failed, and the job fails when any step does. A check skips itself only when the
+  # tool it needs could not be installed, so a failed install is reported once rather than as a second,
+  # misleading failure of the check. The name stays the one a branch rule would point at.
+  #
+  # editorconfig-checker comes last because it unpacks its release into the working tree, which no
+  # other linter should see.
+  required:
+    name: Lint / required
     runs-on: ubuntu-26.04
-    timeout-minutes: 5
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
       - name: Checkout repository
+        id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -31,6 +42,7 @@ jobs:
       # resolves from here too. Without both, every file is analysed in isolation and
       # the constants the sourced files define are unknown, so a misspelt one passes.
       - name: Run shellcheck
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         env:
           # Folded to stay inside the line length yamllint enforces; a digest plus a tag
           # does not fit on an indented line. Renovate's github-actions manager reads
@@ -43,19 +55,9 @@ jobs:
             | xargs -0 docker run --rm -v "$PWD:/mnt" -w /mnt \
                 "${SHELLCHECK_IMAGE}" -x -S warning
 
-  c:
-    name: C (compiler warnings and cppcheck)
-    runs-on: ubuntu-26.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
       - name: Install cppcheck and gcc-14
+        id: c-tools
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: |
           sudo apt-get update -qq
           sudo apt-get install --yes --no-install-recommends cppcheck gcc-14
@@ -63,6 +65,7 @@ jobs:
       # -fanalyzer costs nothing here and catches memory and null-pointer
       # problems that plain -Wall does not see.
       - name: Compiler warnings
+        if: ${{ !cancelled() && steps.c-tools.outcome == 'success' }}
         run: |
           failed=0
           while IFS= read -r f; do
@@ -75,21 +78,10 @@ jobs:
       # Only "warning": the "style" category is largely taste and its findings
       # differ between cppcheck versions, which would make the gate unstable.
       - name: Run cppcheck
+        if: ${{ !cancelled() && steps.c-tools.outcome == 'success' }}
         run: |
           find . -name '*.c' -type f -print0 \
             | xargs -0 cppcheck --std=c23 --enable=warning --quiet --error-exitcode=1
-
-  python:
-    name: Python (ruff and bandit)
-    runs-on: ubuntu-26.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
 
       # Exact versions rather than hashes. A hashed lock was tried and removed: pip-tools
       # writes --no-index into the header of the file it generates, Renovate replays that
@@ -101,49 +93,33 @@ jobs:
       # them: Renovate reads no Python dependency out of a shell command, so without it
       # they would rot for exactly the reason the lock was rejected.
       - name: Install linters
+        id: python-tools
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: python3 -m pip install --quiet ruff==0.17.0 bandit==1.9.4
 
       - name: Run ruff
+        if: ${{ !cancelled() && steps.python-tools.outcome == 'success' }}
         run: ruff check --no-cache --output-format github .
 
       # The prune orchestrator starts processes and its output becomes the
       # sandbox allow-list, so the security lint is not optional here.
       - name: Run bandit
+        if: ${{ !cancelled() && steps.python-tools.outcome == 'success' }}
         run: bandit --recursive --ini .bandit --severity-level medium
              pruner/exercise_pruner/src pruner/runtime_pruner/src pruner/shared/src
 
-  yaml:
-    name: YAML (yamllint)
-    runs-on: ubuntu-26.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
       - name: Install yamllint
+        id: yaml-tools
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: python3 -m pip install --quiet yamllint==1.38.0
 
       - name: Run yamllint
+        if: ${{ !cancelled() && steps.yaml-tools.outcome == 'success' }}
         run: yamllint --strict --format github .
-
-  docker:
-    name: Buildable Dockerfiles (hadolint)
-    runs-on: ubuntu-26.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
 
       # The threshold and the DL3008 exception live in .hadolint.yaml.
       - name: Run hadolint
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         env:
           # Folded for the same reason as the shellcheck image above.
           HADOLINT_IMAGE: >-
@@ -158,51 +134,6 @@ jobs:
           done < <(find . -name 'Dockerfile*' -type f)
           exit "$failed"
 
-  editorconfig:
-    name: Whitespace and line endings (editorconfig-checker)
-    runs-on: ubuntu-26.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      # .editorconfig has been advisory since it was written: it asks editors for LF, and
-      # AGENTS.md calls LF load-bearing, because a carriage return ends up inside a path and
-      # the run silently loses access the policy granted. Nothing checked it. This job does.
-      # .editorconfig-checker.json says which rules it enforces and why one is left off.
-      #
-      # A pinned release binary rather than the project's action: this organisation allows
-      # only actions it owns and actions GitHub publishes, so a third-party one is refused
-      # before the run starts, whether or not it is pinned to a commit.
-      - name: Run editorconfig-checker
-        env:
-          # Update the checksum together with the version; it pins the exact release asset.
-          EDITORCONFIG_CHECKER_VERSION: "3.4.0"
-          EDITORCONFIG_CHECKER_SHA256: "feae0baaf8d55e51fd9b6c9e04497f2fb288b40034110fb9ac83fb1bf0b6011e"
-        run: |
-          curl --fail --silent --show-error --location \
-            --output editorconfig-checker.tar.gz \
-            "https://github.com/editorconfig-checker/editorconfig-checker/releases/download/v${EDITORCONFIG_CHECKER_VERSION}/ec-linux-amd64.tar.gz"
-          echo "${EDITORCONFIG_CHECKER_SHA256}  editorconfig-checker.tar.gz" | sha256sum --check --strict
-          tar --extract --gzip --file editorconfig-checker.tar.gz bin/ec-linux-amd64
-          ./bin/ec-linux-amd64 --no-color
-
-  conventions:
-    name: Documented shell functions
-    runs-on: ubuntu-26.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
       # AGENTS.md asks that every function in the core shell scripts carry a comment saying what
       # it does and what it assumes about its environment, and nothing measured it. This checks
       # the narrow half that a machine can: that a comment line immediately precedes each
@@ -210,6 +141,7 @@ jobs:
       # stays a reviewer's job, and it does not find a comment inside a body. The helpers moved
       # into phobos-tools-* subfolders, so the check globs those beside the top-level layers.
       - name: Every function in the core shell scripts is preceded by a comment
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: |
           awk 'FNR == 1 { previous = "" }
                /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/ {
@@ -221,36 +153,24 @@ jobs:
                { previous = $0 }
                END { exit undocumented }' protecter/src/*.sh protecter/src/phobos-tools-*/*.sh
 
-  # One check for a branch rule to require, rather than seven.
-  #
-  # A rule naming the jobs themselves breaks quietly in two ways: a renamed job leaves the
-  # old name required and forever pending, and a job that never runs, because a path
-  # filter excluded it, does the same. This one always runs and reads the results, so the
-  # rule has a single stable name to point at and a skipped dependency is still a failure
-  # rather than a silent pass.
-  required:
-    name: Lint / required
-    needs: [ shell, c, python, yaml, docker, editorconfig, conventions ]
-    # always(), not !cancelled(). A job that is skipped counts as success towards a
-    # required check, so !cancelled() would let a cancelled run leave the one required
-    # lint check skipped and therefore green.
-    if: ${{ always() }}
-    runs-on: ubuntu-26.04
-    timeout-minutes: 5
-    permissions: {}
-    steps:
-      - name: Check that every lint job succeeded
+      # .editorconfig has been advisory since it was written: it asks editors for LF, and
+      # AGENTS.md calls LF load-bearing, because a carriage return ends up inside a path and
+      # the run silently loses access the policy granted. Nothing checked it. This step does.
+      # .editorconfig-checker.json says which rules it enforces and why one is left off.
+      #
+      # A pinned release binary rather than the project's action: this organisation allows
+      # only actions it owns and actions GitHub publishes, so a third-party one is refused
+      # before the run starts, whether or not it is pinned to a commit.
+      - name: Run editorconfig-checker
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         env:
-          RESULTS: ${{ toJSON(needs) }}
+          # Update the checksum together with the version; it pins the exact release asset.
+          EDITORCONFIG_CHECKER_VERSION: "3.4.0"
+          EDITORCONFIG_CHECKER_SHA256: "feae0baaf8d55e51fd9b6c9e04497f2fb288b40034110fb9ac83fb1bf0b6011e"
         run: |
-          failed=0
-          while IFS='=' read -r job result; do
-            printf '%-12s %s\n' "${job}" "${result}"
-            if [ "${result}" != "success" ]; then
-              echo "::error::the ${job} lint job reported ${result}"
-              failed=1
-            fi
-          done <<EOT
-          $(printf '%s' "${RESULTS}" | jq -r 'to_entries[] | "\(.key)=\(.value.result)"')
-          EOT
-          exit "${failed}"
+          curl --fail --silent --show-error --location \
+            --output editorconfig-checker.tar.gz \
+            "https://github.com/editorconfig-checker/editorconfig-checker/releases/download/v${EDITORCONFIG_CHECKER_VERSION}/ec-linux-amd64.tar.gz"
+          echo "${EDITORCONFIG_CHECKER_SHA256}  editorconfig-checker.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file editorconfig-checker.tar.gz bin/ec-linux-amd64
+          ./bin/ec-linux-amd64 --no-color
