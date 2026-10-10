@@ -286,8 +286,8 @@ The run's supervisor prints one such line for each distinct blocked action it ca
 certainty, and a run prints at most 100. With the network layer on, the supervisor is the connect
 guard. Its lines cover the filesystem refusals, its own connect, datagram, socket and listen
 refusals, the ports Landlock refuses to bind, and the host names the egress broker refuses. They
-cover the calls a Phobos filter refuses outright too: `io_uring`, `setsid`, `setpgid`, and any call
-through a foreign application binary interface. With the network layer off, or the filesystem
+cover the calls a Phobos filter refuses outright too: `io_uring` and any call through a foreign
+application binary interface. With the network layer off, or the filesystem
 layer on its own, the supervisor is the filesystem layer's report-only supervisor. The timeout layer words the
 time limit, and the filesystem layer words a CPU or file size limit that a command hit. The supervisor is exact where it speaks and silent where it is in doubt, so a run
 without a line can still have been refused something. When it cannot report, it says so in a
