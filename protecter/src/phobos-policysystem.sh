@@ -81,7 +81,7 @@ WHAT IT READS
 
 WHAT IT WRITES INTO --spec-dir
   read.paths execute.paths write.paths create.paths delete.paths ipc.paths symlink.paths
-  refer.paths   the filesystem allow-list, one path per line per right
+  refer.paths ioctl.paths   the filesystem allow-list, one path per line per right
   net.rules bind.rules accept.rules   the [connect], [bind] and [accept] rules
   timeout.sec   the wall-clock bound, empty when the run is not bounded
   limits.conf   one "key=value" line per resource limit that applies
@@ -405,7 +405,7 @@ write_spec "$SPEC_DIR" "$eff_dir" "$eff_net" "$timeout_eff" "$tail_flags_file" "
 # state now that the port rules and the connect guard live in the network layer.
 writable_union="$(mktemp -p "$PHOBOS_SCRATCH")"
 cat "${SPEC_DIR}/write.paths" "${SPEC_DIR}/create.paths" "${SPEC_DIR}/delete.paths" \
-  "${SPEC_DIR}/ipc.paths" "${SPEC_DIR}/symlink.paths" "${SPEC_DIR}/refer.paths" 2>/dev/null \
+  "${SPEC_DIR}/ipc.paths" "${SPEC_DIR}/symlink.paths" "${SPEC_DIR}/refer.paths" "${SPEC_DIR}/ioctl.paths" 2>/dev/null \
   > "$writable_union" || :
 refuse_spec_dir_under_write_path "$SPEC_DIR" "$writable_union"
 

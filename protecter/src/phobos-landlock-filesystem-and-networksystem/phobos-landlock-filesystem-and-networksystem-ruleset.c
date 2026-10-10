@@ -139,7 +139,10 @@ int create_ruleset(int landlock_version, uint64_t handled_filesystem, uint64_t h
     return ruleset_descriptor;
 }
 
-/* A changeable path that is a symbolic link is refused: O_PATH|O_NOFOLLOW opens
+/* A rule none of whose rights this kernel can grant, as an ioctl-only rule on a Landlock version below 5, adds
+ * nothing and is skipped, because the kernel refuses a rule with an empty set of rights (ENOMSG).
+ *
+ * A changeable path that is a symbolic link is refused: O_PATH|O_NOFOLLOW opens
  * the link itself instead of failing, so it has to be rejected here, and a rule
  * anchored on a link is at best useless and at worst points somewhere the policy
  * never named. A path that is not a directory is not granted the rights that only
@@ -167,6 +170,12 @@ void add_path_rule(int ruleset_descriptor, int landlock_version, const struct pa
         path_rule_attributes.allowed_access &= ~DIRECTORY_ONLY_ACCESS_RIGHTS;
     }
     path_rule_attributes.parent_fd = path_descriptor;
+
+    if (path_rule_attributes.allowed_access == 0) {
+        log_verbose("skip %s: no right it asks for exists on Landlock version %d", rule->path, landlock_version);
+        close(path_descriptor);
+        return;
+    }
 
     if (syscall(SYSCALL_NUMBER_LANDLOCK_ADD_RULE, ruleset_descriptor, LANDLOCK_RULE_PATH_BENEATH,
                 &path_rule_attributes, 0) != 0) {

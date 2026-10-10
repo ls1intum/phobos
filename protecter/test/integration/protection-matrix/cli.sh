@@ -291,6 +291,9 @@ refused_run "a create path above a chosen specification parent refuses the run t
 printf '[read]\n%s\n[delete]\n%s\n' "$PM/ro" "$PM/rw" > "$PM/cfg/delete-spec.cfg"
 run_pm --spec-parent "$PM/rw" --config "$PM/cfg/delete-spec.cfg" -- "$P" cwd
 refused_run "and so does a delete path" "$PHB_EPOLICY"
+printf '[read]\n%s\n[ioctl]\n%s\n' "$PM/ro" "$PM/rw" > "$PM/cfg/ioctl-spec.cfg"
+run_pm --spec-parent "$PM/rw" --config "$PM/cfg/ioctl-spec.cfg" -- "$P" cwd
+refused_run "and so does an ioctl path, which the enforcer counts among the changeable ones" "$PHB_EPOLICY"
 ln -sfn "$PM/rw" "$PM/rwlink"
 printf '[read]\n%s\n[write]\n%s\n' "$PM/ro" "$PM/rw" > "$PM/cfg/write-rw.cfg"
 run_pm --spec-parent "$PM/rwlink" --config "$PM/cfg/write-rw.cfg" -- "$P" cwd

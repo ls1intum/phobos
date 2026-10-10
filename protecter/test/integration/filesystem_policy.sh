@@ -33,14 +33,14 @@ ln -s "$TREE" "$ALIAS"
 
 # Runs build_path_args over one section body per right in a subshell, so a policy refusal
 # (which exits) is captured rather than ending this suite. Each argument is the body of the
-# section named in the order read, execute, write, create, delete; an empty one writes no
+# section named in the order read, execute, write, create, delete, ipc, symlink, refer, ioctl; an empty one writes no
 # paths. Every line is terminated, as parse_cfg_policy terminates the ones it writes, because
 # collect_rights_table reads with a plain `while read` and an unterminated last line is lost.
 # Prints "<exit>|<args>|<log>".
 run_sections() {
   local right
   local index=1
-  for right in read execute write create delete ipc symlink refer; do
+  for right in read execute write create delete ipc symlink refer ioctl; do
     if [[ -n "${!index:-}" ]]; then printf '%s\n' "${!index}" > "$WORK/${right}.paths"; else : > "$WORK/${right}.paths"; fi
     index=$((index + 1))
   done
@@ -53,7 +53,7 @@ run_sections() {
     args=()
     build_path_args args "$WORK/read.paths" "$WORK/execute.paths" "$WORK/write.paths" \
       "$WORK/create.paths" "$WORK/delete.paths" "$WORK/ipc.paths" "$WORK/symlink.paths" \
-      "$WORK/refer.paths" 2>"$WORK/log"
+      "$WORK/refer.paths" "$WORK/ioctl.paths" 2>"$WORK/log"
     printf '%s' "${args[*]}"
   )"
   local rc=$?
@@ -209,6 +209,53 @@ if [[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" == *"--rights=mfd ${TREE}"* ]]
 else
   bad "a path in create, delete and refer holds m, d and f" \
     "exit 0 and a --rights=mfd rule for ${TREE}" "exit $(field "$r" 1): $(field "$r" 2)"
+fi
+
+echo
+echo "== [ioctl] grants the ioctl right on a device and nothing else =="
+r="$(run_sections "" "" "" "" "" "" "" "" "$TREE")"
+if [[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" == "--rights=i ${TREE}" ]]; then
+  ok "an [ioctl] path grants only i"
+else
+  bad "an [ioctl] path grants only i" "exit 0 and --rights=i ${TREE}" "exit $(field "$r" 1): $(field "$r" 2)"
+fi
+
+r="$(run_sections "$TREE" "" "$TREE" "" "" "" "" "" "$TREE")"
+if [[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" == *"--rights=rwi ${TREE}"* && "$(field "$r" 2)" != *"--rights=r ${TREE}"* && "$(field "$r" 2)" != *"--rights=w ${TREE}"* ]]; then
+  ok "a path in read, write and ioctl holds r, w and i together"
+else
+  bad "a path in read, write and ioctl holds r, w and i together" "exit 0 and --rights=rwi ${TREE}" "exit $(field "$r" 1): $(field "$r" 2)"
+fi
+
+r="$(run_sections "$TREE" "" "" "" "" "" "" "" "$TREE/child")"
+if [[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" == *"--rights=r ${TREE}"* && "$(field "$r" 2)" == *"--rights=ri ${TREE}/child"* ]]; then
+  ok "an [ioctl] path beneath a read path is accepted, and holds the ancestor's r as well"
+else
+  bad "an [ioctl] path beneath a read path is accepted, and holds the ancestor's r as well" "exit 0 and both rules" "exit $(field "$r" 1): $(field "$r" 2) $(field "$r" 3)"
+fi
+
+r="$(run_sections "" "" "" "" "" "" "" "" "$TREE/missing-device")"
+if [[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" != *"missing-device"* && ! -e "$TREE/missing-device" ]]; then
+  ok "an [ioctl] path the image does not hold is dropped and is not created"
+else
+  bad "an [ioctl] path the image does not hold is dropped and is not created" "exit 0, no rule, no file" "exit $(field "$r" 1): $(field "$r" 2); exists: $(ls "$TREE")"
+fi
+
+r="$(run_sections "" "" "" "" "" "" "" "" "$ALIAS")"
+if [[ "$(field "$r" 1)" == 0 && "$(field "$r" 2)" == "--rights=i ${ALIAS}" ]]; then
+  ok "an [ioctl] path spelled through a symbolic link keeps its spelling, so the enforcer refuses to anchor on the link"
+else
+  bad "an [ioctl] path spelled through a symbolic link keeps its spelling, so the enforcer refuses to anchor on the link" "--rights=i ${ALIAS}" "exit $(field "$r" 1): $(field "$r" 2)"
+fi
+
+echo
+echo "== nesting two [ioctl] entries =="
+r="$(run_sections "" "" "" "" "" "" "" "" "$TREE
+$TREE/child")"
+if [[ "$(field "$r" 1)" == 0 ]]; then
+  ok "an [ioctl] path beneath an [ioctl] path of the same rights is accepted"
+else
+  bad "an [ioctl] path beneath an [ioctl] path of the same rights is accepted" "exit 0" "exit $(field "$r" 1): $(field "$r" 3)"
 fi
 
 finish
