@@ -55,6 +55,11 @@ the Python reference exercise on this image, joined from an x86_64 and an aarch6
 exercise passes under it in continuous integration (CI), and grading refuses a code path that
 exercise never takes.
 
+The C image for Artemis exercises that use the FACT template is built from
+`docker/protecter/c-fact/docker-compose.yaml` and carries `BaseLanguage-c-fact.cfg`. That base permits
+executing a program the run itself wrote, in the directory of the submission only. It did not permit this
+before, and the FACT reference exercise is the reason: its tester compiles the submission and runs the result.
+
 ## Running a command
 
 ```bash

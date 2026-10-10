@@ -72,6 +72,7 @@ DEFAULT_NETWORK="none"
 # The images the compose files and the Dockerfiles tag, by language.
 IMAGE_JAVA="phobos-run-phase-java"
 IMAGE_PYTHON="phobos-run-phase-python"
+IMAGE_C_FACT="phobos-run-phase-c-fact"
 
 MODE=""
 DRY_RUN="no"
@@ -87,9 +88,9 @@ phobos-cli.sh - run a command under Phobos, prune or record a reference program,
 
 USAGE
   phobos-cli.sh [--mode host|image] [--dry-run] run [options] [--] <command> [args...]
-  phobos-cli.sh [--mode host|image] [--dry-run] prune <java-gradle|java-maven|python|java-egress|all>
+  phobos-cli.sh [--mode host|image] [--dry-run] prune <java-gradle|java-maven|python|c-fact|java-egress|all>
   phobos-cli.sh [--mode host|image] [--dry-run] record [options] <record|generate|check|diff> [args...]
-  phobos-cli.sh [--mode host|image] [--dry-run] build <java|python>
+  phobos-cli.sh [--mode host|image] [--dry-run] build <java|python|c-fact>
   phobos-cli.sh --help
 
 PLACES
@@ -108,7 +109,7 @@ run
   phobos.sh directly. Everything after -- (or after the first word that is not an option) is the
   command, options of its own included.
   On a host also:
-    --language <java|python>     the run-phase image to use (default java)
+    --language <java|python|c-fact> the run-phase image to use (default java)
     --image <name>               a run-phase image by name; not with --language
     --exercise <dir>             required; mounted read-write as /var/tmp/testing-dir, the working
                                  directory of the command
@@ -120,14 +121,14 @@ run
   command can never write one. --project-root is then relative to --exercise.
 
 prune
-  Host: runs the Compose service of the key, rebuilt first; "all" runs the seven jobs of the layer
-  pruner in order (the three prunes, the merge, the three verifications) and stops at the first one
+  Host: runs the Compose service of the key, rebuilt first; "all" runs the nine jobs of the layer
+  pruner in order (the four prunes, the merge, the four verifications) and stops at the first one
   that fails. Image: runs the layer pruner (/var/tmp/helpers/exercise_pruner/src/interface/main.py); java-egress needs
   --resolver <ip[:port]>.
 
 record
   Runs the recording pruner, which runs the program unsandboxed: for the instructor's reference
-  program only, never for a submission. On a host also --language <java|python> (default java),
+  program only, never for a submission. On a host also --language <java|python|c-fact> (default java),
   --exercise <dir> (mounted read-only) and --networked.
 
 build
@@ -292,7 +293,7 @@ compose_prefix() {
   local project="$1"
   local file="$2"
   shift 2
-  COMPOSE_PREFIX=(env -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME -u COMPOSE_PROFILES -u COMPOSE_PATH_SEPARATOR -u COMPOSE_ENV_FILES -u RUN_PHASE_IMAGE -u RUN_PHASE_IMAGE_PYTHON -u RECORD_EXERCISE COMPOSE_DISABLE_ENV_FILE=1)
+  COMPOSE_PREFIX=(env -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME -u COMPOSE_PROFILES -u COMPOSE_PATH_SEPARATOR -u COMPOSE_ENV_FILES -u RUN_PHASE_IMAGE -u RUN_PHASE_IMAGE_PYTHON -u RUN_PHASE_IMAGE_C_FACT -u RECORD_EXERCISE COMPOSE_DISABLE_ENV_FILE=1)
   COMPOSE_PREFIX+=("$@")
   COMPOSE_PREFIX+=(docker compose --project-directory "$project" -f "$file" --env-file /dev/null)
 }
@@ -361,12 +362,13 @@ refuse_socket_directory() {
   fi
 }
 
-# Sets IMAGE_NAME from the language $1 (java or python), and ends the script for any other word.
+# Sets IMAGE_NAME from the language $1 (java, python or c-fact), and ends the script for any other word.
 image_of_language() {
   case "$1" in
     java) IMAGE_NAME="${IMAGE_JAVA}" ;;
     python) IMAGE_NAME="${IMAGE_PYTHON}" ;;
-    *) fail_usage "--language takes java or python, not '$1'" ;;
+    c-fact) IMAGE_NAME="${IMAGE_C_FACT}" ;;
+    *) fail_usage "--language takes java, python or c-fact, not '$1'" ;;
   esac
 }
 
@@ -565,8 +567,9 @@ prune_service() {
     java-gradle) REPLY="prune_java_gradle" ;;
     java-maven) REPLY="prune_java_maven" ;;
     python) REPLY="prune_python" ;;
+    c-fact) REPLY="prune_c_fact" ;;
     java-egress) REPLY="prune_java_egress"; PROFILE="egress" ;;
-    *) fail_usage "prune takes java-gradle, java-maven, python, java-egress or all, not '$1'" ;;
+    *) fail_usage "prune takes java-gradle, java-maven, python, c-fact, java-egress or all, not '$1'" ;;
   esac
 }
 
@@ -596,7 +599,7 @@ command_prune() {
       *) [[ -z "$key" ]] || fail_usage "prune takes one key"; key="$1"; shift ;;
     esac
   done
-  [[ -n "$key" ]] || fail_usage "prune needs a key: java-gradle, java-maven, python, java-egress or all"
+  [[ -n "$key" ]] || fail_usage "prune needs a key: java-gradle, java-maven, python, c-fact, java-egress or all"
   if [[ "$MODE" == "image" ]]; then
     prune_in_image "$key" "$resolver"
   else
@@ -611,7 +614,7 @@ prune_in_image() {
   local resolver="$2"
   case "$key" in
     java) fail_usage "the prune key java is now java-gradle" ;;
-    java-gradle | java-maven | python)
+    java-gradle | java-maven | python | c-fact)
       [[ -z "$resolver" ]] || fail_usage "--resolver belongs to java-egress"
       require_helper "${IMAGE_HELPERS}/exercise_pruner/src/interface/main.py"
       hand_over python3 "${IMAGE_HELPERS}/exercise_pruner/src/interface/main.py" --stage all "$key" ;;
@@ -620,11 +623,11 @@ prune_in_image() {
       require_helper "${IMAGE_HELPERS}/exercise_pruner/src/interface/main.py"
       hand_over python3 "${IMAGE_HELPERS}/exercise_pruner/src/interface/main.py" --resolver "$resolver" --output-dir /var/tmp/path_sets/egress java-egress ;;
     all) fail_usage "prune all needs a host: the merge and the verification are separate images" ;;
-    *) fail_usage "prune takes java-gradle, java-maven, python, java-egress or all, not '$key'" ;;
+    *) fail_usage "prune takes java-gradle, java-maven, python, c-fact, java-egress or all, not '$key'" ;;
   esac
 }
 
-# Host mode of prune: runs the Compose service of the key, or the seven jobs of all in order.
+# Host mode of prune: runs the Compose service of the key, or the nine jobs of all in order.
 prune_on_host() {
   local key="$1"
   local service
@@ -632,7 +635,7 @@ prune_on_host() {
   require_docker
   compose_prefix "$CHECKOUT_ROOT" "${CHECKOUT_ROOT}/docker-compose.yaml"
   if [[ "$key" == "all" ]]; then
-    for service in prune_java_gradle prune_java_maven prune_python orchestrate verify_java_gradle verify_java_maven verify_python; do
+    for service in prune_java_gradle prune_java_maven prune_python prune_c_fact orchestrate verify_java_gradle verify_java_maven verify_python verify_c_fact; do
       compose_run "$service" ""
     done
     return 0
@@ -706,11 +709,11 @@ command_build() {
     help_text 1
     exit 0
   fi
-  (( $# == 1 )) || fail_usage "build takes exactly one language: java or python"
+  (( $# == 1 )) || fail_usage "build takes exactly one language: java, python or c-fact"
   language="$1"
   case "$language" in
-    java | python) ;;
-    *) fail_usage "build takes java or python, not '$language'" ;;
+    java | python | c-fact) ;;
+    *) fail_usage "build takes java, python or c-fact, not '$language'" ;;
   esac
   if [[ "$MODE" == "image" ]]; then
     fail_environment "build needs a host with Docker; there is no docker inside an image"
