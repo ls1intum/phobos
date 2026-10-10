@@ -28,7 +28,8 @@ The rules, each erring in the direction A.7 names, and every case no rule covers
   or on an entry beneath it, since a file written there could then be executed. Execute stays on the
   exact files the reference executed there, each with a comment saying why, and saying so when the
   file itself stays writable. An executed object that did not exist before the run was written by it,
-  so it is reported and never granted, wherever it lies. Per-run directories (/proc, /dev/pts) are
+  so it is reported and never granted, wherever it lies, except beneath a root the exercise declared with
+  runs_compiled_programs (its assignment directory), where the directory keeps [execute] with a comment. Per-run directories (/proc, /dev/pts) are
   left to per_run_grants: a run cannot create a regular file in them.
 
 The caller rewrites /proc/self and /proc/thread-self with rewrite_self first and then resolves every
@@ -72,6 +73,9 @@ WRITE_CLASS = frozenset(cfgfile.WRITE_SECTIONS)
 EXECUTE_KEPT_COMMENT = ("execute: kept on the files the reference executed, because {directory} overlaps a "
                         "write-class right; a file written there is not executable")
 EXECUTE_KEPT_WRITABLE = ", but this file itself can be overwritten in place"
+# The comment above a directory that keeps [execute] beside a write-class right because the exercise runs what it compiles.
+COMPILED_PROGRAMS_COMMENT = ("execute: kept on this directory beside a write-class right, because the exercise declares "
+                             "runs_compiled_programs in its prune.json: its tests run the programs they compile here")
 # The comment above any other executable file a write-class right lets the run overwrite in place.
 EXECUTE_WRITABLE_COMMENT = "execute: this file can also be overwritten in place, and then executed"
 # A kernel-assigned id: 0 or a number without a leading zero.
@@ -374,12 +378,18 @@ def read_class_target(path: str, snapshot: Snapshot, fine_roots: tuple[str, ...]
     return parent if depth(parent) >= MINIMUM_WIDENING_DEPTH else path
 
 
-def placed(path: str, section: str, snapshot: Snapshot, fine_roots: tuple[str, ...], notes: Notes) -> str | None:
-    """Where one section asked for on one object is granted, or None when it is reported instead."""
+def placed(path: str, section: str, snapshot: Snapshot, fine_roots: tuple[str, ...], notes: Notes,
+           compiled_roots: tuple[str, ...] = ()) -> str | None:
+    """Where one section asked for on one object is granted, or None when it is reported instead.
+
+    A run that executed what it wrote gets no [execute] grant, except beneath one of `compiled_roots`, the
+    directories whose exercise declared that it runs the programs it compiles: the grant then goes on the
+    nearest directory that existed before the run.
+    """
     if is_self_link(path):
         notes.report(path, section, "a /proc/self link of a denial without process ids")
         return None
-    if section == "execute" and not snapshot.existed(path):
+    if section == "execute" and not snapshot.existed(path) and not within(path, compiled_roots):
         notes.report(path, section, "the run executed what it wrote; a written file is never made executable")
         return None
     if section in READ_CLASS:
@@ -424,8 +434,11 @@ def holds(path: str, section: str, entries: dict[str, frozenset[str]] | dict[str
 
 
 def narrow_execute(grants: dict[str, frozenset[str]], executed: Iterable[str], snapshot: Snapshot,
-                   notes: Notes, held: dict[str, frozenset[str]] | None = None) -> dict[str, frozenset[str]]:
+                   notes: Notes, held: dict[str, frozenset[str]] | None = None,
+                   compiled_roots: tuple[str, ...] = ()) -> dict[str, frozenset[str]]:
     """The grants with [execute] taken off every directory that overlaps a write-class right, and put on the files.
+
+    A directory in or beneath one of `compiled_roots` keeps its [execute], with a comment saying why.
 
     `executed` names the objects the reference was refused executing, and `held` the entries of the
     policy the grants are layered on, whose write-class rights count as well. First every such
@@ -435,8 +448,12 @@ def narrow_execute(grants: dict[str, frozenset[str]], executed: Iterable[str], s
     with [execute] that a [write] on it or an ancestor lets the run overwrite gets a comment saying so.
     """
     narrowed = [path for path in sorted(grants) if "execute" in grants[path] and snapshot.is_directory(path)
-                and overlaps_write(path, grants, held)]
+                and overlaps_write(path, grants, held) and not within(path, compiled_roots)]
     result = {path: set(sections) for path, sections in grants.items()}
+    for path in sorted(grants):
+        if "execute" in grants[path] and snapshot.is_directory(path) and within(path, compiled_roots) \
+                and overlaps_write(path, grants, held):
+            notes.comments.setdefault(path, COMPILED_PROGRAMS_COMMENT)
     for path in narrowed:
         result[path].discard("execute")
     for item in sorted(set(executed)):
@@ -468,7 +485,8 @@ def pinned_root_of(path: str, pinned_roots: dict[str, str]) -> str | None:
 
 def grants_and_notes(denials: Iterable[Denial | Need], snapshot: Snapshot, fine_roots: tuple[str, ...],
                      held: dict[str, frozenset[str]] | None = None, pinned_roots: dict[str, str] | None = None,
-                     own_ids: frozenset[int] = frozenset()) -> tuple[dict[str, frozenset[str]], Notes]:
+                     own_ids: frozenset[int] = frozenset(),
+                     compiled_roots: tuple[str, ...] = ()) -> tuple[dict[str, frozenset[str]], Notes]:
     """The grants the filesystem denials ask for outside per-run names, with the comments and reports beside them.
 
     `pinned_roots` maps each verified pinned read root to the comment its grant gets (pinned.py). A
@@ -476,7 +494,8 @@ def grants_and_notes(denials: Iterable[Denial | Need], snapshot: Snapshot, fine_
     is ever granted on one or on an ancestor of one: that is reported instead.
 
     [execute] is narrowed to the executed files wherever it would sit on a directory that overlaps a
-    write-class right of these grants or of `held`, the policy they are layered on (narrow_execute).
+    write-class right of these grants or of `held`, the policy they are layered on (narrow_execute), except
+    in or beneath `compiled_roots` (placed says what those are).
     """
     denials = as_denials(denials)
     taken = classify_per_run(denials, own_ids)
@@ -499,7 +518,7 @@ def grants_and_notes(denials: Iterable[Denial | Need], snapshot: Snapshot, fine_
                     grants.setdefault(pinned, set()).add(section)
                     notes.comments.setdefault(pinned, (pinned_roots or {})[pinned])
                     continue
-                target = placed(path, section, snapshot, fine_roots, notes)
+                target = placed(path, section, snapshot, fine_roots, notes, compiled_roots)
                 if target is not None and section not in READ_CLASS and any(
                         target == root or is_beneath(root, target) for root in pinned_roots or {}):
                     notes.report(path, section, "a write-class right on a pinned read root or on an ancestor of one "
@@ -508,7 +527,7 @@ def grants_and_notes(denials: Iterable[Denial | Need], snapshot: Snapshot, fine_
                 if target is not None:
                     grants.setdefault(target, set()).add(section)
     found = {path: frozenset(sections) for path, sections in grants.items()}
-    return narrow_execute(found, executed, snapshot, notes, held), notes
+    return narrow_execute(found, executed, snapshot, notes, held, compiled_roots), notes
 
 
 def grants_for(denials: Iterable[Denial | Need], snapshot: Snapshot, fine_roots: tuple[str, ...],

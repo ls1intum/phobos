@@ -345,7 +345,7 @@ def filesystem_grants(pruning: Pruning, current: list[record.Denial], snapshot: 
         if kept:
             remaining.append(dataclasses.replace(denial, objects=tuple(kept)))
     found, notes = generalise.grants_and_notes(remaining, snapshot, generalise.DEFAULT_FINE_ROOTS, held,
-                                               pruning.pinned_roots)
+                                               pruning.pinned_roots, compiled_roots=compiled_roots(pruning))
     notes.reported.extend(per_run_reported)
     for path, sections in found.items():
         grants.setdefault(path, set()).update(sections)
@@ -355,6 +355,16 @@ def filesystem_grants(pruning: Pruning, current: list[record.Denial], snapshot: 
                  confirmed=jsonable([dataclasses.asdict(denial) for denial in confirmed]),
                  not_landlock=jsonable([dataclasses.asdict(denial) for denial in current if denial not in confirmed]))
     return {path: frozenset(sections) for path, sections in grants.items()}
+
+
+def compiled_roots(pruning: Pruning) -> tuple[str, ...]:
+    """The directories whose [execute] stays beside a write: the assignment directory, for an exercise that runs what it compiles.
+
+    Only an exercise that declares runs_compiled_programs in its prune.json gets one, and it is the directory of
+    the submission, never the working directory itself, so the tests beside it stay unexecutable. Everything else
+    keeps the rule that a file the run wrote is never made executable.
+    """
+    return (cfgfile.TESTING_DIR + "/assignment",) if pruning.exercise.runs_compiled_programs else ()
 
 
 def normalised(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
@@ -367,7 +377,7 @@ def normalised(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
     notes = generalise.Notes()
     executed = sorted({path for denial in pruning.history if "execute" in denial.sections for path in denial.objects})
     narrowed = generalise.narrow_execute(generalise.normalise_hierarchy(policy.fs), executed,
-                                         snapshot_for(pruning, policy), notes)
+                                         snapshot_for(pruning, policy), notes, compiled_roots=compiled_roots(pruning))
     pruning.comments.update(notes.comments)
     return dataclasses.replace(policy, fs=generalise.normalise_hierarchy(narrowed))
 
