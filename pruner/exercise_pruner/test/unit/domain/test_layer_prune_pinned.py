@@ -236,7 +236,7 @@ def test_the_grants_of_the_pruning_reach_the_generalisation_through_the_filesyst
                            environment=runner.Environment())
     stages.verify_pinned_roots(found)
     inside = str(pathlib.Path(root.path) / "a.pom")
-    monkeypatch.setattr(stages.control, "landlock_caused", lambda found_denial: True)
+    monkeypatch.setattr(stages.control, "landlock_caused", lambda found_denial, *rest: True)
     snapshot = generalise.Snapshot(existing=frozenset({inside, root.path}), directories=frozenset({root.path}),
                                    scanned=("/",))
     grants = stages.filesystem_grants(found, [denial(inside, "read")], snapshot, {})

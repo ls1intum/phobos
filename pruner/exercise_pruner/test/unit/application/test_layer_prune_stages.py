@@ -132,7 +132,7 @@ def proc_denial(path: str, section: str, pid: int = 412) -> record.Denial:
 
 def test_a_write_on_a_per_run_name_is_reported_and_only_a_read_is_granted_on_its_stable_directory(tmp_path,
                                                                                                     monkeypatch):
-    monkeypatch.setattr(stages.control, "landlock_caused", lambda denial: True)
+    monkeypatch.setattr(stages.control, "landlock_caused", lambda denial, *rest: True)
     found = pruning(tmp_path)
     snapshot = stages.generalise.Snapshot(existing=frozenset(), directories=frozenset(), scanned=())
     written = stages.filesystem_grants(found, [proc_denial("/proc/412/oom_score_adj", "write")], snapshot, {})
@@ -485,3 +485,54 @@ def test_when_every_declared_host_is_kept_the_filesystem_is_not_minimised_again(
     monkeypatch.setattr(stages, "minimise_policy_fs", lambda *arguments, **keywords: pytest.fail("not again"))
     index = stages.generalise.Snapshot(existing=frozenset(), directories=frozenset(), scanned=())
     assert stages.prune_exercise(found.exercise, stages.Budget(), runner.Environment(), "network", index)[0] == kept
+
+
+def pty_denial(path: str, sections: frozenset[str], detail: str = "") -> record.Denial:
+    """A Landlock filesystem denial on a pseudo-terminal device, as the ioctl and the open of one produce."""
+    return record.Denial(pid=500, layer=record.LAYER_FILESYSTEM, operation="ioctl" if detail else "openat",
+                         objects=(path,), sections=sections, address=None, port=None, transport=None,
+                         errno="EACCES", run=1, tid=500, detail=detail)
+
+
+PTY_RUN = [pty_denial("/dev/ptmx", frozenset({"read", "write"})),
+           pty_denial("/dev/pts/ptmx", frozenset({"read", "write"})),
+           pty_denial("/dev/pts/ptmx", frozenset({"ioctl"}), "TIOCSPTLCK"),
+           pty_denial("/dev/pts/3", frozenset({"read", "write"})),
+           pty_denial("/dev/pts/3", frozenset({"ioctl"}), "TCGETS")]
+
+
+def terminal_pruning(tmp_path: pathlib.Path, declared: bool) -> stages.Pruning:
+    """A pruning of an exercise that does or does not declare uses_pseudo_terminals."""
+    found = pruning(tmp_path)
+    found.exercise = dataclasses.replace(found.exercise, uses_pseudo_terminals=declared)
+    return found
+
+
+def test_a_declared_exercise_gets_the_one_directory_read_written_and_open_to_ioctl(tmp_path, monkeypatch):
+    monkeypatch.setattr(stages.control, "landlock_caused", lambda denial, *rest: True)
+    snapshot = stages.generalise.Snapshot(existing=frozenset(), directories=frozenset(), scanned=())
+    grants = stages.filesystem_grants(terminal_pruning(tmp_path, True), PTY_RUN, snapshot, {})
+    assert grants == {"/dev/pts": frozenset({"read", "write", "ioctl"})}
+
+
+def test_an_undeclared_exercise_gets_no_ioctl_grant_from_the_same_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(stages.control, "landlock_caused", lambda denial, *rest: True)
+    snapshot = stages.generalise.Snapshot(existing=frozenset(), directories=frozenset(), scanned=())
+    grants = stages.filesystem_grants(terminal_pruning(tmp_path, False), PTY_RUN, snapshot, {})
+    assert not any("ioctl" in sections for sections in grants.values())
+    assert "/dev/pts" not in grants
+
+
+def test_an_ioctl_denial_alone_does_not_grant_the_directory_to_an_undeclared_exercise(tmp_path, monkeypatch):
+    monkeypatch.setattr(stages.control, "landlock_caused", lambda denial, *rest: True)
+    snapshot = stages.generalise.Snapshot(existing=frozenset(), directories=frozenset(), scanned=())
+    only_ioctl = [pty_denial("/dev/pts/ptmx", frozenset({"ioctl"}), "TIOCGPTN")]
+    assert stages.filesystem_grants(terminal_pruning(tmp_path, False), only_ioctl, snapshot, {}) == {}
+
+
+def test_the_permissive_policy_of_a_declared_exercise_holds_the_terminal_directory_and_no_other_device():
+    declared = cfgfile.permissive_policy(pathlib.Path("/"), (), True)
+    undeclared = cfgfile.permissive_policy(pathlib.Path("/"), (), False)
+    assert declared.fs["/dev/pts"] == frozenset({"read", "write", "ioctl"})
+    assert "/dev/pts" not in undeclared.fs
+    assert {path for path, sections in declared.fs.items() if "ioctl" in sections} == {"/dev/pts"}

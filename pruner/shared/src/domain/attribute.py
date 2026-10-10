@@ -38,6 +38,16 @@ SECTION_DELETE = "delete"
 SECTION_RESTRUCTURE = "restructure"
 SECTION_CONNECT = "connect"
 SECTION_BIND = "bind"
+SECTION_IOCTL = "ioctl"
+# The device nodes of a pseudo-terminal: the master clone device, under the name a program opens it by
+# (/dev/ptmx, a link to pts/ptmx) and under the name a descriptor of it shows, and the numbered slaves of one
+# devpts instance.
+PSEUDO_TERMINAL_DEVICE = re.compile(r"/dev/(?:ptmx|pts/(?:ptmx|[0-9]+))\Z")
+# Which side of a pair a device path is: the master clone device, or a numbered slave.
+PSEUDO_TERMINAL_MASTER = re.compile(r"/dev/(?:ptmx|pts/ptmx)\Z")
+# The requests each side takes: the master allocates and unlocks the pair, the slave holds the terminal.
+PSEUDO_TERMINAL_MASTER_REQUESTS = frozenset({"TIOCGPTN", "TIOCSPTLCK"})
+PSEUDO_TERMINAL_SLAVE_REQUESTS = frozenset({"TCGETS", "TCSETS", "TCSETSW", "TCSETSF", "TIOCGWINSZ", "TIOCSWINSZ"})
 
 # The errors a layer answers a refusal with. Landlock refuses a path with EACCES, and a rename or link
 # across directories without the refer right with EXDEV; the connect guard and Landlock's port rules
@@ -178,10 +188,11 @@ def parent_of(path: str) -> str:
 
 
 def make_denial(call: Syscall, layer: str, objects: tuple[str, ...] = (), sections: frozenset[str] = frozenset(),
-                address: str | None = None, port: int | None = None, transport: str | None = None) -> Denial:
+                address: str | None = None, port: int | None = None, transport: str | None = None,
+                detail: str = "") -> Denial:
     """A Denial of one call, with the call's own id, name and errno."""
     return Denial(pid=call.pid, layer=layer, operation=call.name, objects=objects, sections=sections,
-                  address=address, port=port, transport=transport, errno=call.errno or "")
+                  address=address, port=port, transport=transport, errno=call.errno or "", detail=detail)
 
 
 def filesystem(call: Syscall, objects: tuple[str, ...], *sections: str) -> Denial:
@@ -406,6 +417,30 @@ def attribute_network(call: Syscall, state: RunState) -> Denial | None:
     return None
 
 
+def pseudo_terminal_request(path: str, request: str | None) -> bool:
+    """Whether the request is one the control replay can repeat on a fresh pair, on the side of it the path names.
+
+    These are the only ioctl refusals that can be confirmed: allocating and unlocking the pair on the master, and
+    reading and setting the terminal attributes and size on a slave. Any other request, and a request on the wrong
+    side, stays a fixed refusal.
+    """
+    if PSEUDO_TERMINAL_DEVICE.match(path) is None:
+        return False
+    if PSEUDO_TERMINAL_MASTER.match(path) is not None:
+        return request in PSEUDO_TERMINAL_MASTER_REQUESTS
+    return request in PSEUDO_TERMINAL_SLAVE_REQUESTS
+
+
+def attribute_ioctl(call: Syscall) -> Denial:
+    """A refused ioctl: a filesystem denial for [ioctl] when it is a supported request on a pseudo-terminal device,
+    a fixed refusal for every other ioctl, whatever device it was on."""
+    path = strace_parse.descriptor_path(call, 0)
+    request = strace_parse.argument(call, 1)
+    if path is not None and pseudo_terminal_request(path, request):
+        return make_denial(call, LAYER_FILESYSTEM, (path,), frozenset({SECTION_IOCTL}), detail=request)
+    return make_denial(call, LAYER_FIXED, tuple(filter(None, [path])))
+
+
 def attribute_eacces(call: Syscall, state: RunState) -> Denial:
     """A call refused with EACCES or EXDEV, by the table of A.6.2; `other` for a call it does not name."""
     if call.name in TWO_PATH_ARGUMENTS:
@@ -416,7 +451,7 @@ def attribute_eacces(call: Syscall, state: RunState) -> Denial:
     if network is not None:
         return network
     if call.name == "ioctl":
-        return make_denial(call, LAYER_FIXED, tuple(filter(None, [strace_parse.descriptor_path(call, 0)])))
+        return attribute_ioctl(call)
     if call.name in DESCRIPTOR_CALLS:
         path = strace_parse.descriptor_path(call, 0)
         if path is None:

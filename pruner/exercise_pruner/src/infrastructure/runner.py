@@ -48,7 +48,7 @@ REAP_SECONDS = 10
 REAP_INTERVAL_SECONDS = 0.05
 # The keys prune.json may hold, with the type each value must have (A.6.8).
 SETTING_TYPES = {"report_globs": list, "declared_hosts": list, "heap_pinned": bool, "pinned_read_roots": list,
-                 "seed": str, "key": str, "runs_compiled_programs": bool}
+                 "seed": str, "key": str, "runs_compiled_programs": bool, "uses_pseudo_terminals": bool}
 
 
 class PrunerDefect(Exception):
@@ -84,6 +84,7 @@ class Exercise:
     pinned_read_roots: tuple[pinned.PinnedRoot, ...] = ()
     seed: str | None = None
     runs_compiled_programs: bool = False
+    uses_pseudo_terminals: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -193,7 +194,8 @@ def read_exercise(directory: pathlib.Path) -> Exercise:
     return Exercise(name=directory.name, workdir=directory, build_script=script, report_globs=globs,
                     declared_hosts=declared, heap_pinned=bool(settings.get("heap_pinned", False)),
                     pinned_read_roots=pinned.parse(settings.get("pinned_read_roots", []), str(directory / "prune.json")),
-                    seed=settings.get("seed"), runs_compiled_programs=bool(settings.get("runs_compiled_programs", False)))
+                    seed=settings.get("seed"), runs_compiled_programs=bool(settings.get("runs_compiled_programs", False)),
+                    uses_pseudo_terminals=bool(settings.get("uses_pseudo_terminals", False)))
 
 
 def restore(exercise: Exercise, environment: Environment) -> pathlib.Path:
@@ -405,5 +407,5 @@ def run_reference(exercise: Exercise, environment: Environment = Environment()) 
     """
     if not exercise.declared_hosts:
         return run_direct(exercise, environment)
-    policy = cfgfile.permissive_policy(pathlib.Path("/"), exercise.declared_hosts)
+    policy = cfgfile.permissive_policy(pathlib.Path("/"), exercise.declared_hosts, exercise.uses_pseudo_terminals)
     return run_layers(exercise, policy, RunShape(observe=False, network=True, limits=False, sample=False), environment)

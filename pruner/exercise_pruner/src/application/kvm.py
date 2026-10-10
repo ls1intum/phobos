@@ -199,7 +199,7 @@ def cross_check_run(pruning: stages.Pruning, policy: cfgfile.Policy, capture: Ca
     result = pruning.run(stages.normalised(pruning, narrowed(policy)), stages.OBSERVED_FILESYSTEM, "kvm cross-check")
     records, unparsed, _ = read_records(capture)
     attributed = [denial for denial in stages.denials_of(pruning, result)
-                  if denial.layer == record.LAYER_FILESYSTEM and control.landlock_caused(denial)]
+                  if denial.layer == record.LAYER_FILESYSTEM and control.landlock_caused(denial, pruning.exercise.uses_pseudo_terminals)]
     compared = audit.cross_check(attributed, audit.denials(records))
     return {"strace_denials": len(attributed), "audit_records": len(records), "unparsed": unparsed, **compared}
 

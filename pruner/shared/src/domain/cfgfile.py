@@ -31,7 +31,7 @@ from typing import Self
 from shared.src.domain import network
 
 # The filesystem sections, in the order they are written.
-FILESYSTEM_SECTIONS = ("read", "execute", "write", "create", "create-ipc", "create-symlink", "delete", "restructure")
+FILESYSTEM_SECTIONS = ("read", "execute", "write", "create", "create-ipc", "create-symlink", "delete", "restructure", "ioctl")
 # The rights letters each filesystem section grants, as phobos-policy-parse.sh and phobos-rights.sh
 # translate them; [restructure] is create, delete and refer.
 SECTION_RIGHTS = {
@@ -43,6 +43,7 @@ SECTION_RIGHTS = {
     "create-symlink": frozenset("l"),
     "delete": frozenset("d"),
     "restructure": frozenset("mdf"),
+    "ioctl": frozenset("i"),
 }
 # The write-class sections, which the permissive policy grants wherever it grants writing.
 WRITE_SECTIONS = ("write", "create", "create-ipc", "create-symlink", "delete", "restructure")
@@ -74,6 +75,8 @@ NEVER_WRITABLE_TOP_LEVEL = frozenset({"/var", "/proc", "/sys", "/dev", "/run"})
 # specification directory in by default.
 TESTING_DIR = "/var/tmp/testing-dir"
 SPEC_PARENT = "/var/tmp"
+# The directory of a devpts instance, the one device directory an exercise can be granted ioctl on.
+PSEUDO_TERMINAL_DIRECTORY = "/dev/pts"
 # The loopback and port-0 rules the permissive policy holds, so no stage starts narrower than a
 # build on its own machine.
 PERMISSIVE_CONNECT = ("allow 127.0.0.1:*", "allow [::1]", "allow localhost")
@@ -358,15 +361,19 @@ def writable_top_level(root: pathlib.Path) -> list[str]:
     return names
 
 
-def permissive_policy(root: pathlib.Path, declared_hosts: tuple[str, ...] = ()) -> Policy:
+def permissive_policy(root: pathlib.Path, declared_hosts: tuple[str, ...] = (),
+                      pseudo_terminals: bool = False) -> Policy:
     """The policy of A.6.4's permissive layered run: every layer on, everything an exercise could need.
 
     [read] and [execute] on `/`; every write-class section on the directories writable_top_level names
     and on the exercise's working directory; /dev/null read and write; loopback and port 0; and, as the
     only external [connect] rules, one per declared host (decision 11). The specification's parent
-    (/var/tmp) and the candidate's directory (/run) are never writable.
+    (/var/tmp) and the candidate's directory (/run) are never writable. For an exercise that declares it uses
+    pseudo-terminals, /dev/pts is read, written and open to ioctl as well, and no other device is.
     """
     fs: dict[str, frozenset[str]] = {"/": frozenset({"read", "execute"}), "/dev/null": frozenset({"read", "write"})}
+    if pseudo_terminals:
+        fs[PSEUDO_TERMINAL_DIRECTORY] = frozenset({"read", "write", "ioctl"})
     for path in [*writable_top_level(root), TESTING_DIR]:
         fs[path] = frozenset(WRITE_SECTIONS)
     return with_permissive_network(Policy(fs=fs, connect=(), bind=(), limits={}), declared_hosts)

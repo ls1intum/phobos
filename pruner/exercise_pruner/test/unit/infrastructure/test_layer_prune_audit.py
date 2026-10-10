@@ -65,7 +65,7 @@ def test_blockers_map_to_the_sections_of_the_call_table(parsed):
     sections = {item.blockers: audit.sections_of(item) for item in records}
     assert sections[("fs.read_file", "fs.write_file")] == {"read", "write"}
     assert sections[("fs.make_reg",)] == {"create"}
-    assert sections[("fs.ioctl_dev",)] == frozenset()
+    assert sections[("fs.ioctl_dev",)] == {"ioctl"}
     assert sections[("net.bind_udp",)] == frozenset()
 
 

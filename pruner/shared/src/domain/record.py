@@ -66,7 +66,8 @@ class Denial:
     destination or a local port and are None otherwise. `operation` names the refused system call.
     `pid` is the refusing process (its thread-group id) and `tid` the refusing thread, the id strace
     printed; `run` numbers the observed run the denial came from, which the caller sets, so that a
-    name seen changing between runs can be told apart from one seen once.
+    name seen changing between runs can be told apart from one seen once. `detail` names what the call
+    asked for where the object alone does not say it, the request of a refused ioctl.
     """
 
     pid: int
@@ -80,6 +81,7 @@ class Denial:
     errno: str
     run: int = 0
     tid: int = 0
+    detail: str = ""
 
     def need(self) -> Need:
         """The access granting this denial would give: the same objects and sections, as a Need."""

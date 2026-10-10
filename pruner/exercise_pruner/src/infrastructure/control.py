@@ -22,16 +22,23 @@ entry is replayed as it is, so a refusal that process's own rules made is not co
 from __future__ import annotations
 
 import errno
+import fcntl
 import os
 import re
 import socket
 import stat
+import struct
 import tempfile
+import termios
 
 from shared.src.domain.attribute import (
+    PSEUDO_TERMINAL_DEVICE,
+    PSEUDO_TERMINAL_MASTER_REQUESTS,
+    PSEUDO_TERMINAL_SLAVE_REQUESTS,
     SECTION_BIND,
     SECTION_CREATE,
     SECTION_EXECUTE,
+    SECTION_IOCTL,
     SECTION_READ,
     SECTION_RESTRUCTURE,
     SECTION_WRITE,
@@ -212,9 +219,65 @@ def own_equivalent(path: str, pid: int) -> str:
     return ("/proc/thread-self" if match.group("task") else "/proc/self") + rest
 
 
-def replay(path: str, section: str, pid: int = 0) -> bool:
+# The requests each side of a pair takes, as the attribution names them.
+MASTER_REQUESTS = PSEUDO_TERMINAL_MASTER_REQUESTS
+SLAVE_REQUESTS = PSEUDO_TERMINAL_SLAVE_REQUESTS
+# The generic request numbers where Python's termios module does not name them (the same on every architecture here).
+TIOCGPTN = getattr(termios, "TIOCGPTN", 0x80045430)
+TIOCSPTLCK = getattr(termios, "TIOCSPTLCK", 0x40045431)
+
+
+def replay_pseudo_terminal(request: str) -> bool:
+    """Whether the request succeeds outside the sandbox on a fresh pseudo-terminal pair of the pruner's own.
+
+    The slave a run opened is gone by now, so the request is repeated on a new pair, on the master for the two
+    that allocate and unlock it and on the slave for the rest. Landlock decides an ioctl by the right on the
+    device alone, before the driver sees the arguments, so the same request on an equal device is what shows
+    the refusal was the sandbox's. A request this does not know is never confirmed, and a pair the pruner
+    cannot allocate confirms nothing.
+    """
+    if request not in MASTER_REQUESTS and request not in SLAVE_REQUESTS:
+        return False
+    try:
+        pair = os.openpty()
+    except OSError:
+        return False
+    master = pair[0]
+    slave = pair[1]
+    try:
+        if request == "TIOCGPTN":
+            fcntl.ioctl(master, TIOCGPTN, struct.pack("I", 0))
+        elif request == "TIOCSPTLCK":
+            fcntl.ioctl(master, TIOCSPTLCK, struct.pack("i", 0))
+        elif request == "TCGETS":
+            termios.tcgetattr(slave)
+        elif request in ("TCSETS", "TCSETSW", "TCSETSF"):
+            when = {"TCSETS": termios.TCSANOW, "TCSETSW": termios.TCSADRAIN, "TCSETSF": termios.TCSAFLUSH}[request]
+            termios.tcsetattr(slave, when, termios.tcgetattr(slave))
+        elif request == "TIOCGWINSZ":
+            fcntl.ioctl(slave, termios.TIOCGWINSZ, struct.pack("HHHH", 0, 0, 0, 0))
+        else:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+    except OSError:
+        return False
+    finally:
+        os.close(master)
+        os.close(slave)
+    return True
+
+
+def pseudo_terminal_equivalent(path: str, declared: bool = False) -> str:
+    """The path a replay uses for a numbered pseudo-terminal slave that no longer exists: the master clone device,
+    which the run's slave was a sibling of, opened with the same rights. Only for an exercise that declares it
+    uses pseudo-terminals: for any other, a slave that is gone is simply not confirmable."""
+    if declared and PSEUDO_TERMINAL_DEVICE.match(path) and not os.path.exists(path):
+        return "/dev/pts/ptmx"
+    return path
+
+
+def replay(path: str, section: str, pid: int = 0, pseudo_terminals: bool = False) -> bool:
     """Whether one section's access to one object, refused to the process `pid`, succeeds outside the sandbox."""
-    path = own_equivalent(path, pid)
+    path = pseudo_terminal_equivalent(own_equivalent(path, pid), pseudo_terminals)
     if section == SECTION_READ:
         return replay_read(path)
     if section == SECTION_WRITE:
@@ -226,7 +289,7 @@ def replay(path: str, section: str, pid: int = 0) -> bool:
     return replay_directory_change(path)
 
 
-def landlock_caused(denial: Denial) -> bool:
+def landlock_caused(denial: Denial, pseudo_terminals: bool = False) -> bool:
     """Whether granting the denial could help, because the access it was refused succeeds unsandboxed.
 
     A refused connect or datagram is replayed with a datagram connect, because the guard passes the
@@ -241,4 +304,7 @@ def landlock_caused(denial: Denial) -> bool:
         return False
     if denial.errno == "EXDEV" and SECTION_RESTRUCTURE in denial.sections and not same_filesystem(denial.objects):
         return False
-    return all(replay(path, section, denial.pid) for path in denial.objects for section in sorted(denial.sections))
+    if SECTION_IOCTL in denial.sections:
+        return pseudo_terminals and replay_pseudo_terminal(denial.detail)
+    return all(replay(path, section, denial.pid, pseudo_terminals)
+               for path in denial.objects for section in sorted(denial.sections))
