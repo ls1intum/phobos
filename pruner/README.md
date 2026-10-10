@@ -101,6 +101,11 @@ The prune image is built on the C run-phase image there and prunes `exercises/c/
 to end in a policy. That exercise declares `runs_compiled_programs` in its `prune.json`, because the program
 FACT compiles and then runs is written by the run itself.
 
+## The R run-phase image, run by the `run-phase-r` job of `build.yml`
+
+The prune image is built on the R run-phase image there and prunes `exercises/r/r-reference`, which has
+to end in a policy. The seed `r.cfg` grants `/tmp`, where R names its temporaries at random.
+
 ## The environment variables the suites read
 
 | Variable | Read by | Meaning |
