@@ -279,7 +279,7 @@ for header in "[Read]" "[read ]" "[ read]" "[read]]" "[[read]]" "[unknown]" "[RE
   run_pm --config "$config" -- "$P" cwd
   if ! started && (( PM_STATUS == PHB_EPOLICY )); then ok "refused with ${PHB_EPOLICY}: the header ${header}"; else bad "the header ${header} is refused" "$(pm_describe)"; fi
 done
-for header in "[read]" "[execute]" "[write]" "[create]" "[delete]" "[create-ipc]" "[create-symlink]" "[restructure]" "[connect]" "[bind]" "[accept]" "[limits]"; do
+for header in "[read]" "[execute]" "[write]" "[create]" "[delete]" "[create-ipc]" "[create-symlink]" "[restructure]" "[ioctl]" "[connect]" "[bind]" "[accept]" "[limits]"; do
   config="$PM/cfg/header.cfg"
   printf '[read]\n%s\n%s\n' "$PM/ro" "$header" > "$config"
   run_pm --config "$config" -- "$P" cwd

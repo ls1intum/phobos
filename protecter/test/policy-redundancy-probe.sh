@@ -32,7 +32,7 @@ readonly PROBE_EXIT_USAGE=2
 
 # The sections whose entries this probe compares, and the rights letter each grants. The
 # order is the one phobos-common.sh uses, so a set of letters prints the way the manual reads.
-readonly PROBE_SECTIONS="read:r execute:x write:w create:m delete:d"
+readonly PROBE_SECTIONS="read:r execute:x write:w create:m delete:d ioctl:i"
 
 # Prints how to call the probe and ends with PROBE_EXIT_USAGE.
 usage() {

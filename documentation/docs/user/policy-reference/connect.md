@@ -1,6 +1,6 @@
 ---
 title: "[connect]"
-sidebar_position: 9
+sidebar_position: 10
 description: "The outbound destinations a command may reach, by host, port and transport."
 ---
 
@@ -44,6 +44,10 @@ example file, so reading them in order walks it from top to bottom.
 
 [restructure]
 /var/tmp/workspace
+
+# Devices that may receive ioctl calls, here the pseudo-terminals of the container.
+[ioctl]
+/dev/pts
 
 # policy-focus-start
 [connect]

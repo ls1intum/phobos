@@ -10,10 +10,11 @@
 # shellcheck disable=SC2034
 # The filesystem buckets, one per phobos-landlock-filesystem-and-networksystem right letter: read (r), execute (x),
 # write (w), create (m: regular files and directories), delete (d), ipc (p: sockets and
-# named pipes), symlink (l), refer (f: move or rename across directories). The cfg section
-# [create-ipc] feeds ipc, [create-symlink] feeds symlink, and [restructure] feeds create,
-# delete and refer together, so a policy that names it may rename and move within the tree.
-PHB_FS_RIGHTS="read execute write create delete ipc symlink refer"
+# named pipes), symlink (l), refer (f: move or rename across directories), ioctl (i: ioctl on a character
+# or block device). The cfg section [create-ipc] feeds ipc, [create-symlink] feeds symlink, [ioctl] feeds ioctl
+# and nothing else, and [restructure] feeds create, delete and refer together, so a policy that names it
+# may rename and move within the tree.
+PHB_FS_RIGHTS="read execute write create delete ipc symlink refer ioctl"
 
 # Where parse_cfg_policy is, as "<file>, line <number>", while it reads a line; empty otherwise.
 PARSE_LOCATION=""
@@ -209,8 +210,8 @@ reset_parsed_limits() {
 refuse_unknown_section() {
   local section="$1"
   case "$section" in
-    read|execute|write|create|delete|create-ipc|create-symlink|restructure|connect|bind|accept|limits) ;;
-    *) refuse_cfg "unknown section ${section@Q}; the sections are [read], [execute], [write], [create], [delete], [create-ipc], [create-symlink], [restructure], [connect], [bind], [accept] and [limits]" ;;
+    read|execute|write|create|delete|create-ipc|create-symlink|restructure|ioctl|connect|bind|accept|limits) ;;
+    *) refuse_cfg "unknown section ${section@Q}; the sections are [read], [execute], [write], [create], [delete], [create-ipc], [create-symlink], [restructure], [ioctl], [connect], [bind], [accept] and [limits]" ;;
   esac
 }
 
@@ -627,10 +628,11 @@ parse_cfg_policy() {
   local ipc="${tdir}/ipc.paths"
   local sym="${tdir}/symlink.paths"
   local ref="${tdir}/refer.paths"
+  local ioc="${tdir}/ioctl.paths"
   local net="${tdir}/net.rules"
   local bind="${tdir}/bind.rules"
   local acc="${tdir}/accept.rules"
-  : >"$rd"; : >"$ex"; : >"$wr"; : >"$cr"; : >"$de"; : >"$ipc"; : >"$sym"; : >"$ref"; : >"$net"; : >"$bind"; : >"$acc"
+  : >"$rd"; : >"$ex"; : >"$wr"; : >"$cr"; : >"$de"; : >"$ipc"; : >"$sym"; : >"$ref"; : >"$ioc"; : >"$net"; : >"$bind"; : >"$acc"
   reset_parsed_limits
   refuse_binary_cfg "$cfg"
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -649,10 +651,10 @@ parse_cfg_policy() {
       continue
     fi
     case "$sec" in
-      read|execute|write|create|delete|create-ipc|create-symlink|restructure)
+      read|execute|write|create|delete|create-ipc|create-symlink|restructure|ioctl)
         refuse_relative_path "$line" "$sec"
         refuse_wildcard_path "$line" "$sec"
-        if [[ -n "$exercise" && ( "$sec" == "read" || "$sec" == "execute" ) ]]; then refuse_missing_path "$line" "$sec"; fi ;;
+        if [[ -n "$exercise" && ( "$sec" == "read" || "$sec" == "execute" || "$sec" == "ioctl" ) ]]; then refuse_missing_path "$line" "$sec"; fi ;;
     esac
     case "$sec" in
       read)    printf '%s\n' "$line" >>"$rd" ;;
@@ -662,6 +664,7 @@ parse_cfg_policy() {
       delete)  printf '%s\n' "$line" >>"$de" ;;
       create-ipc)     printf '%s\n' "$line" >>"$ipc" ;;
       create-symlink) printf '%s\n' "$line" >>"$sym" ;;
+      ioctl)          printf '%s\n' "$line" >>"$ioc" ;;
       restructure)    printf '%s\n' "$line" >>"$cr"; printf '%s\n' "$line" >>"$de"; printf '%s\n' "$line" >>"$ref" ;;
       connect) append_connect_rule "$line" "$net" ;;
       bind)    append_bind_rule "$line" "$bind" ;;

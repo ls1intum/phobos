@@ -269,6 +269,16 @@ jobs:
           docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/scoping-test.sh
 
+      # The ioctl right on a device and the [ioctl] section, with a pseudo-terminal as the device: it works with
+      # read, write and ioctl on /dev/pts, stops at the first ioctl without the right, and another device stays
+      # refused. The Java image runs it too, as every image can be asked for a terminal.
+      - name: The ioctl right on a device is granted by [ioctl] and by nothing else
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
+        run: |
+          docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
+            phobos-run-phase:ci \
+            bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/ioctl-device-test.sh
+
       # The connect guard the image compiled installs its seccomp user-notification filter under
       # the image's default seccomp profile in an ordinary container, and enforces the [connect]
       # allow-list by host and port. This is both the availability check (the filter installs
@@ -542,6 +552,7 @@ jobs:
               landlock-filesystem-and-networksystem-acceptance/network-port-test.sh \
               landlock-filesystem-and-networksystem-acceptance/bind-port-test.sh \
               landlock-filesystem-and-networksystem-acceptance/scoping-test.sh \
+              landlock-filesystem-and-networksystem-acceptance/ioctl-device-test.sh \
               landlock-filesystem-and-networksystem-acceptance/seccomp-networksystem-test.sh \
               landlock-filesystem-and-networksystem-acceptance/network-cleanup-test.sh \
               protection-matrix/network.sh \

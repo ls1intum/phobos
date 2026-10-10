@@ -99,6 +99,7 @@ run them by hand.
 | `python-policy-test.sh` | the Python reference exercise passes under the Python base the Python image ships (compileall, then pytest with its JUnit report), and a canary outside the base's directories, an overwrite of a file beside the working directory and a connection to an unnamed address are refused | never |
 | `network-port-test.sh` | a raw `connect()` syscall is still refused by Landlock's port rule |
 | `scoping-test.sh` | Landlock scoping: a sandboxed process can neither signal a process outside its domain nor reach an abstract UNIX socket there |
+| `ioctl-device-test.sh` | the ioctl right on a device and the `[ioctl]` section: a pseudo-terminal exchange works with read, write and ioctl on `/dev/pts`, stops at the first ioctl without the right, is refused at the open with the right alone, and another device stays refused; an entry on the link `/dev/ptmx` ends the run |
 | `seccomp-networksystem-test.sh` | the connect guard inside the image: an allowed destination connects, a forbidden one is refused, neither can be redirected, and a rule for one transport admits nothing on the other |
 
 ## The protection matrix, run by `build.yml` inside the run-phase image
@@ -130,7 +131,7 @@ the kernel lacks, a missing tool or too few processor cores.
 ## The Python run-phase image, run by the `run-phase-python` job of `build.yml`
 
 The Python run-phase image (`docker/protecter/python/`) is held to every suite above that needs no
-Java: `network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`, `seccomp-networksystem-test.sh`,
+Java: `network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`, `ioctl-device-test.sh`, `seccomp-networksystem-test.sh`,
 `network-cleanup-test.sh` and the whole protection matrix, in one looped step that names each suite and
 fails when any one does. The four acceptance suites that compile Java probes or run Maven
 (`run-tests.sh`, `extra-tests.sh`, `phase-test.sh`, `shipped-policy-test.sh`) stay with the Java job.

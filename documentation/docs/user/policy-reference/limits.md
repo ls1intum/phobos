@@ -1,6 +1,6 @@
 ---
 title: "[limits]"
-sidebar_position: 12
+sidebar_position: 13
 description: "The wall-clock timeout and the five resource limits a run is held to."
 ---
 
@@ -45,6 +45,10 @@ example file, so reading them in order walks it from top to bottom.
 
 [restructure]
 /var/tmp/workspace
+
+# Devices that may receive ioctl calls, here the pseudo-terminals of the container.
+[ioctl]
+/dev/pts
 
 [connect]
 allow 192.0.2.10:443
