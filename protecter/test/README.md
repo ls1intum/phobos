@@ -103,7 +103,7 @@ run them by hand.
 
 ## The protection matrix, run by `build.yml` inside the run-phase image
 
-Eleven suites in `protecter/test/integration/protection-matrix/` hold the whole of `phobos.sh` to what it
+Twelve suites in `protecter/test/integration/protection-matrix/` hold the whole of `phobos.sh` to what it
 promises, each in a step of its own. They run in an ordinary container with `--network none`, plus
 `--memory` and `--pids-limit`, which are cgroup caps and not privileges. Every denial has an
 unprotected control and a run with only its layer switched off, a check whose control fails is
