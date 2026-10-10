@@ -19,7 +19,19 @@ on:
     branches: [ "main" ]
   schedule:
     - cron: "0 17 * * 0"
+  # A stacked pull request gets its checks from a dispatch rather than from pull_request (see
+  # AGENTS.md), so a dispatch runs what a pull request runs unless it asks for the full scope, which is
+  # what a push to main and the weekly run get, plus the extended suites on every language image.
   workflow_dispatch:
+    inputs:
+      scope:
+        description: "pull-request: what a pull request runs; full: every suite of every image, on both architectures"
+        required: true
+        default: pull-request
+        type: choice
+        options:
+          - pull-request
+          - full
 
 permissions: {}
 
@@ -129,9 +141,14 @@ jobs:
   # Built and tested once per architecture on a native runner, never under emulation:
   # Landlock and the seccomp user-notification the acceptance suites rest on are absent or
   # unreliable under QEMU, so an emulated arm64 run would test nothing. Each leg builds the
-  # image for its own architecture, compiling the four C products from source
-  # there, and runs the whole acceptance suite against that exact image, so both
-  # architectures are proven before the image is published by hand (see AGENTS.md).
+  # image for its own architecture, compiling the four C products from source there.
+  #
+  # amd64 runs every group on every event. A pull request, and a dispatch that does not ask for the
+  # full scope, runs only the acceptance group on arm64: it holds the reporter, whose table of trapped
+  # calls differs between the architectures (arm64 has no open, mkdir or unlink of its own), the group
+  # lock's refusals and a supervisor that is gone. The other groups reach arm64 later rather than never:
+  # a push to main, the weekly run and a full dispatch run every group there too, and the image is
+  # published by hand only from a commit such a run has proven (see AGENTS.md).
   run-phase:
     name: Build the run-phase image (${{ matrix.platform }}) and hold it to the ${{ matrix.group }} suites
     runs-on: ${{ matrix.runner }}
@@ -143,6 +160,26 @@ jobs:
       matrix:
         platform: [amd64, arm64]
         group: [acceptance, matrix-a, matrix-b, recorder-and-egress, pruner]
+        # A group named 'none' matches nothing, so outside a pull request or a narrow dispatch these
+        # exclude nothing. exclude is applied before include, so the condition cannot be a matrix key.
+        exclude:
+          - platform: arm64
+            group: >-
+              ${{ (github.event_name == 'pull_request'
+              || (github.event_name == 'workflow_dispatch' && inputs.scope != 'full')) && 'matrix-a' || 'none' }}
+          - platform: arm64
+            group: >-
+              ${{ (github.event_name == 'pull_request'
+              || (github.event_name == 'workflow_dispatch' && inputs.scope != 'full')) && 'matrix-b' || 'none' }}
+          - platform: arm64
+            group: >-
+              ${{ (github.event_name == 'pull_request'
+              || (github.event_name == 'workflow_dispatch' && inputs.scope != 'full'))
+              && 'recorder-and-egress' || 'none' }}
+          - platform: arm64
+            group: >-
+              ${{ (github.event_name == 'pull_request'
+              || (github.event_name == 'workflow_dispatch' && inputs.scope != 'full')) && 'pruner' || 'none' }}
         include:
           - platform: amd64
             runner: ubuntu-26.04
@@ -487,14 +524,14 @@ jobs:
 
   # The run-phase image for Python, built FROM the official Python image rather than Artemis's
   # ls1tum/artemis-python-docker (see its Dockerfile), on native runners for both architectures as
-  # the Java image is. It is held to every suite that does not need Java: the language-neutral
-  # acceptance suites and the whole protection matrix, which replace the image's base with their
-  # own whatever language it is for. The four acceptance suites that compile Java probes or run
-  # Maven (run-tests, extra-tests, phase-test, shipped-policy-test) stay with the Java job. The layer
-  # pruner is then built on this image and prunes the fixture on it, so the pruner is proven on the
-  # image it prunes Python exercises in.
+  # the Java image is. Its four C products are compiled in its own Debian stage, so they are not the
+  # Java image's binaries, and on every event this job holds the binaries it ships to both directions:
+  # the shipped Python base on the Python reference exercise, the five language-neutral acceptance
+  # suites, and the layer pruner pruning that exercise on this image. The protection matrix runs on
+  # the Java image only. The weekly run and a full dispatch add the reporter and the layer pruner's own
+  # suites, whose aborts for the wrong reason and declared hosts the reference exercise does not reach.
   run-phase-python:
-    name: Build the Python run-phase image (${{ matrix.platform }}) and hold it to the ${{ matrix.group }} suites
+    name: Build the Python run-phase image (${{ matrix.platform }}) and hold it to its own suites
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     permissions:
@@ -503,7 +540,6 @@ jobs:
       fail-fast: false
       matrix:
         platform: [amd64, arm64]
-        group: [pruner-a, egress, suites-a, suites-b]
         include:
           - platform: amd64
             runner: ubuntu-26.04
@@ -530,112 +566,61 @@ jobs:
             "${RUNNER_TEMP}/run-phase-context"
 
       # The same ordinary containers as the Java job: --network none, and no --privileged, no
-      # --cap-add, no --security-opt. The cgroup limits the Java job gives the matrix are given to
-      # the acceptance suites here too, which only bounds them. One step per suite would repeat the
-      # Java job's seventeen; a loop that names every suite it runs, and fails when any one does,
-      # says the same.
-      - name: The language-neutral acceptance suites and the first half of the protection matrix
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'suites-a' }}
+      # --cap-add, no --security-opt. These five need no Java and take seconds, and each one puts a
+      # binary this image compiled to a raw call it must refuse.
+      - name: The language-neutral acceptance suites hold on the Python image
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           failed=0
           for suite in \
-              landlock-filesystem-and-networksystem-acceptance/network-port-test.sh \
-              landlock-filesystem-and-networksystem-acceptance/bind-port-test.sh \
-              landlock-filesystem-and-networksystem-acceptance/scoping-test.sh \
-              landlock-filesystem-and-networksystem-acceptance/seccomp-networksystem-test.sh \
-              landlock-filesystem-and-networksystem-acceptance/network-cleanup-test.sh \
-              protection-matrix/network.sh \
-              protection-matrix/timeout.sh \
-              protection-matrix/filesystem.sh \
-              protection-matrix/cli.sh; do
+              network-port-test.sh \
+              bind-port-test.sh \
+              scoping-test.sh \
+              seccomp-networksystem-test.sh \
+              network-cleanup-test.sh; do
             echo "::group::${suite}"
             if ! docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
-                phobos-run-phase-python:ci bash "/tests/integration/${suite}"; then
+                phobos-run-phase-python:ci \
+                bash "/tests/integration/landlock-filesystem-and-networksystem-acceptance/${suite}"; then
               failed=1
               echo "::error::${suite} failed"
             fi
             echo "::endgroup::"
           done
           exit "${failed}"
-
-      - name: The language-neutral acceptance suites and the second half of the protection matrix
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'suites-b' }}
-        run: |
-          failed=0
-          for suite in \
-              protection-matrix/network-edge.sh \
-              protection-matrix/combinations.sh \
-              protection-matrix/lifecycle.sh \
-              protection-matrix/policy-syntax.sh \
-              protection-matrix/filesystem-edge.sh \
-              protection-matrix/resources.sh \
-              protection-matrix/resources-edge.sh; do
-            echo "::group::${suite}"
-            if ! docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
-                phobos-run-phase-python:ci bash "/tests/integration/${suite}"; then
-              failed=1
-              echo "::error::${suite} failed"
-            fi
-            echo "::endgroup::"
-          done
-          exit "${failed}"
-
-      - name: The reporter reports each blocked action on the Python image and changes no outcome
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'egress' }}
-        run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
-            phobos-run-phase-python:ci bash /tests/integration/protection-matrix/reporting.sh
 
       # The Python reference exercise under the Python base the image ships, which the layer pruner
       # derived from this very exercise: the template's two phases pass, and a canary, a write beside
       # the working directory and an unnamed address are refused. Without it a stale base would go
       # unnoticed, as the previous one did.
       - name: The shipped Python base runs the Python reference exercise both ways
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'suites-a' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             -v "${PWD}/exercises/python/python-reference:/exercise:ro" \
             phobos-run-phase-python:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/python-policy-test.sh
 
-      - name: Build the prune image on the Python run-phase image
-        id: prune-build
+      - name: The reporter reports each blocked action on the Python image and changes no outcome
         if: >-
           ${{ !cancelled() && steps.build.outcome == 'success'
-          && contains(fromJSON('["pruner-a","egress"]'), matrix.group) }}
+          && (github.event_name == 'schedule'
+          || (github.event_name == 'workflow_dispatch' && inputs.scope == 'full')) }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
+            phobos-run-phase-python:ci bash /tests/integration/protection-matrix/reporting.sh
+
+      - name: Build the prune image on the Python run-phase image
+        id: prune-build
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase-python:ci \
             -f docker/pruner/layers/Dockerfile -t phobos-prune-layers-python:ci .
 
-      - name: The prune image's observer on the Python image sees what the layers refuse, and only that
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner-a' }}
-        run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}/protecter/test:/repo/protecter/test:ro" -v "${PWD}/pruner:/repo/pruner:ro" \
-            -v "${PWD}/pruner:/var/tmp/helpers:ro" \
-            phobos-prune-layers-python:ci \
-            bash /repo/pruner/exercise_pruner/test/integration/infrastructure/layer_prune_observer.sh
-
-      - name: The layer pruner on the Python image derives a policy that holds in both directions
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner-a' }}
-        timeout-minutes: 50
-        run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci \
-            bash /repo/pruner/exercise_pruner/test/integration/interface/layer_prune.sh
-
-      - name: The layer pruner on the Python image keeps exactly the declared hosts a build needs
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'egress' }}
-        timeout-minutes: 30
-        run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci \
-            bash /repo/pruner/exercise_pruner/test/integration/interface/layer_prune_egress.sh
-
       # The Python reference exercise, pruned as Compose's prune_python prunes it: pytest under the
       # layers, and every stage ending in a policy rather than an abort.
       - name: The layer pruner prunes the Python reference exercise on the Python image
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner-a' }}
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
         timeout-minutes: 30
         run: |
           output="$(mktemp -d)"
@@ -646,10 +631,46 @@ jobs:
             /var/tmp/helpers/exercise_pruner/src/interface/main.py python
           test -s "${output}/python_python-reference.cfg"
 
+      - name: The prune image's observer on the Python image sees what the layers refuse, and only that
+        if: >-
+          ${{ !cancelled() && steps.prune-build.outcome == 'success'
+          && (github.event_name == 'schedule'
+          || (github.event_name == 'workflow_dispatch' && inputs.scope == 'full')) }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}/protecter/test:/repo/protecter/test:ro" -v "${PWD}/pruner:/repo/pruner:ro" \
+            -v "${PWD}/pruner:/var/tmp/helpers:ro" \
+            phobos-prune-layers-python:ci \
+            bash /repo/pruner/exercise_pruner/test/integration/infrastructure/layer_prune_observer.sh
+
+      - name: The layer pruner on the Python image derives a policy that holds in both directions
+        if: >-
+          ${{ !cancelled() && steps.prune-build.outcome == 'success'
+          && (github.event_name == 'schedule'
+          || (github.event_name == 'workflow_dispatch' && inputs.scope == 'full')) }}
+        timeout-minutes: 50
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci \
+            bash /repo/pruner/exercise_pruner/test/integration/interface/layer_prune.sh
+
+      - name: The layer pruner on the Python image keeps exactly the declared hosts a build needs
+        if: >-
+          ${{ !cancelled() && steps.prune-build.outcome == 'success'
+          && (github.event_name == 'schedule'
+          || (github.event_name == 'workflow_dispatch' && inputs.scope == 'full')) }}
+        timeout-minutes: 30
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci \
+            bash /repo/pruner/exercise_pruner/test/integration/interface/layer_prune_egress.sh
+
   # The run-phase image for C exercises built with Artemis's FACT template, on native runners for both
   # architectures. The shipped C base is derived from the FACT reference exercise on this very image, so the
   # job holds the image to that exercise in both directions and proves the layer pruner still prunes it:
   # the exercise's declared `runs_compiled_programs` setting is the one place a base keeps execute beside write.
+  # As on the Python image, the five language-neutral acceptance suites hold the binaries it compiled on every
+  # event, and the reporter runs on the weekly run and a full dispatch.
   run-phase-c-fact:
     name: Build the C (FACT) run-phase image (${{ matrix.platform }}) and hold it to the FACT reference exercise
     runs-on: ${{ matrix.runner }}
@@ -694,8 +715,32 @@ jobs:
             phobos-run-phase-c-fact:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/c-fact-policy-test.sh
 
-      - name: The reporter reports each blocked action on the C image and changes no outcome
+      - name: The language-neutral acceptance suites hold on the C image
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          failed=0
+          for suite in \
+              network-port-test.sh \
+              bind-port-test.sh \
+              scoping-test.sh \
+              seccomp-networksystem-test.sh \
+              network-cleanup-test.sh; do
+            echo "::group::${suite}"
+            if ! docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
+                phobos-run-phase-c-fact:ci \
+                bash "/tests/integration/landlock-filesystem-and-networksystem-acceptance/${suite}"; then
+              failed=1
+              echo "::error::${suite} failed"
+            fi
+            echo "::endgroup::"
+          done
+          exit "${failed}"
+
+      - name: The reporter reports each blocked action on the C image and changes no outcome
+        if: >-
+          ${{ !cancelled() && steps.build.outcome == 'success'
+          && (github.event_name == 'schedule'
+          || (github.event_name == 'workflow_dispatch' && inputs.scope == 'full')) }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase-c-fact:ci bash /tests/integration/protection-matrix/reporting.sh
@@ -722,6 +767,8 @@ jobs:
   # The run-phase image for R exercises built with Artemis's R template, on native runners for both
   # architectures. The shipped R base is derived from the R reference exercise on this very image, so the
   # job holds the image to that exercise in both directions and proves the layer pruner still prunes it.
+  # As on the Python image, the five language-neutral acceptance suites hold the binaries it compiled on every
+  # event, and the reporter runs on the weekly run and a full dispatch.
   run-phase-r:
     name: Build the R run-phase image (${{ matrix.platform }}) and hold it to the R reference exercise
     runs-on: ${{ matrix.runner }}
@@ -766,8 +813,32 @@ jobs:
             phobos-run-phase-r:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/r-policy-test.sh
 
-      - name: The reporter reports each blocked action on the R image and changes no outcome
+      - name: The language-neutral acceptance suites hold on the R image
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          failed=0
+          for suite in \
+              network-port-test.sh \
+              bind-port-test.sh \
+              scoping-test.sh \
+              seccomp-networksystem-test.sh \
+              network-cleanup-test.sh; do
+            echo "::group::${suite}"
+            if ! docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
+                phobos-run-phase-r:ci \
+                bash "/tests/integration/landlock-filesystem-and-networksystem-acceptance/${suite}"; then
+              failed=1
+              echo "::error::${suite} failed"
+            fi
+            echo "::endgroup::"
+          done
+          exit "${failed}"
+
+      - name: The reporter reports each blocked action on the R image and changes no outcome
+        if: >-
+          ${{ !cancelled() && steps.build.outcome == 'success'
+          && (github.event_name == 'schedule'
+          || (github.event_name == 'workflow_dispatch' && inputs.scope == 'full')) }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase-r:ci bash /tests/integration/protection-matrix/reporting.sh

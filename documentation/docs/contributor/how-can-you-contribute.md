@@ -30,7 +30,8 @@ rather than on `main`. A change written against `main` alone can be correct and 
 with an open stack. Run `gh pr list` and read the bases first. A pull request whose base is
 another branch is part of a stack, and it gets no checks of its own, because every workflow
 filters its `pull_request` trigger on `main`: start `build.yml`, `lint.yml`, `test.yml` and
-`codeql.yml` on its branch with `workflow_dispatch` and link the runs.
+`codeql.yml` on its branch with `workflow_dispatch` and link the runs. A dispatch of `build.yml` runs
+what a pull request runs, and `scope: full` runs every suite each image is held to, on both architectures.
 
 ## Never widen the sandbox quietly
 
