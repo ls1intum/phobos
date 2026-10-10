@@ -73,10 +73,10 @@ and `.editorconfig` asks editors for the same. Check with `git ls-files --eol | 
 
 ## The gate
 
-`lint.yml` runs seven lint jobs, and `actionlint.yml` lints the workflows beside it, weekly and
-on a change under `.github`. Every one can be run by hand. The commands below are those seven
-jobs plus `actionlint`, run against locally installed tools. That is the usual reason a local run and the run in
-continuous integration (CI) disagree on a version. The C job is two steps rather than one: the
+`lint.yml` runs nine checks as the steps of one job, and `actionlint.yml` lints the workflows beside it, weekly and
+on a change under `.github`. Every one can be run by hand. The commands below are its
+checks plus `actionlint`, run against locally installed tools. That is the usual reason a local run and the run in
+continuous integration (CI) disagree on a version. The C check is two steps rather than one: the
 compiler gate runs before cppcheck and fails on any warning.
 
 ```bash

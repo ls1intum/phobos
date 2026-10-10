@@ -4,11 +4,18 @@
 # the run-phase image are built and argued about separately, in build.yml.
 name: Test
 
+# A change that touches nothing but the documentation site starts none of these jobs: no suite reads a
+# file under documentation/, and documentation-ci.yml is that site's own gate. Lint keeps running on such
+# a change, because yamllint and editorconfig-checker read documentation/ too.
 on:
   pull_request:
     branches: [ "main" ]
+    paths-ignore:
+      - "documentation/**"
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - "documentation/**"
   workflow_dispatch:
 
 permissions: {}
