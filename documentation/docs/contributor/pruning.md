@@ -80,7 +80,7 @@ outside the working directory, so each run starts as a fresh grading container d
 files, so the pruner runs only in the prune image, which sets `PHOBOS_PRUNE_CONTAINER=1`.
 
 The code is in `pruner/exercise_pruner/src/` and, for what the recording pruner shares, `pruner/shared/src/`,
-sorted into the layers domain, infrastructure, application and interface (`pruner/README.md` says which may import which):
+sorted into the layers domain, infrastructure, application and interface (`pruner/README.md` lists what each layer imports):
 
 - `strace_parse.py` turns the log into the calls made inside the command's Landlock domain.
 - `record.py` holds the shared records.
@@ -114,15 +114,15 @@ the reason it produced none, every widening and every containment check. An exer
 gets `<key>_<exercise>.aborted.json` and no configuration. The policy stays only as good as the
 reference: the grading layers refuse a code path that the reference never took.
 
-An exercise lives in `exercises/<family>/<exercise>/`, and the folder it sits in only groups related
-exercises. Its key, which names the artefacts and the base it is merged into, is the `"key"` in its
-`prune.json`, or the family's folder name when it declares none. `exercises/java/` holds the Gradle
-reference (`"key": "java-gradle"`) and the Maven reference (`"key": "java-maven"`) for that reason. The
-pruner, the verification and the KVM staging all pick an exercise's key the same way
-(`pruner/exercise_pruner/src/application/discovery.py`). A `prune.json` that is not a JSON object, a `"key"` that is not
-lower-case words joined by hyphens, and two exercises of one key with one folder name each end the run
-before anything is written, because the key of the exercise, or the artefacts it would write, are then
-not known.
+An exercise lives in `exercises/<family>/<exercise>/`, and the folder only groups related exercises. The exercise
+names its key with `"key"` in its `prune.json`; without one, the key is the family's folder name. That is why
+`exercises/java/` holds the Gradle reference (`"key": "java-gradle"`) and the Maven reference (`"key": "java-maven"`).
+The pruner, the verification and the KVM staging pick the key the same way, in
+`pruner/exercise_pruner/src/application/discovery.py`.
+
+Three things end a run before it writes anything. One is a `prune.json` that is not a JSON object. Another is a
+`"key"` that is not lower-case words joined by hyphens. In both cases the pruner cannot tell which key the exercise
+belongs to. The third is two exercises of one key with one folder name, because both write the same files.
 
 Four rules for an exercise are worth knowing:
 
