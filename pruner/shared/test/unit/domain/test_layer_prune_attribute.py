@@ -6,6 +6,7 @@ refusal outside the domain, an ordinary error and a foreign refusal from ever be
 
 from __future__ import annotations
 
+import os
 import pathlib
 import sys
 
@@ -59,6 +60,17 @@ def test_a_relative_path_without_a_decoration_uses_the_working_directory_and_fol
                      '300 chdir("sub") = 0',
                      '300 openat(AT_FDCWD, "two", O_RDONLY) = -1 EACCES (Permission denied)')
     assert [denial.objects for denial in attribute.denials(trace, "/w")] == [("/w/one",), ("/w/sub/two",)]
+
+
+def test_a_vfork_child_resolves_a_relative_path_against_the_working_directory_it_inherited():
+    trace = trace_of(RESTRICT,
+                     '300 chdir("/w/test") = 0',
+                     "300 clone(child_stack=0x7f, flags=CLONE_VM|CLONE_VFORK|SIGCHLD <unfinished ...>",
+                     '301 chdir("../assignment/") = 0',
+                     '301 openat(AT_FDCWD, "exercise", O_RDONLY) = -1 EACCES (Permission denied)',
+                     "300 <... clone resumed>) = 301")
+    paths = [os.path.normpath(path) for denial in attribute.denials(trace, "/w") for path in denial.objects]
+    assert paths == ["/w/assignment/exercise"]
 
 
 def test_a_refused_write_asks_for_write_and_a_read_write_open_for_both():
