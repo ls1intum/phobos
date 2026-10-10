@@ -3,7 +3,7 @@
 #
 # The base is the one the layer pruner derived from this very exercise, so the exercise must pass
 # under it as it ships, with only the limits of an exercise added. Permitted direction: Artemis's
-# own `./gradlew --offline clean test` builds, both test cases pass and the JUnit report is written. Containment direction: a canary file outside every directory the base names is refused
+# own `./gradlew --offline clean test` builds, all 13 tests of the template pass and the JUnit reports are written. Containment direction: a canary file outside every directory the base names is refused
 # for read, a write outside the working directory is refused, and a connection to an address no rule
 # names is refused.
 #
@@ -50,12 +50,14 @@ if grep -q "BUILD SUCCESSFUL" "${WORK}/exercise.out"; then
 else
   bad "Gradle builds and tests offline" "$(tail -12 "${WORK}/exercise.out")"
 fi
-report="$(find "${EXERCISE}/build/test-results" -name 'TEST-*.xml' 2> /dev/null | head -1)"
-if [[ -n "${report}" ]] && grep -q 'tests="2"' "${report}" && grep -q 'failures="0"' "${report}"; then
-  ok "the JUnit report is written and holds two tests and no failure"
-else
-  bad "the JUnit report is written and holds two tests and no failure" "$(head -c 600 "${report:-/nonexistent}" 2>&1)"
-fi
+tests_run=0
+failures_found=0
+while IFS= read -r count; do tests_run=$((tests_run + count)); done \
+  < <(find "${EXERCISE}/build/test-results" -name 'TEST-*.xml' -exec grep -ho 'tests="[0-9]*"' {} + 2> /dev/null | tr -dc '0-9\n')
+while IFS= read -r count; do failures_found=$((failures_found + count)); done \
+  < <(find "${EXERCISE}/build/test-results" -name 'TEST-*.xml' -exec grep -ho 'failures="[0-9]*"' {} + 2> /dev/null | tr -dc '0-9\n')
+check "the JUnit reports hold the template's 13 tests" 13 "${tests_run}"
+check "and no failure" 0 "${failures_found}"
 
 under_base "${WORK}/canary.out" cat "${CANARY}/secret"
 if grep -q "Permission denied" "${WORK}/canary.out"; then

@@ -22,9 +22,13 @@ thisPolicyFileCompliesToThePolicyVersion: 1
 regardingTheSupervisedCode:
   theFollowingProgrammingLanguageConfigurationIsUsed: JAVA_USING_GRADLE_ARCHUNIT_AND_ASPECTJ
   theSupervisedCodeUsesTheFollowingPackage: "de.phobos.reference"
-  theMainClassInsideThisPackageIs: "Adder"
+  theMainClassInsideThisPackageIs: "Client"
   theFollowingClassesAreTestClasses:
-    - "de.phobos.reference.AdderTest"
+    - "de.phobos.reference.AttributeTest"
+    - "de.phobos.reference.ClassTest"
+    - "de.phobos.reference.ConstructorTest"
+    - "de.phobos.reference.MethodTest"
+    - "de.phobos.reference.SortingExampleBehaviorTest"
   theFollowingResourceAccessesArePermitted:
     regardingFileSystemInteractions: [ ]
     regardingNetworkConnections: [ ]
