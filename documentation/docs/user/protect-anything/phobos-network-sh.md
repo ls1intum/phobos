@@ -169,8 +169,10 @@ The connect guard is the run's one supervisor when this layer is on, so it print
   With the filesystem layer off, a command that runs as the same user can still write to the pipe
   through `/proc` and forge such a line. A forged line changes the output and never the broker's
   decisions.
-- **The calls its filter refuses outright.** `io_uring`, `setsid`, `setpgid` and a call through a
-  foreign application binary interface (ABI) fail with `EACCES`, as before, and each prints a line.
+- **The calls its filter refuses outright.** `io_uring` and a call through a foreign
+  application binary interface (ABI) fail with `EACCES`, as before, and each prints a line. The guard
+  answers `setsid` and `setpgid` from its ledger of virtual groups and prints nothing. Where the kernel
+  cannot continue a supervised call they fail with `EACCES` and print a line as before.
 
 Reporting decides nothing. If the guard dies, every call it watches fails with `ENOSYS`, and no
 call gains a right. If the kernel cannot have the reporting traps, the guard keeps the filter it

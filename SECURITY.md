@@ -212,8 +212,10 @@ Every blocked action Phobos can attribute with certainty is worded on stderr, on
 action and run, and one `Phobos Security Summary` line closes a run that blocked anything. This is
 a report and never a decision: a supervisor answers the calls it watches for observation only with
 "continue", so Landlock alone decides them, and the calls a Phobos filter refuses outright
-(`io_uring`, `setsid`, `setpgid`, a foreign ABI) are answered with `EACCES` by a handler that has
-no way to let a call through. While a supervisor serves, the errno a program sees for those calls
+(`io_uring`, a foreign ABI, and `setsid` and `setpgid` where the supervisor cannot continue a call)
+are answered with `EACCES` by a handler that has no way to let a call through. Where it can continue a
+call, `setsid` and `setpgid` are not refused: the supervisor answers them from a ledger of virtual
+sessions and groups without running them, so every process stays in the group the timeout kills. While a supervisor serves, the errno a program sees for those calls
 depends on it answering correctly where it once depended on the kernel alone; if the supervisor
 dies, the kernel refuses them with `ENOSYS`, and every other watched call fails with `ENOSYS` too.
 Nothing is granted in any state.

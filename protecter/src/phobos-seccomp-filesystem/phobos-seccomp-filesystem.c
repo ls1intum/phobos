@@ -43,6 +43,7 @@
 
 #define _GNU_SOURCE
 #include "phobos-seccomp-filesystem-filter.h"
+#include "phobos-seccomp-filesystem-groups.h"
 #include "phobos-seccomp-filesystem-handoff.h"
 #include "phobos-seccomp-filesystem-message.h"
 #include "phobos-seccomp-filesystem-refusals.h"
@@ -223,6 +224,10 @@ static void service_one(int listener, struct seccomp_notif *request, size_t requ
     if (ioctl(listener, SECCOMP_IOCTL_NOTIF_RECV, request) != 0) {
         return;
     }
+    if (groups_enabled() && is_group_call(&request->data)) {
+        answer_group_call(listener, request, response);
+        return;
+    }
     if (is_filter_refusal(&request->data)) {
         answer_filter_refusal(listener, request, response, REPORT_LAYER_TIMEOUT);
         return;
@@ -339,6 +344,7 @@ int main(int argument_count, char *arguments[]) {
         say_verbose(&options, "nothing to watch, so the command runs unsupervised");
         exec_command(options.command);
     }
+    groups_configure(file_traps && refusal_traps, nullptr);
     say_verbose(&options, file_traps ? "watching the path calls" : "not watching the path calls");
     say_verbose(&options, refusal_traps ? "answering the group lock's refusals"
                                         : "not answering the group lock's refusals");

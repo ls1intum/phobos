@@ -61,6 +61,7 @@ LINKED=(
   "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-refusals.c"
   "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-filter.c"
   "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-handoff.c"
+  "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-groups.c"
   "${CORE}/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-policy.c"
   "${CORE}/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-path-rule.c"
   "${CORE}/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-model.c"

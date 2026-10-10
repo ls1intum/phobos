@@ -48,6 +48,24 @@ It fails closed: where `PR_SET_NO_NEW_PRIVS` or the filter cannot be set, the co
 refused rather than run outside the lock. The timeout layer refuses to run at all where the
 program is missing.
 
+## Virtual groups
+
+Some programs need a group of their own. The testers of Artemis's C GCC and C++ templates start the
+program with `setsid` and stop it with `killpg(getpgid(pid))`, and SwiftPM starts each child with
+`setpgid(0, 0)`. A process that moved leaves the group the kill targets.
+
+So no process moves. Where a supervisor runs and can continue a call, the supervisor keeps a ledger
+of virtual sessions and groups. The connect guard is that supervisor, or the report-only supervisor
+beside the group lock. It answers `setsid` and `setpgid` from the ledger and never runs or continues
+them. It answers `getpgid`, `getsid`, `getpgrp` and a `kill` to a group from the ledger when the
+process is in it. A `kill` to a virtual group goes to the members only. Each one receives it through
+a process descriptor whose start time the supervisor checked, so the signal stays inside the
+sandboxed lineage.
+
+The real group never changes, so the timeout still reaches every process. The page on what Phobos
+does not protect against lists the differences a program can see. Membership follows the process
+tree at the time of the question, and a process whose parent ended is no longer found.
+
 ## Why the cover is duplicated
 
 The connect guard refuses the same two calls, and that cover belongs to the network layer. The
