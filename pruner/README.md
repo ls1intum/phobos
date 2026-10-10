@@ -95,6 +95,12 @@ The prune image is built on the Python run-phase image there and runs `layer_pru
 `layer_prune.sh` and `layer_prune_egress.sh`, and prunes `exercises/python/python-reference`, which has
 to end in a policy.
 
+## The C (FACT) run-phase image, run by the `run-phase-c-fact` job of `build.yml`
+
+The prune image is built on the C run-phase image there and prunes `exercises/c/fact-reference`, which has
+to end in a policy. That exercise declares `runs_compiled_programs` in its `prune.json`, because the program
+FACT compiles and then runs is written by the run itself.
+
 ## The environment variables the suites read
 
 | Variable | Read by | Meaning |
