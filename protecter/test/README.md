@@ -129,24 +129,27 @@ the kernel lacks, a missing tool or too few processor cores.
 
 ## The Python run-phase image, run by the `run-phase-python` job of `build.yml`
 
-The Python run-phase image (`docker/protecter/python/`) is held to every suite above that needs no
-Java: `network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`, `seccomp-networksystem-test.sh`,
-`network-cleanup-test.sh` and the whole protection matrix, in one looped step that names each suite and
-fails when any one does. The four acceptance suites that compile Java probes or run Maven
-(`run-tests.sh`, `extra-tests.sh`, `phase-test.sh`, `shipped-policy-test.sh`) stay with the Java job.
+The Python run-phase image (`docker/protecter/python/`) compiles its own four C programs, so on every
+event it is held to `python-policy-test.sh` and to the five acceptance suites that need no Java and
+put those programs to a raw call they must refuse: `network-port-test.sh`, `bind-port-test.sh`,
+`scoping-test.sh`, `seccomp-networksystem-test.sh` and `network-cleanup-test.sh`, in one looped step
+that names each suite and fails when any one does. The weekly run and a dispatch with `scope: full`
+add `reporting.sh`. The rest of the protection matrix runs on the Java image only.
 The pruner's suites on that image are listed in [`pruner/README.md`](../../pruner/README.md).
 
 ## The C (FACT) run-phase image, run by the `run-phase-c-fact` job of `build.yml`
 
-The C run-phase image (`docker/protecter/c-fact/`) is held to `c-fact-policy-test.sh` and to `reporting.sh`.
-The first runs the FACT reference exercise under the base the image ships: the three tests of the template pass,
+The C run-phase image (`docker/protecter/c-fact/`) is held to `c-fact-policy-test.sh` and to the same five
+language-neutral acceptance suites on every event, and to `reporting.sh` on the weekly run and a dispatch with
+`scope: full`. The first runs the FACT reference exercise under the base the image ships: the three tests of the template pass,
 a canary, an overwrite of a file beside the working directory and an unnamed address are refused, and a file the run writes can
 be executed in the submission's directory and nowhere else.
 
 ## The R run-phase image, run by the `run-phase-r` job of `build.yml`
 
-The R run-phase image (`docker/protecter/r/`) is held to `r-policy-test.sh` and to `reporting.sh`.
-The first runs the R reference exercise under the base the image ships: the four tests of the template pass,
+The R run-phase image (`docker/protecter/r/`) is held to `r-policy-test.sh` and to the same five
+language-neutral acceptance suites on every event, and to `reporting.sh` on the weekly run and a dispatch with
+`scope: full`. The first runs the R reference exercise under the base the image ships: the four tests of the template pass,
 a canary, an overwrite of a file beside the working directory and an unnamed address are refused, and no file the run
 writes can be executed.
 
