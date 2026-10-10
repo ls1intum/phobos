@@ -96,7 +96,7 @@ the Docker socket, and no option or option value can add them.
 
 Every job is rebuilt first, so an image that already exists is never reused on a stale base. The
 key decides the run-phase image: `python` uses the Python image, the others the Java image. Inside
-an image, `prune` starts `/var/tmp/helpers/layer_prune/main.py` when you mount the helpers there.
+an image, `prune` starts `/var/tmp/helpers/exercise_pruner/src/interface/main.py` when you mount the helpers there.
 There, `java-egress` needs `--resolver <ip[:port]>`, and `all` needs a host because the merge is a
 separate image.
 

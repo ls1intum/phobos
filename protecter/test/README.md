@@ -7,7 +7,7 @@ in a workflow summary.
 
 Each shell suite is run by a step of its own in CI, so one run names every suite that broke
 rather than only the first. A step of `test.yml` fails when a shell file under `protecter/test/` or
-`pruner/test/` is named in no workflow, so a suite cannot sit in the tree and run nowhere. The
+`pruner/` is named in no workflow, so a suite cannot sit in the tree and run nowhere. The
 exceptions are the helpers that are not suites: `harness.sh`, the matrix `lib.sh` and `run-all.sh`,
 and `policy-redundancy-probe.sh`.
 
@@ -15,7 +15,7 @@ The unit suites live under `protecter/test/unit/` in the same folder structure a
 per component they test, and the integration suites live under `protecter/test/integration/`,
 with the acceptance suites in `protecter/test/integration/landlock-filesystem-and-networksystem-acceptance/`.
 The shared harness and the diagnostics stay at the `protecter/test/` root. The pruner's suites are in
-[`pruner/test/README.md`](../../pruner/test/README.md) and source the same harness.
+[`pruner/README.md`](../../pruner/README.md) and source the same harness.
 
 Every suite reports through `harness.sh`, which it sources and which owns `ok`, `bad`,
 `skip`, `check`, the three counters and `finish`. A suite keeps everything else of its own:
@@ -134,7 +134,7 @@ Java: `network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`, `seccomp-n
 `network-cleanup-test.sh` and the whole protection matrix, in one looped step that names each suite and
 fails when any one does. The four acceptance suites that compile Java probes or run Maven
 (`run-tests.sh`, `extra-tests.sh`, `phase-test.sh`, `shipped-policy-test.sh`) stay with the Java job.
-The pruner's suites on that image are listed in [`pruner/test/README.md`](../../pruner/test/README.md).
+The pruner's suites on that image are listed in [`pruner/README.md`](../../pruner/README.md).
 
 ## The environment variables the suites read
 

@@ -51,7 +51,7 @@ shellcheck -x -S warning $(find . -name '*.sh' -type f)
 gcc -fsyntax-only -Wall -Wextra -Werror -fanalyzer <file>.c
 cppcheck --enable=warning --quiet --error-exitcode=1 <file>.c
 ruff check --no-cache .
-bandit --recursive --ini .bandit --severity-level medium pruner/src
+bandit --recursive --ini .bandit --severity-level medium pruner/exercise_pruner/src pruner/runtime_pruner/src pruner/shared/src
 yamllint --strict .
 hadolint --config .hadolint.yaml < <Dockerfile>
 actionlint

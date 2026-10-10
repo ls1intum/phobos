@@ -122,7 +122,7 @@ run
 prune
   Host: runs the Compose service of the key, rebuilt first; "all" runs the seven jobs of the layer
   pruner in order (the three prunes, the merge, the three verifications) and stops at the first one
-  that fails. Image: runs the layer pruner (/var/tmp/helpers/layer_prune/main.py); java-egress needs
+  that fails. Image: runs the layer pruner (/var/tmp/helpers/exercise_pruner/src/interface/main.py); java-egress needs
   --resolver <ip[:port]>.
 
 record
@@ -613,12 +613,12 @@ prune_in_image() {
     java) fail_usage "the prune key java is now java-gradle" ;;
     java-gradle | java-maven | python)
       [[ -z "$resolver" ]] || fail_usage "--resolver belongs to java-egress"
-      require_helper "${IMAGE_HELPERS}/layer_prune/main.py"
-      hand_over python3 "${IMAGE_HELPERS}/layer_prune/main.py" --stage all "$key" ;;
+      require_helper "${IMAGE_HELPERS}/exercise_pruner/src/interface/main.py"
+      hand_over python3 "${IMAGE_HELPERS}/exercise_pruner/src/interface/main.py" --stage all "$key" ;;
     java-egress)
       [[ -n "$resolver" ]] || fail_usage "prune java-egress needs --resolver"
-      require_helper "${IMAGE_HELPERS}/layer_prune/main.py"
-      hand_over python3 "${IMAGE_HELPERS}/layer_prune/main.py" --resolver "$resolver" --output-dir /var/tmp/path_sets/egress java-egress ;;
+      require_helper "${IMAGE_HELPERS}/exercise_pruner/src/interface/main.py"
+      hand_over python3 "${IMAGE_HELPERS}/exercise_pruner/src/interface/main.py" --resolver "$resolver" --output-dir /var/tmp/path_sets/egress java-egress ;;
     all) fail_usage "prune all needs a host: the merge and the verification are separate images" ;;
     *) fail_usage "prune takes java-gradle, java-maven, python, java-egress or all, not '$key'" ;;
   esac
@@ -665,8 +665,8 @@ command_record() {
   done
   if [[ "$MODE" == "image" ]]; then
     [[ -z "$host_only" ]] || fail_usage "${host_only} belongs to a host; inside an image there is nothing to choose"
-    require_helper "${IMAGE_HELPERS}/layer_record/phobos-record"
-    hand_over "${IMAGE_HELPERS}/layer_record/phobos-record" "$@"
+    require_helper "${IMAGE_HELPERS}/runtime_pruner/src/interface/phobos-record"
+    hand_over "${IMAGE_HELPERS}/runtime_pruner/src/interface/phobos-record" "$@"
   else
     record_on_host "$language" "$exercise" "$networked" "$@"
   fi

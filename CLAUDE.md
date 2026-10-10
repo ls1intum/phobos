@@ -62,7 +62,7 @@ environment, offline, and grading itself only applies a fixed configuration.
 The filesystem layer is enforced by Landlock, an unprivileged Linux kernel sandbox, applied
 by `phobos-landlock-filesystem-and-networksystem` (the C program under `protecter/src/`). The run phase needs no privileges, no
 capabilities and no container flags. The prune runs the layer pruner
-(`pruner/src/layer_prune/`, in `docker/pruner/layers/`), which measures under the
+(`pruner/exercise_pruner/`, in the image of `docker/pruner/layers/`), which measures under the
 grading layers themselves, observing their refusals with `strace`; README.md, "The layer
 pruner", says how to run it. Nothing uses Bubblewrap any more.
 
@@ -137,7 +137,7 @@ find . -name '*.sh'  -type f -print0 | xargs -0 shellcheck -x -S warning
 ( failed=0; while IFS= read -r f; do gcc-14 -std=gnu23 -fsyntax-only -Wall -Wextra -Werror -fanalyzer "$f" || failed=1; done < <(find . -name '*.c' -type f); exit "$failed" )
 find . -name '*.c'   -type f -print0 | xargs -0 cppcheck --std=c23 --enable=warning --quiet --error-exitcode=1
 ruff check --no-cache .
-bandit --recursive --ini .bandit --severity-level medium pruner/src
+bandit --recursive --ini .bandit --severity-level medium pruner/exercise_pruner/src pruner/runtime_pruner/src pruner/shared/src
 yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 actionlint
@@ -222,9 +222,14 @@ protecter/                 the sandbox and the tests that hold it
   test/                    unit/ (C and shell units), integration/ (shell suites, the acceptance suites and
                            protection-matrix/), harness.sh, harness_self_test.sh and a policy probe
 pruner/                    the pruners, which discover what a policy needs
-  src/                     layer_prune/: the layer pruner (observe, attribute, grow, minimise, limits, verify, write);
-                           layer_record/: the recording pruner (record a session unsandboxed, generate a policy, replay
-                           it, compare it; prune image only)
+  exercise_pruner/         the layer pruner and the orchestrator: prune a reference exercise through the grading layers
+                           (observe, attribute, grow, minimise, limits, verify, write) and merge the results
+  runtime_pruner/          the recording pruner: record a session unsandboxed, generate a policy, replay it, compare
+                           it (prune image only)
+  shared/                  what both need: the policy model, the strace parser, attribution, generalisation, limits
+                           and the sampler. Each of the three has src/ and test/ (unit/, integration/), and inside
+                           those the layers domain/, infrastructure/, application/ and interface/ where it has code;
+                           pruner/README.md says which layer may import which
   src/orchestrate/         the orchestrator: merges the pruned exercise policies into the shipped bases
   config/                  what the prune image carries: BasePrune.cfg, which grants nothing, and the language seeds
   test/                    integration/ (the pruner suites and their fixtures), python/, and the runner probes

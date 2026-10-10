@@ -435,9 +435,10 @@ jobs:
         if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder-and-egress' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}/protecter/test:/repo/protecter/test:ro" -v "${PWD}/pruner/test:/repo/pruner/test:ro" \
-            -v "${PWD}/pruner/src:/var/tmp/helpers:ro" \
-            phobos-prune-layers:ci bash /repo/pruner/test/integration/layer_prune_observer.sh
+            -v "${PWD}/protecter/test:/repo/protecter/test:ro" -v "${PWD}/pruner:/repo/pruner:ro" \
+            -v "${PWD}/pruner:/var/tmp/helpers:ro" \
+            phobos-prune-layers:ci \
+            bash /repo/pruner/exercise_pruner/test/integration/infrastructure/layer_prune_observer.sh
 
       # The recording pruner, in the prune image just built: its refusals (record_safety.sh), a real
       # terminal with Ctrl+C, Ctrl+Z and fg (record_interactive.sh), its replay check in both
@@ -448,7 +449,9 @@ jobs:
       - name: The recording pruner records with the terminal passed through and replays under the layers
         if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder-and-egress' }}
         timeout-minutes: 40
-        run: bash pruner/test/integration/record_host.sh phobos-prune-layers:ci phobos-run-phase:ci
+        run: >-
+          bash pruner/runtime_pruner/test/integration/interface/record_host.sh
+          phobos-prune-layers:ci phobos-run-phase:ci
 
       # The recording pruner on a host name: a stand-in server on a Docker network with no route out
       # serves TLS and DNS for api.phobos.test; the recorded session's policy names the host from the
@@ -457,7 +460,7 @@ jobs:
       - name: The recording pruner writes a host name rule and replays it through the egress broker
         if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder-and-egress' }}
         timeout-minutes: 15
-        run: bash pruner/test/integration/record_networked.sh phobos-prune-layers:ci
+        run: bash pruner/runtime_pruner/test/integration/interface/record_networked.sh phobos-prune-layers:ci
 
       # The whole pipeline on the fixture exercise: the derived policy passes the build with every
       # layer on, refuses what the build did not need, bounds each limit, and every wrong-reason
@@ -468,7 +471,8 @@ jobs:
         timeout-minutes: 50
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}:/repo:ro" phobos-prune-layers:ci bash /repo/pruner/test/integration/layer_prune.sh
+            -v "${PWD}:/repo:ro" phobos-prune-layers:ci \
+            bash /repo/pruner/exercise_pruner/test/integration/interface/layer_prune.sh
 
       # Declared hosts: of two the fixture declares, the one it needs keeps its rule and the other is
       # dropped. A stand-in resolver and a TLS server on loopback stand in for the external host, so
@@ -478,7 +482,8 @@ jobs:
         timeout-minutes: 30
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}:/repo:ro" phobos-prune-layers:ci bash /repo/pruner/test/integration/layer_prune_egress.sh
+            -v "${PWD}:/repo:ro" phobos-prune-layers:ci \
+            bash /repo/pruner/exercise_pruner/test/integration/interface/layer_prune_egress.sh
 
   # The run-phase image for Python, built FROM the official Python image rather than Artemis's
   # ls1tum/artemis-python-docker (see its Dockerfile), on native runners for both architectures as
@@ -606,23 +611,26 @@ jobs:
         if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner-a' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}/protecter/test:/repo/protecter/test:ro" -v "${PWD}/pruner/test:/repo/pruner/test:ro" \
-            -v "${PWD}/pruner/src:/var/tmp/helpers:ro" \
-            phobos-prune-layers-python:ci bash /repo/pruner/test/integration/layer_prune_observer.sh
+            -v "${PWD}/protecter/test:/repo/protecter/test:ro" -v "${PWD}/pruner:/repo/pruner:ro" \
+            -v "${PWD}/pruner:/var/tmp/helpers:ro" \
+            phobos-prune-layers-python:ci \
+            bash /repo/pruner/exercise_pruner/test/integration/infrastructure/layer_prune_observer.sh
 
       - name: The layer pruner on the Python image derives a policy that holds in both directions
         if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner-a' }}
         timeout-minutes: 50
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci bash /repo/pruner/test/integration/layer_prune.sh
+            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci \
+            bash /repo/pruner/exercise_pruner/test/integration/interface/layer_prune.sh
 
       - name: The layer pruner on the Python image keeps exactly the declared hosts a build needs
         if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'egress' }}
         timeout-minutes: 30
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci bash /repo/pruner/test/integration/layer_prune_egress.sh
+            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci \
+            bash /repo/pruner/exercise_pruner/test/integration/interface/layer_prune_egress.sh
 
       # The Python reference exercise, pruned as Compose's prune_python prunes it: pytest under the
       # layers, and every stage ending in a policy rather than an abort.
@@ -633,8 +641,9 @@ jobs:
           output="$(mktemp -d)"
           docker run --rm --network none --memory 3g --pids-limit 1024 \
             -v "${PWD}/exercises:/srv/phobos-prune-exercises:ro" \
-            -v "${PWD}/pruner/src:/var/tmp/helpers:ro" -v "${output}:/var/tmp/path_sets" \
-            --entrypoint python3 phobos-prune-layers-python:ci /var/tmp/helpers/layer_prune/main.py python
+            -v "${PWD}/pruner:/var/tmp/helpers:ro" -v "${output}:/var/tmp/path_sets" \
+            --entrypoint python3 phobos-prune-layers-python:ci \
+            /var/tmp/helpers/exercise_pruner/src/interface/main.py python
           test -s "${output}/python_python-reference.cfg"
 
   # Mutation testing installs clang and mull into a container and then runs the suite

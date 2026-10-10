@@ -6,9 +6,9 @@
 #   stage-prune-inputs.sh <fixture|reference> <key> <destination>
 #
 # reference  the exercises of the key under exercises/<family>/<exercise>, as the Compose services mount them.
-#            Which exercises those are is decided by pruner/src/layer_prune/discovery.py, the code the pruner
+#            Which exercises those are is decided by pruner/exercise_pruner/src/application/discovery.py, the code the pruner
 #            itself runs, so the staged tree cannot hold others than the pruner would take.
-# fixture    the layer pruner's fixture exercise (pruner/test/integration/layer-prune-fixture) under the key java-gradle,
+# fixture    the layer pruner's fixture exercise (pruner/exercise_pruner/test/integration/interface/layer-prune-fixture) under the key java-gradle,
 #            with the files it reads laid out by setup.sh and FIXTURE_UDP=1 set in env.sh, so that its
 #            build binds a UDP port that only a Landlock version 10 kernel refuses (A.6.9).
 #
@@ -48,7 +48,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, sys.argv[1])
-from layer_prune import discovery
+from exercise_pruner.src.application import discovery
 
 root = pathlib.Path(sys.argv[2])
 try:
@@ -57,7 +57,7 @@ try:
 except discovery.DiscoveryRefused as refusal:
     print(refusal, file=sys.stderr)
     sys.exit(1)
-' "${REPOSITORY}/pruner/src" "${REPOSITORY}/exercises" "${KEY}"
+' "${REPOSITORY}/pruner" "${REPOSITORY}/exercises" "${KEY}"
 }
 
 SELECTED=""
@@ -74,7 +74,10 @@ if [[ -e "${DESTINATION}" ]]; then
   fi
 fi
 mkdir -p "${DESTINATION}/exercises"
-cp -R "${REPOSITORY}/pruner/src" "${DESTINATION}/helpers"
+for package in exercise_pruner runtime_pruner shared; do
+  mkdir -p "${DESTINATION}/helpers/${package}"
+  cp -R "${REPOSITORY}/pruner/${package}/src" "${DESTINATION}/helpers/${package}/src"
+done
 
 if [[ "${KIND}" == reference ]]; then
   while IFS= read -r exercise; do
@@ -85,7 +88,7 @@ if [[ "${KIND}" == reference ]]; then
   : > "${DESTINATION}/env.sh"
 else
   mkdir -p "${DESTINATION}/exercises/java-gradle"
-  cp -R "${REPOSITORY}/pruner/test/integration/layer-prune-fixture" "${DESTINATION}/exercises/java-gradle/fixture"
+  cp -R "${REPOSITORY}/pruner/exercise_pruner/test/integration/interface/layer-prune-fixture" "${DESTINATION}/exercises/java-gradle/fixture"
   cat > "${DESTINATION}/setup.sh" <<'SETUP'
 mkdir -p /srv/prune-fixture/needed /srv/prune-fixture/optional /srv/prune-fixture/unneeded /srv/prune-fixture-secret
 printf 'needed\n' > /srv/prune-fixture/needed/data.txt

@@ -42,7 +42,7 @@ jobs:
           for script in protecter/src/phobos.sh protecter/src/phobos-policysystem.sh \
                         protecter/src/phobos-filesystem.sh protecter/src/phobos-networksystem.sh \
                         protecter/src/phobos-resourcesystem.sh protecter/src/phobos-timeoutsystem.sh \
-                        pruner/src/layer_record/phobos-record phobos-cli.sh; do
+                        pruner/runtime_pruner/src/interface/phobos-record phobos-cli.sh; do
             if [ ! -x "${script}" ]; then
               echo "::error file=${script}::not executable, so it cannot be started as a program"
               exit 1
@@ -51,7 +51,7 @@ jobs:
 
       # A suite that no workflow starts passes nothing and fails nothing, and it reads like
       # coverage in the tree, so protecter/test/integration/haproxy_inbound.sh sat unrun for a long time.
-      # Every shell file under protecter/test/ and pruner/test/ has to be named in a workflow, except the ones that are
+      # Every shell file under protecter/test/ and pruner/ has to be named in a workflow, except the ones that are
       # not suites: the reporting helper and the matrix library that suites source, the
       # matrix's run-all.sh, which is for running them by hand, and the redundancy probe, a
       # diagnostic that takes arguments.
@@ -71,7 +71,7 @@ jobs:
               echo "::error file=${suite}::no workflow starts this suite, so it runs nowhere"
               missing=1
             fi
-          done < <(find protecter/test pruner/test -name '*.sh' -type f | sort)
+          done < <(find protecter/test pruner -name '*.sh' -type f | sort)
           exit "${missing}"
 
       # What the suites here need beyond the runner's own image. gcc-14 is the compiler the C
@@ -269,10 +269,10 @@ jobs:
       # These two helpers turn a pruning run into the allow-list a sandbox is then built
       # from, so a defect in either is a defect in a security policy.
       - name: Run the helper tests
-        run: python -m pytest pruner/test/python -q
+        run: python -m pytest pruner -q
 
       # The script that lays out what a prune container and the KVM guest are both given asks the pruner's own
       # discovery which exercises a key has, so it is held to that here, and to leaving an earlier staging alone.
       - name: The staging of the prune inputs
         if: ${{ !cancelled() }}
-        run: bash pruner/test/integration/stage_prune_inputs.sh
+        run: bash pruner/exercise_pruner/test/integration/interface/stage_prune_inputs.sh

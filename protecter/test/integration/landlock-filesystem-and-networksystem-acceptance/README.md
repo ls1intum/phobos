@@ -37,5 +37,5 @@ and is not one.
 | `network-cleanup-test.sh` | the network layer leaves nothing behind: the inbound filter answers and an exact name resolves while the command runs, and once the run has ended no HAProxy is left and `/etc/hosts` is byte-identical, through `phobos.sh`, the layer on its own, a timeout escalated to SIGKILL and two overlapping runs |
 
 `PHOBOS_HOME` names where Phobos is installed in the image, `/var/tmp/opt/core` by
-default. `protecter/test/README.md` and `pruner/test/README.md` list every suite of this repository, including the ones that
+default. `protecter/test/README.md` and `pruner/README.md` list every suite of this repository, including the ones that
 need no container.

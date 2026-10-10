@@ -9,7 +9,7 @@
 # .abi10 files to; they are copied onto a data disk and the result copied back, so the guest has no
 # network card, no shared directory and no way to reach the host.
 #
-# It asserts first, through pruner/test/runner-capability-probe.sh --assert-kvm, that a guest boots under KVM at
+# It asserts first, through pruner/shared/test/integration/infrastructure/runner-capability-probe.sh --assert-kvm, that a guest boots under KVM at
 # all, and ends with status 3 where that cannot be told or the guest could not observe Landlock's audit
 # records (the observer's own status 3), never with a pass. The guest's console log is kept in the path_sets
 # directory as kvm-console.log. Needs qemu-system-x86, e2fsprogs and sudo without a password.
@@ -43,7 +43,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if ! bash "${REPOSITORY}/pruner/test/runner-capability-probe.sh" --assert-kvm; then
+if ! bash "${REPOSITORY}/pruner/shared/test/integration/infrastructure/runner-capability-probe.sh" --assert-kvm; then
   printf 'no guest boots under KVM here, so this run answers nothing\n' >&2
   exit "${EXIT_INDETERMINATE}"
 fi

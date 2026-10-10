@@ -9,12 +9,12 @@ x-prune-layers: &prune_layers
     args:
       RUN_PHASE_IMAGE: ${RUN_PHASE_IMAGE:-phobos-run-phase-java}
   image: phobos-prune-layers
-  entrypoint: ["python3", "/var/tmp/helpers/layer_prune/main.py"]
+  entrypoint: ["python3", "/var/tmp/helpers/exercise_pruner/src/interface/main.py"]
   mem_limit: 3g
   pids_limit: 1024
   volumes:
     - ./exercises:/srv/phobos-prune-exercises:ro
-    - ./pruner/src:/var/tmp/helpers:ro
+    - ./pruner:/var/tmp/helpers:ro
     - ./build/pruner/path_sets:/var/tmp/path_sets
 
 # The same, built on the Python run-phase image.
@@ -30,7 +30,7 @@ x-prune-layers-python: &prune_layers_python
 # What the verification of the merged base mounts besides: the orchestrator's output, read-only.
 x-verify-volumes: &verify_volumes
   - ./exercises:/srv/phobos-prune-exercises:ro
-  - ./pruner/src:/var/tmp/helpers:ro
+  - ./pruner:/var/tmp/helpers:ro
   - ./build/pruner/path_sets:/var/tmp/path_sets
   - ./build/pruner/config:/srv/phobos-merged:ro
 
@@ -63,12 +63,12 @@ services:
       dockerfile: docker/pruner/layers/Dockerfile
       args:
         RUN_PHASE_IMAGE: ${RUN_PHASE_IMAGE:-phobos-run-phase-java}
-    entrypoint: ["/var/tmp/helpers/layer_record/phobos-record"]
+    entrypoint: ["/var/tmp/helpers/runtime_pruner/src/interface/phobos-record"]
     stdin_open: true
     tty: true
     network_mode: none
     volumes:
-      - ./pruner/src:/var/tmp/helpers:ro
+      - ./pruner:/var/tmp/helpers:ro
       - ${RECORD_EXERCISE:-./build/pruner/recordings/.no-exercise}:/srv/phobos-record-exercise:ro
       - ./build/pruner/recordings:/var/tmp/recordings
 
@@ -87,7 +87,7 @@ services:
     # The base's three mounts again, since a merge replaces a list instead of extending it.
     volumes:
       - ./exercises:/srv/phobos-prune-exercises:ro
-      - ./pruner/src:/var/tmp/helpers:ro
+      - ./pruner:/var/tmp/helpers:ro
       - ./build/pruner/path_sets:/var/tmp/path_sets
       - ./protecter/image/maven-repository.sha256:/srv/phobos-manifest/maven-repository.sha256:ro
     command: ["--stage", "all", "java-maven"]
@@ -114,7 +114,7 @@ services:
       context: .
       dockerfile: docker/pruner/orchestrate/Dockerfile
     volumes:
-      - ./pruner/src:/var/tmp/helpers:ro
+      - ./pruner:/var/tmp/helpers:ro
       - ./build/pruner/path_sets:/var/tmp/path_sets
       - ./build/pruner/config:/var/tmp/opt/core/config
     depends_on:

@@ -79,7 +79,8 @@ aborts that exercise instead. Before every layered run it removes whatever earli
 outside the working directory, so each run starts as a fresh grading container does. That deletes
 files, so the pruner runs only in the prune image, which sets `PHOBOS_PRUNE_CONTAINER=1`.
 
-The code is in `pruner/src/layer_prune/`:
+The code is in `pruner/exercise_pruner/src/` and, for what the recording pruner shares, `pruner/shared/src/`,
+sorted into the layers domain, infrastructure, application and interface (`pruner/README.md` says which may import which):
 
 - `strace_parse.py` turns the log into the calls made inside the command's Landlock domain.
 - `record.py` holds the shared records.
@@ -102,9 +103,9 @@ exercise under one key by hand, in an ordinary container:
 ```bash
 docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci -f docker/pruner/layers/Dockerfile -t phobos-prune-layers .
 docker run --rm --network none \
-  -v "$PWD/exercises:/srv/phobos-prune-exercises:ro" -v "$PWD/pruner/src:/var/tmp/helpers:ro" \
+  -v "$PWD/exercises:/srv/phobos-prune-exercises:ro" -v "$PWD/pruner:/var/tmp/helpers:ro" \
   -v "$PWD/build/pruner/path_sets:/var/tmp/path_sets" phobos-prune-layers \
-  python3 /var/tmp/helpers/layer_prune/main.py <key>
+  python3 /var/tmp/helpers/exercise_pruner/src/interface/main.py <key>
 ```
 
 Each exercise gets `<key>_<exercise>.cfg`, a complete Phobos configuration, and
@@ -118,7 +119,7 @@ exercises. Its key, which names the artefacts and the base it is merged into, is
 `prune.json`, or the family's folder name when it declares none. `exercises/java/` holds the Gradle
 reference (`"key": "java-gradle"`) and the Maven reference (`"key": "java-maven"`) for that reason. The
 pruner, the verification and the KVM staging all pick an exercise's key the same way
-(`pruner/src/layer_prune/discovery.py`). A `prune.json` that is not a JSON object, a `"key"` that is not
+(`pruner/exercise_pruner/src/application/discovery.py`). A `prune.json` that is not a JSON object, a `"key"` that is not
 lower-case words joined by hyphens, and two exercises of one key with one folder name each end the run
 before anything is written, because the key of the exercise, or the artefacts it would write, are then
 not known.
@@ -146,7 +147,7 @@ the same image as the Gradle one, by the Compose service `prune_java_maven`. The
 `verify_java_maven` verifies it.
 
 The image holds the dependencies Maven resolves, pre-loaded and held to
-`protecter/image/maven-repository.sha256`, and `pruner/test/integration/layer_prune_maven.sh`
+`protecter/image/maven-repository.sha256`, and `pruner/exercise_pruner/test/integration/interface/layer_prune_maven.sh`
 re-hashes every file the manifest lists before it prunes. Maven offline stops at the first
 dependency file it cannot read, so granting that repository file by file would take one prune
 round per file. Inside a fine-grained root such as `/root` a grant is otherwise always file by
@@ -180,7 +181,7 @@ rows that stayed. Language-specific rows live only in such a file, never in the 
 write scratch files with random names to `/tmp` too.
 
 Without the Compose setup, the manual workflow `prune-maven.yml` builds both images on amd64 and
-arm64 and runs `pruner/test/integration/layer_prune_maven.sh` in an ordinary container. That prunes,
+arm64 and runs `pruner/exercise_pruner/test/integration/interface/layer_prune_maven.sh` in an ordinary container. That prunes,
 merges and verifies the exercise. It shows four wrong reasons aborting: no tests, a version the
 repository lacks, a manifest that does not match, and no seed named. The policy, its record and
 the merged base stay as workflow artefacts.
@@ -236,7 +237,7 @@ so a base that held one would stop every run of the language there. A host known
 A base generated without such a run is complete up to Landlock version 9 and, on a version 10
 kernel, refuses an explicit UDP bind the exercise needs, so it fails closed. Any other difference
 between the two kernels fails the exercise. All of this is unproven until the workflow has run to
-the end. The fixture's audit records under `pruner/test/python/fixtures/audit/` are written in the
+the end. The fixture's audit records under `pruner/exercise_pruner/test/unit/infrastructure/fixtures/audit/` are written in the
 kernel's documented layout, and the first run replaces them with the raw lines it uploads.
 
 ## From exercise policies to a shipped policy
@@ -252,7 +253,7 @@ docker compose -f docker-compose.yaml up --build
 ```
 
 Each container writes a complete `<lang>_<exercise>.cfg` and its record per exercise.
-`pruner/src/orchestrate/orchestrate.py` then merges them. It holds each `.cfg` to the
+`pruner/exercise_pruner/src/interface/orchestrate.py` then merges them. It holds each `.cfg` to the
 SHA-256 its record carries before it merges anything. A language that failed, one that
 produced nothing, and one whose `.cfg` its record does not vouch for each stop the merge rather
 than shrinking it. An aborted exercise stops the merge as well.
@@ -302,7 +303,7 @@ measures under the grading layers, so the two phases do not differ.
 
 The layer pruner needs a reference that runs on its own. For a program that a person uses, a tool
 clicked through or a REPL typed into, there is the recording pruner, `phobos-record`
-(`pruner/src/layer_record/`). It blocks nothing: the program runs with no sandbox at all under
+(`pruner/runtime_pruner/`). It blocks nothing: the program runs with no sandbox at all under
 `strace`, with the terminal passed through, and every successful call lands in the recording.
 Several sessions can be recorded into one recording and merged.
 
