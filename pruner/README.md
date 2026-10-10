@@ -106,6 +106,12 @@ FACT compiles and then runs is written by the run itself.
 The prune image is built on the R run-phase image there and prunes `exercises/r/r-reference`, which has
 to end in a policy. The seed `r.cfg` grants `/tmp`, where R names its temporaries at random.
 
+## The Swift run-phase image, run by the `run-phase-swift` job of `build.yml`
+
+The prune image is built on the Swift run-phase image there and prunes `exercises/swift/swift-reference`, which has
+to end in a policy. That exercise declares `runs_compiled_programs`, because SwiftPM runs the package manifest it
+compiles. The seed `swift.cfg` grants `/tmp`, where the toolchain names its temporaries at random.
+
 ## The environment variables the suites read
 
 | Variable | Read by | Meaning |

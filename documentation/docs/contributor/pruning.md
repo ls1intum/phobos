@@ -92,11 +92,11 @@ sorted into the layers domain, infrastructure, application and interface (`prune
 - `cfgfile.py` writes the result as a policy the parser accepts.
 
 The image, `docker/pruner/layers/Dockerfile`, adds `strace` and `python3` to the run-phase
-image of the language being pruned (`phobos-run-phase-java`, `phobos-run-phase-python`, `phobos-run-phase-c-fact` or `phobos-run-phase-r`). Its only base, `BasePrune.cfg`, grants nothing, so every grant in a pruned policy has a
+image of the language being pruned (`phobos-run-phase-java`, `phobos-run-phase-python`, `phobos-run-phase-c-fact`, `phobos-run-phase-r` or `phobos-run-phase-swift`). Its only base, `BasePrune.cfg`, grants nothing, so every grant in a pruned policy has a
 refusal behind it.
 
 `phobos-cli.sh prune <key>` runs one Compose service of the layer pruner, rebuilt first, and `phobos-cli.sh prune all`
-runs the eleven jobs of the pipeline in order and stops at the first that fails (see
+runs the thirteen jobs of the pipeline in order and stops at the first that fails (see
 [`phobos-cli.sh`](/user/protect-anything/phobos-cli-sh)). Compose itself runs the layer pruner for every language. Build the prune image on a run-phase image and prune every
 exercise under one key by hand, in an ordinary container:
 
@@ -218,6 +218,11 @@ The program FACT compiles there is run by the same exercise, and a file written 
 R template, on the R run-phase image. The exercise installs its packages into a library under the working
 directory, so nothing under `/usr` is writable and no file the run writes can be executed.
 
+`protecter/src/config/BaseLanguage-swift.cfg` is the result for the Swift reference exercise built with Artemis's
+Swift template, on the Swift run-phase image. The exercise declares `runs_compiled_programs`, so the base keeps
+execute on the solution's directory beside write, as the FACT base does. The control replay confirms an `execve`
+refused on a program that the build wrote and removed again, but only beneath that declared directory.
+
 Each base is only as good as its reference exercise. An exercise that needs a path the
 reference never touched fails until its own exercise configuration grants that path.
 
@@ -281,7 +286,7 @@ than shrinking it. An aborted exercise stops the merge as well.
 
 Everything goes under `build/pruner/config`, which the orchestrator and the verify services mount. A last container per
 language runs every exercise once more under exactly that pair, the base and the exercise file, as grading applies them.
-These are `verify_java_gradle`, `verify_java_maven`, `verify_python`, `verify_c_fact` and `verify_r`. Each writes its
+These are `verify_java_gradle`, `verify_java_maven`, `verify_python`, `verify_c_fact`, `verify_r` and `verify_swift`. Each writes its
 records to `path_sets/verify/`.
 
 :::warning[Ship exactly one `Base*.cfg` per runtime environment]

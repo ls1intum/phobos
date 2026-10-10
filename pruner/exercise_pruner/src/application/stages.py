@@ -323,7 +323,9 @@ def filesystem_grants(pruning: Pruning, current: list[record.Denial], snapshot: 
 
     `held` is the policy the run held, whose write-class rights the narrowing of [execute] counts too.
     """
-    confirmed = [denial for denial in current if denial.layer == record.LAYER_FILESYSTEM and control.landlock_caused(denial)]
+    roots = compiled_roots(pruning)
+    confirmed = [denial for denial in current
+                 if denial.layer == record.LAYER_FILESYSTEM and control.landlock_caused(denial, roots)]
     combined = pruning.history + confirmed
     taken = generalise.classify_per_run(combined)
     offset = len(pruning.history)
