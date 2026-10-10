@@ -124,7 +124,7 @@ Three things end a run before it writes anything. One is a `prune.json` that is 
 `"key"` that is not lower-case words joined by hyphens. In both cases the pruner cannot tell which key the exercise
 belongs to. The third is two exercises of one key with one folder name, because both write the same files.
 
-Four rules for an exercise are worth knowing:
+Five rules for an exercise are worth knowing:
 
 - A Gradle build must run without a daemon, because the timeout's group lock refuses the `setsid`
   that a daemon needs.
@@ -137,7 +137,11 @@ Four rules for an exercise are worth knowing:
   any host that nobody declared.
 - The pruner reports a write on a name that changes from run to run, such as a process number
   under `/proc`, and never grants it. It never widens `[execute]` to a directory that holds a
-  write-class right as well.
+  write-class right as well, except for the exception in the next rule.
+- An exercise whose tests run the programs they compile, as the C templates of Artemis do, declares
+  `"runs_compiled_programs": true` in `prune.json`. Only then does the pruner grant `[execute]` on the assignment directory of the working directory,
+  which holds a write-class right, and only there. The submission can then run any file it
+  writes into that directory. Without the declaration, a run that executes what it wrote gets no execute grant.
 
 ### The Maven prune
 

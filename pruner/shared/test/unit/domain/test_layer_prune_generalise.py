@@ -339,6 +339,52 @@ def test_a_file_the_run_created_and_executed_in_a_writable_directory_is_reported
     assert [(item["path"], item["section"]) for item in notes.reported] == [("/srv/app/built", "execute")]
 
 
+WORK = ("/var/tmp/testing-dir/assignment",)
+WORKTREE = snapshot_with("/var/tmp/testing-dir/assignment/Makefile", directories=("/var/tmp/testing-dir/assignment",
+                                                                                   "/var/tmp/testing-dir", "/var/tmp"))
+
+
+def test_a_declared_compiled_program_is_granted_execute_on_the_directory_it_was_written_into():
+    denials = [execute("/var/tmp/testing-dir/assignment/exercise"), create("/var/tmp/testing-dir/assignment/exercise")]
+    grants, notes = generalise.grants_and_notes(denials, WORKTREE, FINE, compiled_roots=WORK)
+    assert grants == {"/var/tmp/testing-dir/assignment": frozenset({"execute", "create"})}
+    assert notes.reported == []
+    assert generalise.COMPILED_PROGRAMS_COMMENT in notes.comments.values()
+
+
+def test_without_the_declaration_the_same_run_gets_no_execute_grant():
+    denials = [execute("/var/tmp/testing-dir/assignment/exercise"), create("/var/tmp/testing-dir/assignment/exercise")]
+    grants, notes = generalise.grants_and_notes(denials, WORKTREE, FINE)
+    assert grants == {"/var/tmp/testing-dir/assignment": frozenset({"create"})}
+    assert [(item["path"], item["section"]) for item in notes.reported] == [("/var/tmp/testing-dir/assignment/exercise",
+                                                                              "execute")]
+
+
+def test_a_declared_exercise_still_gets_no_execute_grant_outside_the_working_directory():
+    grants, notes = generalise.grants_and_notes([execute("/srv/app/built"), create("/srv/app/built")], APP, FINE,
+                                                compiled_roots=WORK)
+    assert grants == {"/srv/app": frozenset({"create"})}
+    assert [(item["path"], item["section"]) for item in notes.reported] == [("/srv/app/built", "execute")]
+
+
+def test_a_declared_exercise_gets_no_execute_grant_on_the_tests_nor_the_working_directory_itself():
+    for written in ("/var/tmp/testing-dir/test/built", "/var/tmp/testing-dir/built"):
+        snapshot = snapshot_with("/var/tmp/testing-dir/test/Makefile", directories=("/var/tmp/testing-dir/test",
+                                                                                    "/var/tmp/testing-dir", "/var/tmp"))
+        grants, notes = generalise.grants_and_notes([execute(written), create(written)], snapshot, FINE,
+                                                    compiled_roots=WORK)
+        assert all("execute" not in rights for rights in grants.values())
+        assert [(item["path"], item["section"]) for item in notes.reported] == [(written, "execute")]
+
+
+def test_narrow_execute_keeps_execute_beside_a_write_only_in_a_declared_root():
+    directory = {"/var/tmp/testing-dir/assignment": frozenset({"execute", "create"})}
+    kept = generalise.narrow_execute(directory, [], WORKTREE, generalise.Notes(), compiled_roots=WORK)
+    assert kept == directory
+    taken = generalise.narrow_execute(directory, [], WORKTREE, generalise.Notes())
+    assert taken == {"/var/tmp/testing-dir/assignment": frozenset({"create"})}
+
+
 def test_narrow_execute_on_a_whole_policy_takes_execute_off_a_directory_with_a_write_beneath_it():
     notes = generalise.Notes()
     narrowed = generalise.narrow_execute({"/srv/app": frozenset({"read", "execute"}),

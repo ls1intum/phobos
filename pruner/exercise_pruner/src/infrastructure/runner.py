@@ -48,7 +48,7 @@ REAP_SECONDS = 10
 REAP_INTERVAL_SECONDS = 0.05
 # The keys prune.json may hold, with the type each value must have (A.6.8).
 SETTING_TYPES = {"report_globs": list, "declared_hosts": list, "heap_pinned": bool, "pinned_read_roots": list,
-                 "seed": str, "key": str}
+                 "seed": str, "key": str, "runs_compiled_programs": bool}
 
 
 class PrunerDefect(Exception):
@@ -83,6 +83,7 @@ class Exercise:
     heap_pinned: bool = False
     pinned_read_roots: tuple[pinned.PinnedRoot, ...] = ()
     seed: str | None = None
+    runs_compiled_programs: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -192,7 +193,7 @@ def read_exercise(directory: pathlib.Path) -> Exercise:
     return Exercise(name=directory.name, workdir=directory, build_script=script, report_globs=globs,
                     declared_hosts=declared, heap_pinned=bool(settings.get("heap_pinned", False)),
                     pinned_read_roots=pinned.parse(settings.get("pinned_read_roots", []), str(directory / "prune.json")),
-                    seed=settings.get("seed"))
+                    seed=settings.get("seed"), runs_compiled_programs=bool(settings.get("runs_compiled_programs", False)))
 
 
 def restore(exercise: Exercise, environment: Environment) -> pathlib.Path:

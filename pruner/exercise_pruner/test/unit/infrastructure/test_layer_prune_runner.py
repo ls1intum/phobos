@@ -225,7 +225,7 @@ def test_a_run_past_the_hard_limit_is_killed_with_its_group_and_reads_as_a_timeo
     assert result.verdict.exit_class == "timeout"
 
 
-@pytest.mark.parametrize("settings", ["{not json", "[]", '{"heap_pinned": "false"}', '{"report_globs": "x.xml"}',
+@pytest.mark.parametrize("settings", ["{not json", "[]", '{"heap_pinned": "false"}', '{"runs_compiled_programs": "yes"}', '{"report_globs": "x.xml"}',
                                       '{"report_globs": ["/abs/*.xml"]}', '{"declared_hosts": [1]}', '{"unknown": 1}'])
 def test_a_prune_json_that_is_not_the_contract_refuses_the_exercise(tmp_path, settings):
     directory = tmp_path / "exercise"
@@ -234,6 +234,17 @@ def test_a_prune_json_that_is_not_the_contract_refuses_the_exercise(tmp_path, se
     (directory / "prune.json").write_text(settings)
     with pytest.raises(runner.ExerciseRefused):
         runner.read_exercise(directory)
+
+
+def test_an_exercise_declares_that_it_runs_what_it_compiles_only_by_saying_so(tmp_path):
+    directory = tmp_path / "exercise"
+    directory.mkdir()
+    script(directory / "build_script.sh", "exit 0\n")
+    assert runner.read_exercise(directory).runs_compiled_programs is False
+    (directory / "prune.json").write_text('{"runs_compiled_programs": true}')
+    assert runner.read_exercise(directory).runs_compiled_programs is True
+    (directory / "prune.json").write_text('{"runs_compiled_programs": false}')
+    assert runner.read_exercise(directory).runs_compiled_programs is False
 
 
 def test_a_status_phobos_could_not_read_is_a_pruner_defect_although_it_comes_after_the_command(tmp_path, environment,
