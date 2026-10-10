@@ -390,21 +390,31 @@ else
 fi
 
 echo
-echo "== the group lock's refusals: EACCES and one line while the reporter serves, never run =="
-for switches in "-nnr" "-nnr -nfr"; do
-  run_pm $switches --config "$c_rw" -- "$P" setsid
-  if op_failed_with setsid EACCES && [[ "$(exact_lines "leave the Session")" == 1 ]]; then
-    ok "setsid is refused with EACCES and reported [${switches}]"
-  else
-    bad "setsid is refused with EACCES and reported [${switches}]" "$(pm_describe)"
-  fi
-  run_pm $switches --config "$c_rw" -- "$P" setpgid
-  if op_failed_with setpgid EACCES && [[ "$(exact_lines "leave the Process Group")" == 1 ]]; then
-    ok "setpgid is refused with EACCES and reported [${switches}]"
-  else
-    bad "setpgid is refused with EACCES and reported [${switches}]" "$(pm_describe)"
-  fi
-done
+echo "== setsid and setpgid under the report-only supervisor: answered from the ledger, not run, not reported =="
+run_pm -nnr --config "$c_rw" -- "$P" setsid
+if op_ok setsid && [[ "$(grep -c "^${PREFIX}" "$PM_ERR")" == 0 ]]; then
+  ok "setsid succeeds under the reporter with the group lock above, and nothing is reported [-nnr]"
+else
+  bad "setsid succeeds under the reporter with the group lock above, and nothing is reported [-nnr]" "$(pm_describe)"
+fi
+run_pm -nnr --config "$c_rw" -- "$P" setpgid
+if op_ok setpgid && [[ "$(grep -c "^${PREFIX}" "$PM_ERR")" == 0 ]]; then
+  ok "setpgid(0, 0) succeeds under the reporter, and nothing is reported [-nnr]"
+else
+  bad "setpgid(0, 0) succeeds under the reporter, and nothing is reported [-nnr]" "$(pm_describe)"
+fi
+run_pm -nnr -nfr --config "$c_rw" -- "$P" setsid
+if op_failed_with setsid EACCES && [[ "$(exact_lines "leave the Session")" == 1 ]]; then
+  ok "without the observation traps (no Landlock to report) the reporter cannot pass a call on, so setsid is refused with EACCES and reported [-nnr -nfr]"
+else
+  bad "without the observation traps setsid is refused with EACCES and reported [-nnr -nfr]" "$(pm_describe)"
+fi
+run_pm -nnr -nfr --config "$c_rw" -- "$P" setpgid
+if op_failed_with setpgid EACCES && [[ "$(exact_lines "leave the Process Group")" == 1 ]]; then
+  ok "and setpgid [-nnr -nfr]"
+else
+  bad "and setpgid [-nnr -nfr]" "$(pm_describe)"
+fi
 run_pm -nnr -ntr --config "$c_rw" -- "$P" setsid
 if op_ok setsid && [[ "$(grep -c "^${PREFIX}" "$PM_ERR")" == 0 ]]; then
   ok "without the timeout layer no filter refuses setsid, so it succeeds and nothing is reported"
@@ -441,10 +451,10 @@ if [[ "$supervisor" =~ ^[1-9][0-9]*$ ]]; then
   wait "$BG_PID" 2>/dev/null
   before="$(grep -m1 '^TICK 0 ' "$PM/out/tick.out")"
   after="$(grep '^TICK 5 ' "$PM/out/tick.out")"
-  check "before the kill: granted, and refused three times" "TICK 0 granted=OK refused=EACCES setsid=EACCES setpgid=EACCES" "$before"
+  check "before the kill: granted, refused once, and the group calls answered from the ledger (setsid ok, setpgid by a leader EPERM)" "TICK 0 granted=OK refused=EACCES setsid=OK setpgid=OTHER" "$before"
   check "after it: every trapped call fails with ENOSYS" "TICK 5 granted=ENOSYS refused=ENOSYS setsid=ENOSYS setpgid=ENOSYS" "$after"
-  check "and in no round did the refused read, setsid or setpgid succeed" "0" \
-    "$(grep -cE '^TICK [0-9]+ .*(refused=OK|setsid=OK|setpgid=OK)' "$PM/out/tick.out")"
+  check "and in no round after the kill did any trapped call succeed" "0" \
+    "$(grep -cE '^TICK [0-9]+ granted=ENOSYS.*(refused=OK|setsid=OK|setpgid=OK)' "$PM/out/tick.out")"
 else
   bad "the supervisor can be found to kill" "no process runs ${REPORTER}"
   reap "$BG_PID"
@@ -589,32 +599,24 @@ for switches in "" "-ntr" "-nfr" "-ntr -nfr"; do
   fi
   # shellcheck disable=SC2086
   run_pm $switches --config "$c_rw" -- "$P" setsid
-  if op_failed_with setsid EACCES && [[ "$(exact_lines "leave the Session")" == 1 ]]; then
-    ok "setsid is refused with EACCES and reported [${switches:-all layers}]"
+  if op_ok setsid && [[ "$(grep -c "^${PREFIX}" "$PM_ERR")" == 0 ]]; then
+    ok "setsid is answered from the ledger and not reported [${switches:-all layers}]"
   else
-    bad "setsid is refused with EACCES and reported [${switches:-all layers}]" "$(pm_describe)"
+    bad "setsid is answered from the ledger and not reported [${switches:-all layers}]" "$(pm_describe)"
   fi
   # shellcheck disable=SC2086
   run_pm $switches --config "$c_rw" -- "$P" setpgid
-  if op_failed_with setpgid EACCES && [[ "$(exact_lines "leave the Process Group")" == 1 ]]; then
-    ok "setpgid is refused with EACCES and reported [${switches:-all layers}]"
+  if op_ok setpgid && [[ "$(grep -c "^${PREFIX}" "$PM_ERR")" == 0 ]]; then
+    ok "setpgid(0, 0) is answered from the ledger and not reported [${switches:-all layers}]"
   else
-    bad "setpgid is refused with EACCES and reported [${switches:-all layers}]" "$(pm_describe)"
+    bad "setpgid(0, 0) is answered from the ledger and not reported [${switches:-all layers}]" "$(pm_describe)"
   fi
 done
 run_pm --config "$c_rw" -- "$P" setsid
-if [[ "$(summary_count timeout)" == 1 ]]; then
-  ok "setsid is counted for the timeout layer while its group lock is above and was found"
+if [[ "$(summary_count timeout)" == 0 && "$(summary_count network)" == 0 ]]; then
+  ok "a setsid answered from the ledger counts for no layer"
 else
-  bad "setsid is counted for the timeout layer while its group lock is above and was found" "$(pm_describe)"
-fi
-run_pm -ntr --config "$c_rw" -- "$P" read "$PM/rw/data.txt"
-network_before="$(summary_count network)"
-run_pm -ntr --config "$c_rw" -- "$P" setsid
-if [[ "$(summary_count timeout)" == 0 && "$(summary_count network)" == $(( network_before + 1 )) ]]; then
-  ok "and for the network layer, which refuses it alone, once the timeout layer is off"
-else
-  bad "and for the network layer, which refuses it alone, once the timeout layer is off" "$(pm_describe)"
+  bad "a setsid answered from the ledger counts for no layer" "$(pm_describe)"
 fi
 if [[ "$(uname -m)" != x86_64 ]]; then
   skip "a call through the i386 interface is refused with EACCES and reported" "this machine is not x86-64, which is the only architecture with that interface"
@@ -641,12 +643,12 @@ if [[ "$guard" =~ ^[1-9][0-9]*$ ]]; then
   kill -KILL "$guard"
   wait_for_line "$PM/out/tick-guard.out" "TICK 5 " 100
   wait "$BG_PID" 2>/dev/null
-  check "before the kill: granted, and refused three times" "TICK 0 granted=OK refused=EACCES setsid=EACCES setpgid=EACCES" \
+  check "before the kill: granted, refused once, and the group calls answered from the ledger" "TICK 0 granted=OK refused=EACCES setsid=OK setpgid=OTHER" \
     "$(grep -m1 '^TICK 0 ' "$PM/out/tick-guard.out")"
   check "after it: every trapped call fails with ENOSYS" "TICK 5 granted=ENOSYS refused=ENOSYS setsid=ENOSYS setpgid=ENOSYS" \
     "$(grep '^TICK 5 ' "$PM/out/tick-guard.out")"
-  check "and in no round did the refused read, setsid or setpgid succeed" "0" \
-    "$(grep -cE '^TICK [0-9]+ .*(refused=OK|setsid=OK|setpgid=OK)' "$PM/out/tick-guard.out")"
+  check "and in no round after the kill did any trapped call succeed" "0" \
+    "$(grep -cE '^TICK [0-9]+ granted=ENOSYS.*(refused=OK|setsid=OK|setpgid=OK)' "$PM/out/tick-guard.out")"
 else
   bad "the guard can be found to kill" "no process runs ${PHOBOS_HOME}/phobos-seccomp-networksystem"
   reap "$BG_PID"

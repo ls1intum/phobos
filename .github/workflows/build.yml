@@ -542,6 +542,7 @@ jobs:
               landlock-filesystem-and-networksystem-acceptance/network-port-test.sh \
               landlock-filesystem-and-networksystem-acceptance/bind-port-test.sh \
               landlock-filesystem-and-networksystem-acceptance/scoping-test.sh \
+              landlock-filesystem-and-networksystem-acceptance/process-groups-test.sh \
               landlock-filesystem-and-networksystem-acceptance/seccomp-networksystem-test.sh \
               landlock-filesystem-and-networksystem-acceptance/network-cleanup-test.sh \
               protection-matrix/network.sh \

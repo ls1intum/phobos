@@ -115,8 +115,9 @@ Phobos Security Error: the program tried to illegally read the File '/etc/shadow
 ```
 
 - The lines cover the refusals of Landlock that the supervisor can attribute with certainty. When
-  the timeout layer applies a timeout, they cover the `setsid`, `setpgid` and foreign-ABI calls
-  that the group lock refuses.
+  the timeout layer applies a timeout, they cover the foreign-ABI calls that the group lock refuses,
+  and `setsid` and `setpgid` where the supervisor cannot continue a call. Where it can, it answers
+  those two from its ledger of virtual groups and prints nothing.
 - When the run ends, one `Phobos Security Summary` line counts what the supervisor decided, per
   layer. The line appears only after a blocked action, and the words a command prints itself count
   for nothing.
