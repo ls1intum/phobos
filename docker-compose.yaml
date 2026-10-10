@@ -47,6 +47,16 @@ x-prune-layers-r: &prune_layers_r
       RUN_PHASE_IMAGE: ${RUN_PHASE_IMAGE_R:-phobos-run-phase-r}
   image: phobos-prune-layers-r
 
+# The same, built on the run-phase image of the GCC template.
+x-prune-layers-c-gcc: &prune_layers_c_gcc
+  <<: *prune_layers
+  build:
+    context: .
+    dockerfile: docker/pruner/layers/Dockerfile
+    args:
+      RUN_PHASE_IMAGE: ${RUN_PHASE_IMAGE_C_GCC:-phobos-run-phase-c-gcc}
+  image: phobos-prune-layers-c-gcc
+
 # What the verification of the merged base mounts besides: the orchestrator's output, read-only.
 x-verify-volumes: &verify_volumes
   - ./exercises:/srv/phobos-prune-exercises:ro
@@ -127,6 +137,11 @@ services:
     network_mode: none
     command: ["--stage", "all", "r"]
 
+  prune_c_gcc:
+    <<: *prune_layers_c_gcc
+    network_mode: none
+    command: ["--stage", "all", "c-gcc"]
+
   # Opt-in, for the Java exercises under exercises/java-egress whose prune.json declares
   # hosts (A.6.5): unlike the other layer-pruner services it has a network, and it keeps or drops
   # declared rules but never adds one. The project's own network gives the container Docker's
@@ -158,7 +173,9 @@ services:
         condition: service_completed_successfully
       prune_r:
         condition: service_completed_successfully
-    command: ["--langs", "python,java-gradle,java-maven,c-fact,r", "--path-dir", "/var/tmp/path_sets"]
+      prune_c_gcc:
+        condition: service_completed_successfully
+    command: ["--langs", "python,java-gradle,java-maven,c-fact,r,c-gcc", "--path-dir", "/var/tmp/path_sets"]
 
   # Run every exercise once more under what grading will apply: the merged BaseLanguage-<language>.cfg
   # and the exercise's own file under exercises/, as the orchestrator wrote them. Their records go to
@@ -208,3 +225,12 @@ services:
       orchestrate:
         condition: service_completed_successfully
     command: ["--verify", "/srv/phobos-merged", "r"]
+
+  verify_c_gcc:
+    <<: *prune_layers_c_gcc
+    network_mode: none
+    volumes: *verify_volumes
+    depends_on:
+      orchestrate:
+        condition: service_completed_successfully
+    command: ["--verify", "/srv/phobos-merged", "c-gcc"]

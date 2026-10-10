@@ -60,6 +60,8 @@
 #include "../../../src/phobos-seccomp-networksystem/phobos-seccomp-networksystem-report.h"
 #include "../../../src/phobos-seccomp-networksystem/phobos-seccomp-networksystem-broker-log.h"
 #include "../../../src/phobos-seccomp-filesystem/phobos-seccomp-filesystem-access.h"
+#include "../../../src/phobos-seccomp-filesystem/phobos-seccomp-filesystem-filter.h"
+#include "../../../src/phobos-seccomp-filesystem/phobos-seccomp-filesystem-groups.h"
 #include "../../../src/phobos-seccomp-filesystem/phobos-seccomp-filesystem-message.h"
 #include "../../../src/phobos-seccomp-filesystem/phobos-seccomp-filesystem-refusals.h"
 
@@ -382,6 +384,7 @@ static void reset_behaviour(void) {
     bx->landlock_version = FAKE_LANDLOCK_VERSION;
     bx->continue_supported_answer = 1;
     reporting_reset_for_tests();
+    groups_reset_for_tests();
     broker_log_reset_for_tests();
     reset_report_for_tests();
     reset_reporter_for_tests();
@@ -3640,6 +3643,10 @@ static uint32_t run_captured_filter(const struct sock_filter *program, unsigned 
             at += (accumulator & instruction->k) ? instruction->jt : instruction->jf;
             continue;
         }
+        if (instruction->code == (BPF_JMP | BPF_JA)) {
+            at += instruction->k;
+            continue;
+        }
         if (instruction->code == (BPF_RET | BPF_K)) {
             return instruction->k;
         }
@@ -4353,6 +4360,20 @@ static uint32_t built_answer(const struct sock_filter *program, unsigned short l
     return run_captured_filter(program, length, GUARD_NATIVE_AUDIT_ARCH, number, 0);
 }
 
+/* How many instructions the virtual groups' traps take, and whether a call number is one of them. */
+static size_t group_trap_length(void) {
+    struct sock_filter scratch[GROUP_TRAPS_MAXIMUM];
+    return append_group_traps(scratch);
+}
+
+static bool is_group_number(int number) {
+    return number == __NR_getpgid || number == __NR_getsid || number == __NR_kill
+#ifdef __NR_getpgrp
+           || number == __NR_getpgrp
+#endif
+        ;
+}
+
 static void test_filter_modes(void) {
     struct sock_filter none[GUARD_FILTER_MAXIMUM];
     struct sock_filter network[GUARD_FILTER_MAXIMUM];
@@ -4361,9 +4382,9 @@ static void test_filter_modes(void) {
     size_t network_length = build_connect_filter(network, FAKE_BOOTSTRAP_DESCRIPTOR, GUARD_REPORT_NETWORK);
     size_t filesystem_length = build_connect_filter(filesystem, FAKE_BOOTSTRAP_DESCRIPTOR, GUARD_REPORT_FILESYSTEM);
     check("the network mode adds one trap, two instructions, for each of bind and the arming call",
-          network_length == none_length + 2 * REPORT_NETWORK_TRAPPED_CALL_COUNT);
+          network_length == none_length + group_trap_length() + 2 * REPORT_NETWORK_TRAPPED_CALL_COUNT);
     check("the filesystem mode adds one trap for each call the reporter watches",
-          filesystem_length == none_length + 2 * REPORT_TRAPPED_CALL_COUNT);
+          filesystem_length == none_length + group_trap_length() + 2 * REPORT_TRAPPED_CALL_COUNT);
     check("and the longest of them fits in the room for a filter", filesystem_length < GUARD_FILTER_MAXIMUM);
 
     bool network_differs_only_on_its_set = true;
@@ -4382,10 +4403,10 @@ static void test_filter_modes(void) {
         uint32_t network_answer = built_answer(network, (unsigned short)network_length, number);
         uint32_t filesystem_answer = built_answer(filesystem, (unsigned short)filesystem_length, number);
         network_differs_only_on_its_set = network_differs_only_on_its_set
-            && ((network_answer != base) == (in_network && base != SECCOMP_RET_USER_NOTIF));
+            && ((network_answer != base) == ((in_network || is_group_number(number)) && base != SECCOMP_RET_USER_NOTIF));
         filesystem_differs_only_on_its_set = filesystem_differs_only_on_its_set
-            && ((filesystem_answer != base) == (in_filesystem && base != SECCOMP_RET_USER_NOTIF));
-        if (in_network) {
+            && ((filesystem_answer != base) == ((in_filesystem || is_group_number(number)) && base != SECCOMP_RET_USER_NOTIF));
+        if (in_network || is_group_number(number)) {
             network_traps_are_notifications = network_traps_are_notifications && network_answer == SECCOMP_RET_USER_NOTIF;
         }
     }
@@ -4399,6 +4420,33 @@ static void test_filter_modes(void) {
     check("openat is trapped in the filesystem mode only",
           built_answer(filesystem, (unsigned short)filesystem_length, __NR_openat) == SECCOMP_RET_USER_NOTIF
               && built_answer(network, (unsigned short)network_length, __NR_openat) == SECCOMP_RET_ALLOW);
+
+    struct sock_filter *kill_filters[] = {network, filesystem};
+    unsigned short kill_lengths[] = {(unsigned short)network_length, (unsigned short)filesystem_length};
+    bool kill_exact = true;
+    for (size_t which = 0; which < 2; which++) {
+        struct { uint64_t pid; uint32_t expected; } cases[] = {
+            {1, SECCOMP_RET_ALLOW}, {2147483647ULL, SECCOMP_RET_ALLOW}, {0, SECCOMP_RET_USER_NOTIF},
+            {0xFFFFFFFFULL, SECCOMP_RET_USER_NOTIF}, {0x80000000ULL, SECCOMP_RET_USER_NOTIF},
+            {(uint64_t)-2, SECCOMP_RET_USER_NOTIF}, {0x100000001ULL, SECCOMP_RET_ALLOW},
+            {0xFFFFFFFF00000000ULL, SECCOMP_RET_USER_NOTIF}, {0xFFFFFFFF00000005ULL, SECCOMP_RET_ALLOW},
+        };
+        for (size_t index = 0; index < sizeof(cases) / sizeof(cases[0]); index++) {
+            kill_exact = kill_exact
+                && run_captured_filter(kill_filters[which], kill_lengths[which], GUARD_NATIVE_AUDIT_ARCH, __NR_kill,
+                                       cases[index].pid) == cases[index].expected;
+        }
+    }
+    check("kill is trapped when its pid, read as the int the kernel reads, is zero or below, and only then", kill_exact);
+    check("the calls after the kill block are still judged by their own number",
+          built_answer(network, (unsigned short)network_length, __NR_bind) == SECCOMP_RET_USER_NOTIF
+              && built_answer(network, (unsigned short)network_length, __NR_connect) == SECCOMP_RET_USER_NOTIF
+              && built_answer(filesystem, (unsigned short)filesystem_length, __NR_openat) == SECCOMP_RET_USER_NOTIF
+              && built_answer(none, (unsigned short)none_length, __NR_kill) == SECCOMP_RET_ALLOW
+              && built_answer(none, (unsigned short)none_length, __NR_getpgid) == SECCOMP_RET_ALLOW);
+    check("the mode without the observation traps leaves setsid and setpgid refused and traps nothing more",
+          built_answer(none, (unsigned short)none_length, __NR_setsid) == SECCOMP_RET_USER_NOTIF
+              && built_answer(none, (unsigned short)none_length, __NR_setpgid) == SECCOMP_RET_USER_NOTIF);
 
     bool disjoint = true;
     const int enforced[] = { __NR_socket, __NR_connect, __NR_listen, __NR_sendto, __NR_sendmsg, __NR_sendmmsg };
@@ -4456,15 +4504,15 @@ static void test_report_modes_in_main(void) {
     bx->fork_result = 0;
     bx->execvp_returns = 1;
     (void)run_main_reporting(network_argv);
-    check("told the enforcer, it reports bind ports",
-          bx->installed_filter_length == none_length + 2 * REPORT_NETWORK_TRAPPED_CALL_COUNT);
+    check("told the enforcer, it reports bind ports and answers the group calls",
+          bx->installed_filter_length == none_length + group_trap_length() + 2 * REPORT_NETWORK_TRAPPED_CALL_COUNT);
 
     reset_behaviour();
     bx->fork_result = 0;
     bx->execvp_returns = 1;
     (void)run_main_reporting(filesystem_argv);
     check("and with --report-filesystem the filesystem calls as well",
-          bx->installed_filter_length == none_length + 2 * REPORT_TRAPPED_CALL_COUNT);
+          bx->installed_filter_length == none_length + group_trap_length() + 2 * REPORT_TRAPPED_CALL_COUNT);
 
     reset_behaviour();
     bx->fork_result = 0;
@@ -4521,16 +4569,26 @@ static void test_report_mode_decision(void) {
 }
 
 static void test_refusals_and_attribution_in_main(void) {
-    char *with_lock[] = { "guard", "--landlock-bin", "/x/enforcer", "--group-lock-above", "--", "cmd", NULL };
-    char *without_flag[] = { "guard", "--landlock-bin", "/x/enforcer", "--", "cmd", NULL };
+    char *with_lock[] = { "guard", "--group-lock-above", "--", "cmd", NULL };
+    char *without_flag[] = { "guard", "--", "cmd", NULL };
+    char *with_groups[] = { "guard", "--landlock-bin", "/x/enforcer", "--group-lock-above", "--", "cmd", NULL };
 
     reset_behaviour();
     bx->fork_result = FAKE_CHILD_PID;
     bx->group_lock_answer = 1;
     bx->supervise_services = 1;
     bx->notif_recv_nr = __NR_setsid;
-    const char *out = run_main_reporting(with_lock);
-    check("setsid, refused while the group lock is above and was found, is one line and counts for the timeout layer",
+    const char *out = run_main_reporting(with_groups);
+    check("with the observation traps, and so the groups, setsid is answered from the ledger: no refusal, no line",
+          !holds_line(out, "leave the Session") && bx->last_answer_error == -EPERM && bx->last_answer_flags == 0);
+
+    reset_behaviour();
+    bx->fork_result = FAKE_CHILD_PID;
+    bx->group_lock_answer = 1;
+    bx->supervise_services = 1;
+    bx->notif_recv_nr = __NR_setsid;
+    out = run_main_reporting(with_lock);
+    check("without the observation traps setsid is refused as before, while the group lock is above and was found: one line, the timeout layer",
           holds_line(out, "leave the Session")
               && strstr(out, "Phobos blocked 1 action of the program, 0 in the filesystem layer, 0 in the network "
                              "layer and 1 in the timeout layer; 1 was shown above, 0 repeats and 0 beyond the limit "

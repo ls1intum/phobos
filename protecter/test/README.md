@@ -33,7 +33,7 @@ permission.
 | Suite | What it proves | Skips when |
 | --- | --- | --- |
 | `cli_flags.sh` | the command line of `phobos.sh`: the layer switches, the refusal of an unknown option, where the command's own arguments begin, the exit statuses, and that every `PHB_` name a script reads is one something assigns | never |
-| `phobos_cli.sh` | `phobos-cli.sh` without Docker: the options it accepts and the ones it refuses in both places (every layer switch, every enforcer override, any option not listed, a leaked `BASH_ENV` or `LD_*`), the `docker run` it builds for `run` with its network, memory and process limits and without any privilege, capability, device, host namespace or Docker socket, the configurations copied and mounted read-only, the project root kept inside the exercise, the dispatch table of `prune`, `record` and `build` (Compose anchored to the checkout against a decoy compose file and `.env`, a rebuild before every job, the image chosen by the key or the language), `prune all` stopping at the first of its eleven jobs that fails and never ending with 0 when interrupted, and the image form against a stand-in installation | the stand-in installation or helpers cannot be made because the directory exists (a run inside an image), or no bash older than 4.4 is beside a newer one |
+| `phobos_cli.sh` | `phobos-cli.sh` without Docker: the options it accepts and the ones it refuses in both places (every layer switch, every enforcer override, any option not listed, a leaked `BASH_ENV` or `LD_*`), the `docker run` it builds for `run` with its network, memory and process limits and without any privilege, capability, device, host namespace or Docker socket, the configurations copied and mounted read-only, the project root kept inside the exercise, the dispatch table of `prune`, `record` and `build` (Compose anchored to the checkout against a decoy compose file and `.env`, a rebuild before every job, the image chosen by the key or the language), `prune all` stopping at the first of its thirteen jobs that fails and never ending with 0 when interrupted, and the image form against a stand-in installation | the stand-in installation or helpers cannot be made because the directory exists (a run inside an image), or no bash older than 4.4 is beside a newer one |
 | `startup_environment.sh` | every entry point, `phobos.sh` and each layer on its own, before it runs anything: a program planted under every name in the current directory, in a relative directory and in a `~` directory is never run through a `PATH` of `.:`, `:`, a trailing or doubled colon, `relative/dir:` or `~/bin:`, the command then sees only the absolute entries, a clean absolute `PATH` reaches the command unchanged, a `PATH` with no absolute entry is refused with `PHB-ERUNTIME`, `CDPATH` never redirects an entry point's own `cd`, a relative `TMPDIR`, `HOSTALIASES` or `TZDIR` and the relative entries of `GCONV_PATH`, `LOCPATH` and `NLSPATH` are dropped while absolute ones are kept, and with no `PATH` at all the command is given none and nothing is said. Started as a program under a `PATH` beginning with `.`, no entry point runs a planted `bash`, since each `#!` line names `/bin/bash`, a layer run on its own starts itself again through `/bin/bash`, never a `bash` first in an absolute `PATH` entry, and under a `PATH` without `dirname` every entry point still finds its own files | never |
 | `scratch_location.sh` | every temporary file `phobos.sh`, the policy program, the network layer and the filesystem layer make lies in the run's own specification directory, recorded through a logging `mktemp`, and the run works with a `TMPDIR` that names no directory; a `PHOBOS_SCRATCH` left in the environment is never used; a helper called with no scratch directory refuses with `PHB-ERUNTIME` and makes nothing in `TMPDIR` | never |
 | `signals.sh` | `run_forwarding_signals`, which every layer waits through: SIGTERM, SIGHUP, SIGINT and SIGQUIT sent to the layer reach its command, the status is the command's own (exit codes, a killed command, a command that handles the signal), standard input stays the command's, the layer's own traps are put back exactly (an ignored TERM, a trap whose text names another signal), and a job started before the command is never signalled | never |
@@ -100,6 +100,7 @@ run them by hand.
 | `network-port-test.sh` | a raw `connect()` syscall is still refused by Landlock's port rule |
 | `scoping-test.sh` | Landlock scoping: a sandboxed process can neither signal a process outside its domain nor reach an abstract UNIX socket there |
 | `ioctl-device-test.sh` | the ioctl right on a device and the `[ioctl]` section: a pseudo-terminal exchange works with read, write and ioctl on `/dev/pts`, stops at the first ioctl without the right, is refused at the open with the right alone, and another device stays refused; an entry on the link `/dev/ptmx` ends the run |
+| `process-groups-test.sh` | the supervisors' virtual sessions and groups: the tester pattern (setsid, getpgid, killpg) and SwiftPM's (posix_spawn with a group of zero) work and leave the tester alive, a program that did setsid is still ended at the timeout, the errors Linux gives for a group leader, a missing group, a non-child and a negative group, and the lock alone still refuses |
 | `seccomp-networksystem-test.sh` | the connect guard inside the image: an allowed destination connects, a forbidden one is refused, neither can be redirected, and a rule for one transport admits nothing on the other |
 
 ## The protection matrix, run by `build.yml` inside the run-phase image
@@ -131,7 +132,7 @@ the kernel lacks, a missing tool or too few processor cores.
 ## The Python run-phase image, run by the `run-phase-python` job of `build.yml`
 
 The Python run-phase image (`docker/protecter/python/`) is held to every suite above that needs no
-Java: `network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`, `ioctl-device-test.sh`, `seccomp-networksystem-test.sh`,
+Java: `network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`, `ioctl-device-test.sh`, `process-groups-test.sh`, `seccomp-networksystem-test.sh`,
 `network-cleanup-test.sh` and the whole protection matrix, in one looped step that names each suite and
 fails when any one does. The four acceptance suites that compile Java probes or run Maven
 (`run-tests.sh`, `extra-tests.sh`, `phase-test.sh`, `shipped-policy-test.sh`) stay with the Java job.
@@ -150,6 +151,14 @@ The R run-phase image (`docker/protecter/r/`) is held to `r-policy-test.sh` and 
 The first runs the R reference exercise under the base the image ships: the four tests of the template pass,
 a canary, an overwrite of a file beside the working directory and an unnamed address are refused, and no file the run
 writes can be executed.
+
+## The GCC run-phase image, run by the `run-phase-c-gcc` job of `build.yml`
+
+The GCC run-phase image (`docker/protecter/c-gcc/`) is held to `c-gcc-policy-test.sh` and to `reporting.sh`. The
+first runs the GCC reference exercise under the base the image ships: the eight tests of the template pass, the
+sanitizer builds among them, a pseudo-terminal works, and a canary, an overwrite of a file beside the working
+directory and an unnamed address are refused. A file the run writes can be executed in the solution's directory
+and nowhere else.
 
 ## The environment variables the suites read
 

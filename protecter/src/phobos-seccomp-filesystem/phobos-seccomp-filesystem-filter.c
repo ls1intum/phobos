@@ -42,6 +42,30 @@ size_t append_network_report_traps(struct sock_filter *instructions, size_t room
                         REPORT_NETWORK_TRAPPED_CALL_COUNT);
 }
 
+/* Appends the traps of the virtual process groups: the calls that ask about a group or session, and a kill
+ * whose pid is zero or below, which the supervisor answers from its ledger or passes on. The kill block
+ * compares the low word of the pid as the kernel reads it, an int: it traps when that word is zero or has
+ * its sign bit set, returns the trap on those paths, and reloads the call number on the way out. */
+size_t append_group_traps(struct sock_filter *instructions) {
+    size_t used = 0;
+    write_trap(&instructions[used], __NR_getpgid);
+    used += TRAP_LENGTH;
+    write_trap(&instructions[used], __NR_getsid);
+    used += TRAP_LENGTH;
+#ifdef __NR_getpgrp
+    write_trap(&instructions[used], __NR_getpgrp);
+    used += TRAP_LENGTH;
+#endif
+    instructions[used++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_kill, 0, 6);
+    instructions[used++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[0]));
+    instructions[used++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JSET | BPF_K, 0x80000000U, 3, 0);
+    instructions[used++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, 0, 2, 0);
+    instructions[used++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr));
+    instructions[used++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JA, 1, 0, 0);
+    instructions[used++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF);
+    return used;
+}
+
 /* Appends the refusal traps: an x32 number, where the ABI has one, setsid and setpgid. */
 static size_t append_refusal_traps(struct sock_filter *instructions) {
     size_t used = 0;
@@ -69,6 +93,9 @@ size_t build_report_filter(struct sock_filter *instructions, bool file_traps, bo
                                                         offsetof(struct seccomp_data, nr));
     if (refusal_traps) {
         used += append_refusal_traps(&instructions[used]);
+        if (file_traps) {
+            used += append_group_traps(&instructions[used]);
+        }
     }
     if (file_traps) {
         used += append_report_traps(&instructions[used], REPORT_FILTER_MAXIMUM - used - 1);

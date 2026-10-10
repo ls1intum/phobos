@@ -3130,6 +3130,9 @@ static unsigned int run_filter(const struct sock_filter *program, size_t length,
         case BPF_JMP | BPF_JSET | BPF_K:
             counter += (accumulator & instruction->k) != 0 ? instruction->jt : instruction->jf;
             break;
+        case BPF_JMP | BPF_JA:
+            counter += instruction->k;
+            break;
         case BPF_RET | BPF_K:
             return instruction->k;
         default:
@@ -3156,7 +3159,13 @@ static bool filter_traps_exactly(bool file_traps, bool refusal_traps) {
     for (int number = 0; number <= HIGHEST_NUMBER_TRIED; number++) {
         struct seccomp_data data = native_call(number, 0, 0, 0, 0, 0);
         bool refusal = number == __NR_setsid || number == __NR_setpgid;
-        bool trapped = (file_traps && in_report_set(number)) || (refusal_traps && refusal);
+        bool group = number == __NR_getpgid || number == __NR_getsid || number == __NR_kill
+#ifdef __NR_getpgrp
+                     || number == __NR_getpgrp
+#endif
+            ;
+        bool trapped = (file_traps && in_report_set(number)) || (refusal_traps && refusal)
+                       || (file_traps && refusal_traps && group);
         unsigned int expected = trapped ? SECCOMP_RET_USER_NOTIF : SECCOMP_RET_ALLOW;
         exact = exact && run_filter(program, length, &data) == expected;
     }
@@ -3178,6 +3187,26 @@ static void test_the_filter(void) {
     check("with the refusal traps alone it traps exactly setsid, setpgid and foreign ABIs",
           filter_traps_exactly(false, true));
     check("with both it traps exactly the union", filter_traps_exactly(true, true));
+    struct sock_filter pair[REPORT_FILTER_MAXIMUM];
+    size_t pair_length = build_report_filter(pair, true, true);
+    struct { uint64_t pid; unsigned int expected; } kill_cases[] = {
+        {1, SECCOMP_RET_ALLOW}, {2147483647ULL, SECCOMP_RET_ALLOW}, {0, SECCOMP_RET_USER_NOTIF},
+        {0xFFFFFFFFULL, SECCOMP_RET_USER_NOTIF}, {0x80000000ULL, SECCOMP_RET_USER_NOTIF},
+        {(uint64_t)-2, SECCOMP_RET_USER_NOTIF}, {0x100000001ULL, SECCOMP_RET_ALLOW},
+        {0xFFFFFFFF00000000ULL, SECCOMP_RET_USER_NOTIF}, {0xFFFFFFFF00000005ULL, SECCOMP_RET_ALLOW},
+    };
+    bool kill_exact = true;
+    for (size_t index = 0; index < sizeof(kill_cases) / sizeof(kill_cases[0]); index++) {
+        struct seccomp_data kill_call = native_call(__NR_kill, (uint64_t)kill_cases[index].pid, 9, 0, 0, 0);
+        kill_exact = kill_exact && run_filter(pair, pair_length, &kill_call) == kill_cases[index].expected;
+    }
+    check("kill is trapped when its pid, read as the int the kernel reads, is zero or below, and only then", kill_exact);
+    struct seccomp_data later = native_call(__NR_openat, 0, 0, 0, 0, 0);
+    check("a call after the kill block is still judged by its own number", run_filter(pair, pair_length, &later) == SECCOMP_RET_USER_NOTIF);
+    size_t only_refusals = build_report_filter(pair, false, true);
+    struct seccomp_data group_without_files = native_call(__NR_getpgid, 0, 0, 0, 0, 0);
+    check("the refusal traps alone trap no group query, which the supervisor could not pass on",
+          run_filter(pair, only_refusals, &group_without_files) == SECCOMP_RET_ALLOW);
     struct sock_filter both[REPORT_FILTER_MAXIMUM];
     size_t both_length = build_report_filter(both, true, true);
     bool every_other_trap_refused = true;
@@ -3188,7 +3217,7 @@ static void test_the_filter(void) {
             struct seccomp_data data = foreign_call(arches[arch], number);
             bool observed = arches[arch] == REPORT_NATIVE_AUDIT_ARCH && in_report_set(number);
             if (run_filter(both, both_length, &data) == SECCOMP_RET_USER_NOTIF && !observed) {
-                every_other_trap_refused = every_other_trap_refused && is_filter_refusal(&data);
+                every_other_trap_refused = every_other_trap_refused && (is_filter_refusal(&data) || is_group_call(&data));
             }
             no_observation_refused = no_observation_refused && !(observed && is_filter_refusal(&data));
         }
@@ -3617,7 +3646,7 @@ static void test_supervisor_parent(void) {
     script->fake_group_lock = 1;
     script->reaped_status = 7 << 8;
     script_notification(native_call(__NR_openat, AT_FDCWD_ARGUMENT, NAME_ADDRESS, O_RDONLY, 0, 0));
-    script_notification(native_call(__NR_setsid, 0, 0, 0, 0, 0));
+    script_notification(native_call(__NR_io_uring_setup, 0, 0, 0, 0, 0));
     script_poll(-1, 0, 0);
     script->polls[0].error = EINTR;
     script_poll(1, POLLIN, 0);
@@ -3628,13 +3657,23 @@ static void test_supervisor_parent(void) {
     check("having continued the observation trap and refused the refusal trap",
           script->responses_sent == 2 && refused_exactly(&script->last_response,
                                                          FAKE_NOTIFICATION_ID + 1));
-    check("and reported the refusal", strstr(captured_text, "leave the Session") != NULL);
+    check("and reported the refusal", strstr(captured_text, "use the Kernel Interface io_uring") != NULL);
     check("and closed the run with one summary of what it counted, before the drainer is started",
           strstr(captured_text, "Phobos Security Summary: Phobos blocked 1 action of the program, 0 in the "
                                 "filesystem layer, 0 in the network layer and 1 in the timeout layer; 1 was "
                                 "shown above, 0 repeats and 0 beyond the limit of 100 lines were not. "
                                 "(PHB-EDENY)\n") != NULL);
     check("and handed what is left to a drainer", script->fork_next == 2);
+    script_supervisor();
+    script->fake_group_lock = 1;
+    script->reaped_status = 0;
+    groups_reset_for_tests();
+    script_notification(native_call(__NR_setsid, 0, 0, 0, 0, 0));
+    script_poll(1, POLLIN, 0);
+    script_poll(1, 0, POLLIN);
+    check("with the groups on, setsid is answered from the ledger and not refused or reported",
+          supervisor_ended_with(watch) == 0 && script->responses_sent == 1
+              && script->last_response.error == -EPERM && strstr(captured_text, "leave the Session") == NULL);
     script_supervisor();
     script->reaped_status = 3 << 8;
     script_poll(1, POLLHUP, 0);
@@ -3734,6 +3773,452 @@ static void test_the_drainer(void) {
     script->active = false;
 }
 
+
+/* ------------------------------------------------------------- the virtual process groups */
+
+/* A table of processes the ledger reads instead of /proc. Process 60 is the supervised command, 100 the tester
+ * (a child of 60, in the run's group 50 and session 50), 101 and 102 its children, 103 a grandchild, and 200 a
+ * stranger in a group and session of its own. */
+struct fake_process {
+    pid_t pid;
+    pid_t parent;
+    pid_t group;
+    pid_t session;
+    unsigned long long start;
+    bool alive;
+};
+
+static constexpr size_t FAKE_PROCESS_MAXIMUM = 4096;
+static struct fake_process fake_processes[FAKE_PROCESS_MAXIMUM];
+static size_t fake_process_count = 0;
+static pid_t fake_thread_of_tester = 0;
+static bool fake_list_overflows = false;
+static int fake_signal_error_for[16];
+static pid_t fake_signalled[64];
+static int fake_signal_numbers[64];
+static size_t fake_signalled_count = 0;
+
+static void add_fake_process(pid_t pid, pid_t parent, pid_t group, pid_t session, unsigned long long start) {
+    fake_processes[fake_process_count++] =
+        (struct fake_process){.pid = pid, .parent = parent, .group = group, .session = session, .start = start, .alive = true};
+}
+
+static bool fake_read(pid_t process, struct process_view *view) {
+    for (size_t index = 0; index < fake_process_count; index++) {
+        if (fake_processes[index].pid == process && fake_processes[index].alive) {
+            *view = (struct process_view){.process = process, .parent = fake_processes[index].parent,
+                                          .group = fake_processes[index].group, .session = fake_processes[index].session,
+                                          .start = fake_processes[index].start};
+            return true;
+        }
+    }
+    return false;
+}
+
+static pid_t fake_thread_group(pid_t thread) {
+    if (fake_thread_of_tester != 0 && thread == fake_thread_of_tester) {
+        return 100;
+    }
+    struct process_view view;
+    return fake_read(thread, &view) ? thread : 0;
+}
+
+static size_t fake_list(pid_t *processes, size_t capacity) {
+    size_t count = 0;
+    for (size_t index = 0; index < fake_process_count; index++) {
+        if (fake_processes[index].alive && count < capacity) {
+            processes[count++] = fake_processes[index].pid;
+        }
+    }
+    return fake_list_overflows ? capacity + 1 : count;
+}
+
+static int fake_signal(const struct process_view *target, int number) {
+    if (fake_signalled_count < sizeof(fake_signalled) / sizeof(fake_signalled[0])) {
+        fake_signalled[fake_signalled_count] = target->process;
+        fake_signal_numbers[fake_signalled_count] = number;
+        fake_signalled_count++;
+    }
+    return fake_signal_error_for[target->process % 16];
+}
+
+static const struct process_table FAKE_TABLE = {.read = fake_read, .thread_group = fake_thread_group,
+                                                .list = fake_list, .signal = fake_signal};
+
+static void fresh_groups(void) {
+    groups_reset_for_tests();
+    groups_configure(true, &FAKE_TABLE);
+    memset(fake_processes, 0, sizeof(fake_processes));
+    memset(fake_signal_error_for, 0, sizeof(fake_signal_error_for));
+    fake_process_count = 0;
+    fake_thread_of_tester = 0;
+    fake_list_overflows = false;
+    fake_signalled_count = 0;
+    add_fake_process(60, 1, 50, 50, 1);
+    add_fake_process(100, 60, 50, 50, 10);
+    add_fake_process(101, 100, 50, 50, 11);
+    add_fake_process(102, 100, 50, 50, 12);
+    add_fake_process(103, 101, 50, 50, 13);
+    add_fake_process(200, 1, 200, 200, 14);
+}
+
+static struct seccomp_notif group_request(int number, pid_t caller, long first, long second) {
+    struct seccomp_notif request;
+    memset(&request, 0, sizeof(request));
+    request.id = 7;
+    request.pid = (__u32)caller;
+    request.data.nr = number;
+    request.data.arch = REPORT_NATIVE_AUDIT_ARCH;
+    request.data.args[0] = (__u64)first;
+    request.data.args[1] = (__u64)second;
+    return request;
+}
+
+static struct group_answer group_decision(int number, pid_t caller, long first, long second) {
+    struct seccomp_notif request = group_request(number, caller, first, second);
+    return decide_group_call(&request);
+}
+
+static void test_the_group_calls_are_recognised(void) {
+    printf("\nWhich calls the virtual groups answer\n");
+    int answered[] = {__NR_setsid, __NR_setpgid, __NR_getpgid, __NR_getsid, __NR_kill
+#ifdef __NR_getpgrp
+                      , __NR_getpgrp
+#endif
+    };
+    bool all = true;
+    for (size_t index = 0; index < sizeof(answered) / sizeof(answered[0]); index++) {
+        struct seccomp_data data = native_call(answered[index], 0, 0, 0, 0, 0);
+        all = all && is_group_call(&data);
+    }
+    check("setsid, setpgid, getpgid, getsid, kill and getpgrp where there is one are group calls", all);
+    struct seccomp_data other = native_call(__NR_read, 0, 0, 0, 0, 0);
+    struct seccomp_data foreign = foreign_call(AUDIT_ARCH_I386, __NR_setsid);
+    check("a read is not one, and a group call number under a foreign ABI is not either",
+          !is_group_call(&other) && !is_group_call(&foreign));
+#ifdef __X32_SYSCALL_BIT
+    struct seccomp_data x32 = native_call((int)(__X32_SYSCALL_BIT | (unsigned int)__NR_setsid), 0, 0, 0, 0, 0);
+    check("nor is an x32 number", !is_group_call(&x32));
+#endif
+    groups_reset_for_tests();
+    check("the groups are off until a supervisor turns them on", !groups_enabled());
+    groups_configure(true, nullptr);
+    check("and on when it does", groups_enabled());
+    groups_reset_for_tests();
+}
+
+static void test_setsid_in_the_ledger(void) {
+    printf("\nsetsid\n");
+    fresh_groups();
+    struct group_answer made = group_decision(__NR_setsid, 101, 0, 0);
+    check("a process that is no leader gets a session and a group of its own, and its pid back",
+          !made.pass_on && made.error == 0 && made.value == 101);
+    check("getpgid and getsid of it, and of its child, name it",
+          group_decision(__NR_getpgid, 100, 101, 0).value == 101 && group_decision(__NR_getsid, 100, 101, 0).value == 101
+              && group_decision(__NR_getpgid, 100, 103, 0).value == 101);
+    check("the sibling, outside it, is not in the ledger and the kernel answers",
+          group_decision(__NR_getpgid, 100, 102, 0).pass_on);
+    check("a second setsid by the leader is EPERM", group_decision(__NR_setsid, 101, 0, 0).error == EPERM);
+    check("a process in a real group of its own cannot start a session either",
+          group_decision(__NR_setsid, 200, 0, 0).error == EPERM);
+    fresh_groups();
+    add_fake_process(300, 100, 301, 50, 15);
+    add_fake_process(301, 1, 301, 301, 16);
+    check("a group whose id is the caller's pid and that has another member is EPERM",
+          group_decision(__NR_setsid, 301, 0, 0).error == EPERM);
+    add_fake_process(302, 100, 302, 50, 17);
+    add_fake_process(303, 302, 50, 50, 18);
+    fake_processes[fake_process_count - 1].group = 303;
+    add_fake_process(304, 100, 303, 50, 19);
+    check("a group that exists under the caller's pid, led by nobody, is EPERM",
+          group_decision(__NR_setsid, 303, 0, 0).error == EPERM);
+    fresh_groups();
+    struct group_answer lost = group_decision(__NR_setsid, 999, 0, 0);
+    check("a caller that is not found is EPERM and is never passed on", lost.error == EPERM && !lost.pass_on);
+    fake_list_overflows = true;
+    check("a scan that was cut short is EPERM", group_decision(__NR_setsid, 101, 0, 0).error == EPERM);
+    fresh_groups();
+    fake_thread_of_tester = 4000;
+    check("a thread's call is made for its process", group_decision(__NR_setsid, 4000, 0, 0).value == 100);
+}
+
+static void test_the_ledger_is_bounded_and_purged(void) {
+    printf("\nThe ledger's bounds\n");
+    fresh_groups();
+    bool all_made = true;
+    for (size_t index = 0; index < GROUP_LEDGER_CAPACITY; index++) {
+        add_fake_process((pid_t)(1000 + index), 100, 50, 50, 100 + index);
+        all_made = all_made && group_decision(__NR_setsid, (pid_t)(1000 + index), 0, 0).value == (long)(1000 + index);
+    }
+    check("the ledger takes as many groups as it has room for", all_made);
+    check("a full ledger of live records answers ENOMEM and evicts none",
+          group_decision(__NR_setsid, 101, 0, 0).error == ENOMEM
+              && group_decision(__NR_getpgid, 100, 1500, 0).value == 1500);
+    for (size_t index = 6; index < fake_process_count; index++) {
+        fake_processes[index].alive = false;
+    }
+    check("once those processes are gone, the next group purges them and takes a slot",
+          group_decision(__NR_setsid, 101, 0, 0).value == 101);
+    check("a record is also dropped when another process holds its number",
+          (fake_processes[6].alive = true, fake_processes[6].start = 99999,
+           group_decision(__NR_getpgid, 100, fake_processes[6].pid, 0).pass_on));
+}
+
+static void test_setpgid_in_the_ledger(void) {
+    printf("\nsetpgid\n");
+    fresh_groups();
+    check("a negative group is EINVAL", group_decision(__NR_setpgid, 100, 0, -5).error == EINVAL);
+    check("a negative pid is ESRCH", group_decision(__NR_setpgid, 100, -3, 0).error == ESRCH);
+    check("a caller that is not found is ESRCH", group_decision(__NR_setpgid, 999, 0, 0).error == ESRCH);
+    check("a pid that does not exist is ESRCH", group_decision(__NR_setpgid, 100, 777, 0).error == ESRCH);
+    check("a process that is not the caller's child is ESRCH", group_decision(__NR_setpgid, 100, 103, 0).error == ESRCH);
+    check("setpgid(0, 0) makes the caller the leader of a group of its own",
+          group_decision(__NR_setpgid, 101, 0, 0).value == 0 && group_decision(__NR_getpgid, 100, 101, 0).value == 101
+              && group_decision(__NR_getsid, 100, 101, 0).value == 50);
+    check("a child is moved into a group of its own by its parent, by name",
+          group_decision(__NR_setpgid, 100, 102, 102).value == 0 && group_decision(__NR_getpgid, 100, 102, 0).value == 102);
+    check("a process joins an existing group of the same session",
+          group_decision(__NR_setpgid, 100, 0, 101).value == 0 && group_decision(__NR_getpgid, 100, 100, 0).value == 101);
+    check("a group that exists nowhere cannot be joined", group_decision(__NR_setpgid, 100, 0, 4444).error == EPERM);
+    check("the real group of a process outside the ledger can be joined, in its own session only",
+          group_decision(__NR_setpgid, 100, 0, 200).error == EPERM);
+    check("a process in the real group of the run can rejoin it",
+          group_decision(__NR_setpgid, 100, 0, 50).value == 0);
+    fresh_groups();
+    check("a session leader cannot change its group", group_decision(__NR_setpgid, 100, 0, 0).value == 0
+              && group_decision(__NR_setsid, 100, 0, 0).error == EPERM);
+    add_fake_process(500, 200, 500, 500, 30);
+    add_fake_process(501, 200, 200, 200, 31);
+    check("a child in another session than its parent is EPERM, even for a group of its own",
+          group_decision(__NR_setpgid, 200, 500, 0).error == EPERM);
+    check("a child in its parent's session is moved", group_decision(__NR_setpgid, 200, 501, 0).value == 0);
+    check("a session leader cannot be moved by its parent", group_decision(__NR_setpgid, 200, 200, 0).error == EPERM);
+    fresh_groups();
+    fake_list_overflows = true;
+    check("a scan that was cut short is EPERM", group_decision(__NR_setpgid, 101, 0, 0).error == EPERM);
+    fresh_groups();
+    fake_thread_of_tester = 4000;
+    check("a call made by a thread is made for its process", group_decision(__NR_setpgid, 4000, 0, 0).value == 0);
+    check("an explicit pid that is a thread and not its process is EINVAL", group_decision(__NR_setpgid, 100, 4000, 0).error == EINVAL);
+    fresh_groups();
+    for (size_t index = 0; index < GROUP_LEDGER_CAPACITY; index++) {
+        add_fake_process((pid_t)(1000 + index), 100, 50, 50, 100 + index);
+        (void)group_decision(__NR_setpgid, 100, (pid_t)(1000 + index), 0);
+    }
+    check("a full ledger answers ENOMEM for setpgid too", group_decision(__NR_setpgid, 100, 101, 0).error == ENOMEM);
+}
+
+static void test_never_continuing_setsid_or_setpgid(void) {
+    printf("\nsetsid and setpgid are never continued\n");
+    fresh_groups();
+    bool never = true;
+    long arguments[][2] = {{0, 0}, {-1, 0}, {0, -1}, {101, 101}, {777, 5}, {100, 100}, {2147483647, 0}};
+    for (size_t index = 0; index < sizeof(arguments) / sizeof(arguments[0]); index++) {
+        for (pid_t caller = 0; caller < 300; caller += 7) {
+            never = never && !group_decision(__NR_setpgid, caller, arguments[index][0], arguments[index][1]).pass_on
+                    && !group_decision(__NR_setsid, caller, 0, 0).pass_on;
+        }
+    }
+    check("whatever the arguments and the caller, neither is ever passed on to the kernel", never);
+}
+
+static void test_the_questions(void) {
+    printf("\ngetpgid, getsid and getpgrp\n");
+    fresh_groups();
+    check("a process outside the ledger is the kernel's to answer",
+          group_decision(__NR_getpgid, 100, 101, 0).pass_on && group_decision(__NR_getsid, 100, 0, 0).pass_on);
+    check("a negative pid and a pid that is not found are the kernel's to answer",
+          group_decision(__NR_getpgid, 100, -2, 0).pass_on && group_decision(__NR_getpgid, 100, 777, 0).pass_on);
+    (void)group_decision(__NR_setsid, 101, 0, 0);
+    check("getpgid(0) of a process in the ledger names its group", group_decision(__NR_getpgid, 101, 0, 0).value == 101);
+    check("getsid(0) of its grandchild's parent chain names the session", group_decision(__NR_getsid, 103, 0, 0).value == 101);
+#ifdef __NR_getpgrp
+    check("getpgrp is the caller's own group", group_decision(__NR_getpgrp, 103, 0, 0).value == 101);
+    check("and the kernel's for a caller outside the ledger", group_decision(__NR_getpgrp, 200, 0, 0).pass_on);
+#endif
+    check("a caller that is not found is the kernel's to answer", group_decision(__NR_getpgid, 999, 0, 0).pass_on);
+    fresh_groups();
+    add_fake_process(900, 100, 50, 50, 40);
+    (void)group_decision(__NR_setsid, 900, 0, 0);
+    pid_t parent = 900;
+    for (int depth = 0; depth < GROUP_ANCESTRY_DEPTH + 2; depth++) {
+        add_fake_process((pid_t)(901 + depth), parent, 50, 50, 41 + (unsigned)depth);
+        parent = (pid_t)(901 + depth);
+    }
+    add_fake_process(700, 699, 50, 50, 70);
+    check("a process whose ancestors are gone is not in the ledger", group_decision(__NR_getpgid, 100, 700, 0).pass_on);
+    check("a chain of ancestors longer than the walk follows is not read to its end, and then it is not guessed",
+          group_decision(__NR_getpgid, 100, parent, 0).error == EPERM && group_decision(__NR_getsid, 100, parent, 0).error == EPERM
+              && group_decision(__NR_getpgid, 100, 905, 0).value == 900);
+    check("kill(0, ...) of a process whose chain is too long is EPERM, not the real group",
+          group_decision(__NR_kill, parent, 0, 15).error == EPERM);
+    check("setsid by such a process is EPERM too", group_decision(__NR_setsid, parent, 0, 0).error == EPERM);
+    check("and so is setpgid", group_decision(__NR_setpgid, parent, 0, 0).error == EPERM);
+    fresh_groups();
+    add_fake_process(980, 100, 50, 50, 5);
+    check("a parent that started after its child is a number given away since, and ends the chain",
+          group_decision(__NR_getpgid, 100, 980, 0).pass_on);
+}
+
+static void test_group_signals(void) {
+    printf("\nkill to a group\n");
+    fresh_groups();
+    (void)group_decision(__NR_setsid, 101, 0, 0);
+    check("a signal to a process is not a group call and goes to the kernel",
+          group_decision(__NR_kill, 100, 101, 9).pass_on && group_decision(__NR_kill, 100, -1, 9).pass_on);
+    check("a signal number the kernel rejects is the kernel's to reject",
+          group_decision(__NR_kill, 100, -101, 65).pass_on && group_decision(__NR_kill, 100, -101, -1).pass_on);
+    check("killpg of a group nobody is in goes to the kernel", group_decision(__NR_kill, 100, -4444, 9).pass_on);
+    check("INT_MIN is read as a group number, not negated as an int", group_decision(__NR_kill, 100, INT_MIN, 9).pass_on);
+    struct group_answer sent = group_decision(__NR_kill, 100, -101, 9);
+    check("killpg of a virtual group signals its members and no other process",
+          !sent.pass_on && sent.error == 0 && fake_signalled_count == 2 && fake_signalled[0] + fake_signalled[1] == 101 + 103
+              && fake_signal_numbers[0] == 9);
+    fake_signalled_count = 0;
+    check("kill(0, ...) is the caller's virtual group", !group_decision(__NR_kill, 103, 0, 15).pass_on && fake_signalled_count == 2);
+    check("kill(0, ...) of a caller outside the ledger goes to the kernel", group_decision(__NR_kill, 200, 0, 15).pass_on);
+    check("kill(0, ...) of a caller that is not found goes to the kernel", group_decision(__NR_kill, 999, 0, 15).pass_on);
+    fake_signalled_count = 0;
+    check("signal 0 asks only whether a member can be signalled", !group_decision(__NR_kill, 100, -101, 0).pass_on
+              && fake_signal_numbers[0] == 0);
+    fake_signal_error_for[101 % 16] = EPERM;
+    check("some members that cannot be signalled do not fail the call when another is",
+          group_decision(__NR_kill, 100, -101, 9).error == 0);
+    fake_signal_error_for[103 % 16] = ESRCH;
+    check("when none can, the first error is the answer", group_decision(__NR_kill, 100, -101, 9).error == EPERM);
+    fake_signal_error_for[101 % 16] = 0;
+    fake_signal_error_for[103 % 16] = 0;
+    add_fake_process(104, 103, 50, 50, 50);
+    add_fake_process(701, 699, 50, 50, 71);
+    add_fake_process(702, 703, 50, 50, 72);
+    add_fake_process(703, 702, 50, 50, 72);
+    check("a member found by a scan whose parent is missing from it is not read as one",
+          !group_decision(__NR_kill, 100, -101, 0).pass_on);
+    fake_signal_error_for[101 % 16] = 0;
+    fake_list_overflows = true;
+    check("a scan that was cut short is EPERM, and nothing is signalled", group_decision(__NR_kill, 100, -101, 9).error == EPERM);
+}
+
+static void test_answering_group_calls(void) {
+    printf("\nThe answer that is sent\n");
+    fresh_groups();
+    memset(script, 0, sizeof(*script));
+    struct seccomp_notif_resp response;
+    struct seccomp_notif request = group_request(__NR_setsid, 101, 0, 0);
+    fake_notification_valid = true;
+    answer_group_call(FAKE_LISTENER, &request, &response);
+    check("a value is sent as the call's result", script->responses_sent == 1 && script->last_response.val == 101
+              && script->last_response.error == 0 && script->last_response.flags == 0 && script->last_response.id == 7);
+    request = group_request(__NR_setsid, 101, 0, 0);
+    answer_group_call(FAKE_LISTENER, &request, &response);
+    check("an error is sent as the negative errno", script->responses_sent == 2 && script->last_response.error == -EPERM);
+    request = group_request(__NR_getpgid, 100, 102, 0);
+    answer_group_call(FAKE_LISTENER, &request, &response);
+    check("a call to pass on is sent as continue", script->responses_sent == 3
+              && script->last_response.flags == SECCOMP_USER_NOTIF_FLAG_CONTINUE);
+    fake_notification_valid = false;
+    request = group_request(__NR_setsid, 102, 0, 0);
+    answer_group_call(FAKE_LISTENER, &request, &response);
+    check("a notification that is gone is not answered and changes nothing in the ledger",
+          script->responses_sent == 3 && group_decision(__NR_getpgid, 100, 102, 0).pass_on);
+    fake_notification_valid = true;
+    groups_reset_for_tests();
+}
+
+static void test_reading_stat_and_status(void) {
+    printf("\nThe /proc texts\n");
+    struct process_view view;
+    check("a stat line is read after the last parenthesis, whatever the name holds",
+          parse_process_stat("123 (a b) c) S 7 8 9 0 -1 4194560 1 2 3 4 5 6 7 8 20 0 1 0 987654 1 2", 123, &view)
+              && view.parent == 7 && view.group == 8 && view.session == 9 && view.start == 987654 && view.process == 123);
+    check("a line without a parenthesis is refused", !parse_process_stat("123 S 7 8 9", 123, &view));
+    check("a line that ends before the start time is refused", !parse_process_stat("1 (x) S 7 8 9 0 -1", 1, &view));
+    check("a line whose start time is not a number is refused",
+          !parse_process_stat("1 (x) S 7 8 9 0 -1 4 1 2 3 4 5 6 7 8 20 0 1 0 abc", 1, &view));
+    check("a line whose parent is not a number is refused", !parse_process_stat("1 (x) S x 8 9 0 -1", 1, &view));
+    check("the thread group is read from a status text", parse_thread_group("Name:\tx\nTgid:\t4242\nPid:\t4243\n") == 4242);
+    check("and is 0 when the text has none, or none that makes sense",
+          parse_thread_group("Name:\tx\n") == 0 && parse_thread_group("Name:\tx\nTgid:\t0\n") == 0
+              && parse_thread_group("Name:\tx\nTgid:\t99999999999\n") == 0);
+}
+
+static void test_the_process_filesystem_table(void) {
+    printf("\nThe table that reads /proc\n");
+    groups_reset_for_tests();
+    groups_configure(true, nullptr);
+    pid_t self = getpid();
+    struct process_view view;
+    bool read_self = false;
+    {
+        char name[48];
+        snprintf(name, sizeof(name), "/proc/%d/stat", self);
+        read_self = access(name, R_OK) == 0;
+    }
+    if (!read_self) {
+        printf("  (no /proc here; the cases that read it are skipped)\n");
+        groups_reset_for_tests();
+        return;
+    }
+    struct seccomp_notif request = group_request(__NR_getpgid, self, 0, 0);
+    check("a process outside the ledger is the kernel's to answer, read from the real /proc",
+          decide_group_call(&request).pass_on);
+    request = group_request(__NR_setsid, (pid_t)syscall(SYS_gettid), 0, 0);
+    struct group_answer made = decide_group_call(&request);
+    check("the thread-group id of this thread, read from the real /proc, is this process",
+          getpgrp() == self ? made.error == EPERM : made.value == self);
+    request = group_request(__NR_getpgid, self, 0, 0);
+    check("and then it is in the ledger or was refused as a leader",
+          decide_group_call(&request).pass_on || decide_group_call(&request).value == self);
+    request = group_request(__NR_kill, self, 0, 0);
+    request.data.args[1] = 0;
+    check("a signal to the group of a process in the ledger reaches this process, which is a member",
+          decide_group_call(&request).pass_on || decide_group_call(&request).error == 0);
+    request = group_request(__NR_kill, self, -999999, 0);
+    check("a group nobody is in goes to the kernel", decide_group_call(&request).pass_on);
+    (void)view;
+    groups_reset_for_tests();
+}
+
+static void test_signalling_through_a_process_descriptor(void) {
+    printf("\nSignalling through a process descriptor\n");
+    pid_t self = getpid();
+    char name[48];
+    snprintf(name, sizeof(name), "/proc/%d/stat", self);
+    if (access(name, R_OK) != 0) {
+        printf("  (no /proc here)\n");
+        return;
+    }
+    char text[1024];
+    int descriptor = open(name, O_RDONLY);
+    ssize_t length = read(descriptor, text, sizeof(text) - 1);
+    close(descriptor);
+    text[length > 0 ? length : 0] = '\0';
+    struct process_view mine;
+    bool parsed = parse_process_stat(text, self, &mine);
+    check("this process's own stat is read", parsed && mine.process == self && mine.start > 0);
+    groups_reset_for_tests();
+    groups_configure(true, nullptr);
+    const struct process_table *real = groups_table_for_tests();
+    check("signal 0 reaches this process, which is what it says it is", real->signal(&mine, 0) == 0);
+    check("a signal number the kernel refuses is its error", real->signal(&mine, 99) == EINVAL);
+    struct process_view other = mine;
+    other.start++;
+    check("a process whose start time differs is another process and is not signalled", real->signal(&other, 0) == ESRCH);
+    other = mine;
+    other.parent++;
+    check("one whose parent differs is not either", real->signal(&other, 0) == ESRCH);
+    other = mine;
+    other.process = 1999999999;
+    check("a number no process holds is ESRCH", real->signal(&other, 0) == ESRCH);
+    pid_t listed[8];
+    check("the list of processes holds this one", real->list(listed, 8) >= 1);
+    check("a list that does not fit says so", real->list(listed, 1) == 2);
+    check("a process that does not exist is not read", !real->read(1999999999, &other));
+    check("a thread that does not exist has no process", real->thread_group(1999999999) == 0);
+    check("this thread has this process", real->thread_group((pid_t)syscall(SYS_gettid)) == self);
+    groups_reset_for_tests();
+}
+
 int main(int argument_count, char *arguments[]) {
     if (argument_count == 3 && strcmp(arguments[1], "--quote") == 0) {
         static char out[REPORT_QUOTED_MAXIMUM];
@@ -3793,6 +4278,17 @@ int main(int argument_count, char *arguments[]) {
     test_the_refusal_class();
     test_answering_refusals();
     test_the_filter();
+    test_the_group_calls_are_recognised();
+    test_setsid_in_the_ledger();
+    test_the_ledger_is_bounded_and_purged();
+    test_setpgid_in_the_ledger();
+    test_never_continuing_setsid_or_setpgid();
+    test_the_questions();
+    test_group_signals();
+    test_answering_group_calls();
+    test_reading_stat_and_status();
+    test_the_process_filesystem_table();
+    test_signalling_through_a_process_descriptor();
     test_the_continue_probe();
     test_notification_buffers();
     test_the_group_lock_probe();
