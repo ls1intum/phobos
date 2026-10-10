@@ -212,7 +212,10 @@ summary_count() {
 # phobos.sh with SWITCHES, or the standalone layer with its own reporter for "standalone". Their results for
 # OPNAME must be identical. With ERRNOS empty the operation must succeed and no line may name the matrix's
 # tree; otherwise it must fail with one of ERRNOS and LINE must appear exactly once, as the only line naming
-# the matrix's tree. PREP, when set, runs before each of the two runs.
+# the matrix's tree. PREP, when set, runs before each of the two runs. The baseline takes no SWITCHES, so it
+# is run once per case, which is its CONFIG, OPNAME, PREP and probe arguments, and its result is reused for
+# every SWITCHES that case is reported under.
+declare -A REPORTED_BASELINES=()
 reported_case() {
   local title="$1"
   local switches="$2"
@@ -220,12 +223,17 @@ reported_case() {
   local opname="$4"
   local errnos="$5"
   local line="$6"
+  local key
   local baseline
   local reported
   shift 7
-  pm_prep
-  run_layer --no-own-reporter --config "$config" -- "$@"
-  baseline="$(op_result "$opname")"
+  key="${config}"$'\x1f'"${opname}"$'\x1f'"${PREP:-}"$'\x1f'"$(printf '%q ' "$@")"
+  if [[ -z "${REPORTED_BASELINES[$key]+set}" ]]; then
+    pm_prep
+    run_layer --no-own-reporter --config "$config" -- "$@"
+    REPORTED_BASELINES[$key]="$(op_result "$opname")"
+  fi
+  baseline="${REPORTED_BASELINES[$key]}"
   pm_prep
   if [[ "$switches" == standalone ]]; then
     run_layer --config "$config" -- "$@"
