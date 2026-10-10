@@ -418,7 +418,7 @@ def _next_session(recording: pathlib.Path) -> int:
 
 def _now() -> str:
     """The current time in UTC as an ISO 8601 text."""
-    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    return datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
 
 
 def _strace_version() -> str:
