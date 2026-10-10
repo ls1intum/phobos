@@ -674,9 +674,12 @@ def prune_limits(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
     Every raised value is verified; a limit that would need more than LIMIT_RAISES doublings aborts.
     """
     measurements = [measured_run(pruning, policy) for _ in range(BASELINE_RUNS)]
-    derived = limits.margins(measurements, limits.Margins(), pruning.exercise.heap_pinned)
+    derived = limits.margins(measurements, limits.Margins(), pruning.exercise.heap_pinned,
+                             pruning.exercise.address_space_unbounded)
     pruning.note("limits", measurements=[dataclasses.asdict(item) for item in measurements], derived=dict(derived),
-                 mem_mb="derived" if pruning.exercise.heap_pinned else "left to the default: the heap is not pinned")
+                 mem_mb="switched off: the exercise declares an unbounded address space"
+                 if pruning.exercise.address_space_unbounded
+                 else "derived" if pruning.exercise.heap_pinned else "left to the default: the heap is not pinned")
     raises: dict[str, int] = {}
     while True:
         current = dataclasses.replace(policy, limits=dict(derived))

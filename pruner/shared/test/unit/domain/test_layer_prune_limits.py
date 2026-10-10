@@ -86,3 +86,17 @@ def test_an_exhausted_resource_counts_only_for_a_limit_the_run_had_and_on_its_ow
 
 def test_a_limit_switched_off_is_never_the_signature():
     assert limits.limit_signature(1, [], {"nofile": 0}, [limit_denial("openat", "EMFILE")], []) is None
+
+
+def test_an_unbounded_address_space_switches_the_memory_cap_off_whatever_the_heap_is():
+    run = measurement(wall=41.0, cpu=30.2, vm=2100.0, tasks=70, fd=180, file=3.0)
+    for heap_pinned in (False, True):
+        result = limits.margins([run], limits.Margins(), heap_pinned=heap_pinned, address_space_unbounded=True)
+        assert result["mem_mb"] == 0
+        assert result["nproc"] == 156 and result["nofile"] == 362
+
+
+def test_without_the_declaration_the_memory_cap_is_as_before():
+    run = measurement(wall=41.0, cpu=30.2, vm=2100.0, tasks=70, fd=180, file=3.0)
+    assert "mem_mb" not in limits.margins([run], limits.Margins(), heap_pinned=False, address_space_unbounded=False)
+    assert limits.margins([run], limits.Margins(), heap_pinned=True)["mem_mb"] == 4352

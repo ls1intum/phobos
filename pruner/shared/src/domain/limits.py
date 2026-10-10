@@ -76,11 +76,14 @@ def ceil_to(value: float, step: int) -> int:
     return math.ceil(round(value / step, MEASUREMENT_DIGITS)) * step
 
 
-def margins(measurements: list[Measurement], margins: Margins, heap_pinned: bool) -> dict[str, int]:
+def margins(measurements: list[Measurement], margins: Margins, heap_pinned: bool,
+            address_space_unbounded: bool = False) -> dict[str, int]:
     """The [limits] values for an exercise: the maximum of each quantity over the runs, with its margin.
 
     `mem_mb` is derived only for an exercise that pins the heap of every JVM it starts (decision 4);
-    otherwise it is left out, so the default of phobos-constants.sh applies.
+    otherwise it is left out, so the default of phobos-constants.sh applies. An exercise that declares an
+    unbounded address space (the sanitizers of a C or C++ build reserve terabytes of it) gets `mem_mb=0`,
+    which switches the cap off; the container's own memory limit still bounds what the run uses.
     """
     wall = max(measurement.wall_seconds for measurement in measurements)
     cpu = max(measurement.cpu_seconds for measurement in measurements)
@@ -95,7 +98,9 @@ def margins(measurements: list[Measurement], margins: Margins, heap_pinned: bool
         "nofile": max(margins.descriptor_floor, margins.descriptor_factor * (descriptor + 1)),
         "fsize_mb": max(margins.file_floor, ceil_to(margins.file_factor * largest, margins.file_step)),
     }
-    if heap_pinned:
+    if address_space_unbounded:
+        result["mem_mb"] = 0
+    elif heap_pinned:
         result["mem_mb"] = max(margins.memory_floor, ceil_to(margins.memory_factor * memory, margins.memory_step))
     return result
 
