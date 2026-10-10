@@ -10,7 +10,7 @@
 #              exactly one row, `allow 5000 udp`, in a sidecar whose SHA-256 the record carries;
 #   forbidden  no other rule was added, nothing was granted for a refusal the kernel did not name, and the
 #              record names the .cfg it verified by its SHA-256, so a changed .cfg is not mistaken for it;
-#   merged     the orchestrator writes the row to Abi10-java.cfg and never into the base, which an older
+#   merged     the orchestrator writes the row to Abi10-java-gradle.cfg and never into the base, which an older
 #              kernel would refuse to run under, while a sidecar changed afterwards stops the merge.
 # Runs on the host, after the guest, with python3 and the helpers of this repository.
 set -uo pipefail
@@ -20,8 +20,8 @@ HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/../../../protecter/test/harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 REPO="$(cd -- "${HERE}/../../.." && pwd)"
 PATH_SETS="${1:?usage: kvm_fixture_result.sh <path_sets directory>}"
-RECORD="${PATH_SETS}/java_fixture.abi10.json"
-SIDECAR="${PATH_SETS}/java_fixture.abi10.cfg"
+RECORD="${PATH_SETS}/java-gradle_fixture.abi10.json"
+SIDECAR="${PATH_SETS}/java-gradle_fixture.abi10.cfg"
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
@@ -29,7 +29,7 @@ if [[ ! -f "${RECORD}" ]]; then
   bad "the KVM run wrote its record" "no ${RECORD}"
   finish
 fi
-summary="$(python3 - "${RECORD}" "${PATH_SETS}/java_fixture.cfg" "${SIDECAR}" <<'PY'
+summary="$(python3 - "${RECORD}" "${PATH_SETS}/java-gradle_fixture.cfg" "${SIDECAR}" <<'PY'
 import hashlib
 import json
 import os
@@ -63,22 +63,22 @@ check "the record names the .cfg it verified by its SHA-256" "cfg-hash True" "$(
 check "the record names the sidecar by its SHA-256" "sidecar-hash True" "$(grep '^sidecar-hash' <<<"${summary}")"
 
 merge() {
-  python3 "${REPO}/pruner/src/orchestrate/orchestrate.py" --langs java --path-dir "$1" --core-dir "$2" \
+  python3 "${REPO}/pruner/src/orchestrate/orchestrate.py" --langs java-gradle --path-dir "$1" --core-dir "$2" \
     --helpers-dir "${REPO}/pruner/src" > "${WORK}/merge.log" 2>&1
 }
-if merge "${PATH_SETS}" "${WORK}/core" && grep -q '^allow 5000 udp$' "${WORK}/core/Abi10-java.cfg"; then
-  ok "the orchestrator writes the row to Abi10-java.cfg"
+if merge "${PATH_SETS}" "${WORK}/core" && grep -q '^allow 5000 udp$' "${WORK}/core/Abi10-java-gradle.cfg"; then
+  ok "the orchestrator writes the row to Abi10-java-gradle.cfg"
 else
-  bad "the orchestrator writes the row to Abi10-java.cfg" "$(tail -3 "${WORK}/merge.log")"
+  bad "the orchestrator writes the row to Abi10-java-gradle.cfg" "$(tail -3 "${WORK}/merge.log")"
 fi
-if grep -q 'udp' "${WORK}/core/BaseLanguage-java.cfg"; then
-  bad "the base of the language holds no UDP row" "$(grep udp "${WORK}/core/BaseLanguage-java.cfg")"
+if grep -q 'udp' "${WORK}/core/BaseLanguage-java-gradle.cfg"; then
+  bad "the base of the language holds no UDP row" "$(grep udp "${WORK}/core/BaseLanguage-java-gradle.cfg")"
 else
   ok "the base of the language holds no UDP row"
 fi
 mkdir -p "${WORK}/tampered"
-cp "${PATH_SETS}"/java_fixture.* "${WORK}/tampered/"
-printf '[bind]\nallow 6000 udp\n' > "${WORK}/tampered/java_fixture.abi10.cfg"
+cp "${PATH_SETS}"/java-gradle_fixture.* "${WORK}/tampered/"
+printf '[bind]\nallow 6000 udp\n' > "${WORK}/tampered/java-gradle_fixture.abi10.cfg"
 if merge "${WORK}/tampered" "${WORK}/core-tampered"; then
   bad "a sidecar changed after the run stops the merge" "the orchestrator merged it"
 elif grep -q 'its SHA-256 differs' "${WORK}/merge.log"; then

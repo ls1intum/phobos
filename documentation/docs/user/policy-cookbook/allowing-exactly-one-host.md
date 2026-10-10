@@ -83,7 +83,7 @@ the repository" meant.
 ## Notes
 
 :::warning[The shipped base policies carry a loopback wildcard]
-`BaseLanguage-java.cfg` and `BaseLanguage-python.cfg` each name three loopback rules with no
+`BaseLanguage-java-gradle.cfg` and `BaseLanguage-python.cfg` each name three loopback rules with no
 port:
 
 ```ini

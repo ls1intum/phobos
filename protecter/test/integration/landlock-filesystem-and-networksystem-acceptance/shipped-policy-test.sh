@@ -2,7 +2,7 @@
 # Runs the SHIPPED Java policy end to end, in both directions.
 #
 # Every other acceptance script swaps in its own tight test policy, so no suite ever ran
-# protecter/src/config/BaseLanguage-java.cfg, the policy an exercise actually gets. This one applies
+# protecter/src/config/BaseLanguage-java-gradle.cfg, the policy an exercise actually gets. This one applies
 # it through phobos.sh, as baked into the run-phase image, and checks that a normal exercise
 # still works under it (read its files, write its build output, use /dev/null and
 # /dev/urandom) and that a path outside the allow-list stays denied.
@@ -22,6 +22,7 @@ source "${HERE}/../../harness.sh" || { echo "cannot source the harness beside ${
 
 CORE="${PHOBOS_HOME:-/var/tmp/opt/core}"
 EXERCISE=/var/tmp/testing-dir
+check_base_set "$CORE" BaseLanguage-java-gradle.cfg
 
 # A minimal exercise under the directory the shipped policy names.
 mkdir -p "$EXERCISE/assignment" "$EXERCISE/build"

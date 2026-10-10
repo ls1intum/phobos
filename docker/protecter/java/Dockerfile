@@ -76,7 +76,7 @@ RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
 FROM ls1tum/artemis-maven-template:java25-1@sha256:b8393cc0fd728e1645e63380e8470443a691cedf5aaa7b1b86fd33250141de3b AS maven-repository
 COPY pin/pin-repository.sh /usr/local/bin/pin-repository.sh
 COPY pin/maven-repository.sha256 /maven-repository.sha256
-COPY exercises/java-maven/maven-reference /var/tmp/testing-dir
+COPY exercises/java/maven-reference /var/tmp/testing-dir
 WORKDIR /var/tmp/testing-dir
 RUN pin-repository.sh verify /root/.m2/repository /maven-repository.sha256 mvn --batch-mode --strict-checksums clean test
 
@@ -130,8 +130,8 @@ COPY --from=enforcers /build/bin/phobos-landlock-filesystem-and-networksystem ${
 COPY --from=enforcers /build/bin/phobos-seccomp-networksystem ${PHOBOS_HOME}/
 COPY --from=enforcers /build/bin/phobos-seccomp-timeoutsystem ${PHOBOS_HOME}/
 COPY --from=enforcers /build/bin/phobos-seccomp-filesystem ${PHOBOS_HOME}/
-COPY config/BaseLanguage-java.cfg                     ${PHOBOS_HOME}/
-COPY config/TailPhobos.cfg                     ${PHOBOS_HOME}/
+COPY config/BaseLanguage-java-gradle.cfg ${PHOBOS_HOME}/
+COPY config/TailPhobos.cfg ${PHOBOS_HOME}/
 # The pre-loaded dependency repositories of the two stages above, over the base image's own.
 COPY --from=maven-repository /root/.m2/repository /root/.m2/repository
 COPY --from=gradle-repository /root/.gradle/caches/modules-2 /root/.gradle/caches/modules-2

@@ -41,7 +41,16 @@ if (( ${#PM_BASES[@]} > 1 )); then
   echo "the image ships ${#PM_BASES[@]} Base*.cfg files, and the matrix replaces exactly one" >&2
   exit 1
 fi
-PM_BASE="${PM_BASES[0]:-${PHOBOS_HOME}/BaseLanguage-java.cfg}"
+# Only the two bases the images ship are accepted, so a stale or stray base (an old name, a BasePhobos.cfg) is a
+# failure here rather than the file the matrix quietly replaces.
+case "${PM_BASES[0]##*/}" in
+  BaseLanguage-java-gradle.cfg | BaseLanguage-python.cfg | "") ;;
+  *)
+    echo "the image ships ${PM_BASES[0]##*/}, which is neither BaseLanguage-java-gradle.cfg nor BaseLanguage-python.cfg" >&2
+    exit 1
+    ;;
+esac
+PM_BASE="${PM_BASES[0]:-${PHOBOS_HOME}/BaseLanguage-java-gradle.cfg}"
 
 export PATH="${PHOBOS_HOME}:${PATH}"
 
@@ -111,7 +120,7 @@ PM_NEUTRAL_CONFIGURATION="PM_NEUTRAL_FOR_THE_IMAGES_BASE"
 PM_JAVA_CONFIGURATION="JAVA_USING_GRADLE_ARCHUNIT_AND_ASPECTJ"
 
 # Makes the Ares 2 policies of the suites name a programming language configuration whose base the image has. The Java
-# configurations name BaseLanguage-java.cfg, which a Python image does not ship, so an image with another base gets a
+# configurations name BaseLanguage-java-gradle.cfg, which a Python image does not ship, so an image with another base gets a
 # configuration of the suites' own: the Java one with its [base] line naming the image's base, which pm_install_base
 # replaces with the minimal one. Everything else stays what the shipped file says, the loopback UDP rule included, so the
 # cases hold the import to the same rules in every image. An image with the Java base uses the shipped configuration as
@@ -122,14 +131,14 @@ pm_install_ares_configuration() {
   local source="${PM_CONFIGURATIONS}/${PM_JAVA_CONFIGURATION}.cfg"
   local target="${PM_CONFIGURATIONS}/${PM_NEUTRAL_CONFIGURATION}.cfg"
   PM_ARES_CONFIGURATION="${PM_JAVA_CONFIGURATION}"
-  if [[ "${base_name}" == "BaseLanguage-java.cfg" ]]; then
+  if [[ "${base_name}" == "BaseLanguage-java-gradle.cfg" ]]; then
     return 0
   fi
   if [[ ! -f "${source}" ]]; then
     bad "the Ares 2 cases have a configuration to start from" "${source} is missing"
     return 1
   fi
-  if ! PM_IMAGE_BASE="${base_name}" awk '$0 == "BaseLanguage-java.cfg" { print ENVIRON["PM_IMAGE_BASE"]; next } { print }' "${source}" \
+  if ! PM_IMAGE_BASE="${base_name}" awk '$0 == "BaseLanguage-java-gradle.cfg" { print ENVIRON["PM_IMAGE_BASE"]; next } { print }' "${source}" \
       > "${target}" || ! grep -qxF -- "${base_name}" "${target}"; then
     rm -f "${target}"
     bad "the Ares 2 cases have a configuration that names the image's base" "${target} could not be written with ${base_name} as its base"
@@ -167,7 +176,7 @@ cfg() {
 }
 
 # The programming language configuration the Ares 2 policies of the suites name: the Java one the image ships, whose base,
-# BaseLanguage-java.cfg, pm_install_base has replaced with the minimal one, or in an image with another base the
+# BaseLanguage-java-gradle.cfg, pm_install_base has replaced with the minimal one, or in an image with another base the
 # configuration pm_install_ares_configuration writes for it.
 PM_ARES_CONFIGURATION="JAVA_USING_GRADLE_ARCHUNIT_AND_ASPECTJ"
 

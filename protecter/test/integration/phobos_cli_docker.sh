@@ -151,12 +151,12 @@ docker run --rm --network none --mount "type=bind,source=${EXERCISE},target=/var
 check "and without it the file stays refused" 1 "$?"
 docker run --rm --network none "${IMAGE}" /var/tmp/opt/core/phobos-cli.sh run --no-restriction -- true > /dev/null 2>&1
 check "an image refuses the switch that turns the sandbox off" 2 "$?"
-docker run --rm --network none "${IMAGE}" /var/tmp/opt/core/phobos-cli.sh prune java > /dev/null 2>&1
+docker run --rm --network none "${IMAGE}" /var/tmp/opt/core/phobos-cli.sh prune java-gradle > /dev/null 2>&1
 check "and has no helpers to prune with" 15 "$?"
 
 echo "== the Ares 2 policy of the Maven reference exercise, with a project root inside the exercise"
 mkdir -p "${WORK}/maven"
-cp -R "${REPOSITORY}/exercises/java-maven/maven-reference/." "${WORK}/maven/"
+cp -R "${REPOSITORY}/exercises/java/maven-reference/." "${WORK}/maven/"
 cli run --image "${IMAGE}" --exercise "${WORK}/maven" --config "${WORK}/maven/SecurityPolicy.yaml" --project-root . -- /bin/bash /var/tmp/testing-dir/build_script.sh
 if (( STATUS == 0 )) && grep -qF "Tests run: 2, Failures: 0, Errors: 0, Skipped: 0" <<<"${OUT}" && grep -qF "BUILD SUCCESS" <<<"${OUT}"; then
   ok "both tests pass under the policy, found through the staged copy and the translated project root"

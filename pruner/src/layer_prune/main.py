@@ -3,7 +3,8 @@
     python3 main.py [--stage filesystem|network|limits|all] [--testing-root DIR] [--output-dir DIR]
                     [--resolver ADDRESS] [--verify MERGED_DIR] [--kernel-observer audit] <key>
 
-For each exercise under <testing-root>/<key> it writes <key>_<exercise>.cfg, the policy, and
+For each exercise of the key under <testing-root>/<family>/<exercise> (discovery.py says which exercises
+that are) it writes <key>_<exercise>.cfg, the policy, and
 <key>_<exercise>.json, the record (schema version 2), each to a temporary file renamed into place, and
 only once the exercise has passed every stage, the joint verification and the containment checks. A
 run stopped after an earlier stage (--stage) writes its artefacts under partial/ instead, where the
@@ -43,7 +44,7 @@ import tempfile
 if __package__ in (None, ""):
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from layer_prune import cfgfile, generalise, kvm, runner, search, stages
+from layer_prune import cfgfile, discovery, generalise, kvm, runner, search, stages
 
 # The record's schema version (A.9).
 SCHEMA_VERSION = 2
@@ -262,7 +263,7 @@ def main(argv: list[str]) -> int:
         return EXIT_ABORTED
     environment = runner.Environment(resolver=options.resolver, kept=(options.output_dir,),
                                      landlock_version=landlock_version())
-    root = pathlib.Path(options.testing_root) / options.key
+    root = pathlib.Path(options.testing_root)
     for name, given in (("testing root", options.testing_root), ("output directory", options.output_dir)):
         if overlaps(pathlib.Path(given), pathlib.Path(environment.testing_dir)):
             print(f"the {name} {given} overlaps {environment.testing_dir}, which every run replaces; refusing it",
@@ -270,6 +271,11 @@ def main(argv: list[str]) -> int:
             return EXIT_ABORTED
     if not root.is_dir():
         print(f"no exercise under {root}", file=sys.stderr)
+        return EXIT_ABORTED
+    try:
+        exercises = discovery.exercises_of(root, options.key)
+    except discovery.DiscoveryRefused as refusal:
+        print(f"refusing to start, nothing was written: {refusal}", file=sys.stderr)
         return EXIT_ABORTED
     output = pathlib.Path(options.output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -280,12 +286,11 @@ def main(argv: list[str]) -> int:
     else:
         for stale in (output / VERIFY_DIRECTORY).glob(f"{options.key}_*.json"):
             stale.unlink()
-    exercises = sorted(path for path in root.iterdir() if path.is_dir() and not path.name.startswith("."))
     origin = provenance(environment)
     pristine = stages.pristine_index(environment)
     if options.kernel_observer is not None:
         if not exercises:
-            print(f"no exercise under {options.testing_root}/{options.key}", file=sys.stderr)
+            print(f"no exercise under {options.testing_root} has the key {options.key}", file=sys.stderr)
             return EXIT_ABORTED
         return kernel_observe(options, environment, exercises, output, origin, pristine)
     aborted = {}
@@ -301,7 +306,7 @@ def main(argv: list[str]) -> int:
         if reason is not None:
             aborted[directory.name] = reason
     if not exercises:
-        print(f"no exercise under {options.testing_root}/{options.key}", file=sys.stderr)
+        print(f"no exercise under {options.testing_root} has the key {options.key}", file=sys.stderr)
         return EXIT_ABORTED
     return EXIT_ABORTED if aborted else 0
 

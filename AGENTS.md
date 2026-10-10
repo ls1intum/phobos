@@ -52,7 +52,7 @@ that would break the intended platform/language/exercise layering, not tighten i
 ### A base entry an ancestor already covers is not dead code
 
 A shipped `Base*.cfg` lists paths that grant Landlock nothing beyond what an ancestor entry
-already grants it: `BaseLanguage-java.cfg` names `/usr/bin` with `rx` under a `/usr` that is
+already grants it: `BaseLanguage-java-gradle.cfg` names `/usr/bin` with `rx` under a `/usr` that is
 already `rx`, and Landlock unions the rights of every rule along a path, so the nested rule
 adds nothing to the ruleset. They look like clutter and they are not.
 

@@ -63,6 +63,19 @@ check() {
   if [[ "$got" == "$want" ]]; then ok "$name"; else bad "$name" "$want" "$got"; fi
 }
 
+# Checks that the Base*.cfg files directly in the core directory $1 are exactly the names given after it.
+# Phobos applies every one of them, so a stale or second base would add grants no policy meant to give.
+# The names come from the caller and are never read from the directory being checked.
+check_base_set() {
+  local core="$1"
+  shift
+  local found
+  local want
+  found="$(cd -- "$core" && ls -1 -- Base*.cfg 2> /dev/null | sort | tr '\n' ' ')"
+  want="$(printf '%s\n' "$@" | sort | tr '\n' ' ')"
+  check "the core directory holds exactly the bases ${want}" "$want" "$found"
+}
+
 # Prints the counts and ends the suite, non-zero when anything failed. A suite ends with
 # this rather than with a bare test, so that the status and the printed summary can never
 # disagree.

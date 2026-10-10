@@ -17,6 +17,7 @@ HERE="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/../../harness.sh" || { echo "cannot source the harness beside ${HERE}" >&2; exit 1; }
 
 CORE="${PHOBOS_HOME:-/var/tmp/opt/core}"
+check_base_set "$CORE" BaseLanguage-python.cfg
 EXERCISE_SOURCE=/exercise
 EXERCISE=/var/tmp/testing-dir
 CANARY=/srv/phobos-python-canary

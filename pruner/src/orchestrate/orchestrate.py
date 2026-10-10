@@ -54,7 +54,7 @@ inspected.
   every exercise granted a path, raised as the base is.
 
 Ship exactly one Base*.cfg beside phobos-policysystem.sh: it applies every Base*.cfg it
-finds there, so a BasePhobos.cfg left next to a BaseLanguage-java.cfg gives a Java
+finds there, so a BasePhobos.cfg left next to a BaseLanguage-java-gradle.cfg gives a Java
 run the paths of every other language as well.
 """
 
@@ -116,7 +116,7 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
         formatter_class=argparse.RawTextHelpFormatter,
         description=textwrap.dedent(__doc__))
     parser.add_argument('--langs', required=True,
-                        help='comma-separated: java,python')
+                        help='comma-separated keys: java-gradle,java-maven,python')
     parser.add_argument('--path-dir', default='/var/tmp/path_sets',
                         help='Where the <lang>_<exercise>.cfg artefacts and their records live (input).')
     parser.add_argument('--helpers-dir', default='/var/tmp/helpers',

@@ -113,6 +113,16 @@ the reason it produced none, every widening and every containment check. An exer
 gets `<key>_<exercise>.aborted.json` and no configuration. The policy stays only as good as the
 reference: the grading layers refuse a code path that the reference never took.
 
+An exercise lives in `exercises/<family>/<exercise>/`, and the folder it sits in only groups related
+exercises. Its key, which names the artefacts and the base it is merged into, is the `"key"` in its
+`prune.json`, or the family's folder name when it declares none. `exercises/java/` holds the Gradle
+reference (`"key": "java-gradle"`) and the Maven reference (`"key": "java-maven"`) for that reason. The
+pruner, the verification and the KVM staging all pick an exercise's key the same way
+(`pruner/src/layer_prune/discovery.py`). A `prune.json` that is not a JSON object, a `"key"` that is not
+lower-case words joined by hyphens, and two exercises of one key with one folder name each end the run
+before anything is written, because the key of the exercise, or the artefacts it would write, are then
+not known.
+
 Four rules for an exercise are worth knowing:
 
 - A Gradle build must run without a daemon, because the timeout's group lock refuses the `setsid`
@@ -130,7 +140,7 @@ Four rules for an exercise are worth knowing:
 
 ### The Maven prune
 
-The Maven reference exercise, `exercises/java-maven/maven-reference/`, is Artemis's
+The Maven reference exercise, `exercises/java/maven-reference/`, is Artemis's
 Maven test template with Ares 2, built offline. It is pruned under its own key, `java-maven`, in
 the same image as the Gradle one, by the Compose service `prune_java_maven`. The service
 `verify_java_maven` verifies it.
@@ -177,7 +187,7 @@ the merged base stay as workflow artefacts.
 
 ### The shipped Java and Python bases
 
-`protecter/src/config/BaseLanguage-java.cfg` is the prune of the Gradle reference exercise on the
+`protecter/src/config/BaseLanguage-java-gradle.cfg` is the prune of the Gradle reference exercise on the
 Java Development Kit (JDK) 25. It joins an x86_64 run on GitHub's runners and an aarch64 run,
 plus twelve machine files a Java Virtual Machine (JVM) reads. Ten under `/proc` and `/sys` are there
 because the denial reporting decided to grant them. The other two are the random devices, and
@@ -256,13 +266,13 @@ than shrinking it. An aborted exercise stops the merge as well.
 | `Abi10-<lang>.cfg` and `exercises/<lang>_<exercise>.abi10.cfg` | the rows only a kernel with Landlock version 10 can prove, from [the KVM run](#the-kvm-run-a-second-observer-on-x86). Never part of the base. |
 
 Everything goes under `build/pruner/config`, which the orchestrator and the verify services mount. A last container per
-language, `verify_java`, `verify_java_maven` and `verify_python`, runs every exercise once more
+language, `verify_java_gradle`, `verify_java_maven` and `verify_python`, runs every exercise once more
 under exactly that pair, the base and the exercise file, as grading applies them, and writes its
 records to `path_sets/verify/`.
 
 :::warning[Ship exactly one `Base*.cfg` per runtime environment]
 `phobos-policysystem.sh` applies every `Base*.cfg` it finds beside itself. A `BasePhobos.cfg` left
-next to a `BaseLanguage-java.cfg` gives a Java run the paths of every other language too. The
+next to a `BaseLanguage-java-gradle.cfg` gives a Java run the paths of every other language too. The
 orchestrator writes every alternative into one directory on purpose, because they are
 alternatives rather than parts of one policy. Choosing between them is the packaging step, and
 `docker/protecter/java/Dockerfile` does the choosing by naming one file.

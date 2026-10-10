@@ -10,11 +10,11 @@
 #   forbidden  under the same policy the probe is refused the unneeded file, the optional file the
 #              build did without, a sibling of a granted prefix, a write into what was only read,
 #              10.0.0.1:80 and port 8080, and each derived limit ends a run that exceeds it;
-#   merged     the orchestrator merges the artefacts into BaseLanguage-java.cfg and the exercise's
+#   merged     the orchestrator merges the artefacts into BaseLanguage-java-gradle.cfg and the exercise's
 #              own file, and the fixture passes under that pair (main.py --verify), as grading applies it,
 #              while a base without the needed file's grant fails it; a hand-edited .cfg its record does
 #              not vouch for stops the merge. The verification runs in the container the prune ran in,
-#              whose index holds what the prune's last run left, which Compose's fresh verify_java
+#              whose index holds what the prune's last run left, which Compose's fresh verify_java_gradle
 #              container would not;
 #   wrong reasons  a flaky reference, NO-SOURCE, a needed setsid, a needed external host and a
 #              failure no refused call explains each abort the exercise and write no policy.
@@ -34,7 +34,7 @@ EXERCISES=/srv/phobos-prune-exercises
 PROBE=/usr/local/libexec/phobos-prune-probe
 WORK="$(mktemp -d /var/tmp/layer-prune-suite.XXXXXX)" || { echo "cannot create a working directory" >&2; exit 1; }
 OUTPUT="${WORK}/out"
-CFG="${OUTPUT}/java_fixture.cfg"
+CFG="${OUTPUT}/java-gradle_fixture.cfg"
 PROBE_CFG="${WORK}/probe.cfg"
 
 # Removes the working directory however the suite ends.
@@ -52,8 +52,8 @@ set_up() {
   printf 'secret\n' > /srv/prune-fixture/unneeded/secret.txt
   printf 'secret\n' > /srv/prune-fixture-secret/x
   rm -rf "${EXERCISES}" "${HELPERS}"
-  mkdir -p "${EXERCISES}/java"
-  cp -r "${REPO}/pruner/test/integration/layer-prune-fixture" "${EXERCISES}/java/fixture"
+  mkdir -p "${EXERCISES}/java-gradle"
+  cp -r "${REPO}/pruner/test/integration/layer-prune-fixture" "${EXERCISES}/java-gradle/fixture"
   cp -r "${REPO}/pruner/src" "${HELPERS}"
   printf '[read]\n%s\n/dev/null\n\n[execute]\n%s\n' "${PROBE}" "${PROBE}" > "${PROBE_CFG}"
 }
@@ -73,9 +73,9 @@ probe_under_policy() {
 
 # The derived policy exists and the fixture's build passes under it with every layer on.
 check_permitted() {
-  if [[ -f "${CFG}" ]]; then ok "the pruner wrote java_fixture.cfg"; else bad "the pruner wrote java_fixture.cfg"; return; fi
+  if [[ -f "${CFG}" ]]; then ok "the pruner wrote java-gradle_fixture.cfg"; else bad "the pruner wrote java-gradle_fixture.cfg"; return; fi
   rm -rf /var/tmp/testing-dir
-  cp -r "${EXERCISES}/java/fixture" /var/tmp/testing-dir
+  cp -r "${EXERCISES}/java-gradle/fixture" /var/tmp/testing-dir
   (cd /var/tmp/testing-dir && "${PHOBOS_HOME}/phobos.sh" --config "${CFG}" -- /bin/bash ./build_script.sh) >"${WORK}/build.log" 2>&1
   local report=/var/tmp/testing-dir/build/test-results/test/TEST-fixture.xml
   if [[ -f "${report}" ]] && ! grep -q '<failure' "${report}" && [[ "$(grep -c '<testcase' "${report}")" -eq 6 ]]; then
@@ -128,7 +128,7 @@ check_forbidden() {
 
 # Every derived limit is below its default, and the record shows every containment check refused.
 check_limits_and_containment() {
-  local record="${OUTPUT}/java_fixture.json"
+  local record="${OUTPUT}/java-gradle_fixture.json"
   [[ -f "${record}" ]] || { bad "the record can be read" "no record was written"; return; }
   local summary
   summary="$(python3 - "${record}" "${PHOBOS_HOME}/phobos-tools-common/phobos-constants.sh" <<'PY'
@@ -199,37 +199,37 @@ PY
 check_merged_and_verified() {
   [[ -f "${CFG}" ]] || { bad "the merged configuration can be checked" "no policy was written"; return; }
   local core="${WORK}/core"
-  if python3 "${REPO}/pruner/src/orchestrate/orchestrate.py" --langs java --path-dir "${OUTPUT}" \
+  if python3 "${REPO}/pruner/src/orchestrate/orchestrate.py" --langs java-gradle --path-dir "${OUTPUT}" \
       --core-dir "${core}" --helpers-dir "${HELPERS}" >"${WORK}/merge.log" 2>&1 \
-      && [[ -f "${core}/BaseLanguage-java.cfg" ]] && ! grep -q '^\[limits\]' "${core}/BaseLanguage-java.cfg" \
-      && grep -q '^\[limits\]' "${core}/exercises/java_fixture.cfg"; then
+      && [[ -f "${core}/BaseLanguage-java-gradle.cfg" ]] && ! grep -q '^\[limits\]' "${core}/BaseLanguage-java-gradle.cfg" \
+      && grep -q '^\[limits\]' "${core}/exercises/java-gradle_fixture.cfg"; then
     ok "the orchestrator merges the artefacts into a base without limits and the exercise's own file with them"
   else
     bad "the orchestrator merges the artefacts into a base without limits and the exercise's own file with them" \
       "$(tail -5 "${WORK}/merge.log")"
   fi
   local out
-  out="$(python3 "${HELPERS}/layer_prune/main.py" --verify "${core}" --output-dir "${WORK}/verify-out" java 2>&1)"
-  if [[ $? -eq 0 && "${out}" == *"java/fixture: verified"* ]]; then
+  out="$(python3 "${HELPERS}/layer_prune/main.py" --verify "${core}" --output-dir "${WORK}/verify-out" java-gradle 2>&1)"
+  if [[ $? -eq 0 && "${out}" == *"java-gradle/fixture: verified"* ]]; then
     ok "the fixture passes under the merged base and its own file, every layer on"
   else
     bad "the fixture passes under the merged base and its own file, every layer on" "$(tail -3 <<<"${out}")"
   fi
   local narrowed="${WORK}/core-narrowed"
   cp -r "${core}" "${narrowed}"
-  sed -i '\|^/srv/prune-fixture/needed|d' "${narrowed}/BaseLanguage-java.cfg"
-  out="$(python3 "${HELPERS}/layer_prune/main.py" --verify "${narrowed}" --output-dir "${WORK}/verify-narrowed" java 2>&1)"
+  sed -i '\|^/srv/prune-fixture/needed|d' "${narrowed}/BaseLanguage-java-gradle.cfg"
+  out="$(python3 "${HELPERS}/layer_prune/main.py" --verify "${narrowed}" --output-dir "${WORK}/verify-narrowed" java-gradle 2>&1)"
   local narrowed_status=$?
-  if [[ ${narrowed_status} -ne 0 && "${out}" == *"java/fixture: aborted: a run under the merged base"*"did not match"* ]] \
-      && grep -q '"verified": false' "${WORK}/verify-narrowed/verify/java_fixture.json"; then
+  if [[ ${narrowed_status} -ne 0 && "${out}" == *"java-gradle/fixture: aborted: a run under the merged base"*"did not match"* ]] \
+      && grep -q '"verified": false' "${WORK}/verify-narrowed/verify/java-gradle_fixture.json"; then
     ok "a merged base without the needed file's grant fails the verification"
   else
     bad "a merged base without the needed file's grant fails the verification" "status ${narrowed_status}: $(tail -3 <<<"${out}")"
   fi
   local tampered="${WORK}/tampered"
   cp -r "${OUTPUT}" "${tampered}"
-  printf '[read]\n/\n' >> "${tampered}/java_fixture.cfg"
-  if python3 "${REPO}/pruner/src/orchestrate/orchestrate.py" --langs java --path-dir "${tampered}" \
+  printf '[read]\n/\n' >> "${tampered}/java-gradle_fixture.cfg"
+  if python3 "${REPO}/pruner/src/orchestrate/orchestrate.py" --langs java-gradle --path-dir "${tampered}" \
       --core-dir "${WORK}/core-tampered" --helpers-dir "${HELPERS}" >"${WORK}/tampered.log" 2>&1; then
     bad "a .cfg its record does not vouch for stops the merge" "the orchestrator merged it"
   elif grep -q 'its SHA-256 differs' "${WORK}/tampered.log"; then
@@ -251,7 +251,7 @@ check_wrong_reasons() {
     reason="${variant#*:}"
     rm -rf /var/tmp/layer-prune-counter "${EXERCISES:?}/${key}"
     mkdir -p "${EXERCISES}/${key}"
-    cp -r "${EXERCISES}/java/fixture" "${EXERCISES}/${key}/fixture"
+    cp -r "${EXERCISES}/java-gradle/fixture" "${EXERCISES}/${key}/fixture"
     local out
     out="$(prune "${key}" "${WORK}/${key}" "${variant%%:*}=1" 2>&1)"
     local status=$?
@@ -264,7 +264,7 @@ check_wrong_reasons() {
 }
 
 set_up
-prune java "${OUTPUT}" >"${WORK}/prune.log" 2>&1
+prune java-gradle "${OUTPUT}" >"${WORK}/prune.log" 2>&1
 status=$?
 check "the pruner ends with status 0 on the fixture" "0" "${status}"
 [[ "${status}" -eq 0 ]] || sed 's/^/    /' "${WORK}/prune.log" | tail -20

@@ -210,7 +210,7 @@ jobs:
 
       # The one suite that runs the shipped policy an exercise actually gets, rather than a
       # tight test policy, so a regression that breaks an ordinary run under it, or widens it,
-      # fails here. The image bakes protecter/src/config/BaseLanguage-java.cfg, so this exercises it.
+      # fails here. The image bakes protecter/src/config/BaseLanguage-java-gradle.cfg, so this exercises it.
       - name: The shipped policy runs an exercise both ways
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
@@ -225,7 +225,7 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
         run: |
           docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
-            -v "${PWD}/exercises/java-maven/maven-reference:/exercise:ro" \
+            -v "${PWD}/exercises/java/maven-reference:/exercise:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/maven-policy-test.sh
 

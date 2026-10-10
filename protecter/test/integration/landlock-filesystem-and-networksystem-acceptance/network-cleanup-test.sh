@@ -48,7 +48,7 @@ if (( ${#BASE_FILES[@]} > 1 )); then
   echo "the image ships ${#BASE_FILES[@]} Base*.cfg files, and this suite replaces exactly one" >&2
   exit 1
 fi
-cat > "${BASE_FILES[0]:-$CORE/BaseLanguage-java.cfg}" <<'CFG'
+cat > "${BASE_FILES[0]:-$CORE/BaseLanguage-java-gradle.cfg}" <<'CFG'
 [read]
 /bin
 /etc

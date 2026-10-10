@@ -62,11 +62,11 @@ cp -R "${REPOSITORY}"/protecter/src/config/language-configurations "${DESTINATIO
 # The two reference exercises and what pins the dependencies they resolve, in folders of their own so
 # that the flat *.sh copy of the layer scripts does not take pin-repository.sh with it. The exercises
 # stay in their stages; only the repositories those stages produce enter the image.
-mkdir -p "${DESTINATION}/pin" "${DESTINATION}/exercises/java-maven" "${DESTINATION}/exercises/java"
+mkdir -p "${DESTINATION}/pin" "${DESTINATION}/exercises/java"
 cp "${REPOSITORY}"/protecter/image/pin-repository.sh "${DESTINATION}/pin/"
 cp "${REPOSITORY}"/protecter/image/maven-repository.sha256 "${DESTINATION}/pin/"
 cp "${REPOSITORY}"/protecter/image/gradle-repository.sha256 "${DESTINATION}/pin/"
-cp -R "${REPOSITORY}"/exercises/java-maven/maven-reference "${DESTINATION}/exercises/java-maven/"
+cp -R "${REPOSITORY}"/exercises/java/maven-reference "${DESTINATION}/exercises/java/"
 cp -R "${REPOSITORY}"/exercises/java/gradle-reference "${DESTINATION}/exercises/java/"
 
 touch "${DESTINATION}/${MARKER}"

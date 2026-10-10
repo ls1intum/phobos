@@ -40,10 +40,10 @@ services:
   # writable, since every run replaces /var/tmp/testing-dir with a fresh copy of the exercise
   # (A.6.1). No network, no privilege and no capability: strace traces only the pruner's own
   # children.
-  prune_java:
+  prune_java_gradle:
     <<: *prune_layers
     network_mode: none
-    command: ["--stage", "all", "java"]
+    command: ["--stage", "all", "java-gradle"]
 
   # The recording pruner: records the instructor's reference program while a person uses it, with
   # no sandbox at all, and replays it under the layers with `check`. Started only on purpose, as
@@ -76,7 +76,7 @@ services:
     <<: *record
     network_mode: bridge
 
-  # The Maven reference exercise (exercises/java-maven) is pruned under its own key, in the
+  # The Maven reference exercise (exercises/java/maven-reference) is pruned under its own key, java-maven, in the
   # same image as Gradle's, with the same mounts and no network, no privilege and no capability, and the
   # manifest of the pre-loaded repository mounted read-only: the exercise's prune.json declares that
   # repository as a pinned read root, and the pruner checks it against this file before any run
@@ -120,23 +120,23 @@ services:
     depends_on:
       prune_python:
         condition: service_completed_successfully
-      prune_java:
+      prune_java_gradle:
         condition: service_completed_successfully
       prune_java_maven:
         condition: service_completed_successfully
-    command: ["--langs", "python,java,java-maven", "--path-dir", "/var/tmp/path_sets"]
+    command: ["--langs", "python,java-gradle,java-maven", "--path-dir", "/var/tmp/path_sets"]
 
   # Run every exercise once more under what grading will apply: the merged BaseLanguage-<language>.cfg
   # and the exercise's own file under exercises/, as the orchestrator wrote them. Their records go to
   # path_sets/verify/; they change no artefact of the prune.
-  verify_java:
+  verify_java_gradle:
     <<: *prune_layers
     network_mode: none
     volumes: *verify_volumes
     depends_on:
       orchestrate:
         condition: service_completed_successfully
-    command: ["--verify", "/srv/phobos-merged", "java"]
+    command: ["--verify", "/srv/phobos-merged", "java-gradle"]
 
   # The same for the Maven reference exercise, under the merged BaseLanguage-java-maven.cfg.
   verify_java_maven:
