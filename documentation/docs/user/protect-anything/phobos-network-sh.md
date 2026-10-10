@@ -30,6 +30,8 @@ ${PHOBOS_HOME}/phobos-networksystem.sh --config exercise.cfg -- curl https://exa
 | `--haproxy-bin <path>` | The HAProxy program the broker and the inbound filter run as. |
 | `--resolver <ip[:port]>` | The Domain Name System (DNS) resolver the broker resolves an exact host name through, and the one a `udp` host name is resolved through once at the start. |
 | `--landlock-bin <path>` | The `phobos-landlock-filesystem-and-networksystem` program that applies the port rules. |
+| `--report-filesystem` | Have the connect guard report the filesystem layer's denials too. `phobos.sh` passes it when the filesystem layer is in the chain. |
+| `--group-lock-above` | The timeout layer's group lock is above this layer, so the connect guard counts the calls the lock refuses outright for the timeout layer. `phobos.sh` passes it when the timeout layer applies the lock. |
 | `--debug` | Report what the layer builds and runs. |
 
 ## The connect guard

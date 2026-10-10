@@ -34,6 +34,9 @@ isolating a failure.
 | `--no-landlock` | Run the command with no Landlock ruleset. |
 | `--landlock-bin <path>` | The `phobos-landlock-filesystem-and-networksystem` program to use. |
 | `--resources-layer <path>` | Start the resource layer as the last step before `phobos-landlock-filesystem-and-networksystem`. |
+| `--reporter-bin <path>` | The report-only supervisor that reports each blocked action. |
+| `--no-own-reporter` | Start no reporter of the layer's own. `phobos.sh` passes it when the network layer is on, whose connect guard is then the run's one supervisor. |
+| `--group-lock-above` | The timeout layer's group lock is above this layer, so the reporter answers and reports the calls the lock refuses outright. `phobos.sh` passes it exactly when it applies the lock. |
 | `--debug` | Report what the layer builds and runs. |
 
 Called from `phobos.sh`, it receives a specification directory in place of the `--config`

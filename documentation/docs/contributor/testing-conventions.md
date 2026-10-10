@@ -120,9 +120,9 @@ compiled programs are position independent with full RELRO.
 
 The acceptance suites measure the shipped policy. The matrix under
 `protecter/test/integration/protection-matrix/` holds `phobos.sh` itself to its promises, layer by layer
-and combined. It has eleven suites (`filesystem`, `network`, `timeout`, `resources`,
-`combinations`, `cli`, `lifecycle`, `policy-syntax`, `network-edge`, `filesystem-edge` and
-`resources-edge`), each a step of the `run-phase` job in an ordinary container with
+and combined. It has twelve suites (`filesystem`, `network`, `timeout`, `resources`,
+`combinations`, `cli`, `lifecycle`, `policy-syntax`, `network-edge`, `filesystem-edge`,
+`resources-edge` and `reporting`), each a step of the `run-phase` job in an ordinary container with
 `--network none --memory 3g --pids-limit 1024`. The cgroup caps are not privileges. `lib.sh`,
 `probe.c`, `edge.c`, `stubdns.c` and `run-all.sh` are the shared parts.
 
