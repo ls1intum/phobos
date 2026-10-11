@@ -5,6 +5,11 @@ on:
     branches: ["main"]
   push:
     branches: ["main"]
+  # Weekly, so that a new shellcheck finding is noticed without anyone touching the tree first.
+  # actionlint runs the shellcheck of the runner image over every `run:` block, so a newer
+  # shellcheck arrives whenever an image update ships one. actionlint itself is pinned below.
+  schedule:
+    - cron: "0 15 * * 0"
   workflow_dispatch:
 
 permissions: {}
@@ -20,12 +25,12 @@ jobs:
   # all of them take to run. Every step runs whatever an earlier one reported, so one run still names
   # every linter that failed, and the job fails when any step does. A check skips itself only when the
   # tool it needs could not be installed, so a failed install is reported once rather than as a second,
-  # misleading failure of the check. The name stays the one a branch rule would point at.
+  # misleading failure of the check.
   #
   # editorconfig-checker comes last because it unpacks its release into the working tree, which no
-  # other linter should see.
+  # other linter should see. actionlint unpacks into the runner's temporary directory instead.
   required:
-    name: Lint / required
+    name: Linters
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -133,6 +138,21 @@ jobs:
             echo "::endgroup::"
           done < <(find . -name 'Dockerfile*' -type f)
           exit "$failed"
+
+      # The workflows themselves, with the shellcheck of the runner image over every `run:` block.
+      - name: Run actionlint
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        env:
+          # Update the checksum together with the version; it pins the exact release asset.
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          curl --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/actionlint.tar.gz" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  ${RUNNER_TEMP}/actionlint.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "${RUNNER_TEMP}/actionlint.tar.gz" --directory "${RUNNER_TEMP}" actionlint
+          "${RUNNER_TEMP}/actionlint" -color
 
       # AGENTS.md asks that every function in the core shell scripts carry a comment saying what
       # it does and what it assumes about its environment, and nothing measured it. This checks

@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   analyse:
-    name: Analyse ${{ matrix.language }}
+    name: Security scan (${{ matrix.language }})
     # No fork gate. Code scanning accepts an upload from a pull_request run even though a
     # fork's token is read-only, and a fork changing a workflow is exactly the case the
     # actions analysis is most worth having. Nothing here runs fork code beyond javac on

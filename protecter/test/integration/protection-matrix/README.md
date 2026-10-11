@@ -146,12 +146,11 @@ The second group is behaviour nothing documents, found while writing the suites,
 - A successful UDP host-name resolution, its address snapshot and the guard's refusals of received or evicted
   descriptors, oversize datagrams and UNIX-addressed sends. They need Landlock version 10 or reach into the
   guard's internals, and `seccomp_networksystem.sh` and the unit suites under `protecter/test/unit/` cover them.
-- Other architectures than the one the suites ran on. CI runs every suite here on amd64 on every
-  event, and on arm64 `filesystem-edge.sh`, `resources-edge.sh` and `reporting.sh` on every event and
-  the rest on a push to `main`, the weekly run and a dispatch with `scope: full`.
+- Other architectures than amd64. CI runs every suite here on amd64 on every event, and on no other
+  architecture.
 - Images other than the Java run-phase image. The Python, C and R images compile their own programs
-  and are held to `reporting.sh` only on the weekly run and a dispatch with `scope: full`, and to none
-  of the other suites here.
+  and are held to `reporting.sh` only, on the weekly run (amd64) and a dispatch with `scope: full`
+  (amd64 and arm64), and to none of the other suites here.
 - The shipped Java policy. The suites install a minimal base so that every grant in a case is theirs,
   and `shipped-policy-test.sh` in the acceptance folder covers the real one.
 - Hosts that are not an ordinary container. `--network none` is the container's job, not Phobos's.
