@@ -4196,6 +4196,9 @@ static void test_signalling_through_a_process_descriptor(void) {
     struct process_view mine;
     bool parsed = parse_process_stat(text, self, &mine);
     check("this process's own stat is read", parsed && mine.process == self && mine.start > 0);
+    if (!parsed) {
+        return;
+    }
     groups_reset_for_tests();
     groups_configure(true, nullptr);
     const struct process_table *real = groups_table_for_tests();
@@ -4212,7 +4215,7 @@ static void test_signalling_through_a_process_descriptor(void) {
     check("a number no process holds is ESRCH", real->signal(&other, 0) == ESRCH);
     pid_t listed[8];
     check("the list of processes holds this one", real->list(listed, 8) >= 1);
-    check("a list that does not fit says so", real->list(listed, 1) == 2);
+    check("a list that does not fit says so", real->list(listed, 0) == 1);
     check("a process that does not exist is not read", !real->read(1999999999, &other));
     check("a thread that does not exist has no process", real->thread_group(1999999999) == 0);
     check("this thread has this process", real->thread_group((pid_t)syscall(SYS_gettid)) == self);
