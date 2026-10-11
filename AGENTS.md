@@ -15,7 +15,9 @@ conflict with an open stack.
 another branch rather than `main` is part of a stack; do not rebase it onto `main` yourself.
 Every workflow filters its `pull_request` trigger on `main`, so a stacked pull request gets no
 checks of its own: start `build.yml`, `lint.yml`, `test.yml` and `codeql.yml` on its branch with
-`workflow_dispatch`, link the runs in the pull request, and run the template checker locally.
+`workflow_dispatch`, link the runs in the pull request, and run the template checker locally. A
+dispatch of `build.yml` runs what a pull request runs; give it `scope: full` for every suite each image
+is held to, on both architectures.
 
 ## The sandbox is the product, so never widen it quietly
 
@@ -134,7 +136,10 @@ is never normalised, though none is shipped.
 - Never check a compiled binary in. The `run-phase` job in `build.yml` builds the image for
   amd64 and arm64 on native runners and, on the copies each image ships, checks with `readelf`
   that all four are position-independent (`Type: DYN`) with full RELRO (`BIND_NOW`), so both
-  architectures are proven on every run; publishing the multi-arch image is a manual step (below).
+  architectures are built and checked on every run. amd64 runs every suite on every run; a pull
+  request runs the acceptance group alone on arm64, and a push to `main`, the weekly run and a
+  dispatch with `scope: full` run every suite there too. Publishing the multi-arch image is a manual
+  step (below).
 - Where the connect guard binary is missing the network layer ends the run with PHB-ERUNTIME
   rather than running without connect supervision, so a bare checkout with nothing built does
   not run: the delivery vehicle is the image.
@@ -145,8 +150,11 @@ is never normalised, though none is shipped.
 ## Publishing the run-phase image
 
 CI builds and tests the run-phase image on both architectures but does not publish it, so no
-registry credentials live in the workflow. A maintainer publishes it by hand once CI is green,
-to their own registry namespace (for example `markuspaulsen/phobos`), from the repository root:
+registry credentials live in the workflow. A maintainer publishes it by hand, from a commit a full run
+of `build.yml` has proven: for the Java image the run of the push to `main`, and for any other language
+image the weekly run or a dispatch with `scope: full` on that very commit, since only those hold it to
+the reporter, and the Python image to the layer pruner's own suites too. It goes to the maintainer's own
+registry namespace (for example `markuspaulsen/phobos`), from the repository root:
 
 ```
 CTX="$(mktemp -d)"
