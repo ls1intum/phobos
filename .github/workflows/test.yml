@@ -1,7 +1,6 @@
-# Runs the suites that need only a compiler, a shell and a Python, and no
-# container, no kernel feature and no elevated permission. That is the whole point of this
-# workflow: the checks that cost seconds run on every pull request, so the ones that need
-# the run-phase image are built and argued about separately, in build.yml.
+# The unit tests: the suites that need no run-phase image, one job per part of the repository.
+# The end-to-end suites, which run against the run-phase image, live in build.yml beside the job
+# that builds it, together with the suites of their layer that run on the runner itself.
 name: Test
 
 # A change that touches nothing but the documentation site starts none of these jobs: no suite reads a
@@ -16,6 +15,10 @@ on:
     branches: [ "main" ]
     paths-ignore:
       - "documentation/**"
+  # Weekly, so that a toolchain that stops compiling the sources under mutation testing, or a moved
+  # apt package, is noticed without anyone touching the tree first.
+  schedule:
+    - cron: "0 17 * * 0"
   workflow_dispatch:
 
 permissions: {}
@@ -25,10 +28,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  shell:
-    name: Shell suites
+  protecter:
+    name: Protecter unit tests
     runs-on: ubuntu-26.04
-    timeout-minutes: 10
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
@@ -81,13 +84,10 @@ jobs:
           done < <(find protecter/test pruner -name '*.sh' -type f | sort)
           exit "${missing}"
 
-      # What the suites here need beyond the runner's own image. gcc-14 is the compiler the C
-      # probes of the network suites are pinned to, and without it those suites skip themselves whole;
-      # haproxy is the egress broker protecter/test/integration/haproxy_broker.sh drives and the inbound filter
-      # protecter/test/integration/haproxy_inbound.sh drives, and openssl is the client
-      # that sends it a ClientHello with a host name; that suite skips without either.
-      # A skip reads as a pass in the workflow's summary, so they are installed rather
-      # than left to the image.
+      # What the suites here need beyond the runner's own image. gcc-14 is the compiler the C unit
+      # suites are pinned to, and haproxy is what protecter/test/unit/phobos-tools-networksystem/haproxy_conf.sh
+      # holds the generated configuration to. A skip reads as a pass in the workflow's summary, so
+      # they are installed rather than assumed.
       - name: Install what the suites need
         run: |
           sudo apt-get update -qq
@@ -111,41 +111,6 @@ jobs:
       - name: The timeout contract
         if: ${{ !cancelled() }}
         run: bash protecter/test/unit/phobos-tools-common/timeout_units.sh
-
-      - name: The timeout stops a command that ignores SIGTERM
-        if: ${{ !cancelled() }}
-        run: bash protecter/test/integration/timeout_escalation.sh
-
-      - name: The timeout's group lock refuses setsid and setpgid
-        if: ${{ !cancelled() }}
-        run: bash protecter/test/integration/seccomp_timeoutsystem.sh
-
-      - name: Each layer runs on its own from a config
-        if: ${{ !cancelled() }}
-        run: bash protecter/test/integration/standalone_layers.sh
-
-      - name: The command-line contract
-        if: ${{ !cancelled() }}
-        run: bash protecter/test/integration/cli_flags.sh
-
-      # The command line of the repository, phobos-cli.sh: the options it accepts and the ones it refuses
-      # in both places, the commands it builds for run, prune, record and build, and that nothing it
-      # builds can give a container more than the policy says. It starts no container: it reads the
-      # commands a dry run prints and answers a stand-in docker.
-      - name: The repository's command line starts nothing it should refuse
-        if: ${{ !cancelled() }}
-        run: bash protecter/test/integration/phobos_cli.sh
-
-      # No entry point finds a program through a relative or empty PATH entry, which names the
-      # current directory, and the submission's tree when a grader starts Phobos there.
-      - name: No entry point looks a program up in the current directory
-        if: ${{ !cancelled() }}
-        run: bash protecter/test/integration/startup_environment.sh
-      # Every temporary file of a run lies in its own specification directory, out of the reach of
-      # the command of a concurrent run, and never in TMPDIR, or /tmp when it is unset.
-      - name: A run's temporary files stay in its specification directory
-        if: ${{ !cancelled() }}
-        run: bash protecter/test/integration/scratch_location.sh
 
       # How the network allow-list becomes Landlock TCP-port rules: a concrete port is
       # enforced, a loopback host with no port is tolerated, a non-loopback host with no
@@ -195,27 +160,9 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash protecter/test/unit/phobos-tools-policysystem/ares_policy.sh
 
-      # The policy program given an Ares 2 policy: base selection by the programming language
-      # configuration, the additive fold beside a .cfg, the project root and the covered-entry skip.
-      - name: The policy program with an Ares 2 policy
-        if: ${{ !cancelled() }}
-        run: bash protecter/test/integration/ares_policy_program.sh
-
-      - name: The connect guard enforces the allow-list by host and port
-        if: ${{ !cancelled() }}
-        run: bash protecter/test/integration/seccomp_networksystem.sh
-
       - name: The allow-list becomes an egress-broker config
         if: ${{ !cancelled() }}
         run: bash protecter/test/unit/phobos-tools-networksystem/haproxy_conf.sh
-
-      - name: The egress broker enforces the allow-list by TLS host name
-        if: ${{ !cancelled() }}
-        run: bash protecter/test/integration/haproxy_broker.sh
-
-      - name: The inbound filter admits only the sources an [accept] rule names
-        if: ${{ !cancelled() }}
-        run: bash protecter/test/integration/haproxy_inbound.sh
 
       # The lines a run adds to a hosts file carry its tag and leave with its specification
       # directory, under a lock and in place. A scratch hosts file, so no root is needed.
@@ -223,43 +170,48 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash protecter/test/unit/phobos-tools-common/hosts_entries.sh
 
-      # The [limits] resource keys are parsed and, when applied, set the process's rlimits,
-      # the in-process line against a fork bomb, a runaway allocation or a disk-filling file.
-      - name: The resource limits
+      # The C programs' own unit suites, with gcc-14 and nothing else. The syscalls are interposed
+      # through the linker, so these need no Landlock, no container and no elevated permission.
+      - name: The Landlock program's unit tests
         if: ${{ !cancelled() }}
-        run: bash protecter/test/integration/resource_limits.sh
+        run: bash protecter/test/unit/phobos-landlock-filesystem-and-networksystem/run.sh
 
-      # The filesystem layer's denial report, both directions, and that neither the report nor
-      # the helpers behind it ever cost the command its output or its exit status.
-      - name: The denial report
+      - name: The connect guard's unit tests
         if: ${{ !cancelled() }}
-        run: bash protecter/test/integration/denial_report.sh
+        run: bash protecter/test/unit/phobos-seccomp-networksystem/seccomp_networksystem_run.sh
 
-      - name: The timeout and resource-limit merge
+      # The guard installs a real seccomp filter and forks only when run for real; the unit
+      # suite wraps every syscall and fork instead, so it needs no kernel, and its interposed
+      # calls are answered rather than passed through, so gcov's own writes are undisturbed.
+      # Lines are held to 100 %; branches are reported, not gated, for the reason the script
+      # states.
+      - name: Every line of the connect guard ran
         if: ${{ !cancelled() }}
-        run: bash protecter/test/integration/limit_merge.sh
+        run: bash protecter/test/unit/phobos-seccomp-networksystem/seccomp_networksystem_run.sh --coverage
 
-      - name: The policy program
+      # The denial reporter's sources are held to the same line gate as the guard, and its
+      # quoting to bash's own over a corpus of names.
+      - name: The denial reporter's unit tests
         if: ${{ !cancelled() }}
-        run: bash protecter/test/integration/policy_program.sh
+        run: bash protecter/test/unit/phobos-seccomp-filesystem/seccomp_filesystem_run.sh
 
-      # A configuration that is wrong has to end the run with a message that says what and where, and no
-      # bash error or raw byte may reach the terminal in its place.
-      - name: A malformed configuration is refused with a message that says what and where
+      - name: Every line of the denial reporter ran
         if: ${{ !cancelled() }}
-        run: bash protecter/test/integration/malformed_cfg.sh
+        run: bash protecter/test/unit/phobos-seccomp-filesystem/seccomp_filesystem_run.sh --coverage
 
-      # The rights hierarchy decides which policies are refused before a command runs, and
-      # nothing measured it until this suite: a nested entry narrower than its ancestor is
-      # unenforceable and refused, while a redundant one and a merely different one are both
-      # allowed, and the redundant one is what lets an exercise config name that path with
-      # fewer rights.
-      - name: The filesystem policy
+      # The Landlock program's suite has no coverage step, deliberately. It interposes open and
+      # close, which is also how the gcov runtime writes its .gcda files, so an instrumented run has
+      # gcov's own diagnostics landing on stderr. That breaks the test asserting that a run which
+      # goes through says nothing. Mutation testing is the stronger measure of it: clang and mull
+      # are installed into a container and the suite runs once per mutant, and a run that does not
+      # reach a score fails, so a toolchain that stops compiling the sources is noticed in the pull
+      # request that broke it.
+      - name: Mutation score of the Landlock program's unit tests
         if: ${{ !cancelled() }}
-        run: bash protecter/test/integration/filesystem_policy.sh
+        run: bash protecter/test/unit/phobos-landlock-filesystem-and-networksystem/mutation.sh
 
-  python:
-    name: Python helpers
+  exercise-pruner:
+    name: Exercise-Pruner unit tests
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
@@ -273,13 +225,47 @@ jobs:
       - name: Install pytest
         run: python -m pip install --quiet pytest==8.4.2
 
-      # These two helpers turn a pruning run into the allow-list a sandbox is then built
-      # from, so a defect in either is a defect in a security policy.
-      - name: Run the helper tests
-        run: python -m pytest pruner -q
+      # The layer pruner and the orchestrator turn a pruning run into the allow-list a sandbox is
+      # then built from, so a defect here is a defect in a security policy.
+      - name: Run the unit tests
+        run: python -m pytest pruner/exercise_pruner -q
 
-      # The script that lays out what a prune container and the KVM guest are both given asks the pruner's own
-      # discovery which exercises a key has, so it is held to that here, and to leaving an earlier staging alone.
-      - name: The staging of the prune inputs
-        if: ${{ !cancelled() }}
-        run: bash pruner/exercise_pruner/test/integration/interface/stage_prune_inputs.sh
+  runtime-pruner:
+    name: Runtime-Pruner unit tests
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pytest
+        run: python -m pip install --quiet pytest==8.4.2
+
+      # The recording pruner turns a recorded session into a policy, so a defect here is a defect
+      # in a security policy too.
+      - name: Run the unit tests
+        run: python -m pytest pruner/runtime_pruner -q
+
+  shared-pruner:
+    name: Shared-Pruner unit tests
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pytest
+        run: python -m pip install --quiet pytest==8.4.2
+
+      # What both pruners rest on: the policy model, the strace parser, attribution, generalisation,
+      # limits and the sampler, and the rule that says which layer may import which.
+      - name: Run the unit tests
+        run: python -m pytest pruner/shared -q

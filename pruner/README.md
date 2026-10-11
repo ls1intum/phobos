@@ -40,7 +40,8 @@ host, so the container mounts the repository's layout: `protecter/test` at `/rep
 
 The suites that need the prune image, a Docker network or a KVM guest. `layer_prune_observer.sh`,
 `layer_prune.sh`, `layer_prune_egress.sh` and the record suites run inside the prune image that the
-`run-phase` job of `build.yml` builds; `layer_prune_maven.sh` is run by `prune-maven.yml` and
+`java-image` job of `build.yml` builds, in its `Exercise-Pruner e2e tests` and `Runtime-Pruner e2e
+tests` jobs; `layer_prune_maven.sh` is run by `prune-maven.yml` and
 `kvm_fixture_result.sh` by `prune-kvm.yml`.
 
 | Suite | What it proves | Skips when |
@@ -56,12 +57,14 @@ The suites that need the prune image, a Docker network or a KVM guest. `layer_pr
 | `record_networked.sh` | run on the host with the prune image and a Docker network that has no route out: a stand-in server answers DNS and TLS for `api.phobos.test`; the recorded HTTPS session becomes `allow api.phobos.test:443` with the note that the policy needs `--resolver`, the replay under the egress broker passes, and the server's address and the name on the plain port are refused | never |
 | `record_host.sh` | run on the host: starts the record suites above, one container per phase, and checks that the run-phase image holds no strace and refuses the recorder | never |
 | `kvm_fixture_result.sh` | run on the host by the manual `prune-kvm.yml`, after its guest, on the layer pruner's fixture with `FIXTURE_UDP=1`: the guest verified the policy on Landlock version 10 or later, compared a non-empty set of refusals strace attributed with the kernel's records without a mismatch, added exactly one row, `allow 5000 udp`, in a sidecar whose SHA-256 the record names, and the orchestrator writes it to `Abi10-java.cfg`, keeps it out of the base and refuses a sidecar changed afterwards | the guest could not boot or observe, which is a failure of the job, not a skip |
-| `stage_prune_inputs.sh` | run on the host by `test.yml`: `.github/scripts/stage-prune-inputs.sh` stages a reference with the exercises the pruner's discovery assigns to the key, in the two-level tree, and the fixture under `java-gradle`; a tree the pruner would refuse ends it with a failure before an earlier staging is deleted | never |
+| `stage_prune_inputs.sh` | run on the host by the `Exercise-Pruner e2e tests` job of `build.yml`: `.github/scripts/stage-prune-inputs.sh` stages a reference with the exercises the pruner's discovery assigns to the key, in the two-level tree, and the fixture under `java-gradle`; a tree the pruner would refuse ends it with a failure before an earlier staging is deleted | never |
 | `runner-capability-probe.sh` | not a suite: it answers what a machine can do, and is run by `runner-capabilities.yml` on request, on each hosted runner image for the KVM question. It reports for itself rather than through the harness, because its statuses are its own | it is a diagnostic; the assert modes answer 0, 1 or 3. `--assert-kvm` needs QEMU and a readable kernel image, and `--assert-ptrace` needs gcc with a static libc and docker; each says indeterminate without them |
 
-## Python suites, run by the `Python helpers` job of `test.yml`
+## Python suites, run by the pruner unit test jobs of `test.yml`
 
-The second job of the same workflow installs pytest and runs `python -m pytest pruner`.
+Three jobs of `test.yml` install pytest and each runs `python -m pytest` on one folder:
+`Exercise-Pruner unit tests` on `pruner/exercise_pruner`, `Runtime-Pruner unit tests` on
+`pruner/runtime_pruner` and `Shared-Pruner unit tests` on `pruner/shared`.
 It needs no container and no compiler: the artefacts are written as the layer pruner writes them,
 and the runs are replaced by stand-ins, so these drive the helpers alone.
 
@@ -80,8 +83,8 @@ and the runs are replaced by stand-ins, so these drive the helpers alone.
 
 ## The prune image's observer, run by `build.yml` inside the prune image
 
-`docker/pruner/layers/Dockerfile` builds the prune image on the run-phase image the same
-job has just tested, adding `strace` and `python3` and replacing the base policy with
+`docker/pruner/layers/Dockerfile` builds the prune image on the run-phase image the
+`java-image` job of `build.yml` has just built, adding `strace` and `python3` and replacing the base policy with
 `BasePrune.cfg`, which grants nothing. The suite runs in an ordinary container with
 `--network none`, `--memory` and `--pids-limit`, with `protecter/test/` and `pruner/` mounted
 read-only.
@@ -91,11 +94,12 @@ read-only.
 | `layer_prune_observer.sh` | the prune image ships `BasePrune.cfg` as its only base and `phobos-policysystem.sh` accepts it, `strace` records a Landlock refusal made inside the `phobos.sh` chain with its path and errno while a permitted read beside it succeeds, and the parser and attribution turn that record into exactly one filesystem denial and none for the permitted read |
 ## The Python run-phase image, run by the `run-phase-python` job of `build.yml`
 
-The prune image is built on the Python run-phase image there and prunes
-`exercises/python/python-reference`, which has to end in a policy, on every event. The weekly run and a
-dispatch with `scope: full` also run `layer_prune_observer.sh`, `layer_prune.sh` and
-`layer_prune_egress.sh` on it, whose aborts for the wrong reason and declared hosts the reference
-exercise does not reach; on every other event they run on the Java image alone.
+That job runs only in the weekly run (amd64) and in a dispatch with `scope: full` (amd64 and arm64),
+never for a pull request. The prune image is built on the Python run-phase image there and prunes
+`exercises/python/python-reference`, which has to end in a policy, and `layer_prune_observer.sh`,
+`layer_prune.sh` and `layer_prune_egress.sh` run on it too, whose aborts for the wrong reason and
+declared hosts the reference exercise does not reach; on every other event they run on the Java
+image alone.
 
 ## The C (FACT) run-phase image, run by the `run-phase-c-fact` job of `build.yml`
 

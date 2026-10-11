@@ -122,16 +122,16 @@ layer off, call `phobos.sh` directly.
 
 ### The linters, which are the gate
 
-`lint.yml` runs nine checks as the steps of one job, and `actionlint.yml` lints the workflows beside it, weekly
-as well as on a change under `.github`. Neither is the whole of CI: `test.yml` runs the shell and
-Python suites, `build.yml` builds the images for amd64 and arm64, runs the two C unit suites
-and holds the run-phase image to the Landlock acceptance suites and the protection matrix inside
-it, `codeql.yml` scans, `pullrequest-template.yml` checks the body, and `documentation-ci.yml`
+`lint.yml` runs ten checks, `actionlint` among them, as the steps of one job, on every change and weekly.
+It is not the whole of CI: `test.yml` runs the unit tests of the protecter and of the pruners,
+`build.yml` builds the Java run-phase image once and holds it to the end-to-end suites of each layer
+and of each pruner (and, weekly or on a full dispatch, builds the Python, C and R images),
+`codeql.yml` scans, `pullrequest-template.yml` checks the body, and `documentation-ci.yml`
 holds the documentation site to its own gate (see `documentation/README.md`). Its checks are the ones you can run in full by hand before opening a pull request.
 
 ```
-# Same file sets and same flags as CI. Together these are the checks of lint.yml plus
-# actionlint, and the C check is two
+# Same file sets and same flags as CI. Together these are the checks of lint.yml, and the C
+# check is two
 # steps rather than one: the compiler gate runs before cppcheck and fails on any warning.
 find . -name '*.sh'  -type f -print0 | xargs -0 shellcheck -x -S warning
 ( failed=0; while IFS= read -r f; do gcc-14 -std=gnu23 -fsyntax-only -Wall -Wextra -Werror -fanalyzer "$f" || failed=1; done < <(find . -name '*.c' -type f); exit "$failed" )

@@ -16,8 +16,8 @@ another branch rather than `main` is part of a stack; do not rebase it onto `mai
 Every workflow filters its `pull_request` trigger on `main`, so a stacked pull request gets no
 checks of its own: start `build.yml`, `lint.yml`, `test.yml` and `codeql.yml` on its branch with
 `workflow_dispatch`, link the runs in the pull request, and run the template checker locally. A
-dispatch of `build.yml` runs what a pull request runs; give it `scope: full` for every suite each image
-is held to, on both architectures.
+dispatch of `build.yml` runs what a pull request runs; give it `scope: full` to add the Python, C and R
+images, on amd64 and arm64.
 
 ## The sandbox is the product, so never widen it quietly
 
@@ -133,43 +133,42 @@ is never normalised, though none is shipped.
 
 **Rule:**
 
-- Never check a compiled binary in. The `run-phase` job in `build.yml` builds the image for
-  amd64 and arm64 on native runners and, on the copies each image ships, checks with `readelf`
-  that all four are position-independent (`Type: DYN`) with full RELRO (`BIND_NOW`), so both
-  architectures are built and checked on every run. amd64 runs every suite on every run; a pull
-  request runs the acceptance group alone on arm64, and a push to `main`, the weekly run and a
-  dispatch with `scope: full` run every suite there too. Publishing the multi-arch image is a manual
-  step (below).
+- Never check a compiled binary in. Every run-phase image build checks with `readelf`, on the
+  copies the image ships, that all four are position-independent (`Type: DYN`) with full RELRO
+  (`BIND_NOW`). The `java-image` job in `build.yml` builds the Java image once, for amd64 on a native
+  runner, on every run, and every end-to-end job of `build.yml` tests that one image; CI does not
+  test the Java image on arm64. The Python, C and R images are built for amd64 by the weekly run and for
+  amd64 and arm64 by a dispatch with `scope: full`, and never for a pull request. Publishing is a
+  manual step (below).
 - Where the connect guard binary is missing the network layer ends the run with PHB-ERUNTIME
   rather than running without connect supervision, so a bare checkout with nothing built does
   not run: the delivery vehicle is the image.
 - To rebuild and check the image locally, build it and run the acceptance suites inside it, as
-  the run-phase job does; the exact commands are in the run-phase section of `build.yml` and in
+  the end-to-end jobs do; the exact commands are in the end-to-end jobs of `build.yml` and in
   CLAUDE.md.
 
 ## Publishing the run-phase image
 
-CI builds and tests the run-phase image on both architectures but does not publish it, so no
-registry credentials live in the workflow. A maintainer publishes it by hand, from a commit a full run
-of `build.yml` has proven: for the Java image the run of the push to `main`, and for any other language
-image the weekly run or a dispatch with `scope: full` on that very commit, since only those hold it to
-the reporter, and the Python image to the layer pruner's own suites too. It goes to the maintainer's own
-registry namespace (for example `markuspaulsen/phobos`), from the repository root:
+CI builds and tests the run-phase images but does not publish them, so no registry credentials live
+in the workflow. A maintainer publishes an image by hand, only for the architectures CI has proven it
+on, from a commit a run of `build.yml` has proven: the Java image from the run of the push to `main`,
+which holds it on amd64 alone, so it is published for amd64 alone; any other language image from a
+dispatch with `scope: full` on that very commit, which holds it on amd64 and arm64. It goes to the
+maintainer's own registry namespace (for example `markuspaulsen/phobos`), from the repository root:
 
 ```
 CTX="$(mktemp -d)"
 .github/scripts/assemble-run-phase-context.sh "$CTX"
 docker login                 # to the registry the tag below names
-docker buildx build --platform linux/amd64,linux/arm64 \
+docker buildx build --platform linux/amd64 \
   -f docker/protecter/java/Dockerfile -t <namespace>/phobos:latest --push "$CTX"
 ```
 
 The Python run-phase image is published the same way from `docker/protecter/python/Dockerfile`,
-under a tag of its own (for example `<namespace>/phobos-python:latest`).
-
-`buildx --push` builds both architectures and pushes one multi-arch manifest, so a `docker pull`
-selects the puller's architecture. The per-architecture acceptance suites ran natively in CI;
-this step only packages and publishes. An image that embeds Phobos, such as a grading image,
+under a tag of its own (for example `<namespace>/phobos-python:latest`), with
+`--platform linux/amd64,linux/arm64`: `buildx --push` then builds both architectures and pushes one
+multi-arch manifest, so a `docker pull` selects the puller's architecture. The suites ran natively in
+CI; this step only packages and publishes. An image that embeds Phobos, such as a grading image,
 then pulls it with `COPY --from=<namespace>/phobos:latest`.
 - `.gitignore` covers `*.o` and `*.a`, not `*.so`, for that reason.
 
