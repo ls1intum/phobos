@@ -1264,4 +1264,3 @@ jobs:
             --entrypoint python3 phobos-prune-layers-c-gcc:ci \
             /var/tmp/helpers/exercise_pruner/src/interface/main.py c-gcc
           test -n "$(find "${output}" -maxdepth 1 -name '*gcc-reference.cfg' -size +0)"
-
