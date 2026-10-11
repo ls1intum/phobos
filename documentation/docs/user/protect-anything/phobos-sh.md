@@ -60,6 +60,12 @@ The C image for Artemis exercises that use the FACT template is built from
 executing a program the run itself wrote, in the directory of the submission only. It did not permit this
 before, and the FACT reference exercise is the reason: its tester compiles the submission and runs the result.
 
+The R image for Artemis exercises that use the R template is built from `docker/protecter/r/docker-compose.yaml`
+and carries `BaseLanguage-r.cfg`. It starts from the official Debian image with the R that Debian packages, not
+from Artemis's `artemis-r-docker`, so an Artemis R exercise graded under Phobos must select this image. The
+exercise installs its packages into `R_LIBS_USER`, a library under the working directory. The image does not
+set that variable. The grading script sets it and creates the directory, as the reference's `build_script.sh` does.
+
 ## Running a command
 
 ```bash

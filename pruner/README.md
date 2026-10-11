@@ -91,15 +91,22 @@ read-only.
 | `layer_prune_observer.sh` | the prune image ships `BasePrune.cfg` as its only base and `phobos-policysystem.sh` accepts it, `strace` records a Landlock refusal made inside the `phobos.sh` chain with its path and errno while a permitted read beside it succeeds, and the parser and attribution turn that record into exactly one filesystem denial and none for the permitted read |
 ## The Python run-phase image, run by the `run-phase-python` job of `build.yml`
 
-The prune image is built on the Python run-phase image there and runs `layer_prune_observer.sh`,
-`layer_prune.sh` and `layer_prune_egress.sh`, and prunes `exercises/python/python-reference`, which has
-to end in a policy.
+The prune image is built on the Python run-phase image there and prunes
+`exercises/python/python-reference`, which has to end in a policy, on every event. The weekly run and a
+dispatch with `scope: full` also run `layer_prune_observer.sh`, `layer_prune.sh` and
+`layer_prune_egress.sh` on it, whose aborts for the wrong reason and declared hosts the reference
+exercise does not reach; on every other event they run on the Java image alone.
 
 ## The C (FACT) run-phase image, run by the `run-phase-c-fact` job of `build.yml`
 
 The prune image is built on the C run-phase image there and prunes `exercises/c/fact-reference`, which has
 to end in a policy. That exercise declares `runs_compiled_programs` in its `prune.json`, because the program
 FACT compiles and then runs is written by the run itself.
+
+## The R run-phase image, run by the `run-phase-r` job of `build.yml`
+
+The prune image is built on the R run-phase image there and prunes `exercises/r/r-reference`, which has
+to end in a policy. The seed `r.cfg` grants `/tmp`, where R names its temporaries at random.
 
 ## The environment variables the suites read
 
