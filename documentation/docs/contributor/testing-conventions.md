@@ -28,16 +28,24 @@ non-zero on a failure.
 | Shell unit suites | `protecter/test/unit/<core component>/*.sh` | a shell | the `Shell suites` job of `test.yml` |
 | Python suites | `pruner/` | pytest | the `Python helpers` job of `test.yml` |
 | C unit suites | `protecter/test/unit/phobos-landlock-filesystem-and-networksystem/`, `protecter/test/unit/phobos-seccomp-networksystem/`, `protecter/test/unit/phobos-seccomp-filesystem/` | `gcc-14`, no kernel feature | the `unit` job of `build.yml` |
-| Acceptance suites | `protecter/test/integration/landlock-filesystem-and-networksystem-acceptance/` | the run-phase image, an ordinary container | the groups of the `run-phase` job of `build.yml`, on amd64 and arm64 |
-| Protection matrix | `protecter/test/integration/protection-matrix/` | the run-phase image, an ordinary container | the groups of the `run-phase` job of `build.yml`, on amd64 and arm64 |
+| Acceptance suites | `protecter/test/integration/landlock-filesystem-and-networksystem-acceptance/` | the run-phase image, an ordinary container | the groups of the `run-phase` job of `build.yml`, on amd64 and arm64 on every event |
+| Protection matrix | `protecter/test/integration/protection-matrix/` | the run-phase image, an ordinary container | the groups of the `run-phase` job of `build.yml`, on amd64 on every event and on arm64 as described below |
 
 The `run-phase` job is a matrix of parallel groups on each architecture: `acceptance`, `matrix-a`,
 `matrix-b`, `recorder-and-egress` and `pruner`. A group is a slice of the suites, so one slow
-suite no longer makes every run wait for the sum of all of them. The Python run-phase image has
-its own job with the groups `suites-a`, `suites-b`, `pruner-a` and `egress`. It holds that image to
-every suite that needs no Java, while the acceptance suites that compile Java probes or run Maven
-stay with the Java image. On the free plan GitHub runs at most 20 jobs at once, so every new group
-counts against that limit.
+suite no longer makes every run wait for the sum of all of them. amd64 runs every group on every
+event. A pull request, and a dispatch that leaves `scope` at `pull-request`, runs only `acceptance` on
+arm64. That group holds the reporter, whose table of trapped calls differs between the architectures.
+A push to `main`, the weekly run and a dispatch with `scope: full` run every group there too.
+
+The Python, C and R run-phase images compile their own C programs, so each has one job per
+architecture. On every event it holds the image to its reference exercise and to the layer pruner
+pruning that exercise. The same job runs the five acceptance suites that need no Java:
+`network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`, `seccomp-networksystem-test.sh` and
+`network-cleanup-test.sh`. The weekly run and a dispatch with `scope: full` add `reporting.sh` on each of them, and the
+layer pruner's own suites on the Python image. The rest of the protection matrix runs on the Java
+image only. On the free plan GitHub runs at most 20 jobs at once, so every new group counts against
+that limit.
 
 Some integration suites run elsewhere. They need the prune image that the `run-phase` job of
 `build.yml` builds on the run-phase image, so the `pruner` and `recorder-and-egress` groups run
@@ -113,8 +121,8 @@ bind refused by a Landlock bind-port rule, Landlock scoping against signals and 
 the connect guard inside the image, and the network layer leaving nothing behind. That last
 suite checks that no HAProxy remains and that `/etc/hosts` is byte for byte as it was, even
 after a `SIGKILL`ed timeout and two overlapping runs.
-The job runs on both architectures, and the image build checks with `readelf` that the three
-compiled programs are position independent with full RELRO.
+The `acceptance` group runs on both architectures on every event, and the image build checks with
+`readelf` that the four compiled programs are position independent with full RELRO.
 
 ## The protection matrix
 
