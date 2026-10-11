@@ -4184,12 +4184,12 @@ static void test_signalling_through_a_process_descriptor(void) {
     pid_t self = getpid();
     char name[48];
     snprintf(name, sizeof(name), "/proc/%d/stat", self);
-    if (access(name, R_OK) != 0) {
+    int descriptor = open(name, O_RDONLY);
+    if (descriptor < 0) {
         printf("  (no /proc here)\n");
         return;
     }
     char text[1024];
-    int descriptor = open(name, O_RDONLY);
     ssize_t length = read(descriptor, text, sizeof(text) - 1);
     close(descriptor);
     text[length > 0 ? length : 0] = '\0';
