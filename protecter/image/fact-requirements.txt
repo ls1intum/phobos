@@ -1,9 +1,9 @@
 Arpeggio==2.0.3
 attrs==25.4.0
-clang==14.0
+clang==14.0.6
 coverage==7.13.4
 et_xmlfile==2.0.0
-iniconfig==2.3.0
+iniconfig==2.3.1
 jsonschema==4.26.0
 jsonschema_specifications==2025.9.1
 networkx==3.6.1
@@ -12,7 +12,7 @@ openpyxl==3.1.5
 packaging==26.0
 pandas==3.0.1
 pluggy==1.6.0
-Pygments==2.19.2
+Pygments==2.21.0
 pytest==9.0.3
 pytest_cov==7.0.0
 python_dateutil==2.9.0.post0
