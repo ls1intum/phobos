@@ -111,7 +111,7 @@ integration requirement in SECURITY.md.
 # On a host: build the image, run a command in an ordinary container with limits, prune and record
 ./phobos-cli.sh build java
 ./phobos-cli.sh run --exercise ./my-exercise --config exercise.cfg -- ./gradlew test
-./phobos-cli.sh prune python        # one Compose service, rebuilt first; "prune all" runs the thirteen jobs in order
+./phobos-cli.sh prune python        # one Compose service, rebuilt first; "prune all" runs the fifteen jobs in order
 ./phobos-cli.sh record generate --name tool
 ./phobos-cli.sh --dry-run run --exercise ./my-exercise -- true    # print the commands, start nothing
 ```
@@ -172,7 +172,7 @@ docker compose -f docker/protecter/python/docker-compose.yaml up --build
 Each prune container works independently on its language and writes its result into the
 shared `build/pruner/path_sets` directory; nothing passes between containers except through
 `build/pruner`. Each language's prune needs its run-phase image (`phobos-run-phase-java`,
-`phobos-run-phase-python`, `phobos-run-phase-c-fact`, `phobos-run-phase-r`, `phobos-run-phase-c-gcc`) built first, and each `verify_*` service re-runs the
+`phobos-run-phase-python`, `phobos-run-phase-c-fact`, `phobos-run-phase-r`, `phobos-run-phase-c-gcc`, `phobos-run-phase-cpp`) built first, and each `verify_*` service re-runs the
 exercises under the merged configuration at the end.
 
 ### The host
@@ -236,7 +236,7 @@ pruner/                    the pruners, which discover what a policy needs
 docker/pruner/             the layer pruner's image and the orchestrator's
   layers/                  the layer pruner's image: the run-phase image, strace, the probe, an empty base
   orchestrate/             the orchestrator's image
-docker/protecter/          the images an exercise actually runs in, one per language (java/, python/, c-fact/, r/, c-gcc/)
+docker/protecter/          the images an exercise actually runs in, one per language (java/, python/, c-fact/, r/, c-gcc/, cpp/)
 exercises/                 the reference exercises: the pruners' input and the protecter's acceptance fixtures
 phobos-cli.sh              one command line for phobos.sh, the layer pruner, the recording pruner and the image build; on a host it
                            starts Docker, in an image it starts what the image holds, and it refuses every switch that turns a layer off

@@ -1,0 +1,17 @@
+services:
+  phobos-runner:
+    build:
+      # The Dockerfile copies files and folders that live in several directories of this
+      # repository, so the context has to be assembled first, as for the Java image.
+      #
+      # Run this from the repository root before `docker compose build`:
+      #   .github/scripts/assemble-run-phase-context.sh build/run-phase-context
+      context: ../../../build/run-phase-context
+      dockerfile: ../../docker/protecter/cpp/Dockerfile
+    image: phobos-run-phase-cpp
+    stdin_open: true
+    tty: true
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - "exec /bin/bash"

@@ -113,6 +113,12 @@ end in a policy. That exercise declares `runs_compiled_programs` (the tester run
 `uses_pseudo_terminals` (it starts the program on a pseudo-terminal) and `address_space_unbounded` (the sanitizers
 reserve terabytes). The seed `c.cfg` grants `/tmp`, where gcc names its temporaries at random.
 
+## The C++ run-phase image, run by the `run-phase-cpp` job of `build.yml`
+
+The prune image is built on the C++ run-phase image there and prunes `exercises/cpp/cpp-reference`, which has to
+end in a policy. That exercise declares the same three settings as the GCC one, and `compiled_programs_directory`
+as `test`, because CMake builds into the tests directory. The seed `cpp.cfg` grants `/tmp`.
+
 ## The environment variables the suites read
 
 | Variable | Read by | Meaning |

@@ -92,11 +92,11 @@ sorted into the layers domain, infrastructure, application and interface (`prune
 - `cfgfile.py` writes the result as a policy the parser accepts.
 
 The image, `docker/pruner/layers/Dockerfile`, adds `strace` and `python3` to the run-phase
-image of the language being pruned (`phobos-run-phase-java`, `phobos-run-phase-python`, `phobos-run-phase-c-fact`, `phobos-run-phase-r` or `phobos-run-phase-c-gcc`). Its only base, `BasePrune.cfg`, grants nothing, so every grant in a pruned policy has a
+image of the language being pruned (`phobos-run-phase-java`, `phobos-run-phase-python`, `phobos-run-phase-c-fact`, `phobos-run-phase-r`, `phobos-run-phase-c-gcc` or `phobos-run-phase-cpp`). Its only base, `BasePrune.cfg`, grants nothing, so every grant in a pruned policy has a
 refusal behind it.
 
 `phobos-cli.sh prune <key>` runs one Compose service of the layer pruner, rebuilt first, and `phobos-cli.sh prune all`
-runs the thirteen jobs of the pipeline in order and stops at the first that fails (see
+runs the fifteen jobs of the pipeline in order and stops at the first that fails (see
 [`phobos-cli.sh`](/user/protect-anything/phobos-cli-sh)). Compose itself runs the layer pruner for every language. Build the prune image on a run-phase image and prune every
 exercise under one key by hand, in an ordinary container:
 
@@ -140,7 +140,9 @@ Five rules for an exercise are worth knowing:
   write-class right as well, except for the exception in the next rule.
 - An exercise whose tests run the programs they compile, as the C templates of Artemis do, declares
   `"runs_compiled_programs": true` in `prune.json`. Only then does the pruner grant `[execute]` on the assignment directory of the working directory,
-  which holds a write-class right, and only there. The submission can then run any file it
+  which holds a write-class right, and only there. `"compiled_programs_directory": "test"` names another directory
+  of the working directory, for a build that compiles elsewhere. It must exist before the run, because the pruner
+  grants what the run met beneath an existing directory. The submission can then run any file it
   writes into that directory. Without the declaration, a run that executes what it wrote gets no execute grant.
 - An exercise whose tests open a pseudo-terminal, as the C GCC and C++ templates of Artemis do, declares
   `"uses_pseudo_terminals": true` in `prune.json`. Only then does the pruner grant `[read]`, `[write]` and
@@ -236,6 +238,19 @@ on the solution's directory beside write, and `uses_pseudo_terminals`, so the ba
 `[ioctl]` on `/dev/pts`. The tester builds with the sanitizers, which need more address space than the default
 memory cap allows, so the exercise's own file sets `mem_mb=0`.
 
+`protecter/src/config/BaseLanguage-cpp.cfg` is the result for the C++ reference exercise built with Artemis's C++
+template, on the C++ run-phase image. CMake builds into the tests directory, so the exercise declares
+`compiled_programs_directory` as `test`, and the base keeps execute on `/var/tmp/testing-dir/test` beside write. It
+declares `uses_pseudo_terminals` and `address_space_unbounded` as the GCC exercise does. The sanitizer runtime reads
+per-run names under `/proc`, so the base reads `/proc` whole. The reference runs with leak detection off
+(`ASAN_OPTIONS=detect_leaks=0`) and with longer test timeouts, because the pruner observes it with `strace`, under
+which LeakSanitizer aborts and CMake runs several times slower.
+
+That base writes the whole tests directory, which holds the tester. Code that the build runs, such as a
+`CMakeLists.txt` of the submission, can therefore change the tester's files between its phases. The GCC base has
+the same property for the whole working directory. Neither base stops a submission from tampering with its own
+grading; they stop it from reaching anything outside the working directory.
+
 Each base is only as good as its reference exercise. An exercise that needs a path the
 reference never touched fails until its own exercise configuration grants that path.
 
@@ -299,7 +314,7 @@ than shrinking it. An aborted exercise stops the merge as well.
 
 Everything goes under `build/pruner/config`, which the orchestrator and the verify services mount. A last container per
 language runs every exercise once more under exactly that pair, the base and the exercise file, as grading applies them.
-These are `verify_java_gradle`, `verify_java_maven`, `verify_python`, `verify_c_fact`, `verify_r` and `verify_c_gcc`. Each writes its
+These are `verify_java_gradle`, `verify_java_maven`, `verify_python`, `verify_c_fact`, `verify_r`, `verify_c_gcc` and `verify_cpp`. Each writes its
 records to `path_sets/verify/`.
 
 :::warning[Ship exactly one `Base*.cfg` per runtime environment]

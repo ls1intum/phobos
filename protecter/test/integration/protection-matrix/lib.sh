@@ -44,9 +44,9 @@ fi
 # Only the bases the images ship are accepted, so a stale or stray base (an old name, a BasePhobos.cfg) is a
 # failure here rather than the file the matrix quietly replaces.
 case "${PM_BASES[0]##*/}" in
-  BaseLanguage-java-gradle.cfg | BaseLanguage-python.cfg | BaseLanguage-c-fact.cfg | BaseLanguage-r.cfg | BaseLanguage-c-gcc.cfg | "") ;;
+  BaseLanguage-java-gradle.cfg | BaseLanguage-python.cfg | BaseLanguage-c-fact.cfg | BaseLanguage-r.cfg | BaseLanguage-c-gcc.cfg | BaseLanguage-cpp.cfg | "") ;;
   *)
-    echo "the image ships ${PM_BASES[0]##*/}, which is none of BaseLanguage-java-gradle.cfg, BaseLanguage-python.cfg, BaseLanguage-c-fact.cfg, BaseLanguage-r.cfg and BaseLanguage-c-gcc.cfg" >&2
+    echo "the image ships ${PM_BASES[0]##*/}, which is none of BaseLanguage-java-gradle.cfg, BaseLanguage-python.cfg, BaseLanguage-c-fact.cfg, BaseLanguage-r.cfg, BaseLanguage-c-gcc.cfg and BaseLanguage-cpp.cfg" >&2
     exit 1
     ;;
 esac

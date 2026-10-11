@@ -356,13 +356,13 @@ has_pair --project-directory "${REPOSITORY}" && ok "Compose is anchored to the c
 has_pair -f "${REPOSITORY}/docker-compose.yaml" && ok "and to the checkout's compose file, not the one in the working directory" || bad "and to the checkout's compose file" "${OUT}"
 has_pair --env-file /dev/null && ok "a .env file is not read" || bad "a .env file is not read" "${OUT}"
 has_line COMPOSE_DISABLE_ENV_FILE=1 && ok "implicit .env loading is switched off" || bad "implicit .env loading is switched off" "${OUT}"
-for name in COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_PATH_SEPARATOR COMPOSE_ENV_FILES RUN_PHASE_IMAGE RUN_PHASE_IMAGE_PYTHON RUN_PHASE_IMAGE_C_FACT RUN_PHASE_IMAGE_R RUN_PHASE_IMAGE_C_GCC; do
+for name in COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_PATH_SEPARATOR COMPOSE_ENV_FILES RUN_PHASE_IMAGE RUN_PHASE_IMAGE_PYTHON RUN_PHASE_IMAGE_C_FACT RUN_PHASE_IMAGE_R RUN_PHASE_IMAGE_C_GCC RUN_PHASE_IMAGE_CPP; do
   has_pair -u "${name}" && continue
   bad "${name} is unset for the call" "${OUT}"
 done
 ok "the variables that select a file, a project or a profile are unset"
 has_line prune_java_gradle && has_line --build && has_line --no-deps && ok "the service is rebuilt and started alone" || bad "the service is rebuilt and started alone" "${OUT}"
-for key in "java-gradle prune_java_gradle" "java-maven prune_java_maven" "python prune_python" "c-fact prune_c_fact" "r prune_r" "c-gcc prune_c_gcc"; do
+for key in "java-gradle prune_java_gradle" "java-maven prune_java_maven" "python prune_python" "c-fact prune_c_fact" "r prune_r" "c-gcc prune_c_gcc" "cpp prune_cpp"; do
   cli --dry-run prune "${key%% *}"
   has_line "${key##* }" && ok "prune ${key%% *} runs ${key##* }" || bad "prune ${key%% *} runs ${key##* }" "${OUT}"
 done
@@ -380,14 +380,14 @@ if grep -q "java-gradle" <<<"${ERR}"; then ok "and the refusal names java-gradle
 cli --dry-run prune
 expect_refused "prune without a key is refused" "${PHB_EXIT_USAGE}"
 cli --dry-run prune all
-check "prune all builds thirteen commands" 13 "$(count_line COMMAND)"
-order="$(grep -E '^(prune_java_gradle|prune_java_maven|prune_python|prune_c_fact|prune_r|prune_c_gcc|orchestrate|verify_java_gradle|verify_java_maven|verify_python|verify_c_fact|verify_r|verify_c_gcc)$' <<<"${OUT}" | tr '\n' ' ')"
-check "in the order of the pipeline" "prune_java_gradle prune_java_maven prune_python prune_c_fact prune_r prune_c_gcc orchestrate verify_java_gradle verify_java_maven verify_python verify_c_fact verify_r verify_c_gcc " "${order}"
+check "prune all builds fifteen commands" 15 "$(count_line COMMAND)"
+order="$(grep -E '^(prune_java_gradle|prune_java_maven|prune_python|prune_c_fact|prune_r|prune_c_gcc|prune_cpp|orchestrate|verify_java_gradle|verify_java_maven|verify_python|verify_c_fact|verify_r|verify_c_gcc|verify_cpp)$' <<<"${OUT}" | tr '\n' ' ')"
+check "in the order of the pipeline" "prune_java_gradle prune_java_maven prune_python prune_c_fact prune_r prune_c_gcc prune_cpp orchestrate verify_java_gradle verify_java_maven verify_python verify_c_fact verify_r verify_c_gcc verify_cpp " "${order}"
 declared="$(awk '/^  [a-z_]+:$/ { name = $1; sub(":", "", name) } /command: \["--(stage|verify|langs)"/ { print name }' "${REPOSITORY}/docker-compose.yaml" | sort | tr '\n' ' ')"
-listed="$(grep -E '^(prune_java_gradle|prune_java_maven|prune_python|prune_c_fact|prune_r|prune_c_gcc|orchestrate|verify_java_gradle|verify_java_maven|verify_python|verify_c_fact|verify_r|verify_c_gcc)$' <<<"${OUT}" | sort | tr '\n' ' ')"
+listed="$(grep -E '^(prune_java_gradle|prune_java_maven|prune_python|prune_c_fact|prune_r|prune_c_gcc|prune_cpp|orchestrate|verify_java_gradle|verify_java_maven|verify_python|verify_c_fact|verify_r|verify_c_gcc|verify_cpp)$' <<<"${OUT}" | sort | tr '\n' ' ')"
 check "and those are the services of docker-compose.yaml that carry a pipeline command" "${declared}" "${listed}"
 
-for position in 1 2 3 4 5 6 7 8 9 10 11 12 13; do
+for position in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
   statuses=()
   for ((call = 1; call < position; call++)); do statuses+=(0); done
   statuses+=($((40 + position)))
@@ -396,11 +396,11 @@ for position in 1 2 3 4 5 6 7 8 9 10 11 12 13; do
   check "prune all stops at the failing job ${position} with its status" "$((40 + position))" "${STATUS}"
   check "and runs no job after it" "${position}" "$(wc -l < "${LOG}" | tr -d ' ')"
 done
-plan 0 0 0 0 0 0 0 0 0 0 0 0 0
+plan 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
 cli prune all
-check "prune all ends with 0 when all thirteen jobs end with 0" 0 "${STATUS}"
-check "after exactly thirteen jobs" 13 "$(wc -l < "${LOG}" | tr -d ' ')"
-if [[ "$(grep -c -- '--build' "${LOG}")" == 13 ]]; then ok "every job is rebuilt first"; else bad "every job is rebuilt first" "$(cat "${LOG}")"; fi
+check "prune all ends with 0 when all fifteen jobs end with 0" 0 "${STATUS}"
+check "after exactly fifteen jobs" 15 "$(wc -l < "${LOG}" | tr -d ' ')"
+if [[ "$(grep -c -- '--build' "${LOG}")" == 15 ]]; then ok "every job is rebuilt first"; else bad "every job is rebuilt first" "$(cat "${LOG}")"; fi
 
 plan wait
 rm -f "${WORK}/started"

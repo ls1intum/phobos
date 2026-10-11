@@ -247,6 +247,31 @@ def test_an_exercise_declares_that_it_runs_what_it_compiles_only_by_saying_so(tm
     assert runner.read_exercise(directory).runs_compiled_programs is False
 
 
+@pytest.mark.parametrize("settings", ['{"compiled_programs_directory": "test"}',
+                                      '{"runs_compiled_programs": true, "compiled_programs_directory": "/abs"}',
+                                      '{"runs_compiled_programs": true, "compiled_programs_directory": "../x"}',
+                                      '{"runs_compiled_programs": true, "compiled_programs_directory": "a/../x"}',
+                                      '{"runs_compiled_programs": true, "compiled_programs_directory": "."}',
+                                      '{"runs_compiled_programs": true, "compiled_programs_directory": "test/./build"}',
+                                      '{"runs_compiled_programs": true, "compiled_programs_directory": ""}'])
+def test_a_compiled_programs_directory_must_be_a_plain_relative_path_and_needs_the_declaration(tmp_path, settings):
+    directory = tmp_path / "exercise"
+    directory.mkdir()
+    script(directory / "build_script.sh", "exit 0\n")
+    (directory / "prune.json").write_text(settings)
+    with pytest.raises(runner.ExerciseRefused):
+        runner.read_exercise(directory)
+
+
+def test_the_directory_of_the_compiled_programs_is_the_assignment_unless_the_exercise_names_another(tmp_path):
+    directory = tmp_path / "exercise"
+    directory.mkdir()
+    script(directory / "build_script.sh", "exit 0\n")
+    assert runner.read_exercise(directory).compiled_programs_directory == "assignment"
+    (directory / "prune.json").write_text('{"runs_compiled_programs": true, "compiled_programs_directory": "test/build"}')
+    assert runner.read_exercise(directory).compiled_programs_directory == "test/build"
+
+
 def test_a_status_phobos_could_not_read_is_a_pruner_defect_although_it_comes_after_the_command(tmp_path, environment,
                                                                                                monkeypatch):
     monkeypatch.setenv("FAKE_RUN", "1")
