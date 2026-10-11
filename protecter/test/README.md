@@ -102,6 +102,7 @@ run them by hand.
 | `python-policy-test.sh` | the Python reference exercise passes under the Python base the Python image ships (compileall, then pytest with its JUnit report), and a canary outside the base's directories, an overwrite of a file beside the working directory and a connection to an unnamed address are refused | never |
 | `network-port-test.sh` | a raw `connect()` syscall is still refused by Landlock's port rule |
 | `scoping-test.sh` | Landlock scoping: a sandboxed process can neither signal a process outside its domain nor reach an abstract UNIX socket there |
+| `ioctl-device-test.sh` | the ioctl right on a device and the `[ioctl]` section: a pseudo-terminal exchange works with read, write and ioctl on `/dev/pts`, stops at the first ioctl without the right, is refused at the open with the right alone, and another device stays refused; an entry on the link `/dev/ptmx` ends the run |
 | `process-groups-test.sh` | the supervisors' virtual sessions and groups: the tester pattern (setsid, getpgid, killpg) and SwiftPM's (posix_spawn with a group of zero) work and leave the tester alive, a program that did setsid is still ended at the timeout, the errors Linux gives for a group leader, a missing group, a non-child and a negative group, and the lock alone still refuses |
 | `seccomp-networksystem-test.sh` | the connect guard inside the image: an allowed destination connects, a forbidden one is refused, neither can be redirected, and a rule for one transport admits nothing on the other |
 
@@ -135,9 +136,9 @@ the kernel lacks, a missing tool or too few processor cores.
 
 The Python run-phase image (`docker/protecter/python/`) compiles its own four C programs. It is not
 built for a pull request: the weekly run builds it for amd64, and a dispatch with `scope: full` for
-amd64 and arm64. It is held to `python-policy-test.sh`, to `reporting.sh` and to the six acceptance
+amd64 and arm64. It is held to `python-policy-test.sh`, to `reporting.sh` and to the seven acceptance
 suites that need no Java and put those programs to a raw call they must refuse:
-`network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`, `process-groups-test.sh`, `seccomp-networksystem-test.sh` and
+`network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`, `ioctl-device-test.sh`, `process-groups-test.sh`, `seccomp-networksystem-test.sh` and
 `network-cleanup-test.sh`, in one looped step that names each suite and fails when any one does. The rest of the protection matrix runs on the Java image only.
 The pruner's suites on that image are listed in [`pruner/README.md`](../../pruner/README.md).
 
