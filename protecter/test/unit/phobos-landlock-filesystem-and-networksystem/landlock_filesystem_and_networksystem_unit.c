@@ -696,6 +696,15 @@ static void test_version_gate(void) {
     mock_landlock_version = 8;
     expect_exit("--minimum-landlock-version below the kernel runs", 0, lenient);
 
+    char *ioctl_only[] = {"phobos-landlock-filesystem-and-networksystem", "--rights=i", "/usr", "--", "/bin/true", NULL};
+    mock_landlock_version = 4;
+    expect_exit("an ioctl-only rule on a kernel below version 5 runs", 0, ioctl_only);
+    check("and hands the kernel no rule, which it would refuse as empty", record->path_rule_count == 0);
+    mock_landlock_version = 5;
+    expect_exit("the same rule on version 5 runs", 0, ioctl_only);
+    check("and hands the kernel the one rule", record->path_rule_count == 1);
+    mock_landlock_version = 8;
+
     mock_landlock_version = 99;
     expect_exit("a version newer than this build warns but runs", 0, plain);
     check("a newer kernel is reported as only partly restricted",

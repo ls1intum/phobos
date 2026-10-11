@@ -74,7 +74,7 @@ PHB_HOSTS_LOCK="/run/lock/phobos-hosts.lock"
 PHB_HOSTS_LOCK_WAIT_SECONDS=10
 
 # The files write_spec creates, the only ones remove_owned_spec_dir deletes.
-PHB_SPEC_FILES="read.paths execute.paths write.paths create.paths delete.paths ipc.paths symlink.paths refer.paths tail.flags net.rules net.guard.rules bind.rules accept.rules timeout.sec limits.conf"
+PHB_SPEC_FILES="read.paths execute.paths write.paths create.paths delete.paths ipc.paths symlink.paths refer.paths ioctl.paths tail.flags net.rules net.guard.rules bind.rules accept.rules timeout.sec limits.conf"
 
 # The subdirectory phobos.sh keeps its own scratch files in, so they live under the
 # specification directory and are removed with it rather than left in /tmp. phobos.sh ends

@@ -154,7 +154,7 @@ refused "the message names the file" "$(cfg_text '[limits]\ncolour=5\n')" "cfg."
 
 echo
 echo "== a path that is not absolute =="
-for section in read execute write create delete create-ipc create-symlink restructure; do
+for section in read execute write create delete create-ipc create-symlink restructure ioctl; do
   refused "[${section}] a name relative to a directory" "$(cfg_text "[${section}]\nrelative/path\n")" "not an absolute path" "[${section}]" "line 2"
 done
 # The tilde is the case: a policy line that starts with one must stay a tilde, which the parser does not expand.
@@ -183,7 +183,7 @@ refused "[write] with a wildcard" "$(cfg_text '[write]\n/tmp/*\n')" "holds a wil
 
 echo
 echo "== a path that does not exist =="
-for section in read execute; do
+for section in read execute ioctl; do
   refused "[${section}] a path that does not exist" "$(cfg_text "[${section}]\n/nonexistent/where\n")" "does not exist on this system" "[${section}]" "line 2"
 done
 for section in write create delete create-ipc create-symlink restructure; do
