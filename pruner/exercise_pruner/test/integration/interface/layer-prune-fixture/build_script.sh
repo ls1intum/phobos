@@ -8,7 +8,7 @@
 # below make it fail for a wrong reason, so the suite can show the pruner aborts instead of granting:
 #   FIXTURE_FLAKY=1           readsNeeded fails on every second run (a counter outside the exercise)
 #   FIXTURE_NO_SOURCE=1       prints Gradle's NO-SOURCE line and writes no report
-#   FIXTURE_SETSID=1          needs setsid, which the timeout's group lock refuses
+#   FIXTURE_RAW_SOCKET=1      needs a raw socket, which the connect guard refuses
 #   FIXTURE_NEEDS_NET=1       a test passes only when the external attempt is not refused by the sandbox
 #   FIXTURE_UNATTRIBUTABLE=1  writesOutput fails once no_new_privs is set, which every layered run sets
 #                             and no refused call shows; the external attempt is left out
@@ -107,9 +107,10 @@ s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 s.bind(("127.0.0.1", 5000))' 2>/dev/null && udp_status=0
 fi
 
-setsid_status=0
-if [[ "${FIXTURE_SETSID:-0}" == 1 ]]; then
-  setsid true || setsid_status=1
+raw_socket_status=0
+if [[ "${FIXTURE_RAW_SOCKET:-0}" == 1 ]]; then
+  python3 -S -c 'import socket
+socket.socket(socket.AF_PACKET, socket.SOCK_RAW)' 2>/dev/null || raw_socket_status=1
 fi
 
 mkdir -p "$REPORT_DIRECTORY"
@@ -120,7 +121,7 @@ mkdir -p "$REPORT_DIRECTORY"
   testcase writesOutput "$write_status"
   testcase talksToItsServer "$server_status"
   testcase reachesTheNetworkWhenItMust "$external_status"
-  testcase startsASession "$setsid_status"
+  testcase opensARawSocket "$raw_socket_status"
   [[ "${FIXTURE_DECLARED:-0}" == 1 ]] && testcase reachesItsDeclaredHost "$declared_status"
   [[ "${FIXTURE_UDP:-0}" == 1 ]] && testcase bindsAUdpPort "$udp_status"
   printf '</testsuite>\n'
