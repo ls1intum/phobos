@@ -132,7 +132,7 @@ def proc_denial(path: str, section: str, pid: int = 412) -> record.Denial:
 
 def test_a_write_on_a_per_run_name_is_reported_and_only_a_read_is_granted_on_its_stable_directory(tmp_path,
                                                                                                     monkeypatch):
-    monkeypatch.setattr(stages.control, "landlock_caused", lambda denial: True)
+    monkeypatch.setattr(stages.control, "landlock_caused", lambda denial, roots=(): True)
     found = pruning(tmp_path)
     snapshot = stages.generalise.Snapshot(existing=frozenset(), directories=frozenset(), scanned=())
     written = stages.filesystem_grants(found, [proc_denial("/proc/412/oom_score_adj", "write")], snapshot, {})

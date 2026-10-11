@@ -1,0 +1,17 @@
+{
+  "object": [
+    {
+      "mirror": "/opt/swift-deps/HTMLString",
+      "original": "https://github.com/alexaubry/HTMLString.git"
+    },
+    {
+      "mirror": "/opt/swift-deps/swift-ast",
+      "original": "https://github.com/yanagiba/swift-ast.git"
+    },
+    {
+      "mirror": "/opt/swift-deps/swift-junit",
+      "original": "https://github.com/allegro/swift-junit.git"
+    }
+  ],
+  "version": 1
+}

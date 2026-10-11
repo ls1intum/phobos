@@ -232,3 +232,50 @@ def test_a_refused_read_of_an_exited_process_s_status_is_landlock_caused():
                         errno="EACCES")
     assert control.landlock_caused(own) is True
     assert control.landlock_caused(read_denial(f"/proc/{exited}/status")) is False
+
+
+def execve_denial(path: str) -> record.Denial:
+    """A refused execve of one path, with the execute and read sections a refused program carries."""
+    return record.Denial(pid=1, layer=record.LAYER_FILESYSTEM, operation="execve", objects=(path,),
+                         sections=frozenset({attribute.SECTION_EXECUTE, attribute.SECTION_READ}),
+                         address=None, port=None, transport=None, errno="EACCES")
+
+
+def test_a_program_removed_again_beneath_a_declared_root_is_landlock_caused(tmp_path):
+    gone = str(tmp_path / "assignment" / ".tmp" / "manifest")
+    assert control.landlock_caused(execve_denial(gone), (str(tmp_path / "assignment"),)) is True
+
+
+def test_the_same_program_without_a_declared_root_is_not_landlock_caused(tmp_path):
+    gone = str(tmp_path / "assignment" / ".tmp" / "manifest")
+    assert control.landlock_caused(execve_denial(gone)) is False
+
+
+def test_a_program_removed_again_outside_the_declared_root_is_not_landlock_caused(tmp_path):
+    gone = str(tmp_path / "test" / "manifest")
+    assert control.landlock_caused(execve_denial(gone), (str(tmp_path / "assignment"),)) is False
+    sibling = str(tmp_path / "assignment-other" / "manifest")
+    assert control.landlock_caused(execve_denial(sibling), (str(tmp_path / "assignment"),)) is False
+
+
+def test_only_a_refused_execve_is_confirmed_for_a_removed_file(tmp_path):
+    gone = str(tmp_path / "assignment" / "file")
+    assert control.landlock_caused(read_denial(gone), (str(tmp_path / "assignment"),)) is False
+
+
+def test_a_path_that_cannot_be_looked_up_is_not_taken_for_a_removed_program(tmp_path):
+    closed = tmp_path / "assignment" / "closed"
+    closed.mkdir(parents=True)
+    (closed / "manifest").write_text("x")
+    closed.chmod(0)
+    try:
+        if running_as_root():
+            pytest.skip("root looks up inside a mode-000 directory")
+        assert control.landlock_caused(execve_denial(str(closed / "manifest")), (str(tmp_path / "assignment"),)) is False
+    finally:
+        closed.chmod(0o700)
+
+
+def test_a_path_that_climbs_out_of_the_declared_root_is_not_confirmed(tmp_path):
+    escaping = str(tmp_path / "assignment" / ".." / "test" / "manifest")
+    assert control.landlock_caused(execve_denial(escaping), (str(tmp_path / "assignment"),)) is False

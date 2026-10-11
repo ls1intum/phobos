@@ -28,7 +28,7 @@ on:
   workflow_dispatch:
     inputs:
       key:
-        description: "The key to prune and verify: java-gradle (the fixture, the Gradle exercise), python, c-fact or r"
+        description: "The key to prune and verify: java-gradle, java-maven, python, c-fact, r or swift"
         required: true
         default: java-gradle
         type: string
@@ -51,8 +51,8 @@ env:
   # A push has no inputs, so these are the fixture's.
   PRUNE_KEY: ${{ inputs.key || 'java-gradle' }}
   PRUNE_SOURCE: ${{ inputs.source || 'fixture' }}
-  # The run-phase image follows the key: python, c-fact and r have their own, every other key is a Java one.
-  RUN_PHASE: ${{ contains(fromJSON('["python","c-fact","r"]'), inputs.key) && inputs.key || 'java' }}
+  # The run-phase image follows the key: python, c-fact, r and swift have their own, every other key is a Java one.
+  RUN_PHASE: ${{ contains(fromJSON('["python","c-fact","r","swift"]'), inputs.key) && inputs.key || 'java' }}
 
 jobs:
   prune:
