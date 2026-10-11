@@ -36,16 +36,16 @@ end-to-end jobs as an artefact, so every one of them tests the same image. `Prot
 tests` runs first: the reference exercises and the guarantees every other suite rests on. Once it
 has passed, the others run in parallel, one per part of the protecter (`Policy`, `Filesystem`,
 `Networksystem`, `Timeoutsystem`, `Resourcesystem`, `Combined`, `Reporting` and `CLI`) and one per
-pruner. A layer's job also runs the integration suites of that layer that need no image, on the
-runner itself. The Java image runs on amd64 only.
+pruner. Each layer's job runs, on the runner itself, the integration suites of that layer that need
+no image. The Java image runs on amd64 only.
 
 The Python, C and R run-phase images compile their own C programs, so each has a job of its own.
 None of them runs for a pull request: the weekly run builds them for amd64, and a dispatch with
 `scope: full` for amd64 and arm64. Each holds its image to its reference exercise and to the layer
-pruner pruning that exercise, and runs the five acceptance suites that need no Java:
-`network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`, `seccomp-networksystem-test.sh` and
-`network-cleanup-test.sh`, together with `reporting.sh`, and on the Python image the layer pruner's
-own suites. The rest of the protection matrix runs on the Java image only. On the free plan GitHub
+pruner pruning that exercise. Each runs `reporting.sh` and the five acceptance suites that need no
+Java: `network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`,
+`seccomp-networksystem-test.sh` and `network-cleanup-test.sh`. The Python image runs the layer
+pruner's own suites too. The rest of the protection matrix runs on the Java image only. On the free plan GitHub
 runs at most 20 jobs at once, so every new job counts against that limit.
 
 Some integration suites run elsewhere. They need the prune image that the `java-image` job of
