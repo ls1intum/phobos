@@ -358,7 +358,7 @@ for file in "${CORE}"/config/language-configurations/*.cfg; do
       && determine_language_placeholder java.home && determine_language_placeholder java.io.tmpdir \
       && determine_language_placeholder user.home \
       && printf '%s ' "${LANGUAGE_CONFIGURATION_BASES[@]##*/}" "${#LANGUAGE_PLACEHOLDER_DEFINITIONS[@]}" "$LANGUAGE_PLACEHOLDER_VALUE") 2>&1)" || true
-  expected_base="BaseLanguage-java.cfg"
+  expected_base="BaseLanguage-java-gradle.cfg"
   if [[ "$name" == JAVA_USING_MAVEN_* ]]; then expected_base="BaseLanguage-java-maven.cfg"; fi
   check "${name} loads, names its base and determines its placeholders, user.home from the password database" "${expected_base} 3 ${REAL_HOME} " "$result"
 done

@@ -108,7 +108,7 @@ diagnose() {
 diagnose
 
 printf 'PHOBOS-KVM-KERNEL %s\n' "$(uname -r)"
-python3 /var/tmp/helpers/layer_prune/main.py --kernel-observer audit --output-dir /var/tmp/path_sets "${KEY}"
+python3 /var/tmp/helpers/exercise_pruner/src/interface/main.py --kernel-observer audit --output-dir /var/tmp/path_sets "${KEY}"
 status=$?
 # What the kernel wrote, for whoever reads the run: the records that replace the fixtures' written ones.
 dmesg | grep -E 'type=(1423|1424|LANDLOCK)' > /var/tmp/path_sets/audit-raw.log

@@ -53,7 +53,7 @@ reviews:
       instructions: Apply when a change touches a Dockerfile, a compose file, or the contents of a language image.
     - label: tests
       instructions: >-
-        Apply when a change primarily touches the suites under protecter/test/ and pruner/test/,
+        Apply when a change primarily touches the suites under protecter/test/ and the test folders of pruner/,
         fixtures, or test utilities.
     - label: docs
       instructions: Apply when a change primarily touches documentation, manuals, or Markdown.
@@ -64,8 +64,8 @@ reviews:
     - "protecter/image/**"
     - "docker/**"
     - "protecter/test/**"
-    - "pruner/test/**"
-    - "pruner/src/**"
+    - "pruner/**/test/**"
+    - "pruner/**/src/**"
     - "pruner/config/**"
     - "assets/**"
     - "docker-compose.yaml"
@@ -148,7 +148,7 @@ reviews:
         cannot pass because of file permissions or a missing fixture rather than
         because of the mechanism under test, and that skipped checks are not counted
         as passing.
-    - path: "pruner/test/**"
+    - path: "pruner/**/test/**"
       instructions: >-
         Require every sandbox assertion to cover both directions: the forbidden case
         stays denied and the permitted case still works. A suite that only shows
@@ -169,7 +169,7 @@ reviews:
         here widens the sandbox silently. Check that a failed or skipped run cannot be
         recorded as a successful one, that path sets are merged deterministically, and
         that no external command is assembled through a shell.
-    - path: "pruner/src/**"
+    - path: "pruner/**/src/**"
       instructions: >-
         These helpers turn run results into path sets and artefacts. Check that path
         handling is exact, that a partial result is not silently treated as complete,

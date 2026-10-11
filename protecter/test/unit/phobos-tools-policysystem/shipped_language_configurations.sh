@@ -18,7 +18,7 @@ trap 'rm -rf "$WORK"' EXIT
 export PHOBOS_SCRATCH="${WORK}/scratch"
 mkdir -p "$PHOBOS_SCRATCH"
 
-GRADLE_BASE="${CONFIG}/BaseLanguage-java.cfg"
+GRADLE_BASE="${CONFIG}/BaseLanguage-java-gradle.cfg"
 MAVEN_BASE="${CONFIG}/language-configurations/bases/BaseLanguage-java-maven.cfg"
 
 # Prints the bases the configuration of that name lists, one per line. Assumes it runs in a

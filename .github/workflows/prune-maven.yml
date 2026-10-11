@@ -4,7 +4,8 @@
 #
 # Manual on purpose. The prune runs the build under strace many times, so it takes far longer than a
 # suite belonging to every change, and its output is an artefact to be reviewed and handed on, not a
-# check. The suite it runs, pruner/test/integration/layer_prune_maven.sh, also holds the result to the
+# check. The suite it runs,
+# pruner/exercise_pruner/test/integration/interface/layer_prune_maven.sh, also holds the result to the
 # conditions of the plan's Task 14.1 and shows the three wrong reasons aborting, so a green run is a
 # prune that passed them, never one that merely ended with status 0.
 name: Prune the Maven reference exercise
@@ -63,7 +64,7 @@ jobs:
             -v "${PWD}:/repo:ro" \
             -v "${PWD}/protecter/image/maven-repository.sha256:/srv/phobos-manifest/maven-repository.sha256:ro" \
             -v "${RUNNER_TEMP}/artefacts:/artefacts" -e ARTEFACTS_DIR=/artefacts \
-            phobos-prune-layers:ci bash /repo/pruner/test/integration/layer_prune_maven.sh
+            phobos-prune-layers:ci bash /repo/pruner/exercise_pruner/test/integration/interface/layer_prune_maven.sh
 
       # Kept even when the suite failed, since the record of a failed prune is what explains it.
       - name: Keep the artefacts

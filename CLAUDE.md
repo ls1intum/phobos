@@ -62,7 +62,7 @@ environment, offline, and grading itself only applies a fixed configuration.
 The filesystem layer is enforced by Landlock, an unprivileged Linux kernel sandbox, applied
 by `phobos-landlock-filesystem-and-networksystem` (the C program under `protecter/src/`). The run phase needs no privileges, no
 capabilities and no container flags. The prune runs the layer pruner
-(`pruner/src/layer_prune/`, in `docker/pruner/layers/`), which measures under the
+(`pruner/exercise_pruner/`, in the image of `docker/pruner/layers/`), which measures under the
 grading layers themselves, observing their refusals with `strace`; README.md, "The layer
 pruner", says how to run it. Nothing uses Bubblewrap any more.
 
@@ -111,7 +111,7 @@ integration requirement in SECURITY.md.
 # On a host: build the image, run a command in an ordinary container with limits, prune and record
 ./phobos-cli.sh build java
 ./phobos-cli.sh run --exercise ./my-exercise --config exercise.cfg -- ./gradlew test
-./phobos-cli.sh prune python        # one Compose service, rebuilt first; "prune all" runs the seven jobs in order
+./phobos-cli.sh prune python        # one Compose service, rebuilt first; "prune all" runs the eleven jobs in order
 ./phobos-cli.sh record generate --name tool
 ./phobos-cli.sh --dry-run run --exercise ./my-exercise -- true    # print the commands, start nothing
 ```
@@ -122,22 +122,22 @@ layer off, call `phobos.sh` directly.
 
 ### The linters, which are the gate
 
-`lint.yml` runs seven lint jobs, and `actionlint.yml` lints the workflows beside it, weekly
+`lint.yml` runs nine checks as the steps of one job, and `actionlint.yml` lints the workflows beside it, weekly
 as well as on a change under `.github`. Neither is the whole of CI: `test.yml` runs the shell and
 Python suites, `build.yml` builds the images for amd64 and arm64, runs the two C unit suites
 and holds the run-phase image to the Landlock acceptance suites and the protection matrix inside
 it, `codeql.yml` scans, `pullrequest-template.yml` checks the body, and `documentation-ci.yml`
-holds the documentation site to its own gate (see `documentation/README.md`). The lint jobs are the ones you can run in full by hand before opening a pull request.
+holds the documentation site to its own gate (see `documentation/README.md`). Its checks are the ones you can run in full by hand before opening a pull request.
 
 ```
-# Same file sets and same flags as CI. Together these are the seven lint.yml jobs plus
-# actionlint, and the C job is two
+# Same file sets and same flags as CI. Together these are the checks of lint.yml plus
+# actionlint, and the C check is two
 # steps rather than one: the compiler gate runs before cppcheck and fails on any warning.
 find . -name '*.sh'  -type f -print0 | xargs -0 shellcheck -x -S warning
 ( failed=0; while IFS= read -r f; do gcc-14 -std=gnu23 -fsyntax-only -Wall -Wextra -Werror -fanalyzer "$f" || failed=1; done < <(find . -name '*.c' -type f); exit "$failed" )
 find . -name '*.c'   -type f -print0 | xargs -0 cppcheck --std=c23 --enable=warning --quiet --error-exitcode=1
 ruff check --no-cache .
-bandit --recursive --ini .bandit --severity-level medium pruner/src
+bandit --recursive --ini .bandit --severity-level medium pruner/exercise_pruner/src pruner/runtime_pruner/src pruner/shared/src
 yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 actionlint
@@ -172,7 +172,7 @@ docker compose -f docker/protecter/python/docker-compose.yaml up --build
 Each prune container works independently on its language and writes its result into the
 shared `build/pruner/path_sets` directory; nothing passes between containers except through
 `build/pruner`. Each language's prune needs its run-phase image (`phobos-run-phase-java`,
-`phobos-run-phase-python`) built first, and `verify_java` and `verify_python` re-run the
+`phobos-run-phase-python`, `phobos-run-phase-c-fact`, `phobos-run-phase-r`) built first, and each `verify_*` service re-runs the
 exercises under the merged configuration at the end.
 
 ### The host
@@ -222,16 +222,21 @@ protecter/                 the sandbox and the tests that hold it
   test/                    unit/ (C and shell units), integration/ (shell suites, the acceptance suites and
                            protection-matrix/), harness.sh, harness_self_test.sh and a policy probe
 pruner/                    the pruners, which discover what a policy needs
-  src/                     layer_prune/: the layer pruner (observe, attribute, grow, minimise, limits, verify, write);
-                           layer_record/: the recording pruner (record a session unsandboxed, generate a policy, replay
-                           it, compare it; prune image only)
+  exercise_pruner/         the layer pruner and the orchestrator: prune a reference exercise through the grading layers
+                           (observe, attribute, grow, minimise, limits, verify, write) and merge the results
+  runtime_pruner/          the recording pruner: record a session unsandboxed, generate a policy, replay it, compare
+                           it (prune image only)
+  shared/                  what both need: the policy model, the strace parser, attribution, generalisation, limits
+                           and the sampler. Each of the three has src/ and test/ (unit/, integration/), and inside
+                           those the layers domain/, infrastructure/, application/ and interface/ where it has code;
+                           pruner/README.md says which layer may import which
   src/orchestrate/         the orchestrator: merges the pruned exercise policies into the shipped bases
   config/                  what the prune image carries: BasePrune.cfg, which grants nothing, and the language seeds
   test/                    integration/ (the pruner suites and their fixtures), python/, and the runner probes
 docker/pruner/             the layer pruner's image and the orchestrator's
   layers/                  the layer pruner's image: the run-phase image, strace, the probe, an empty base
   orchestrate/             the orchestrator's image
-docker/protecter/          the images an exercise actually runs in, one per language (java/, python/)
+docker/protecter/          the images an exercise actually runs in, one per language (java/, python/, c-fact/, r/)
 exercises/                 the reference exercises: the pruners' input and the protecter's acceptance fixtures
 phobos-cli.sh              one command line for phobos.sh, the layer pruner, the recording pruner and the image build; on a host it
                            starts Docker, in an image it starts what the image holds, and it refuses every switch that turns a layer off

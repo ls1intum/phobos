@@ -30,7 +30,8 @@ rather than on `main`. A change written against `main` alone can be correct and 
 with an open stack. Run `gh pr list` and read the bases first. A pull request whose base is
 another branch is part of a stack, and it gets no checks of its own, because every workflow
 filters its `pull_request` trigger on `main`: start `build.yml`, `lint.yml`, `test.yml` and
-`codeql.yml` on its branch with `workflow_dispatch` and link the runs.
+`codeql.yml` on its branch with `workflow_dispatch` and link the runs. A dispatch of `build.yml` runs
+what a pull request runs, and `scope: full` runs every suite each image is held to, on both architectures.
 
 ## Never widen the sandbox quietly
 
@@ -73,10 +74,10 @@ and `.editorconfig` asks editors for the same. Check with `git ls-files --eol | 
 
 ## The gate
 
-`lint.yml` runs seven lint jobs, and `actionlint.yml` lints the workflows beside it, weekly and
-on a change under `.github`. Every one can be run by hand. The commands below are those seven
-jobs plus `actionlint`, run against locally installed tools. That is the usual reason a local run and the run in
-continuous integration (CI) disagree on a version. The C job is two steps rather than one: the
+`lint.yml` runs nine checks as the steps of one job, and `actionlint.yml` lints the workflows beside it, weekly and
+on a change under `.github`. Every one can be run by hand. The commands below are its
+checks plus `actionlint`, run against locally installed tools. That is the usual reason a local run and the run in
+continuous integration (CI) disagree on a version. The C check is two steps rather than one: the
 compiler gate runs before cppcheck and fails on any warning.
 
 ```bash
@@ -84,7 +85,7 @@ find . -name '*.sh'  -type f -print0 | xargs -0 shellcheck -x -S warning
 ( failed=0; while IFS= read -r f; do gcc-14 -std=gnu23 -fsyntax-only -Wall -Wextra -Werror -fanalyzer "$f" || failed=1; done < <(find . -name '*.c' -type f); exit "$failed" )
 find . -name '*.c'   -type f -print0 | xargs -0 cppcheck --std=c23 --enable=warning --quiet --error-exitcode=1
 ruff check --no-cache .
-bandit --recursive --ini .bandit --severity-level medium pruner/src
+bandit --recursive --ini .bandit --severity-level medium pruner/exercise_pruner/src pruner/runtime_pruner/src pruner/shared/src
 yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 actionlint

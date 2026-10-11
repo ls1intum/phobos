@@ -7,7 +7,7 @@ in a workflow summary.
 
 Each shell suite is run by a step of its own in CI, so one run names every suite that broke
 rather than only the first. A step of `test.yml` fails when a shell file under `protecter/test/` or
-`pruner/test/` is named in no workflow, so a suite cannot sit in the tree and run nowhere. The
+`pruner/` is named in no workflow, so a suite cannot sit in the tree and run nowhere. The
 exceptions are the helpers that are not suites: `harness.sh`, the matrix `lib.sh` and `run-all.sh`,
 and `policy-redundancy-probe.sh`.
 
@@ -15,7 +15,7 @@ The unit suites live under `protecter/test/unit/` in the same folder structure a
 per component they test, and the integration suites live under `protecter/test/integration/`,
 with the acceptance suites in `protecter/test/integration/landlock-filesystem-and-networksystem-acceptance/`.
 The shared harness and the diagnostics stay at the `protecter/test/` root. The pruner's suites are in
-[`pruner/test/README.md`](../../pruner/test/README.md) and source the same harness.
+[`pruner/README.md`](../../pruner/README.md) and source the same harness.
 
 Every suite reports through `harness.sh`, which it sources and which owns `ok`, `bad`,
 `skip`, `check`, the three counters and `finish`. A suite keeps everything else of its own:
@@ -33,7 +33,7 @@ permission.
 | Suite | What it proves | Skips when |
 | --- | --- | --- |
 | `cli_flags.sh` | the command line of `phobos.sh`: the layer switches, the refusal of an unknown option, where the command's own arguments begin, the exit statuses, and that every `PHB_` name a script reads is one something assigns | never |
-| `phobos_cli.sh` | `phobos-cli.sh` without Docker: the options it accepts and the ones it refuses in both places (every layer switch, every enforcer override, any option not listed, a leaked `BASH_ENV` or `LD_*`), the `docker run` it builds for `run` with its network, memory and process limits and without any privilege, capability, device, host namespace or Docker socket, the configurations copied and mounted read-only, the project root kept inside the exercise, the dispatch table of `prune`, `record` and `build` (Compose anchored to the checkout against a decoy compose file and `.env`, a rebuild before every job, the image chosen by the key or the language), `prune all` stopping at the first of its seven jobs that fails and never ending with 0 when interrupted, and the image form against a stand-in installation | the stand-in installation or helpers cannot be made because the directory exists (a run inside an image), or no bash older than 4.4 is beside a newer one |
+| `phobos_cli.sh` | `phobos-cli.sh` without Docker: the options it accepts and the ones it refuses in both places (every layer switch, every enforcer override, any option not listed, a leaked `BASH_ENV` or `LD_*`), the `docker run` it builds for `run` with its network, memory and process limits and without any privilege, capability, device, host namespace or Docker socket, the configurations copied and mounted read-only, the project root kept inside the exercise, the dispatch table of `prune`, `record` and `build` (Compose anchored to the checkout against a decoy compose file and `.env`, a rebuild before every job, the image chosen by the key or the language), `prune all` stopping at the first of its eleven jobs that fails and never ending with 0 when interrupted, and the image form against a stand-in installation | the stand-in installation or helpers cannot be made because the directory exists (a run inside an image), or no bash older than 4.4 is beside a newer one |
 | `startup_environment.sh` | every entry point, `phobos.sh` and each layer on its own, before it runs anything: a program planted under every name in the current directory, in a relative directory and in a `~` directory is never run through a `PATH` of `.:`, `:`, a trailing or doubled colon, `relative/dir:` or `~/bin:`, the command then sees only the absolute entries, a clean absolute `PATH` reaches the command unchanged, a `PATH` with no absolute entry is refused with `PHB-ERUNTIME`, `CDPATH` never redirects an entry point's own `cd`, a relative `TMPDIR`, `HOSTALIASES` or `TZDIR` and the relative entries of `GCONV_PATH`, `LOCPATH` and `NLSPATH` are dropped while absolute ones are kept, and with no `PATH` at all the command is given none and nothing is said. Started as a program under a `PATH` beginning with `.`, no entry point runs a planted `bash`, since each `#!` line names `/bin/bash`, a layer run on its own starts itself again through `/bin/bash`, never a `bash` first in an absolute `PATH` entry, and under a `PATH` without `dirname` every entry point still finds its own files | never |
 | `scratch_location.sh` | every temporary file `phobos.sh`, the policy program, the network layer and the filesystem layer make lies in the run's own specification directory, recorded through a logging `mktemp`, and the run works with a `TMPDIR` that names no directory; a `PHOBOS_SCRATCH` left in the environment is never used; a helper called with no scratch directory refuses with `PHB-ERUNTIME` and makes nothing in `TMPDIR` | never |
 | `signals.sh` | `run_forwarding_signals`, which every layer waits through: SIGTERM, SIGHUP, SIGINT and SIGQUIT sent to the layer reach its command, the status is the command's own (exit codes, a killed command, a command that handles the signal), standard input stays the command's, the layer's own traps are put back exactly (an ignored TERM, a trap whose text names another signal), and a job started before the command is never signalled | never |
@@ -95,15 +95,15 @@ run them by hand.
 | `phase-test.sh` | rights tightened and widened across four phases, and the trap of an unrestricted final phase |
 | `shipped-policy-test.sh` | the policy the image actually ships runs a real build; a JVM prints no line for the eleven start-up files the Java base grants file by file, each is readable, a neighbour of each is still refused and reported, and the six refusals the base leaves in place are still refused and reported |
 | `maven-policy-test.sh` | the Maven reference exercise passes under the Maven base for each of the four `JAVA_USING_MAVEN_*` configurations, a file the base does not name is refused, and a run with no Ares 2 policy never folds the Maven base |
-| `gradle-policy-test.sh` | the Gradle reference exercise passes offline under the Java base the Java image ships (both test cases and the JUnit report), and a canary outside the base's directories, a write beside the working directory and a connection to an unnamed address are refused | never |
-| `python-policy-test.sh` | the Python reference exercise passes under the Python base the Python image ships (compileall, then pytest with its JUnit report), and a canary outside the base's directories, a write beside the working directory and a connection to an unnamed address are refused | never |
+| `gradle-policy-test.sh` | the Gradle reference exercise passes offline under the Java base the Java image ships (both test cases and the JUnit report), and a canary outside the base's directories, an overwrite of a file beside the working directory and a connection to an unnamed address are refused | never |
+| `python-policy-test.sh` | the Python reference exercise passes under the Python base the Python image ships (compileall, then pytest with its JUnit report), and a canary outside the base's directories, an overwrite of a file beside the working directory and a connection to an unnamed address are refused | never |
 | `network-port-test.sh` | a raw `connect()` syscall is still refused by Landlock's port rule |
 | `scoping-test.sh` | Landlock scoping: a sandboxed process can neither signal a process outside its domain nor reach an abstract UNIX socket there |
 | `seccomp-networksystem-test.sh` | the connect guard inside the image: an allowed destination connects, a forbidden one is refused, neither can be redirected, and a rule for one transport admits nothing on the other |
 
 ## The protection matrix, run by `build.yml` inside the run-phase image
 
-Eleven suites in `protecter/test/integration/protection-matrix/` hold the whole of `phobos.sh` to what it
+Twelve suites in `protecter/test/integration/protection-matrix/` hold the whole of `phobos.sh` to what it
 promises, each in a step of its own. They run in an ordinary container with `--network none`, plus
 `--memory` and `--pids-limit`, which are cgroup caps and not privileges. Every denial has an
 unprotected control and a run with only its layer switched off, a check whose control fails is
@@ -129,12 +129,29 @@ the kernel lacks, a missing tool or too few processor cores.
 
 ## The Python run-phase image, run by the `run-phase-python` job of `build.yml`
 
-The Python run-phase image (`docker/protecter/python/`) is held to every suite above that needs no
-Java: `network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`, `seccomp-networksystem-test.sh`,
-`network-cleanup-test.sh` and the whole protection matrix, in one looped step that names each suite and
-fails when any one does. The four acceptance suites that compile Java probes or run Maven
-(`run-tests.sh`, `extra-tests.sh`, `phase-test.sh`, `shipped-policy-test.sh`) stay with the Java job.
-The pruner's suites on that image are listed in [`pruner/test/README.md`](../../pruner/test/README.md).
+The Python run-phase image (`docker/protecter/python/`) compiles its own four C programs, so on every
+event it is held to `python-policy-test.sh` and to the five acceptance suites that need no Java and
+put those programs to a raw call they must refuse: `network-port-test.sh`, `bind-port-test.sh`,
+`scoping-test.sh`, `seccomp-networksystem-test.sh` and `network-cleanup-test.sh`, in one looped step
+that names each suite and fails when any one does. The weekly run and a dispatch with `scope: full`
+add `reporting.sh`. The rest of the protection matrix runs on the Java image only.
+The pruner's suites on that image are listed in [`pruner/README.md`](../../pruner/README.md).
+
+## The C (FACT) run-phase image, run by the `run-phase-c-fact` job of `build.yml`
+
+The C run-phase image (`docker/protecter/c-fact/`) is held to `c-fact-policy-test.sh` and to the same five
+language-neutral acceptance suites on every event, and to `reporting.sh` on the weekly run and a dispatch with
+`scope: full`. The first runs the FACT reference exercise under the base the image ships: the three tests of the template pass,
+a canary, an overwrite of a file beside the working directory and an unnamed address are refused, and a file the run writes can
+be executed in the submission's directory and nowhere else.
+
+## The R run-phase image, run by the `run-phase-r` job of `build.yml`
+
+The R run-phase image (`docker/protecter/r/`) is held to `r-policy-test.sh` and to the same five
+language-neutral acceptance suites on every event, and to `reporting.sh` on the weekly run and a dispatch with
+`scope: full`. The first runs the R reference exercise under the base the image ships: the four tests of the template pass,
+a canary, an overwrite of a file beside the working directory and an unnamed address are refused, and no file the run
+writes can be executed.
 
 ## The environment variables the suites read
 

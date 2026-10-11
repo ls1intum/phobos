@@ -63,11 +63,11 @@ rest exists to take privileges away. None of the following is a vulnerability.
   networked one, so a name in a udp rule assumes the same posture as one in a tcp rule.
 - `docker/pruner/` runs the discovery phase, which deliberately runs a reference under a
   policy that refuses too much, over and over: the layer pruner (`docker/pruner/layers/`,
-  `pruner/src/layer_prune/`) records the grading layers' refusals with `strace` and grants
+  `pruner/exercise_pruner/`) records the grading layers' refusals with `strace` and grants
   what each refusal proves, and its orchestrator merges the result into the allow-list the
   sandbox later trusts. strace and the containment probe are installed in the prune image only,
   never in the run-phase image a submission is graded in, and the prune container needs no
-  privilege. The recording pruner (`pruner/src/layer_record/`) is the exception to "the reference
+  privilege. The recording pruner (`pruner/runtime_pruner/`) is the exception to "the reference
   runs under a policy": while it records, the program runs with no sandbox at all, and it is for the
   instructor's own reference program, never for an untrusted submission. The run-phase image does not
   hold it, it is started only in the prune image, which the helpers are mounted into, and nothing under

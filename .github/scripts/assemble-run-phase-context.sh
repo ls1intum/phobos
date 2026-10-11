@@ -6,7 +6,7 @@
 # the four C source folders whole (phobos-landlock-filesystem-and-networksystem,
 # phobos-seccomp-networksystem, phobos-seccomp-filesystem and phobos-seccomp-timeoutsystem) for its
 # build stage, config/*.cfg and the folder config/language-configurations/, and, for the two stages that
-# pre-load the dependency repositories, pin/ (pin-repository.sh and the two committed manifests) and
+# pre-load the dependency repositories, pin/ (pin-repository.sh, the two committed manifests and fact-requirements.txt) and
 # exercises/ (the two reference exercises those stages build). The C folders keep
 # their names because the report-only supervisor's sources include the other three folders'
 # headers by paths relative to their own. Those files live across several directories of this
@@ -62,11 +62,12 @@ cp -R "${REPOSITORY}"/protecter/src/config/language-configurations "${DESTINATIO
 # The two reference exercises and what pins the dependencies they resolve, in folders of their own so
 # that the flat *.sh copy of the layer scripts does not take pin-repository.sh with it. The exercises
 # stay in their stages; only the repositories those stages produce enter the image.
-mkdir -p "${DESTINATION}/pin" "${DESTINATION}/exercises/java-maven" "${DESTINATION}/exercises/java"
+mkdir -p "${DESTINATION}/pin" "${DESTINATION}/exercises/java"
 cp "${REPOSITORY}"/protecter/image/pin-repository.sh "${DESTINATION}/pin/"
 cp "${REPOSITORY}"/protecter/image/maven-repository.sha256 "${DESTINATION}/pin/"
 cp "${REPOSITORY}"/protecter/image/gradle-repository.sha256 "${DESTINATION}/pin/"
-cp -R "${REPOSITORY}"/exercises/java-maven/maven-reference "${DESTINATION}/exercises/java-maven/"
+cp "${REPOSITORY}"/protecter/image/fact-requirements.txt "${DESTINATION}/pin/"
+cp -R "${REPOSITORY}"/exercises/java/maven-reference "${DESTINATION}/exercises/java/"
 cp -R "${REPOSITORY}"/exercises/java/gradle-reference "${DESTINATION}/exercises/java/"
 
 touch "${DESTINATION}/${MARKER}"

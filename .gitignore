@@ -13,7 +13,7 @@
 *.o
 *.a
 
-# Python. The prune orchestrator and the helpers under pruner/src are run directly.
+# Python. The prune orchestrator and the helpers under pruner/ are run directly.
 __pycache__/
 *.py[cod]
 .venv/

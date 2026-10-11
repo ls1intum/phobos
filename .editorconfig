@@ -47,6 +47,10 @@ indent_size = 4
 [{*.cfg,*.paths,*.flags,*.rules}]
 end_of_line = lf
 
+# A Makefile recipe line must start with a tab, or make ends with "missing separator".
+[{Makefile,*.mk}]
+indent_style = tab
+
 [*.json]
 indent_size = 2
 

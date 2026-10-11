@@ -39,7 +39,8 @@ mkdir -p "$TD/probe" "$TD/allowed-ro" "$TD/allowed-rw" /var/tmp/secret
 echo "public-data" > "$TD/allowed-ro/data.txt"
 echo "TOP-SECRET-TESTCASE" > /var/tmp/secret/secret.txt
 javac -d "$TD/probe" ${HERE}/PhobosProbe.java || exit 1
-cp ${HERE}/BaseLanguage-java.cfg "$CORE/BaseLanguage-java.cfg"
+cp ${HERE}/BaseLanguage-java-gradle.cfg "$CORE/BaseLanguage-java-gradle.cfg"
+check_base_set "$CORE" BaseLanguage-java-gradle.cfg
 chmod -R a+rX "$TD" /var/tmp/opt /var/tmp/secret
 chmod a+w "$TD/allowed-rw"
 chmod "$SECRET_DIRECTORY_MODE" /var/tmp/secret

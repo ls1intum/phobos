@@ -126,6 +126,29 @@ finish' '-uo pipefail')"
              "1 passed, 1 failed" "$(field "$r" 2)"
 
 echo
+echo "== check_base_set holds a directory to exactly the bases named =="
+CORE_DIR="$(mktemp -d)"
+trap 'rm -rf "${CORE_DIR}"' EXIT
+touch "${CORE_DIR}/BaseLanguage-java-gradle.cfg" "${CORE_DIR}/TailPhobos.cfg"
+r="$(run_suite "check_base_set '${CORE_DIR}' BaseLanguage-java-gradle.cfg
+finish" '-uo pipefail')"
+[[ "$(field "$r" 1)" == 0 ]] \
+  && own_ok "the one base named is the one base there, and a Tail file is not a base" \
+  || own_bad "the one base named is the one base there, and a Tail file is not a base" "0" "$(field "$r" 1)"
+touch "${CORE_DIR}/BaseLanguage-java.cfg"
+r="$(run_suite "check_base_set '${CORE_DIR}' BaseLanguage-java-gradle.cfg
+finish" '-uo pipefail')"
+[[ "$(field "$r" 1)" == 1 ]] \
+  && own_ok "a second base that was not named fails the check" \
+  || own_bad "a second base that was not named fails the check" "1" "$(field "$r" 1)"
+rm -f "${CORE_DIR}/BaseLanguage-java.cfg" "${CORE_DIR}/BaseLanguage-java-gradle.cfg"
+r="$(run_suite "check_base_set '${CORE_DIR}' BaseLanguage-java-gradle.cfg
+finish" '-uo pipefail')"
+[[ "$(field "$r" 1)" == 1 ]] \
+  && own_ok "a base that was named and is missing fails the check" \
+  || own_bad "a base that was named and is missing fails the check" "1" "$(field "$r" 1)"
+
+echo
 printf '%d passed, %d failed\n' "$passed" "$failed"
 (( failed == 0 )) || exit 1
 exit 0

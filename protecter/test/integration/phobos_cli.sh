@@ -42,7 +42,7 @@ cleanup() {
     rmdir /var/tmp/opt 2> /dev/null || true
   fi
   if [[ "${MADE_HELPERS}" == "yes" ]]; then
-    rm -rf -- "${HELPERS}/layer_prune" "${HELPERS}/layer_record"
+    rm -rf -- "${HELPERS}/exercise_pruner" "${HELPERS}/runtime_pruner"
     rmdir "${HELPERS}" 2> /dev/null || true
   fi
   rm -rf -- "${WORK}"
@@ -347,44 +347,47 @@ if [[ ! -e "${WORK}/decoy/planted" ]]; then ok "nothing in the working directory
 
 echo "== prune and record on a host"
 mkdir -p "${WORK}/cwd2"
-printf 'services:\n  prune_java:\n    image: decoy\n' > "${WORK}/cwd2/docker-compose.yaml"
+printf 'services:\n  prune_java_gradle:\n    image: decoy\n' > "${WORK}/cwd2/docker-compose.yaml"
 printf 'COMPOSE_PROFILES=egress\nCOMPOSE_FILE=docker-compose.yaml\n' > "${WORK}/cwd2/.env"
-OUT="$(cd "${WORK}/cwd2" && env COMPOSE_PROFILES=egress COMPOSE_FILE=decoy.yaml COMPOSE_PROJECT_NAME=decoy PATH="${STUBS}:/usr/bin:/bin" bash "${CLI}" --dry-run prune java 2> "${WORK}/err")"
+OUT="$(cd "${WORK}/cwd2" && env COMPOSE_PROFILES=egress COMPOSE_FILE=decoy.yaml COMPOSE_PROJECT_NAME=decoy PATH="${STUBS}:/usr/bin:/bin" bash "${CLI}" --dry-run prune java-gradle 2> "${WORK}/err")"
 STATUS=$?
-check "prune java builds a command" 0 "${STATUS}"
+check "prune java-gradle builds a command" 0 "${STATUS}"
 has_pair --project-directory "${REPOSITORY}" && ok "Compose is anchored to the checkout's directory" || bad "Compose is anchored to the checkout's directory" "${OUT}"
 has_pair -f "${REPOSITORY}/docker-compose.yaml" && ok "and to the checkout's compose file, not the one in the working directory" || bad "and to the checkout's compose file" "${OUT}"
 has_pair --env-file /dev/null && ok "a .env file is not read" || bad "a .env file is not read" "${OUT}"
 has_line COMPOSE_DISABLE_ENV_FILE=1 && ok "implicit .env loading is switched off" || bad "implicit .env loading is switched off" "${OUT}"
-for name in COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_PATH_SEPARATOR COMPOSE_ENV_FILES; do
+for name in COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_PATH_SEPARATOR COMPOSE_ENV_FILES RUN_PHASE_IMAGE RUN_PHASE_IMAGE_PYTHON RUN_PHASE_IMAGE_C_FACT RUN_PHASE_IMAGE_R; do
   has_pair -u "${name}" && continue
   bad "${name} is unset for the call" "${OUT}"
 done
 ok "the variables that select a file, a project or a profile are unset"
-has_line prune_java && has_line --build && has_line --no-deps && ok "the service is rebuilt and started alone" || bad "the service is rebuilt and started alone" "${OUT}"
-for key in "java prune_java" "java-maven prune_java_maven" "python prune_python"; do
+has_line prune_java_gradle && has_line --build && has_line --no-deps && ok "the service is rebuilt and started alone" || bad "the service is rebuilt and started alone" "${OUT}"
+for key in "java-gradle prune_java_gradle" "java-maven prune_java_maven" "python prune_python" "c-fact prune_c_fact" "r prune_r"; do
   cli --dry-run prune "${key%% *}"
   has_line "${key##* }" && ok "prune ${key%% *} runs ${key##* }" || bad "prune ${key%% *} runs ${key##* }" "${OUT}"
 done
 cli --dry-run prune java-egress
 has_pair --profile egress && has_line prune_java_egress && ok "prune java-egress runs its service under the egress profile" || bad "prune java-egress runs its service under the egress profile" "${OUT}"
-cli --dry-run prune java --image x
+cli --dry-run prune java-gradle --image x
 expect_refused "prune takes no --image" "${PHB_EXIT_USAGE}"
-cli --dry-run prune java --language python
+cli --dry-run prune java-gradle --language python
 expect_refused "prune takes no --language: the key decides" "${PHB_EXIT_USAGE}"
 cli --dry-run prune frobnicate
 expect_refused "an unknown key is refused" "${PHB_EXIT_USAGE}"
+cli --dry-run prune java
+expect_refused "the retired key java is refused" "${PHB_EXIT_USAGE}"
+if grep -q "java-gradle" <<<"${ERR}"; then ok "and the refusal names java-gradle"; else bad "and the refusal names java-gradle" "${ERR}"; fi
 cli --dry-run prune
 expect_refused "prune without a key is refused" "${PHB_EXIT_USAGE}"
 cli --dry-run prune all
-check "prune all builds seven commands" 7 "$(count_line COMMAND)"
-order="$(grep -E '^(prune_java|prune_java_maven|prune_python|orchestrate|verify_java|verify_java_maven|verify_python)$' <<<"${OUT}" | tr '\n' ' ')"
-check "in the order of the pipeline" "prune_java prune_java_maven prune_python orchestrate verify_java verify_java_maven verify_python " "${order}"
+check "prune all builds eleven commands" 11 "$(count_line COMMAND)"
+order="$(grep -E '^(prune_java_gradle|prune_java_maven|prune_python|prune_c_fact|prune_r|orchestrate|verify_java_gradle|verify_java_maven|verify_python|verify_c_fact|verify_r)$' <<<"${OUT}" | tr '\n' ' ')"
+check "in the order of the pipeline" "prune_java_gradle prune_java_maven prune_python prune_c_fact prune_r orchestrate verify_java_gradle verify_java_maven verify_python verify_c_fact verify_r " "${order}"
 declared="$(awk '/^  [a-z_]+:$/ { name = $1; sub(":", "", name) } /command: \["--(stage|verify|langs)"/ { print name }' "${REPOSITORY}/docker-compose.yaml" | sort | tr '\n' ' ')"
-listed="$(grep -E '^(prune_java|prune_java_maven|prune_python|orchestrate|verify_java|verify_java_maven|verify_python)$' <<<"${OUT}" | sort | tr '\n' ' ')"
+listed="$(grep -E '^(prune_java_gradle|prune_java_maven|prune_python|prune_c_fact|prune_r|orchestrate|verify_java_gradle|verify_java_maven|verify_python|verify_c_fact|verify_r)$' <<<"${OUT}" | sort | tr '\n' ' ')"
 check "and those are the services of docker-compose.yaml that carry a pipeline command" "${declared}" "${listed}"
 
-for position in 1 2 3 4 5 6 7; do
+for position in 1 2 3 4 5 6 7 8 9 10 11; do
   statuses=()
   for ((call = 1; call < position; call++)); do statuses+=(0); done
   statuses+=($((40 + position)))
@@ -393,11 +396,11 @@ for position in 1 2 3 4 5 6 7; do
   check "prune all stops at the failing job ${position} with its status" "$((40 + position))" "${STATUS}"
   check "and runs no job after it" "${position}" "$(wc -l < "${LOG}" | tr -d ' ')"
 done
-plan 0 0 0 0 0 0 0
+plan 0 0 0 0 0 0 0 0 0 0 0
 cli prune all
-check "prune all ends with 0 when all seven jobs end with 0" 0 "${STATUS}"
-check "after exactly seven jobs" 7 "$(wc -l < "${LOG}" | tr -d ' ')"
-if [[ "$(grep -c -- '--build' "${LOG}")" == 7 ]]; then ok "every job is rebuilt first"; else bad "every job is rebuilt first" "$(cat "${LOG}")"; fi
+check "prune all ends with 0 when all eleven jobs end with 0" 0 "${STATUS}"
+check "after exactly eleven jobs" 11 "$(wc -l < "${LOG}" | tr -d ' ')"
+if [[ "$(grep -c -- '--build' "${LOG}")" == 11 ]]; then ok "every job is rebuilt first"; else bad "every job is rebuilt first" "$(cat "${LOG}")"; fi
 
 plan wait
 rm -f "${WORK}/started"
@@ -524,7 +527,7 @@ if can_stand_in; then
   expect_refused "--mode host inside an image is refused" "${PHB_EXIT_USAGE}"
   cli build java
   check "build is refused inside an image" "${PHB_ERUNTIME}" "${STATUS}"
-  cli prune java
+  cli prune java-gradle
   check "prune without the helpers is an environment error" "${PHB_ERUNTIME}" "${STATUS}"
   cli record generate
   check "record without the helpers is an environment error" "${PHB_ERUNTIME}" "${STATUS}"
@@ -537,10 +540,10 @@ if can_stand_in; then
   check "an image without phobos.sh is broken, and never becomes a host" "${PHB_ERUNTIME}" "${STATUS}"
   if [[ ! -e "${HELPERS}" ]] && mkdir "${HELPERS}" 2> /dev/null; then
     MADE_HELPERS="yes"
-    mkdir "${HELPERS}/layer_prune" "${HELPERS}/layer_record"
-    : > "${HELPERS}/layer_prune/main.py"
-    printf '#!/bin/bash\nprintf "record"; for a in "$@"; do printf " [%%s]" "$a"; done; printf "\\n"\n' > "${HELPERS}/layer_record/phobos-record"
-    chmod +x "${HELPERS}/layer_record/phobos-record"
+    mkdir -p "${HELPERS}/exercise_pruner/src/interface" "${HELPERS}/runtime_pruner/src/interface"
+    : > "${HELPERS}/exercise_pruner/src/interface/main.py"
+    printf '#!/bin/bash\nprintf "record"; for a in "$@"; do printf " [%%s]" "$a"; done; printf "\\n"\n' > "${HELPERS}/runtime_pruner/src/interface/phobos-record"
+    chmod +x "${HELPERS}/runtime_pruner/src/interface/phobos-record"
     cli --dry-run prune java-egress --resolver 10.0.0.2
     has_line --stage && bad "java-egress does not run --stage" "${OUT}" || ok "java-egress runs without --stage"
     has_pair --output-dir /var/tmp/path_sets/egress && has_pair --resolver 10.0.0.2 && ok "and keeps its own output directory and its resolver" || bad "and keeps its own output directory and its resolver" "${OUT}"

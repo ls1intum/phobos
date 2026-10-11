@@ -14,7 +14,7 @@
 # run-phase Dockerfile that builds the repository, and by hand from the same image to regenerate a manifest, for
 # example for Maven (from the exercise's folder, in the image the stage uses):
 #
-#   cp -a exercises/java-maven/maven-reference/. /var/tmp/testing-dir && cd /var/tmp/testing-dir &&
+#   cp -a exercises/java/maven-reference/. /var/tmp/testing-dir && cd /var/tmp/testing-dir &&
 #   pin-repository.sh generate /root/.m2/repository /tmp/maven-repository.sha256 mvn --batch-mode --strict-checksums clean test
 #
 # Only regular files the run added or changed are seen. A file the run removes, and a symbolic link, are not, and

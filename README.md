@@ -30,7 +30,7 @@ untrusted build step, a data job or a third-party tool is the same problem.
 ## Installation
 
 Phobos needs Linux, for Landlock and for seccomp user-notification. It is delivered as a
-container image, which compiles the three C programs and puts the shipped policy where the
+container image, which compiles the four C programs and puts the shipped policy where the
 scripts look for it; a bare checkout is refused rather than run unprotected.
 
 ```bash
