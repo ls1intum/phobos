@@ -25,10 +25,13 @@ so a suite reaches it relative to its own depth: `../harness.sh` from `protecter
 therefore mounts `protecter/test/` at `/tests` rather than
 `protecter/test/integration/landlock-filesystem-and-networksystem-acceptance/`.
 
-## Host suites, run by the `Shell suites` job of `test.yml`
+## Host suites, run by `test.yml` and `build.yml`
 
-These need a shell, a compiler and a Python. No container, no kernel feature and no elevated
-permission.
+These need a shell, a compiler and a Python, no container and no elevated permission. Some need
+the runner's kernel to offer Landlock or seccomp user notification, as `standalone_layers.sh` and
+`seccomp_networksystem.sh` do. The ones under `unit/` run in the `Protecter unit tests` job of `test.yml`; the ones
+under `integration/` run on the runner itself, in the end-to-end job of `build.yml` for the layer
+they hold.
 
 | Suite | What it proves | Skips when |
 | --- | --- | --- |
@@ -63,15 +66,15 @@ permission.
 
 ## The repository's command line with a real Docker, run by `build.yml`
 
-`phobos_cli_docker.sh <image>` runs on the host of the `run-phase` job, in the `matrix-b` group, against the
-image that job built. Every container it starts is ordinary: `--network none`, and no `--privileged`,
+`phobos_cli_docker.sh <image>` runs on the host of the `Protecter e2e CLI tests` job, against the
+image the `java-image` job built. Every container it starts is ordinary: `--network none`, and no `--privileged`,
 `--cap-add` or `--security-opt`.
 
 | Suite | What it proves |
 | --- | --- |
 | `phobos_cli_docker.sh` | the file the policy does not name stays refused through `phobos-cli.sh run`, a configuration that names it makes it readable, the exercise is the working directory and writable, the status of the command is the status of `run`, a SIGTERM ends it and the container is gone, the started container has no privilege, capability, security option, device or host namespace, network `none`, memory and process limits and the exercise as its only writable mount, the same command line inside the image applies a configuration and refuses to turn the sandbox off, an Ares 2 policy of the Maven reference exercise passes through the staged copy and the translated project root, and Compose reads what `prune` and `record` build |
 
-## Unit suites, run by `build.yml`
+## Unit suites, run by `test.yml`
 
 C, compiled with `gcc-14` and run without a kernel feature: every syscall the code under
 test makes is interposed.
@@ -80,7 +83,7 @@ test makes is interposed.
 | --- | --- | --- |
 | `unit/phobos-landlock-filesystem-and-networksystem/run.sh` | `phobos-landlock-filesystem-and-networksystem`: the options, the path rules, the ruleset | none; `mutation.sh` in the same folder measures this suite instead, because the coverage runtime disturbs the calls it interposes |
 | `unit/phobos-seccomp-networksystem/seccomp_networksystem_run.sh` | the connect guard: the filter, the supervisor, the socket types, the held sockets and the listen decision, the rules | every line, with `--coverage` |
-| `unit/phobos-landlock-filesystem-and-networksystem/mutation.sh` | mutation testing of the Landlock suite, the `mutation` job of `build.yml`, on every change and weekly. It needs clang 20 and mull 0.34.1 in an Ubuntu 26.04 container. A processor-time limit ends a mutant whose loop never ends, whose forked child would otherwise hold the run | reports a score, and fails where no score is reached; it is not a gate on the score |
+| `unit/phobos-landlock-filesystem-and-networksystem/mutation.sh` | mutation testing of the Landlock suite, a step of the `Protecter unit tests` job of `test.yml`, on every change and weekly. It needs clang 20 and mull 0.34.1 in an Ubuntu 26.04 container. A processor-time limit ends a mutant whose loop never ends, whose forked child would otherwise hold the run | reports a score, and fails where no score is reached; it is not a gate on the score |
 
 ## Acceptance suites, run by `build.yml` inside the run-phase image
 
@@ -130,24 +133,25 @@ the kernel lacks, a missing tool or too few processor cores.
 
 ## The Python run-phase image, run by the `run-phase-python` job of `build.yml`
 
-The Python run-phase image (`docker/protecter/python/`) is held to every suite above that needs no
-Java: `network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`, `process-groups-test.sh`, `seccomp-networksystem-test.sh`,
-`network-cleanup-test.sh` and the whole protection matrix, in one looped step that names each suite and
-fails when any one does. The four acceptance suites that compile Java probes or run Maven
-(`run-tests.sh`, `extra-tests.sh`, `phase-test.sh`, `shipped-policy-test.sh`) stay with the Java job.
+The Python run-phase image (`docker/protecter/python/`) compiles its own four C programs. It is not
+built for a pull request: the weekly run builds it for amd64, and a dispatch with `scope: full` for
+amd64 and arm64. It is held to `python-policy-test.sh`, to `reporting.sh` and to the six acceptance
+suites that need no Java and put those programs to a raw call they must refuse:
+`network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`, `process-groups-test.sh`, `seccomp-networksystem-test.sh` and
+`network-cleanup-test.sh`, in one looped step that names each suite and fails when any one does. The rest of the protection matrix runs on the Java image only.
 The pruner's suites on that image are listed in [`pruner/README.md`](../../pruner/README.md).
 
 ## The C (FACT) run-phase image, run by the `run-phase-c-fact` job of `build.yml`
 
-The C run-phase image (`docker/protecter/c-fact/`) is held to `c-fact-policy-test.sh` and to `reporting.sh`.
-The first runs the FACT reference exercise under the base the image ships: the three tests of the template pass,
+The C run-phase image (`docker/protecter/c-fact/`) is built when the Python image is, and held to
+`c-fact-policy-test.sh`, to the same five language-neutral acceptance suites and to `reporting.sh`. The first runs the FACT reference exercise under the base the image ships: the three tests of the template pass,
 a canary, an overwrite of a file beside the working directory and an unnamed address are refused, and a file the run writes can
 be executed in the submission's directory and nowhere else.
 
 ## The R run-phase image, run by the `run-phase-r` job of `build.yml`
 
-The R run-phase image (`docker/protecter/r/`) is held to `r-policy-test.sh` and to `reporting.sh`.
-The first runs the R reference exercise under the base the image ships: the four tests of the template pass,
+The R run-phase image (`docker/protecter/r/`) is built when the Python image is, and held to
+`r-policy-test.sh`, to the same five language-neutral acceptance suites and to `reporting.sh`. The first runs the R reference exercise under the base the image ships: the four tests of the template pass,
 a canary, an overwrite of a file beside the working directory and an unnamed address are refused, and no file the run
 writes can be executed.
 

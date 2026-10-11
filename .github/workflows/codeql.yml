@@ -1,10 +1,17 @@
 name: CodeQL
 
+# A change that touches nothing but the documentation site starts none of these jobs: no suite reads a
+# file under documentation/, and documentation-ci.yml is that site's own gate. Lint keeps running on such
+# a change, because yamllint and editorconfig-checker read documentation/ too.
 on:
   pull_request:
     branches: [ "main" ]
+    paths-ignore:
+      - "documentation/**"
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - "documentation/**"
   schedule:
     - cron: "0 16 * * 0"
   workflow_dispatch:
@@ -17,7 +24,7 @@ concurrency:
 
 jobs:
   analyse:
-    name: Analyse ${{ matrix.language }}
+    name: Security scan (${{ matrix.language }})
     # No fork gate. Code scanning accepts an upload from a pull_request run even though a
     # fork's token is read-only, and a fork changing a workflow is exactly the case the
     # actions analysis is most worth having. Nothing here runs fork code beyond javac on

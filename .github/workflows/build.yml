@@ -1,25 +1,48 @@
-# Builds the images this repository can build, and tests the ones it ships.
+# Builds the run-phase images and holds them to the end-to-end suites.
 #
-# The run-phase images, one per language, are the artefact: each is where the four C products are
-# compiled, in a stage of their own, and it is what an exercise actually runs in. They are built
-# here so that the acceptance suites run against them on every change rather than by hand.
+# The Java run-phase image is the artefact a pull request is held to: it is where the four C
+# products are compiled, in a stage of their own, and it is what an exercise actually runs in. It
+# is built once, by the first job, and handed to every end-to-end job as an artefact, so each of
+# them loads and tests exactly the image that job built rather than building one of its own. The
+# end-to-end suites are split by what they hold: one job per layer of the protecter, one for what
+# no single layer owns, and one per pruner. A layer's job also runs the suites of that layer that
+# need no image and run on the runner itself.
 #
-# An image is built and exercised in the SAME job on purpose. Loading an image populates
-# the Docker daemon of that runner and no other, so a separate test job would quietly build a
-# second image and test that instead. The suites are therefore split into groups that run in
-# parallel jobs, and every job builds its own image from the same context (about a minute);
-# a group is a matrix entry, so one job names the suites that broke and the wall time of a run
-# is that of its longest group, not of all the suites one after the other.
+# The Python, C and R run-phase images are not built for a pull request. The weekly run builds them
+# for amd64, and a dispatch with the full scope builds them for amd64 and arm64.
+#
+# Only amd64 runs the Java image. Every image is built and tested on a native runner, never under
+# emulation: Landlock and the seccomp user-notification the suites rest on are absent or unreliable
+# under QEMU, so an emulated run would test nothing.
 name: Build
 
+# A change that touches nothing but the documentation site starts none of these jobs: no suite reads a
+# file under documentation/, and documentation-ci.yml is that site's own gate. Lint keeps running on such
+# a change, because yamllint and editorconfig-checker read documentation/ too.
 on:
   pull_request:
     branches: [ "main" ]
+    paths-ignore:
+      - "documentation/**"
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - "documentation/**"
   schedule:
     - cron: "0 17 * * 0"
+  # A stacked pull request gets its checks from a dispatch rather than from pull_request (see
+  # AGENTS.md), so a dispatch runs what a pull request runs unless it asks for the full scope, which
+  # adds the Python, C and R images on both architectures.
   workflow_dispatch:
+    inputs:
+      scope:
+        description: "pull-request: what a pull request runs; full: also the Python, C and R images, on amd64 and arm64"
+        required: true
+        default: pull-request
+        type: choice
+        options:
+          - pull-request
+          - full
 
 permissions: {}
 
@@ -28,126 +51,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  unit:
-    name: Unit tests for phobos-landlock-filesystem-and-networksystem, the connect guard and the network filter
+  java-image:
+    name: Build the Java run-phase image
     runs-on: ubuntu-26.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      # gcc-14 and nothing else. The syscalls are interposed through the linker, so
-      # this needs no Landlock, no container and no elevated permission. The runner's
-      # default gcc is not the compiler this suite is pinned to, so gcc-14 is installed
-      # rather than assumed.
-      - name: Install gcc-14
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install --yes --no-install-recommends gcc-14
-
-      - name: Run the unit tests
-        run: bash protecter/test/unit/phobos-landlock-filesystem-and-networksystem/run.sh
-
-      - name: Run the connect guard unit tests
-        if: ${{ !cancelled() }}
-        run: bash protecter/test/unit/phobos-seccomp-networksystem/seccomp_networksystem_run.sh
-
-      # The guard installs a real seccomp filter and forks only when run for real; the unit
-      # suite wraps every syscall and fork instead, so it needs no kernel, and its interposed
-      # calls are answered rather than passed through, so gcov's own writes are undisturbed.
-      # Lines are held to 100 %; branches are reported, not gated, for the reason the script
-      # states.
-      - name: Every line of the connect guard ran
-        if: ${{ !cancelled() }}
-        run: bash protecter/test/unit/phobos-seccomp-networksystem/seccomp_networksystem_run.sh --coverage
-
-      # The denial reporter's sources are held to the same line gate as the guard, and its
-      # quoting to bash's own over a corpus of names.
-      - name: Run the denial reporter unit tests
-        if: ${{ !cancelled() }}
-        run: bash protecter/test/unit/phobos-seccomp-filesystem/seccomp_filesystem_run.sh
-
-      - name: Every line of the denial reporter ran
-        if: ${{ !cancelled() }}
-        run: bash protecter/test/unit/phobos-seccomp-filesystem/seccomp_filesystem_run.sh --coverage
-
-      # No coverage step, deliberately. The suite interposes open and close, which is
-      # also how the gcov runtime writes its .gcda files, so an instrumented run has
-      # gcov's own diagnostics landing on stderr. That breaks the test asserting that a
-      # run which goes through says nothing, and it means the figures come from a
-      # perturbed run in the first place.
-      # protecter/test/unit/phobos-landlock-filesystem-and-networksystem/mutation.sh is the stronger
-      # measure of this suite and runs as the mutation job below.
-
-  images:
-    name: Build the ${{ matrix.name }} image
-    runs-on: ubuntu-26.04
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: prune orchestrate
-            slug: prune-orchestrate
-            context: .
-            dockerfile: docker/pruner/orchestrate/Dockerfile
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      # docker build rather than docker/build-push-action: this organisation allows
-      # only actions it owns and actions GitHub publishes, so every third-party one is
-      # refused before the run starts. Docker and buildx are on the runner already.
-      #
-      # The run-phase images are deliberately absent: the jobs below build them and then
-      # test those exact images, and building them here as well would prove nothing twice.
-      - name: Build
-        env:
-          # The weekly run is the one that has to notice a moved base image or a changed
-          # apt package, and a layer that is simply reused is precisely what would hide
-          # that. --no-cache reruns the layers, --pull re-resolves the base image;
-          # neither does the other's half.
-          FRESH: ${{ github.event_name == 'schedule' && '--pull --no-cache' || '' }}
-          # Through the environment rather than interpolated into the command. These three
-          # values come from the matrix above and are safe, but a run block that pastes
-          # an expression into a shell is the shape to avoid having anywhere.
-          IMAGE_SLUG: ${{ matrix.slug }}
-          BUILD_CONTEXT: ${{ matrix.context }}
-          BUILD_DOCKERFILE: ${{ matrix.dockerfile }}
-        run: |
-          # shellcheck disable=SC2086
-          docker build ${FRESH} -f "${BUILD_DOCKERFILE}" -t "phobos-${IMAGE_SLUG}:ci" "${BUILD_CONTEXT}"
-
-  # Built and tested once per architecture on a native runner, never under emulation:
-  # Landlock and the seccomp user-notification the acceptance suites rest on are absent or
-  # unreliable under QEMU, so an emulated arm64 run would test nothing. Each leg builds the
-  # image for its own architecture, compiling the four C products from source
-  # there, and runs the whole acceptance suite against that exact image, so both
-  # architectures are proven before the image is published by hand (see AGENTS.md).
-  run-phase:
-    name: Build the run-phase image (${{ matrix.platform }}) and hold it to the ${{ matrix.group }} suites
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [amd64, arm64]
-        group: [acceptance, matrix-a, matrix-b, recorder-and-egress, pruner]
-        include:
-          - platform: amd64
-            runner: ubuntu-26.04
-          - platform: arm64
-            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -160,41 +69,99 @@ jobs:
       - name: Assemble the build context
         run: .github/scripts/assemble-run-phase-context.sh "${RUNNER_TEMP}/run-phase-context"
 
-      # A plain docker build, so the image lands in this runner's own daemon and the
-      # steps below run the image this job just built rather than one they built
-      # themselves. Third-party actions are refused in this organisation anyway.
+      # docker build rather than docker/build-push-action: this organisation allows only actions
+      # it owns and actions GitHub publishes, so every third-party one is refused before the run
+      # starts. Docker and buildx are on the runner already.
       - name: Build the run-phase image
-        id: build
         env:
+          # The weekly run is the one that has to notice a moved base image or a changed
+          # apt package, and a layer that is simply reused is precisely what would hide
+          # that. --no-cache reruns the layers, --pull re-resolves the base image;
+          # neither does the other's half.
           FRESH: ${{ github.event_name == 'schedule' && '--pull --no-cache' || '' }}
         run: |
+          # FRESH is either empty or two flags, so it must be split into words.
           # shellcheck disable=SC2086
           docker build ${FRESH} \
             -f docker/protecter/java/Dockerfile \
             -t phobos-run-phase:ci \
             "${RUNNER_TEMP}/run-phase-context"
 
-      # No --privileged, no --cap-add, no --security-opt, in any of the acceptance steps
-      # below. That is the claim these suites exist to make, and CI is where it stops
-      # being a claim.
-      #
-      # --network none for the same reason. Every Maven call in the suites is offline
-      # and the checks are meant to hold without a network, so the gate says so instead
-      # of trusting that nobody drops an -o later. Loopback survives it, which is what
-      # the socket assertions need.
-      #
-      # Nothing is mounted over /root/.m2 either. The base image ships a populated
-      # Maven repository, and a cache volume mounted there hides it: the offline
-      # `mvn clean` steps in the phase test then fail for want of a plugin, which looks
-      # like a sandbox failure and is not one.
+      # The prune image is the run-phase image just built plus strace, python3 and the protection
+      # matrix's probe, with a base that grants nothing. It is built on top of that exact image, so
+      # the pruners are held to the layers the protecter jobs prove. Built from the repository root,
+      # since the probe's source lives under protecter/test/.
+      - name: Build the prune image on the run-phase image
+        run: |
+          docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci \
+            -f docker/pruner/layers/Dockerfile -t phobos-prune-layers:ci .
+
+      # Both images in one archive, so the layers they share are stored once. shell: bash, because
+      # only an explicit bash shell runs with pipefail, and a failed docker save must fail the step
+      # rather than hand on a truncated archive.
+      - name: Save the images
+        shell: bash
+        run: |
+          docker save phobos-run-phase:ci phobos-prune-layers:ci \
+            | zstd --threads=0 -3 -o "${RUNNER_TEMP}/java-run-phase-images.tar.zst"
+
+      - name: Hand the images to the end-to-end jobs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: java-run-phase-images
+          path: ${{ runner.temp }}/java-run-phase-images.tar.zst
+          if-no-files-found: error
+          retention-days: 1
+          # Already compressed by zstd; zipping it again costs time and saves nothing.
+          compression-level: 0
+
+  # No --privileged, no --cap-add, no --security-opt, in any of the end-to-end steps below. That is
+  # the claim these suites exist to make, and CI is where it stops being a claim. --network none for
+  # the same reason: every Maven call in the suites is offline and the checks are meant to hold
+  # without a network, so the gate says so instead of trusting that nobody drops an -o later. Loopback
+  # survives it, which is what the socket assertions need. --memory and --pids-limit are cgroup
+  # limits, not privileges.
+  #
+  # Nothing is mounted over /root/.m2 either. The base image ships a populated Maven repository, and
+  # a cache volume mounted there hides it: the offline `mvn clean` steps in the phase test then fail
+  # for want of a plugin, which looks like a sandbox failure and is not one.
+  #
+  # The reference job runs first. Its suites are the ones every other job rests on, so when they
+  # break the other jobs would only repeat the failure, and they are not started.
+  reference:
+    name: Protecter e2e Reference tests
+    needs: java-image
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The images the Java image job built, not ones built here: every end-to-end job tests the
+      # same bytes.
+      - name: Download the Java run-phase image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: java-run-phase-images
+          path: ${{ runner.temp }}/images
+
+      - name: Load the Java run-phase image
+        id: load
+        shell: bash
+        run: zstd --decompress --stdout "${RUNNER_TEMP}/images/java-run-phase-images.tar.zst" | docker load
+
       - name: The five guarantees
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/run-tests.sh
 
       - name: Inheritance, non-root and the control probe
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/extra-tests.sh
@@ -203,7 +170,7 @@ jobs:
       # failure here is a dependency problem rather than a Landlock regression. It still
       # fails the job: naming the cause is for diagnosis, not for excusing it.
       - name: Tightening and widening rights across phases
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/phase-test.sh
@@ -212,7 +179,7 @@ jobs:
       # tight test policy, so a regression that breaks an ordinary run under it, or widens it,
       # fails here. The image bakes protecter/src/config/BaseLanguage-java-gradle.cfg, so this exercises it.
       - name: The shipped policy runs an exercise both ways
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
@@ -222,7 +189,7 @@ jobs:
       # image ships: both tests pass, and a file the base does not name, or the dependency repository to a
       # run with no Ares 2 policy, stays refused. The exercise is mounted read-only, as grading copies it.
       - name: The Maven base runs the Maven reference exercise under every Maven configuration
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             -v "${PWD}/exercises/java/maven-reference:/exercise:ro" \
@@ -233,17 +200,213 @@ jobs:
       # from this very exercise: Artemis's own offline build passes, and a canary, a write beside the
       # working directory and an unnamed address are refused. Without it a stale base would go unnoticed.
       - name: The shipped Java base runs the Gradle reference exercise both ways
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: |
           docker run --rm --network none --memory 6g -v "${PWD}/protecter/test:/tests:ro" \
             -v "${PWD}/exercises/java/gradle-reference:/exercise:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/gradle-policy-test.sh
 
+      # Scoping keeps a submission from signalling the grading process beside it or reaching
+      # an abstract UNIX socket outside the sandbox, which the path and port rules do not
+      # cover. It confines rather than forbidding, so a process inside the sandbox is still
+      # reachable.
+      - name: A sandboxed process cannot reach out of the sandbox with a signal
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        run: |
+          docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
+            phobos-run-phase:ci bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/scoping-test.sh
+
+  policy:
+    name: Protecter e2e Policy tests
+    needs: reference
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # What the suites that run on the runner itself need beyond its own image. gcc-14 is the
+      # compiler their C probes are pinned to, haproxy is the egress broker and inbound filter, and
+      # openssl the client that sends a ClientHello with a host name. Without them a suite skips
+      # itself, and a skip reads as a pass in the workflow's summary, so they are installed rather
+      # than left to the image.
+      - name: Install what the suites on the runner need
+        id: host-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends gcc-14 haproxy openssl
+
+      # The images the Java image job built, not ones built here: every end-to-end job tests the
+      # same bytes.
+      - name: Download the Java run-phase image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: java-run-phase-images
+          path: ${{ runner.temp }}/images
+
+      - name: Load the Java run-phase image
+        id: load
+        shell: bash
+        run: zstd --decompress --stdout "${RUNNER_TEMP}/images/java-run-phase-images.tar.zst" | docker load
+
+      - name: The policy program
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: bash protecter/test/integration/policy_program.sh
+
+      # The policy program given an Ares 2 policy: base selection by the programming language
+      # configuration, the additive fold beside a .cfg, the project root and the covered-entry skip.
+      - name: The policy program with an Ares 2 policy
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: bash protecter/test/integration/ares_policy_program.sh
+
+      # A configuration that is wrong has to end the run with a message that says what and where, and no
+      # bash error or raw byte may reach the terminal in its place.
+      - name: A malformed configuration is refused with a message that says what and where
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: bash protecter/test/integration/malformed_cfg.sh
+
+      # The rights hierarchy decides which policies are refused before a command runs, and
+      # nothing measured it until this suite: a nested entry narrower than its ancestor is
+      # unenforceable and refused, while a redundant one and a merely different one are both
+      # allowed, and the redundant one is what lets an exercise config name that path with
+      # fewer rights.
+      - name: The filesystem policy
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: bash protecter/test/integration/filesystem_policy.sh
+
+      - name: The timeout and resource-limit merge
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: bash protecter/test/integration/limit_merge.sh
+
+      # Every shape of a policy line through phobos.sh: what is accepted, what is refused with
+      # which status, the spelling of a timeout and every limit read back from the kernel.
+      - name: Every shape of a policy line is judged as the parser should
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
+            phobos-run-phase:ci \
+            bash /tests/integration/protection-matrix/policy-syntax.sh
+
+  filesystem:
+    name: Protecter e2e Filesystem tests
+    needs: reference
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # What the suites that run on the runner itself need beyond its own image. gcc-14 is the
+      # compiler their C probes are pinned to, haproxy is the egress broker and inbound filter, and
+      # openssl the client that sends a ClientHello with a host name. Without them a suite skips
+      # itself, and a skip reads as a pass in the workflow's summary, so they are installed rather
+      # than left to the image.
+      - name: Install what the suites on the runner need
+        id: host-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends gcc-14 haproxy openssl
+
+      # The images the Java image job built, not ones built here: every end-to-end job tests the
+      # same bytes.
+      - name: Download the Java run-phase image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: java-run-phase-images
+          path: ${{ runner.temp }}/images
+
+      - name: Load the Java run-phase image
+        id: load
+        shell: bash
+        run: zstd --decompress --stdout "${RUNNER_TEMP}/images/java-run-phase-images.tar.zst" | docker load
+
+      # The filesystem layer's denial report, both directions, and that neither the report nor
+      # the helpers behind it ever cost the command its output or its exit status.
+      - name: The denial report
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: bash protecter/test/integration/denial_report.sh
+
+      # The filesystem layer, one right at a time through phobos.sh: every denial has an
+      # unprotected control and a run with only that layer off, and the limits the documentation
+      # admits are pinned.
+      - name: The filesystem layer holds, right by right, and its documented limits stay as documented
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
+            phobos-run-phase:ci \
+            bash /tests/integration/protection-matrix/filesystem.sh
+
+      # The filesystem layer at its edges: links, dot-dot, magic links, path descriptors, rights
+      # on files and the root, odd names and a link swapped while it is opened.
+      - name: The filesystem layer holds against links, dot-dot, magic links and swaps
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
+            phobos-run-phase:ci \
+            bash /tests/integration/protection-matrix/filesystem-edge.sh
+
+  networksystem:
+    name: Protecter e2e Networksystem tests
+    needs: reference
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # What the suites that run on the runner itself need beyond its own image. gcc-14 is the
+      # compiler their C probes are pinned to, haproxy is the egress broker and inbound filter, and
+      # openssl the client that sends a ClientHello with a host name. Without them a suite skips
+      # itself, and a skip reads as a pass in the workflow's summary, so they are installed rather
+      # than left to the image.
+      - name: Install what the suites on the runner need
+        id: host-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends gcc-14 haproxy openssl
+
+      # The images the Java image job built, not ones built here: every end-to-end job tests the
+      # same bytes.
+      - name: Download the Java run-phase image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: java-run-phase-images
+          path: ${{ runner.temp }}/images
+
+      - name: Load the Java run-phase image
+        id: load
+        shell: bash
+        run: zstd --decompress --stdout "${RUNNER_TEMP}/images/java-run-phase-images.tar.zst" | docker load
+
+      - name: The connect guard enforces the allow-list by host and port
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: bash protecter/test/integration/seccomp_networksystem.sh
+
+      - name: The egress broker enforces the allow-list by TLS host name
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: bash protecter/test/integration/haproxy_broker.sh
+
+      - name: The inbound filter admits only the sources an [accept] rule names
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: bash protecter/test/integration/haproxy_inbound.sh
+
       # The kernel-enforced network boundary holds against a raw connect() syscall, which is
       # what makes concrete Landlock ports the network boundary alongside the connect guard.
       - name: The network port rule holds against a raw-syscall bypass
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
@@ -253,28 +416,18 @@ jobs:
       # names, the public port an [accept] rule fronts included, against a raw bind and a
       # kernel-chosen ephemeral port. This is the port containment the inbound filter relies on.
       - name: The Landlock bind-port rule holds against a raw-syscall bind
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/bind-port-test.sh
-
-      # Scoping keeps a submission from signalling the grading process beside it or reaching
-      # an abstract UNIX socket outside the sandbox, which the path and port rules do not
-      # cover. It confines rather than forbidding, so a process inside the sandbox is still
-      # reachable.
-      - name: A sandboxed process cannot reach out of the sandbox with a signal
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
-        run: |
-          docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
-            phobos-run-phase:ci bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/scoping-test.sh
 
       # The connect guard the image compiled installs its seccomp user-notification filter under
       # the image's default seccomp profile in an ordinary container, and enforces the [connect]
       # allow-list by host and port. This is both the availability check (the filter installs
       # unprivileged here) and the boundary check (both directions), in the image an exercise gets.
       - name: The connect guard enforces the allow-list in the run-phase image
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
@@ -285,126 +438,310 @@ jobs:
       # layer on its own, after a timeout that escalates to SIGKILL, and between concurrent runs.
       # It is the one step that runs HAProxy inside the image, the one an exercise gets.
       - name: The network layer leaves nothing behind in the run-phase image
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/network-cleanup-test.sh
 
-      # The protection matrix: twelve suites that hold the whole of phobos.sh to what it promises, each
-      # in a step of its own so one run names every suite that broke. --memory and --pids-limit are
-      # cgroup limits, not privileges, so the ordinary-container rule above still holds.
-
-      # The filesystem layer, one right at a time through phobos.sh: every denial has an
-      # unprotected control and a run with only that layer off, and the limits the documentation
-      # admits are pinned.
-      - name: The filesystem layer holds, right by right, and its documented limits stay as documented
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-a' }}
-        run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
-            phobos-run-phase:ci \
-            bash /tests/integration/protection-matrix/filesystem.sh
-
       # The network layer through phobos.sh: connect by address, port and name, datagrams that
       # must not reach a forbidden receiver, bind and listen closed, the inbound filter, and the
       # egress broker against a decoy.
       - name: The network layer holds for TCP, UDP, bind, listen, accept and host names
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-a' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/network.sh
 
-      # The timeout layer through phobos.sh: the run ends at its limit with the timeout status
-      # and no descendant outlives it or escapes the process group.
-      - name: The timeout layer ends a run and everything it started
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-a' }}
-        run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
-            phobos-run-phase:ci \
-            bash /tests/integration/protection-matrix/timeout.sh
-
-      # The resource layer through phobos.sh: each limit is read back from the kernel, enforced
-      # on a bounded behaviour and inherited. This is the suite that wants the memory and
-      # process caps below, which are cgroup limits and not privileges.
-      - name: The resource layer sets, enforces and inherits every limit
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
-        run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
-            phobos-run-phase:ci \
-            bash /tests/integration/protection-matrix/resources.sh
-
-      # Every subset of switched-off layers with one witness per layer, the flag spellings,
-      # concurrent runs and a nested phobos.sh.
-      - name: Every combination of the four layers holds exactly where each is on
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
-        run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
-            phobos-run-phase:ci \
-            bash /tests/integration/protection-matrix/combinations.sh
-
-      # The manual, usage errors, the command line and streams, the override options, the tail
-      # flags and policy files that are odd or empty.
-      - name: The command line and odd policy files behave as the manual says
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-a' }}
-        run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
-            phobos-run-phase:ci \
-            bash /tests/integration/protection-matrix/cli.sh
-
-      # Nothing is left behind after any way a run can end, the hosts file is restored and its
-      # lock is bounded, and what a signal sent to phobos.sh does.
-      - name: A run leaves nothing behind, whichever way it ends
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
-        run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
-            phobos-run-phase:ci \
-            bash /tests/integration/protection-matrix/lifecycle.sh
-
-      # Every shape of a policy line through phobos.sh: what is accepted, what is refused with
-      # which status, the spelling of a timeout and every limit read back from the kernel.
-      - name: Every shape of a policy line is judged as the parser should
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
-        run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
-            phobos-run-phase:ci \
-            bash /tests/integration/protection-matrix/policy-syntax.sh
-
       # The network layer at its edges: where a range ends, the port boundaries, special
       # addresses, IPv6 spellings, non-blocking connects, socket kinds and a destination
       # rewritten during a TCP connect.
       - name: The network layer holds at the edges of ranges, ports and socket kinds
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/network-edge.sh
 
-      # The filesystem layer at its edges: links, dot-dot, magic links, path descriptors, rights
-      # on files and the root, odd names and a link swapped while it is opened.
-      - name: The filesystem layer holds against links, dot-dot, magic links and swaps
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
+  timeoutsystem:
+    name: Protecter e2e Timeoutsystem tests
+    needs: reference
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # What the suites that run on the runner itself need beyond its own image. gcc-14 is the
+      # compiler their C probes are pinned to, haproxy is the egress broker and inbound filter, and
+      # openssl the client that sends a ClientHello with a host name. Without them a suite skips
+      # itself, and a skip reads as a pass in the workflow's summary, so they are installed rather
+      # than left to the image.
+      - name: Install what the suites on the runner need
+        id: host-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends gcc-14 haproxy openssl
+
+      # The images the Java image job built, not ones built here: every end-to-end job tests the
+      # same bytes.
+      - name: Download the Java run-phase image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: java-run-phase-images
+          path: ${{ runner.temp }}/images
+
+      - name: Load the Java run-phase image
+        id: load
+        shell: bash
+        run: zstd --decompress --stdout "${RUNNER_TEMP}/images/java-run-phase-images.tar.zst" | docker load
+
+      - name: The timeout stops a command that ignores SIGTERM
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: bash protecter/test/integration/timeout_escalation.sh
+
+      - name: The timeout's group lock refuses setsid and setpgid
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: bash protecter/test/integration/seccomp_timeoutsystem.sh
+
+      # The timeout layer through phobos.sh: the run ends at its limit with the timeout status
+      # and no descendant outlives it or escapes the process group.
+      - name: The timeout layer ends a run and everything it started
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
-            bash /tests/integration/protection-matrix/filesystem-edge.sh
+            bash /tests/integration/protection-matrix/timeout.sh
+
+  resourcesystem:
+    name: Protecter e2e Resourcesystem tests
+    needs: reference
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # What the suites that run on the runner itself need beyond its own image. gcc-14 is the
+      # compiler their C probes are pinned to, haproxy is the egress broker and inbound filter, and
+      # openssl the client that sends a ClientHello with a host name. Without them a suite skips
+      # itself, and a skip reads as a pass in the workflow's summary, so they are installed rather
+      # than left to the image.
+      - name: Install what the suites on the runner need
+        id: host-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends gcc-14 haproxy openssl
+
+      # The images the Java image job built, not ones built here: every end-to-end job tests the
+      # same bytes.
+      - name: Download the Java run-phase image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: java-run-phase-images
+          path: ${{ runner.temp }}/images
+
+      - name: Load the Java run-phase image
+        id: load
+        shell: bash
+        run: zstd --decompress --stdout "${RUNNER_TEMP}/images/java-run-phase-images.tar.zst" | docker load
+
+      # The [limits] resource keys are parsed and, when applied, set the process's rlimits,
+      # the in-process line against a fork bomb, a runaway allocation or a disk-filling file.
+      - name: The resource limits
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: bash protecter/test/integration/resource_limits.sh
+
+      # The resource layer through phobos.sh: each limit is read back from the kernel, enforced
+      # on a bounded behaviour and inherited. This is the suite that wants the memory and
+      # process caps below, which are cgroup limits and not privileges.
+      - name: The resource layer sets, enforces and inherits every limit
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
+            phobos-run-phase:ci \
+            bash /tests/integration/protection-matrix/resources.sh
 
       # Each limit met through the call that meets it, and the limits Phobos does not set.
       - name: Each resource limit holds through the call that meets it
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/resources-edge.sh
 
+  combined:
+    name: Protecter e2e Combined tests
+    needs: reference
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # What the suites that run on the runner itself need beyond its own image. gcc-14 is the
+      # compiler their C probes are pinned to, haproxy is the egress broker and inbound filter, and
+      # openssl the client that sends a ClientHello with a host name. Without them a suite skips
+      # itself, and a skip reads as a pass in the workflow's summary, so they are installed rather
+      # than left to the image.
+      - name: Install what the suites on the runner need
+        id: host-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends gcc-14 haproxy openssl
+
+      # The images the Java image job built, not ones built here: every end-to-end job tests the
+      # same bytes.
+      - name: Download the Java run-phase image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: java-run-phase-images
+          path: ${{ runner.temp }}/images
+
+      - name: Load the Java run-phase image
+        id: load
+        shell: bash
+        run: zstd --decompress --stdout "${RUNNER_TEMP}/images/java-run-phase-images.tar.zst" | docker load
+
+      - name: Each layer runs on its own from a config
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: bash protecter/test/integration/standalone_layers.sh
+
+      # No entry point finds a program through a relative or empty PATH entry, which names the
+      # current directory, and the submission's tree when a grader starts Phobos there.
+      - name: No entry point looks a program up in the current directory
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: bash protecter/test/integration/startup_environment.sh
+
+      # Every temporary file of a run lies in its own specification directory, out of the reach of
+      # the command of a concurrent run, and never in TMPDIR, or /tmp when it is unset.
+      - name: A run's temporary files stay in its specification directory
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: bash protecter/test/integration/scratch_location.sh
+
+      # Every subset of switched-off layers with one witness per layer, the flag spellings,
+      # concurrent runs and a nested phobos.sh.
+      - name: Every combination of the four layers holds exactly where each is on
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
+            phobos-run-phase:ci \
+            bash /tests/integration/protection-matrix/combinations.sh
+
+      # Nothing is left behind after any way a run can end, the hosts file is restored and its
+      # lock is bounded, and what a signal sent to phobos.sh does.
+      - name: A run leaves nothing behind, whichever way it ends
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
+            phobos-run-phase:ci \
+            bash /tests/integration/protection-matrix/lifecycle.sh
+
+  reporting:
+    name: Protecter e2e Reporting tests
+    needs: reference
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The images the Java image job built, not ones built here: every end-to-end job tests the
+      # same bytes.
+      - name: Download the Java run-phase image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: java-run-phase-images
+          path: ${{ runner.temp }}/images
+
+      - name: Load the Java run-phase image
+        id: load
+        shell: bash
+        run: zstd --decompress --stdout "${RUNNER_TEMP}/images/java-run-phase-images.tar.zst" | docker load
+
       # Every blocked action is reported once and every result is the one Landlock alone gives,
       # and the group lock's refusals are reported while they stay refused in every state.
       - name: The reporter reports each blocked action and changes no outcome
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'acceptance' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
             phobos-run-phase:ci \
             bash /tests/integration/protection-matrix/reporting.sh
+
+  cli:
+    name: Protecter e2e CLI tests
+    needs: reference
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # What the suites that run on the runner itself need beyond its own image. gcc-14 is the
+      # compiler their C probes are pinned to, haproxy is the egress broker and inbound filter, and
+      # openssl the client that sends a ClientHello with a host name. Without them a suite skips
+      # itself, and a skip reads as a pass in the workflow's summary, so they are installed rather
+      # than left to the image.
+      - name: Install what the suites on the runner need
+        id: host-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends gcc-14 haproxy openssl
+
+      # The images the Java image job built, not ones built here: every end-to-end job tests the
+      # same bytes.
+      - name: Download the Java run-phase image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: java-run-phase-images
+          path: ${{ runner.temp }}/images
+
+      - name: Load the Java run-phase image
+        id: load
+        shell: bash
+        run: zstd --decompress --stdout "${RUNNER_TEMP}/images/java-run-phase-images.tar.zst" | docker load
+
+      - name: The command-line contract
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: bash protecter/test/integration/cli_flags.sh
+
+      # The command line of the repository, phobos-cli.sh: the options it accepts and the ones it refuses
+      # in both places, the commands it builds for run, prune, record and build, and that nothing it
+      # builds can give a container more than the policy says. It starts no container: it reads the
+      # commands a dry run prints and answers a stand-in docker.
+      - name: The repository's command line starts nothing it should refuse
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: bash protecter/test/integration/phobos_cli.sh
+
+      # The manual, usage errors, the command line and streams, the override options, the tail
+      # flags and policy files that are odd or empty.
+      - name: The command line and odd policy files behave as the manual says
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
+            phobos-run-phase:ci \
+            bash /tests/integration/protection-matrix/cli.sh
 
       # The repository's command line on the image this job just built, with a real Docker: the file the
       # policy does not name stays refused and the one a configuration names is readable, the container
@@ -412,27 +749,52 @@ jobs:
       # reach the caller, an Ares 2 policy of the Maven reference exercise passes through the staged
       # copy and the translated project root, and Compose accepts what prune and record build.
       - name: The repository's command line starts an ordinary container and the sandbox holds in it
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'matrix-b' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: bash protecter/test/integration/phobos_cli_docker.sh phobos-run-phase:ci
 
-      # The prune image is the run-phase image this job just built plus strace, python3 and the
-      # protection matrix's probe, with a base that grants nothing. It is built on top of that exact
-      # image, so the layer pruner is held to the layers this job has just proven. Built from the
-      # repository root, since the probe's source lives under protecter/test/.
-      - name: Build the prune image on the run-phase image
-        id: prune-build
-        if: >-
-          ${{ !cancelled() && steps.build.outcome == 'success'
-          && contains(fromJSON('["recorder-and-egress","pruner"]'), matrix.group) }}
-        run: |
-          docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase:ci \
-            -f docker/pruner/layers/Dockerfile -t phobos-prune-layers:ci .
+  exercise-pruner:
+    name: Exercise-Pruner e2e tests
+    needs: reference
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The images the Java image job built, not ones built here: every end-to-end job tests the
+      # same bytes.
+      - name: Download the Java run-phase image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: java-run-phase-images
+          path: ${{ runner.temp }}/images
+
+      - name: Load the Java run-phase image
+        id: load
+        shell: bash
+        run: zstd --decompress --stdout "${RUNNER_TEMP}/images/java-run-phase-images.tar.zst" | docker load
+
+      # The script that lays out what a prune container and the KVM guest are both given asks the pruner's own
+      # discovery which exercises a key has, so it is held to that here, and to leaving an earlier staging alone.
+      - name: The staging of the prune inputs
+        if: ${{ !cancelled() }}
+        run: bash pruner/exercise_pruner/test/integration/interface/stage_prune_inputs.sh
+
+      # The orchestrator merges the pruned exercise policies into the shipped bases. Its image is
+      # only built here, since its code is held by the unit tests.
+      - name: Build the prune orchestrate image
+        if: ${{ !cancelled() }}
+        run: docker build -f docker/pruner/orchestrate/Dockerfile -t phobos-prune-orchestrate:ci .
 
       # strace observes a Landlock refusal made inside the shipped chain, a permitted read beside it
       # still works, and the parser and attribution turn the record into exactly that one denial. An
-      # ordinary container, as for every suite above: ptrace of one's own child needs no privilege.
+      # ordinary container, as for every suite of the protecter: ptrace of one's own child needs no privilege.
       - name: The prune image's observer sees what the layers refuse, and only that
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder-and-egress' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
             -v "${PWD}/protecter/test:/repo/protecter/test:ro" -v "${PWD}/pruner:/repo/pruner:ro" \
@@ -440,34 +802,12 @@ jobs:
             phobos-prune-layers:ci \
             bash /repo/pruner/exercise_pruner/test/integration/infrastructure/layer_prune_observer.sh
 
-      # The recording pruner, in the prune image just built: its refusals (record_safety.sh), a real
-      # terminal with Ctrl+C, Ctrl+Z and fg (record_interactive.sh), its replay check in both
-      # directions, each phase in a new container (record_replay.sh), and the policy it generates from
-      # recorded sessions, merged, replayed, held to the forbidden direction and given derived limits
-      # (record_generate.sh); from outside, the run-phase image holds no strace and refuses the
-      # recorder. Every container is ordinary.
-      - name: The recording pruner records with the terminal passed through and replays under the layers
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder-and-egress' }}
-        timeout-minutes: 40
-        run: >-
-          bash pruner/runtime_pruner/test/integration/interface/record_host.sh
-          phobos-prune-layers:ci phobos-run-phase:ci
-
-      # The recording pruner on a host name: a stand-in server on a Docker network with no route out
-      # serves TLS and DNS for api.phobos.test; the recorded session's policy names the host from the
-      # ClientHello, and the replay under the egress broker passes while the neighbouring port stays
-      # refused. Every container is ordinary; the network has no route out.
-      - name: The recording pruner writes a host name rule and replays it through the egress broker
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder-and-egress' }}
-        timeout-minutes: 15
-        run: bash pruner/runtime_pruner/test/integration/interface/record_networked.sh phobos-prune-layers:ci
-
       # The whole pipeline on the fixture exercise: the derived policy passes the build with every
       # layer on, refuses what the build did not need, bounds each limit, and every wrong-reason
       # variant aborts without a policy. The repository is mounted read-only; the suite copies what
       # it prunes.
       - name: The layer pruner derives a policy that holds in both directions
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         timeout-minutes: 50
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
@@ -478,37 +818,81 @@ jobs:
       # dropped. A stand-in resolver and a TLS server on loopback stand in for the external host, so
       # this needs no network either.
       - name: The layer pruner keeps exactly the declared hosts a build needs
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'recorder-and-egress' }}
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         timeout-minutes: 30
         run: |
           docker run --rm --network none --memory 3g --pids-limit 1024 \
             -v "${PWD}:/repo:ro" phobos-prune-layers:ci \
             bash /repo/pruner/exercise_pruner/test/integration/interface/layer_prune_egress.sh
 
+  runtime-pruner:
+    name: Runtime-Pruner e2e tests
+    needs: reference
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The images the Java image job built, not ones built here: every end-to-end job tests the
+      # same bytes.
+      - name: Download the Java run-phase image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: java-run-phase-images
+          path: ${{ runner.temp }}/images
+
+      - name: Load the Java run-phase image
+        id: load
+        shell: bash
+        run: zstd --decompress --stdout "${RUNNER_TEMP}/images/java-run-phase-images.tar.zst" | docker load
+
+      # The recording pruner, in the prune image the first job built: its refusals (record_safety.sh), a real
+      # terminal with Ctrl+C, Ctrl+Z and fg (record_interactive.sh), its replay check in both
+      # directions, each phase in a new container (record_replay.sh), and the policy it generates from
+      # recorded sessions, merged, replayed, held to the forbidden direction and given derived limits
+      # (record_generate.sh); from outside, the run-phase image holds no strace and refuses the
+      # recorder. Every container is ordinary.
+      - name: The recording pruner records with the terminal passed through and replays under the layers
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        timeout-minutes: 40
+        run: >-
+          bash pruner/runtime_pruner/test/integration/interface/record_host.sh
+          phobos-prune-layers:ci phobos-run-phase:ci
+
+      # The recording pruner on a host name: a stand-in server on a Docker network with no route out
+      # serves TLS and DNS for api.phobos.test; the recorded session's policy names the host from the
+      # ClientHello, and the replay under the egress broker passes while the neighbouring port stays
+      # refused. Every container is ordinary; the network has no route out.
+      - name: The recording pruner writes a host name rule and replays it through the egress broker
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        timeout-minutes: 15
+        run: bash pruner/runtime_pruner/test/integration/interface/record_networked.sh phobos-prune-layers:ci
+
   # The run-phase image for Python, built FROM the official Python image rather than Artemis's
-  # ls1tum/artemis-python-docker (see its Dockerfile), on native runners for both architectures as
-  # the Java image is. It is held to every suite that does not need Java: the language-neutral
-  # acceptance suites and the whole protection matrix, which replace the image's base with their
-  # own whatever language it is for. The four acceptance suites that compile Java probes or run
-  # Maven (run-tests, extra-tests, phase-test, shipped-policy-test) stay with the Java job. The layer
-  # pruner is then built on this image and prunes the fixture on it, so the pruner is proven on the
-  # image it prunes Python exercises in.
+  # ls1tum/artemis-python-docker (see its Dockerfile), on native runners: amd64 in the weekly run,
+  # amd64 and arm64 in a dispatch with the full scope, and never for a pull request. Its four C
+  # products are compiled in its own Debian stage, so they are not the Java image's binaries, and this
+  # job holds the binaries it ships to both directions: the shipped Python base on the Python
+  # reference exercise, the five language-neutral acceptance suites, the reporter, and the layer
+  # pruner pruning that exercise on this image together with its own suites, whose aborts for the
+  # wrong reason and declared hosts the reference exercise does not reach. The protection matrix runs
+  # on the Java image only.
   run-phase-python:
-    name: Build the Python run-phase image (${{ matrix.platform }}) and hold it to the ${{ matrix.group }} suites
-    runs-on: ${{ matrix.runner }}
+    name: Build the Python run-phase image (${{ matrix.platform }}) and hold it to its own suites
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.scope == 'full') }}
+    runs-on: ${{ matrix.platform == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-26.04' }}
     timeout-minutes: 45
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        platform: [amd64, arm64]
-        group: [pruner-a, egress, suites-a, suites-b]
-        include:
-          - platform: amd64
-            runner: ubuntu-26.04
-          - platform: arm64
-            runner: ubuntu-24.04-arm
+        platform: ${{ fromJSON(github.event_name == 'schedule' && '["amd64"]' || '["amd64", "arm64"]') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -530,113 +914,59 @@ jobs:
             "${RUNNER_TEMP}/run-phase-context"
 
       # The same ordinary containers as the Java job: --network none, and no --privileged, no
-      # --cap-add, no --security-opt. The cgroup limits the Java job gives the matrix are given to
-      # the acceptance suites here too, which only bounds them. One step per suite would repeat the
-      # Java job's seventeen; a loop that names every suite it runs, and fails when any one does,
-      # says the same.
-      - name: The language-neutral acceptance suites and the first half of the protection matrix
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'suites-a' }}
+      # --cap-add, no --security-opt. These five need no Java and take seconds, and each one puts a
+      # binary this image compiled to a raw call it must refuse.
+      - name: The language-neutral acceptance suites hold on the Python image
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           failed=0
           for suite in \
-              landlock-filesystem-and-networksystem-acceptance/network-port-test.sh \
-              landlock-filesystem-and-networksystem-acceptance/bind-port-test.sh \
-              landlock-filesystem-and-networksystem-acceptance/scoping-test.sh \
-              landlock-filesystem-and-networksystem-acceptance/process-groups-test.sh \
-              landlock-filesystem-and-networksystem-acceptance/seccomp-networksystem-test.sh \
-              landlock-filesystem-and-networksystem-acceptance/network-cleanup-test.sh \
-              protection-matrix/network.sh \
-              protection-matrix/timeout.sh \
-              protection-matrix/filesystem.sh \
-              protection-matrix/cli.sh; do
+              network-port-test.sh \
+              bind-port-test.sh \
+              scoping-test.sh \
+              process-groups-test.sh \
+              seccomp-networksystem-test.sh \
+              network-cleanup-test.sh; do
             echo "::group::${suite}"
             if ! docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
-                phobos-run-phase-python:ci bash "/tests/integration/${suite}"; then
+                phobos-run-phase-python:ci \
+                bash "/tests/integration/landlock-filesystem-and-networksystem-acceptance/${suite}"; then
               failed=1
               echo "::error::${suite} failed"
             fi
             echo "::endgroup::"
           done
           exit "${failed}"
-
-      - name: The language-neutral acceptance suites and the second half of the protection matrix
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'suites-b' }}
-        run: |
-          failed=0
-          for suite in \
-              protection-matrix/network-edge.sh \
-              protection-matrix/combinations.sh \
-              protection-matrix/lifecycle.sh \
-              protection-matrix/policy-syntax.sh \
-              protection-matrix/filesystem-edge.sh \
-              protection-matrix/resources.sh \
-              protection-matrix/resources-edge.sh; do
-            echo "::group::${suite}"
-            if ! docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
-                phobos-run-phase-python:ci bash "/tests/integration/${suite}"; then
-              failed=1
-              echo "::error::${suite} failed"
-            fi
-            echo "::endgroup::"
-          done
-          exit "${failed}"
-
-      - name: The reporter reports each blocked action on the Python image and changes no outcome
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'egress' }}
-        run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
-            phobos-run-phase-python:ci bash /tests/integration/protection-matrix/reporting.sh
 
       # The Python reference exercise under the Python base the image ships, which the layer pruner
       # derived from this very exercise: the template's two phases pass, and a canary, a write beside
       # the working directory and an unnamed address are refused. Without it a stale base would go
       # unnoticed, as the previous one did.
       - name: The shipped Python base runs the Python reference exercise both ways
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.group == 'suites-a' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
             -v "${PWD}/exercises/python/python-reference:/exercise:ro" \
             phobos-run-phase-python:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/python-policy-test.sh
 
+      - name: The reporter reports each blocked action on the Python image and changes no outcome
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
+            phobos-run-phase-python:ci bash /tests/integration/protection-matrix/reporting.sh
+
       - name: Build the prune image on the Python run-phase image
         id: prune-build
-        if: >-
-          ${{ !cancelled() && steps.build.outcome == 'success'
-          && contains(fromJSON('["pruner-a","egress"]'), matrix.group) }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase-python:ci \
             -f docker/pruner/layers/Dockerfile -t phobos-prune-layers-python:ci .
 
-      - name: The prune image's observer on the Python image sees what the layers refuse, and only that
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner-a' }}
-        run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}/protecter/test:/repo/protecter/test:ro" -v "${PWD}/pruner:/repo/pruner:ro" \
-            -v "${PWD}/pruner:/var/tmp/helpers:ro" \
-            phobos-prune-layers-python:ci \
-            bash /repo/pruner/exercise_pruner/test/integration/infrastructure/layer_prune_observer.sh
-
-      - name: The layer pruner on the Python image derives a policy that holds in both directions
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner-a' }}
-        timeout-minutes: 50
-        run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci \
-            bash /repo/pruner/exercise_pruner/test/integration/interface/layer_prune.sh
-
-      - name: The layer pruner on the Python image keeps exactly the declared hosts a build needs
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'egress' }}
-        timeout-minutes: 30
-        run: |
-          docker run --rm --network none --memory 3g --pids-limit 1024 \
-            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci \
-            bash /repo/pruner/exercise_pruner/test/integration/interface/layer_prune_egress.sh
-
       # The Python reference exercise, pruned as Compose's prune_python prunes it: pytest under the
       # layers, and every stage ending in a policy rather than an abort.
       - name: The layer pruner prunes the Python reference exercise on the Python image
-        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' && matrix.group == 'pruner-a' }}
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
         timeout-minutes: 30
         run: |
           output="$(mktemp -d)"
@@ -647,25 +977,48 @@ jobs:
             /var/tmp/helpers/exercise_pruner/src/interface/main.py python
           test -s "${output}/python_python-reference.cfg"
 
-  # The run-phase image for C exercises built with Artemis's FACT template, on native runners for both
-  # architectures. The shipped C base is derived from the FACT reference exercise on this very image, so the
+      - name: The prune image's observer on the Python image sees what the layers refuse, and only that
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}/protecter/test:/repo/protecter/test:ro" -v "${PWD}/pruner:/repo/pruner:ro" \
+            -v "${PWD}/pruner:/var/tmp/helpers:ro" \
+            phobos-prune-layers-python:ci \
+            bash /repo/pruner/exercise_pruner/test/integration/infrastructure/layer_prune_observer.sh
+
+      - name: The layer pruner on the Python image derives a policy that holds in both directions
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        timeout-minutes: 50
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci \
+            bash /repo/pruner/exercise_pruner/test/integration/interface/layer_prune.sh
+
+      - name: The layer pruner on the Python image keeps exactly the declared hosts a build needs
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        timeout-minutes: 30
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}:/repo:ro" phobos-prune-layers-python:ci \
+            bash /repo/pruner/exercise_pruner/test/integration/interface/layer_prune_egress.sh
+
+  # The run-phase image for C exercises built with Artemis's FACT template, on native runners, when the
+  # Python image is built. The shipped C base is derived from the FACT reference exercise on this very image, so the
   # job holds the image to that exercise in both directions and proves the layer pruner still prunes it:
   # the exercise's declared `runs_compiled_programs` setting is the one place a base keeps execute beside write.
+  # As on the Python image, the five language-neutral acceptance suites and the reporter hold the binaries it
+  # compiled.
   run-phase-c-fact:
     name: Build the C (FACT) run-phase image (${{ matrix.platform }}) and hold it to the FACT reference exercise
-    runs-on: ${{ matrix.runner }}
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.scope == 'full') }}
+    runs-on: ${{ matrix.platform == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-26.04' }}
     timeout-minutes: 45
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        platform: [amd64, arm64]
-        include:
-          - platform: amd64
-            runner: ubuntu-26.04
-          - platform: arm64
-            runner: ubuntu-24.04-arm
+        platform: ${{ fromJSON(github.event_name == 'schedule' && '["amd64"]' || '["amd64", "arm64"]') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -695,6 +1048,27 @@ jobs:
             phobos-run-phase-c-fact:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/c-fact-policy-test.sh
 
+      - name: The language-neutral acceptance suites hold on the C image
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          failed=0
+          for suite in \
+              network-port-test.sh \
+              bind-port-test.sh \
+              scoping-test.sh \
+              seccomp-networksystem-test.sh \
+              network-cleanup-test.sh; do
+            echo "::group::${suite}"
+            if ! docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
+                phobos-run-phase-c-fact:ci \
+                bash "/tests/integration/landlock-filesystem-and-networksystem-acceptance/${suite}"; then
+              failed=1
+              echo "::error::${suite} failed"
+            fi
+            echo "::endgroup::"
+          done
+          exit "${failed}"
+
       - name: The reporter reports each blocked action on the C image and changes no outcome
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
@@ -720,24 +1094,22 @@ jobs:
             /var/tmp/helpers/exercise_pruner/src/interface/main.py c-fact
           test -n "$(find "${output}" -maxdepth 1 -name '*fact-reference.cfg' -size +0)"
 
-  # The run-phase image for R exercises built with Artemis's R template, on native runners for both
-  # architectures. The shipped R base is derived from the R reference exercise on this very image, so the
+  # The run-phase image for R exercises built with Artemis's R template, on native runners, when the
+  # Python image is built. The shipped R base is derived from the R reference exercise on this very image, so the
   # job holds the image to that exercise in both directions and proves the layer pruner still prunes it.
+  # As on the Python image, the five language-neutral acceptance suites and the reporter hold the binaries it
+  # compiled.
   run-phase-r:
     name: Build the R run-phase image (${{ matrix.platform }}) and hold it to the R reference exercise
-    runs-on: ${{ matrix.runner }}
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.scope == 'full') }}
+    runs-on: ${{ matrix.platform == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-26.04' }}
     timeout-minutes: 45
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        platform: [amd64, arm64]
-        include:
-          - platform: amd64
-            runner: ubuntu-26.04
-          - platform: arm64
-            runner: ubuntu-24.04-arm
+        platform: ${{ fromJSON(github.event_name == 'schedule' && '["amd64"]' || '["amd64", "arm64"]') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -767,6 +1139,27 @@ jobs:
             phobos-run-phase-r:ci \
             bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/r-policy-test.sh
 
+      - name: The language-neutral acceptance suites hold on the R image
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          failed=0
+          for suite in \
+              network-port-test.sh \
+              bind-port-test.sh \
+              scoping-test.sh \
+              seccomp-networksystem-test.sh \
+              network-cleanup-test.sh; do
+            echo "::group::${suite}"
+            if ! docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
+                phobos-run-phase-r:ci \
+                bash "/tests/integration/landlock-filesystem-and-networksystem-acceptance/${suite}"; then
+              failed=1
+              echo "::error::${suite} failed"
+            fi
+            echo "::endgroup::"
+          done
+          exit "${failed}"
+
       - name: The reporter reports each blocked action on the R image and changes no outcome
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
@@ -791,22 +1184,3 @@ jobs:
             --entrypoint python3 phobos-prune-layers-r:ci \
             /var/tmp/helpers/exercise_pruner/src/interface/main.py r
           test -n "$(find "${output}" -maxdepth 1 -name '*r-reference.cfg' -size +0)"
-
-  # Mutation testing installs clang and mull into a container and then runs the suite
-  # once per mutant. It runs on every change like the other jobs, and a run that does
-  # not reach a score fails it, so a toolchain that stops compiling the sources is
-  # noticed in the pull request that broke it and not a week later.
-  mutation:
-    name: Mutation score of the wrapper suite
-    runs-on: ubuntu-26.04
-    timeout-minutes: 60
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Run mutation testing
-        run: bash protecter/test/unit/phobos-landlock-filesystem-and-networksystem/mutation.sh
