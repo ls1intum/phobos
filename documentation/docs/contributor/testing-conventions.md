@@ -24,24 +24,33 @@ non-zero on a failure.
 
 | Family | Where | What it needs | Run by |
 | --- | --- | --- | --- |
-| Integration suites | `protecter/test/integration/*.sh` | a shell, `gcc-14`, `haproxy`, `openssl` | the `Shell suites` job of `test.yml`, in continuous integration (CI) |
-| Shell unit suites | `protecter/test/unit/<core component>/*.sh` | a shell | the `Shell suites` job of `test.yml` |
-| Python suites | `pruner/` | pytest | the `Python helpers` job of `test.yml` |
-| C unit suites | `protecter/test/unit/phobos-landlock-filesystem-and-networksystem/`, `protecter/test/unit/phobos-seccomp-networksystem/`, `protecter/test/unit/phobos-seccomp-filesystem/` | `gcc-14`, no kernel feature | the `unit` job of `build.yml` |
-| Acceptance suites | `protecter/test/integration/landlock-filesystem-and-networksystem-acceptance/` | the run-phase image, an ordinary container | the groups of the `run-phase` job of `build.yml`, on amd64 and arm64 |
-| Protection matrix | `protecter/test/integration/protection-matrix/` | the run-phase image, an ordinary container | the groups of the `run-phase` job of `build.yml`, on amd64 and arm64 |
+| Integration suites | `protecter/test/integration/*.sh` | a shell, `gcc-14`, `haproxy`, `openssl` | the end-to-end job of the layer they hold in `build.yml`, on the runner itself, in continuous integration (CI) |
+| Shell unit suites | `protecter/test/unit/<core component>/*.sh` | a shell | the `Protecter unit tests` job of `test.yml` |
+| Python suites | `pruner/` | pytest | the `Exercise-Pruner unit tests`, `Runtime-Pruner unit tests` and `Shared-Pruner unit tests` jobs of `test.yml` |
+| C unit suites | `protecter/test/unit/phobos-landlock-filesystem-and-networksystem/`, `protecter/test/unit/phobos-seccomp-networksystem/`, `protecter/test/unit/phobos-seccomp-filesystem/` | `gcc-14`, no kernel feature | the `Protecter unit tests` job of `test.yml` |
+| Acceptance suites | `protecter/test/integration/landlock-filesystem-and-networksystem-acceptance/` | the run-phase image, an ordinary container | the end-to-end jobs of `build.yml`, on amd64 |
+| Protection matrix | `protecter/test/integration/protection-matrix/` | the run-phase image, an ordinary container | the end-to-end jobs of `build.yml`, on amd64 |
 
-The `run-phase` job is a matrix of parallel groups on each architecture: `acceptance`, `matrix-a`,
-`matrix-b`, `recorder-and-egress` and `pruner`. A group is a slice of the suites, so one slow
-suite no longer makes every run wait for the sum of all of them. The Python run-phase image has
-its own job with the groups `suites-a`, `suites-b`, `pruner-a` and `egress`. It holds that image to
-every suite that needs no Java, while the acceptance suites that compile Java probes or run Maven
-stay with the Java image. On the free plan GitHub runs at most 20 jobs at once, so every new group
-counts against that limit.
+The `java-image` job of `build.yml` builds the Java run-phase image once and hands it to the
+end-to-end jobs as an artefact, so every one of them tests the same image. `Protecter e2e Reference
+tests` runs first: the reference exercises and the guarantees every other suite rests on. Once it
+has passed, the others run in parallel, one per part of the protecter (`Policy`, `Filesystem`,
+`Networksystem`, `Timeoutsystem`, `Resourcesystem`, `Combined`, `Reporting` and `CLI`) and one per
+pruner. Each layer's job runs, on the runner itself, the integration suites of that layer that need
+no image. The Java image runs on amd64 only.
 
-Some integration suites run elsewhere. They need the prune image that the `run-phase` job of
-`build.yml` builds on the run-phase image, so the `pruner` and `recorder-and-egress` groups run
-them, in an ordinary container:
+The Python, C and R run-phase images compile their own C programs, so each has a job of its own.
+None of them runs for a pull request: the weekly run builds them for amd64, and a dispatch with
+`scope: full` for amd64 and arm64. Each holds its image to its reference exercise and to the layer
+pruner pruning that exercise. Each runs `reporting.sh` and the five acceptance suites that need no
+Java: `network-port-test.sh`, `bind-port-test.sh`, `scoping-test.sh`,
+`seccomp-networksystem-test.sh` and `network-cleanup-test.sh`. The Python image runs the layer
+pruner's own suites too. The rest of the protection matrix runs on the Java image only. On the free plan GitHub
+runs at most 20 jobs at once, so every new job counts against that limit.
+
+Some integration suites run elsewhere. They need the prune image that the `java-image` job of
+`build.yml` builds on the run-phase image, so the `Exercise-Pruner e2e tests` and `Runtime-Pruner
+e2e tests` jobs run them, in an ordinary container:
 
 - `layer_prune_observer.sh`
 - `layer_prune.sh`, the whole layer pruner on its fixture exercise, in both directions
@@ -54,7 +63,7 @@ them, in an ordinary container:
 Two suites cover `phobos-cli.sh`. `phobos_cli.sh` needs no Docker. It reads the commands a dry run prints
 and answers with a stand-in `docker`. That holds the option contract and the dispatch of `run`, `prune`,
 `record` and `build`. The same suite pins the claim that nothing the script builds gives a container a privilege.
-`phobos_cli_docker.sh` starts real containers in the `matrix-b` group of the `run-phase` job and inspects them.
+`phobos_cli_docker.sh` starts real containers in the `Protecter e2e CLI tests` job of `build.yml` and inspects them.
 
 The Python suites cover the modules of both pruners too, from a recorded `strace` log and
 captured packets in the `fixtures/` folders beside the unit tests.
@@ -93,8 +102,8 @@ Two of them carry a coverage gate:
 | `protecter/test/unit/phobos-landlock-filesystem-and-networksystem/run.sh` | none. `mutation.sh` in the same folder reports a mutation score for it instead, because the coverage runtime disturbs the calls the suite interposes |
 
 The mutation score answers a different question from coverage: coverage says a line ran, and
-mutation shows whether a test notices when a line is wrong. The `mutation` job of
-`build.yml` breaks the Landlock program's sources one small change at a time, runs the suite for
+mutation shows whether a test notices when a line is wrong. The mutation step of the
+`Protecter unit tests` job of `test.yml` breaks the Landlock program's sources one small change at a time, runs the suite for
 each and reports the share it catches. It needs clang 20 and mull in an Ubuntu 26.04 container,
 reports a score without gating on it, and fails where it reaches no score. It runs on every
 change and weekly.
@@ -113,8 +122,8 @@ bind refused by a Landlock bind-port rule, Landlock scoping against signals and 
 the connect guard inside the image, and the network layer leaving nothing behind. That last
 suite checks that no HAProxy remains and that `/etc/hosts` is byte for byte as it was, even
 after a `SIGKILL`ed timeout and two overlapping runs.
-The job runs on both architectures, and the image build checks with `readelf` that the three
-compiled programs are position independent with full RELRO.
+They run on amd64 on every event, and the image build checks with
+`readelf` that the four compiled programs are position independent with full RELRO.
 
 ## The protection matrix
 
@@ -122,7 +131,7 @@ The acceptance suites measure the shipped policy. The matrix under
 `protecter/test/integration/protection-matrix/` holds `phobos.sh` itself to its promises, layer by layer
 and combined. It has twelve suites (`filesystem`, `network`, `timeout`, `resources`,
 `combinations`, `cli`, `lifecycle`, `policy-syntax`, `network-edge`, `filesystem-edge`,
-`resources-edge` and `reporting`), each a step of the `run-phase` job in an ordinary container with
+`resources-edge` and `reporting`), each a step of an end-to-end job of `build.yml` in an ordinary container with
 `--network none --memory 3g --pids-limit 1024`. The cgroup caps are not privileges. `lib.sh`,
 `probe.c`, `edge.c`, `stubdns.c` and `run-all.sh` are the shared parts.
 
