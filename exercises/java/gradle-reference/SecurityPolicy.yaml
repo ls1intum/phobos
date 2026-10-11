@@ -1,17 +1,25 @@
-# Ares 2 security policy of the Phobos reference exercise, in the shape of the policy of Artemis's Java test template.
+# Ares 2 security policy for the tests of this repository, referenced by @Policy in the test classes.
 # Docs: https://ls1intum.github.io/Ares2/instructor/policy-reference
 # Add every new test class below, otherwise Ares treats it like student code and blocks it.
 thisPolicyFileCompliesToThePolicyVersion: 1
 regardingTheSupervisedCode:
   theFollowingProgrammingLanguageConfigurationIsUsed: JAVA_USING_GRADLE_ARCHUNIT_AND_ASPECTJ
   theSupervisedCodeUsesTheFollowingPackage: "de.phobos.reference"
-  theMainClassInsideThisPackageIs: "Adder"
+  theMainClassInsideThisPackageIs: "Client"
   theFollowingClassesAreTestClasses:
-    - "de.phobos.reference.AdderTest"
+    - "de.phobos.reference.AttributeTest"
+    - "de.phobos.reference.ClassTest"
+    - "de.phobos.reference.ConstructorTest"
+    - "de.phobos.reference.MethodTest"
+    - "de.phobos.reference.SortingExampleBehaviorTest"
   theFollowingResourceAccessesArePermitted:
     regardingFileSystemInteractions: [ ]
     regardingNetworkConnections: [ ]
     regardingCommandExecutions: [ ]
-    regardingThreadCreations: [ ]
-    regardingPackageImports: [ ]
+    # The sorting exercise uses ThreadLocalRandom to create random dates
+    regardingThreadCreations:
+      - createTheFollowingNumberOfThreads: 1
+        ofThisClass: "java.util.concurrent.ThreadLocalRandom"
+    regardingPackageImports:
+      - importTheFollowingPackage: "org.apache.commons.lang3"
     regardingTimeouts: [ ]

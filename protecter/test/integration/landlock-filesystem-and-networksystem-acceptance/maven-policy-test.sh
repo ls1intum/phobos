@@ -5,7 +5,7 @@
 # The exercise is Artemis's Maven test template with Ares 2, built offline. Its own
 # SecurityPolicy.yaml is imported with phobos.sh, with only the configuration name changed, so the
 # run goes through the base the configuration names (language-configurations/bases/) and no other.
-# Permitted direction: both tests pass under every name. Containment direction: a canary file the
+# Permitted direction: all 13 tests of the template pass under every name. Containment direction: a canary file the
 # base does not name is refused for read, and a run given no Ares 2 policy, which folds the
 # top-level Base*.cfg and never the Maven base, cannot read the Maven dependency repository the
 # Maven base grants.
@@ -52,10 +52,10 @@ for name in "${NAMES[@]}"; do
   prepare_exercise "$name"
   output="$("$CORE/phobos.sh" --config /tmp/SecurityPolicy.yaml --project-root "$EXERCISE" -- /bin/bash "${EXERCISE}/build_script.sh" 2>&1)"
   status=$?
-  if (( status == 0 )) && grep -qF "Tests run: 2, Failures: 0, Errors: 0, Skipped: 0" <<<"$output" && grep -qF "BUILD SUCCESS" <<<"$output"; then
-    ok "${name}: both tests pass under the Maven base"
+  if (( status == 0 )) && grep -qF "Tests run: 13, Failures: 0, Errors: 0, Skipped: 0" <<<"$output" && grep -qF "BUILD SUCCESS" <<<"$output"; then
+    ok "${name}: all 13 tests pass under the Maven base"
   else
-    bad "${name}: both tests pass under the Maven base" "status ${status}: $(tail -n 30 <<<"$output")"
+    bad "${name}: all 13 tests pass under the Maven base" "status ${status}: $(tail -n 30 <<<"$output")"
   fi
 done
 
