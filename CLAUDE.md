@@ -111,7 +111,7 @@ integration requirement in SECURITY.md.
 # On a host: build the image, run a command in an ordinary container with limits, prune and record
 ./phobos-cli.sh build java
 ./phobos-cli.sh run --exercise ./my-exercise --config exercise.cfg -- ./gradlew test
-./phobos-cli.sh prune python        # one Compose service, rebuilt first; "prune all" runs the nine jobs in order
+./phobos-cli.sh prune python        # one Compose service, rebuilt first; "prune all" runs the eleven jobs in order
 ./phobos-cli.sh record generate --name tool
 ./phobos-cli.sh --dry-run run --exercise ./my-exercise -- true    # print the commands, start nothing
 ```
@@ -122,16 +122,16 @@ layer off, call `phobos.sh` directly.
 
 ### The linters, which are the gate
 
-`lint.yml` runs seven lint jobs, and `actionlint.yml` lints the workflows beside it, weekly
+`lint.yml` runs nine checks as the steps of one job, and `actionlint.yml` lints the workflows beside it, weekly
 as well as on a change under `.github`. Neither is the whole of CI: `test.yml` runs the shell and
 Python suites, `build.yml` builds the images for amd64 and arm64, runs the two C unit suites
 and holds the run-phase image to the Landlock acceptance suites and the protection matrix inside
 it, `codeql.yml` scans, `pullrequest-template.yml` checks the body, and `documentation-ci.yml`
-holds the documentation site to its own gate (see `documentation/README.md`). The lint jobs are the ones you can run in full by hand before opening a pull request.
+holds the documentation site to its own gate (see `documentation/README.md`). Its checks are the ones you can run in full by hand before opening a pull request.
 
 ```
-# Same file sets and same flags as CI. Together these are the seven lint.yml jobs plus
-# actionlint, and the C job is two
+# Same file sets and same flags as CI. Together these are the checks of lint.yml plus
+# actionlint, and the C check is two
 # steps rather than one: the compiler gate runs before cppcheck and fails on any warning.
 find . -name '*.sh'  -type f -print0 | xargs -0 shellcheck -x -S warning
 ( failed=0; while IFS= read -r f; do gcc-14 -std=gnu23 -fsyntax-only -Wall -Wextra -Werror -fanalyzer "$f" || failed=1; done < <(find . -name '*.c' -type f); exit "$failed" )
@@ -172,7 +172,7 @@ docker compose -f docker/protecter/python/docker-compose.yaml up --build
 Each prune container works independently on its language and writes its result into the
 shared `build/pruner/path_sets` directory; nothing passes between containers except through
 `build/pruner`. Each language's prune needs its run-phase image (`phobos-run-phase-java`,
-`phobos-run-phase-python`, `phobos-run-phase-c-fact`) built first, and each `verify_*` service re-runs the
+`phobos-run-phase-python`, `phobos-run-phase-c-fact`, `phobos-run-phase-r`) built first, and each `verify_*` service re-runs the
 exercises under the merged configuration at the end.
 
 ### The host
@@ -236,7 +236,7 @@ pruner/                    the pruners, which discover what a policy needs
 docker/pruner/             the layer pruner's image and the orchestrator's
   layers/                  the layer pruner's image: the run-phase image, strace, the probe, an empty base
   orchestrate/             the orchestrator's image
-docker/protecter/          the images an exercise actually runs in, one per language (java/, python/, c-fact/)
+docker/protecter/          the images an exercise actually runs in, one per language (java/, python/, c-fact/, r/)
 exercises/                 the reference exercises: the pruners' input and the protecter's acceptance fixtures
 phobos-cli.sh              one command line for phobos.sh, the layer pruner, the recording pruner and the image build; on a host it
                            starts Docker, in an image it starts what the image holds, and it refuses every switch that turns a layer off
