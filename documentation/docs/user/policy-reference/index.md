@@ -1,7 +1,7 @@
 ---
 title: "Policy Reference"
 sidebar_position: 0
-description: "How a policy file is read, the twelve sections it may hold, and the rules every section is subject to."
+description: "How a policy file is read, the thirteen sections it can hold, and the rules every section is subject to."
 ---
 
 :::tip[Simple Story]
@@ -26,7 +26,7 @@ an unknown section, an unknown key in `[limits]`, a malformed line in any sectio
 grammar, and any content before the first section header. Each of them ends the run with
 `PHB-EPOLICY`.
 
-## The twelve sections
+## The thirteen sections
 
 | Section | What it names |
 | --- | --- |
@@ -38,6 +38,7 @@ grammar, and any content before the first section header. Each of them ends the 
 | [`[create-ipc]`](create-ipc.md) | paths where sockets and named pipes may be created |
 | [`[create-symlink]`](create-symlink.md) | paths where symbolic links may be created |
 | [`[restructure]`](restructure.md) | paths that may be created in, deleted in, and rearranged |
+| [`[ioctl]`](ioctl.md) | device paths that take `ioctl` calls |
 | [`[connect]`](connect.md) | outbound destinations, by host, port and transport |
 | [`[bind]`](bind.md) | local ports that may be listened on |
 | [`[accept]`](accept.md) | a listener fronted by an inbound source filter |
@@ -59,17 +60,19 @@ section is not listed at all and stays denied.
 | `[create-symlink]` | `l` | create symbolic links |
 | `[restructure]` | `m`, `d`, `f` | create, delete, and move or rename across directories |
 | `[delete]` | `d` | delete files and directories |
-| no section | `i` | `ioctl` on a character or block device |
+| `[ioctl]` | `i` | `ioctl` on a character or block device |
 
 The letters are the arguments `phobos-landlock-filesystem-and-networksystem` takes, and `--debug` prints them, so this table
 is what a verbose log is read with. One letter can stand for more than one kernel right: `r`
 carries `READ_FILE`, `READ_DIRECTORY` and, from Landlock version 9, `RESOLVE_UNIX`.
 
-The letter `i` has no policy section, so nothing you write in a configuration file grants it.
-The tail flags file is the one place a `--rights=` reaches `phobos-landlock-filesystem-and-networksystem` without a section
-behind it; it ships inside the image as `TailPhobos.cfg`, carries the working directory alone
-today, and is part of the shipped policy rather than of a task configuration. Creating a device
-node has no letter at all and is never granted.
+The letter `i` comes from [`[ioctl]`](ioctl.md) alone and grants nothing but the `ioctl`. Opening the device still
+needs `[read]` or `[write]`.
+
+The tail flags file is the one place a `--rights=` reaches `phobos-landlock-filesystem-and-networksystem` without a
+section behind it. It ships inside the image as `TailPhobos.cfg`, carries the working directory alone today, and is
+part of the shipped policy rather than of a task configuration. Creating a device node has no letter at all and
+no policy grants it.
 
 ## The rule that catches most hand-written policies
 

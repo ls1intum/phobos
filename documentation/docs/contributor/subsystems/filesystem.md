@@ -136,8 +136,9 @@ CPU limit, when the processes the layer waited for used the whole CPU budget. A 
 with 153 by itself gets the file size line too, because a shell cannot tell the signal from the
 number. The process, open file and memory limits leave no such status.
 
-**The `i` right has no section.** `phobos-landlock-filesystem-and-networksystem` accepts the letter, and no configuration
-file can produce it. A policy that needs `ioctl` on a device has no way to ask.
+**The `i` right comes from `[ioctl]` only.** The section feeds `ioctl.paths`, which `collect_rights_table` reads
+last. Its paths are never materialised, because they name devices. The layer drops one the image lacks, as it does a
+read path.
 
 ## Further reading
 

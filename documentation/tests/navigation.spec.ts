@@ -107,7 +107,7 @@ test.describe('policy documentation', () => {
         // rather than at the page.
         const pages = [
             'read', 'execute', 'write', 'create', 'delete', 'create-ipc', 'create-symlink',
-            'restructure', 'connect', 'bind', 'accept', 'limits',
+            'restructure', 'ioctl', 'connect', 'bind', 'accept', 'limits',
         ];
 
         for (const name of pages) {

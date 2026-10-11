@@ -64,7 +64,7 @@ OPTIONS
 
 WHAT IT READS FROM THE SPECIFICATION DIRECTORY
   read.paths execute.paths write.paths create.paths delete.paths ipc.paths symlink.paths
-  refer.paths   one Landlock rule per line, the rights being exactly the sections a path
+  refer.paths ioctl.paths   one Landlock rule per line, the rights being exactly the sections a path
                 appears in
   tail.flags    flags handed to the enforcer last
   limits.conf   only with --resources-layer
@@ -200,6 +200,7 @@ DELETE="${SPEC_DIR}/delete.paths"
 IPC="${SPEC_DIR}/ipc.paths"
 SYMLINK="${SPEC_DIR}/symlink.paths"
 REFER="${SPEC_DIR}/refer.paths"
+IOCTL="${SPEC_DIR}/ioctl.paths"
 TAIL="${SPEC_DIR}/tail.flags"
 LANDLOCK="${LANDLOCK_BIN_OPT:-${HERE}/phobos-landlock-filesystem-and-networksystem}"
 
@@ -267,8 +268,9 @@ if (( PHB_DEBUG_ENABLED )); then args+=( --verbose ); fi
 
 # One --rights=LETTERS rule per allow-listed path, the letters being exactly the sections the
 # path appears in: [read] grants r, [execute] x, [write] w, [create] m (regular files and
-# directories), [delete] d, [create-ipc] p (sockets and named pipes), [create-symlink] l, and
-# [restructure] m+d+f (create, delete and REFER, so the path may be renamed and moved within).
+# directories), [delete] d, [create-ipc] p (sockets and named pipes), [create-symlink] l, [ioctl] i (ioctl
+# on a character or block device, and nothing else), and [restructure] m+d+f (create, delete and REFER, so the
+# path may be renamed and moved within).
 # Creating device nodes is never granted, since a device node reaches hardware the policy never
 # named. A path that names no right at all is simply not listed and stays denied by Landlock's
 # default. The Landlock TCP-port rules are no longer built here: they
@@ -276,7 +278,7 @@ if (( PHB_DEBUG_ENABLED )); then args+=( --verbose ); fi
 # network-only ruleset, which composes with this filesystem-only one. The specification directory
 # is kept out of every write path by phobos-policysystem.sh, where the write union is known and which
 # runs whichever layers are in the chain.
-build_path_args args "${READ}" "${EXECUTE}" "${WRITE}" "${CREATE}" "${DELETE}" "${IPC}" "${SYMLINK}" "${REFER}"
+build_path_args args "${READ}" "${EXECUTE}" "${WRITE}" "${CREATE}" "${DELETE}" "${IPC}" "${SYMLINK}" "${REFER}" "${IOCTL}"
 if [[ -s "${TAIL}" ]]; then
   # Splitting is intended: tail.flags holds whitespace-separated arguments.
   # Read line by line so a multi-line file works too.

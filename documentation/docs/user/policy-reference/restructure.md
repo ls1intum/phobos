@@ -47,6 +47,10 @@ example file, so reading them in order walks it from top to bottom.
 /var/tmp/workspace
 # policy-focus-end
 
+# Devices that may receive ioctl calls, here the pseudo-terminals of the container.
+[ioctl]
+/dev/pts
+
 [connect]
 allow 192.0.2.10:443
 allow repo.example.org:443

@@ -58,12 +58,13 @@ three kernel rights rather than one:
 | `[create-ipc]` | `p` | create sockets and named pipes |
 | `[create-symlink]` | `l` | create symbolic links |
 | `[restructure]` | `m`, `d`, `f` | create, delete, and move or rename across directories |
+| `[ioctl]` | `i` | `ioctl` on a character or block device |
 
 A path that appears in several sections holds the union of their letters. A path that appears
 in none is not listed at all and stays denied. The letter `i`, for `ioctl` on a character or
-block device, has no policy section: nothing you write in a configuration file grants it.
+block device, comes from `[ioctl]` and grants nothing else.
 
-The one route to a letter no section produces is the tail flags file, whose lines this layer
+The one place a `--rights=` reaches the enforcer without a section behind it is the tail flags file, whose lines this layer
 appends to the `phobos-landlock-filesystem-and-networksystem` argument vector unchanged. It ships as `TailPhobos.cfg` and
 today carries the run's working directory alone. It is part of the image rather than of a task
 configuration, so a `--rights=` written there is a change to the shipped policy.

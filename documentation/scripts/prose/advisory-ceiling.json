@@ -4,9 +4,9 @@
     "active-voice": 283,
     "address-the-reader": 11,
     "context-filler": 3,
-    "long-sentence": 74,
+    "long-sentence": 73,
     "no-intensifiers": 3,
-    "prefer-must": 57,
+    "prefer-must": 56,
     "present-tense": 64
   }
 }

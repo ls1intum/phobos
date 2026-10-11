@@ -52,7 +52,7 @@ function exampleOf(page) {
 describe('the shared example policy file', () => {
     test('there is one page per section the reference documents', async () => {
         const pages = await sectionPages();
-        assert.equal(pages.length, 12, 'twelve sections, twelve pages');
+        assert.equal(pages.length, 13, 'thirteen sections, thirteen pages');
     });
 
     test('every page shows the same file once the markers are removed', async () => {
