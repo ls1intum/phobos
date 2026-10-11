@@ -875,6 +875,78 @@ jobs:
             /var/tmp/helpers/exercise_pruner/src/interface/main.py c-gcc
           test -n "$(find "${output}" -maxdepth 1 -name '*gcc-reference.cfg' -size +0)"
 
+  # The run-phase image for C++ exercises built with Artemis's C++ template, on native runners for both
+  # architectures. The shipped C++ base is derived from the C++ reference exercise on this very image, so the
+  # job holds the image to that exercise in both directions and proves the layer pruner still prunes it.
+  run-phase-cpp:
+    name: Build the C++ run-phase image (${{ matrix.platform }}) and hold it to the C++ reference exercise
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [amd64, arm64]
+        include:
+          - platform: amd64
+            runner: ubuntu-26.04
+          - platform: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assemble the build context
+        run: .github/scripts/assemble-run-phase-context.sh "${RUNNER_TEMP}/run-phase-context"
+
+      - name: Build the C++ run-phase image
+        id: build
+        env:
+          FRESH: ${{ github.event_name == 'schedule' && '--pull --no-cache' || '' }}
+        run: |
+          # FRESH is either empty or two flags, so it must be split into words.
+          # shellcheck disable=SC2086
+          docker build ${FRESH} \
+            -f docker/protecter/cpp/Dockerfile \
+            -t phobos-run-phase-cpp:ci \
+            "${RUNNER_TEMP}/run-phase-context"
+
+      - name: The shipped C++ base runs the C++ reference exercise both ways
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
+            -v "${PWD}/exercises/cpp/cpp-reference:/exercise:ro" \
+            phobos-run-phase-cpp:ci \
+            bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/cpp-policy-test.sh
+
+      - name: The reporter reports each blocked action on the C++ image and changes no outcome
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
+            phobos-run-phase-cpp:ci bash /tests/integration/protection-matrix/reporting.sh
+
+      - name: Build the prune image on the C++ run-phase image
+        id: prune-build
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase-cpp:ci \
+            -f docker/pruner/layers/Dockerfile -t phobos-prune-layers-cpp:ci .
+
+      - name: The layer pruner prunes the C++ reference exercise on the C++ image
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        timeout-minutes: 30
+        run: |
+          output="$(mktemp -d)"
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}/exercises:/srv/phobos-prune-exercises:ro" \
+            -v "${PWD}/pruner:/var/tmp/helpers:ro" -v "${output}:/var/tmp/path_sets" \
+            --entrypoint python3 phobos-prune-layers-cpp:ci \
+            /var/tmp/helpers/exercise_pruner/src/interface/main.py cpp
+          test -n "$(find "${output}" -maxdepth 1 -name '*cpp-reference.cfg' -size +0)"
+
   # Mutation testing installs clang and mull into a container and then runs the suite
   # once per mutant. It runs on every change like the other jobs, and a run that does
   # not reach a score fails it, so a toolchain that stops compiling the sources is

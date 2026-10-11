@@ -15,6 +15,7 @@ import itertools
 import json
 import os
 import pathlib
+import re
 import shutil
 import signal
 import subprocess  # nosec B404
@@ -41,6 +42,8 @@ ESTATUS_STATUS = 16
 ESTATUS_MARKER = "(PHB-ESTATUS)"
 # The names an exercise's build script may have, in the order they are looked for.
 BUILD_SCRIPT_NAMES = ("build_script.sh", "build_script")
+# A directory inside the working directory that prune.json may name for the programs the tests compile and run.
+COMPILED_DIRECTORY = re.compile(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*")
 # How long a run may take at most, in seconds, whatever its policy says (Budget.run_seconds).
 DEFAULT_RUN_SECONDS = 1800
 # How long reap_leftovers waits for the processes it killed to be reaped, and how often it looks.
@@ -49,7 +52,7 @@ REAP_INTERVAL_SECONDS = 0.05
 # The keys prune.json may hold, with the type each value must have (A.6.8).
 SETTING_TYPES = {"report_globs": list, "declared_hosts": list, "heap_pinned": bool, "pinned_read_roots": list,
                  "seed": str, "key": str, "runs_compiled_programs": bool, "uses_pseudo_terminals": bool,
-                 "address_space_unbounded": bool}
+                 "address_space_unbounded": bool, "compiled_programs_directory": str}
 
 
 class PrunerDefect(Exception):
@@ -87,6 +90,7 @@ class Exercise:
     runs_compiled_programs: bool = False
     uses_pseudo_terminals: bool = False
     address_space_unbounded: bool = False
+    compiled_programs_directory: str = "assignment"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -167,6 +171,11 @@ def read_settings(directory: pathlib.Path) -> dict:
                 seed.parse_name(value, str(path))
             except ValueError as error:
                 raise ExerciseRefused(str(error)) from error
+        elif key == "compiled_programs_directory":
+            if not COMPILED_DIRECTORY.fullmatch(value) or {".", ".."} & set(value.split("/")):
+                raise ExerciseRefused(f"{path} holds a compiled_programs_directory that is not a plain relative path")
+            if not settings.get("runs_compiled_programs", False):
+                raise ExerciseRefused(f"{path} names a compiled_programs_directory without runs_compiled_programs")
         elif isinstance(value, list) and not all(isinstance(item, str) and item for item in value):
             raise ExerciseRefused(f"{path} holds {key!r} with an entry that is not a non-empty string")
     if any(pattern.startswith("/") for pattern in settings.get("report_globs", ())):
@@ -198,7 +207,8 @@ def read_exercise(directory: pathlib.Path) -> Exercise:
                     pinned_read_roots=pinned.parse(settings.get("pinned_read_roots", []), str(directory / "prune.json")),
                     seed=settings.get("seed"), runs_compiled_programs=bool(settings.get("runs_compiled_programs", False)),
                     uses_pseudo_terminals=bool(settings.get("uses_pseudo_terminals", False)),
-                    address_space_unbounded=bool(settings.get("address_space_unbounded", False)))
+                    address_space_unbounded=bool(settings.get("address_space_unbounded", False)),
+                    compiled_programs_directory=settings.get("compiled_programs_directory", "assignment"))
 
 
 def restore(exercise: Exercise, environment: Environment) -> pathlib.Path:

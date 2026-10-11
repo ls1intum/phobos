@@ -73,6 +73,11 @@ base, this base permits executing a file the run itself wrote, in the directory 
 `/dev/pts` the `ioctl` right, because the tester starts the program on a pseudo-terminal. The tester's sanitizers
 need the address-space cap off, so the exercise's configuration sets `mem_mb=0` in `[limits]`.
 
+The C++ image for exercises that use the C++ template is built from `docker/protecter/cpp/docker-compose.yaml` and
+carries `BaseLanguage-cpp.cfg`. It adds CMake, g++ and Catch2 to the GCC image's tools. CMake builds into the tests
+directory, so this base permits executing a file the run wrote there, and nowhere else. It reads `/proc` whole, for
+the sanitizer runtime. The exercise's configuration sets `mem_mb=0` here as well.
+
 ## Running a command
 
 ```bash

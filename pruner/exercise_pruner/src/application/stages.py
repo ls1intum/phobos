@@ -388,13 +388,14 @@ def pseudo_terminal_split(pruning: Pruning, confirmed: list[record.Denial]
 
 
 def compiled_roots(pruning: Pruning) -> tuple[str, ...]:
-    """The directories whose [execute] stays beside a write: the assignment directory, for an exercise that runs what it compiles.
+    """The directories whose [execute] stays beside a write: the one the exercise compiles into, for an exercise that runs what it compiles.
 
-    Only an exercise that declares runs_compiled_programs in its prune.json gets one, and it is the directory of
-    the submission, never the working directory itself, so the tests beside it stay unexecutable. Everything else
-    keeps the rule that a file the run wrote is never made executable.
+    Only an exercise that declares runs_compiled_programs in its prune.json gets one. It is the assignment directory
+    unless compiled_programs_directory names another, and never the working directory itself, so what lies beside it
+    stays unexecutable. Everything else keeps the rule that a file the run wrote is never made executable.
     """
-    return (cfgfile.TESTING_DIR + "/assignment",) if pruning.exercise.runs_compiled_programs else ()
+    exercise = pruning.exercise
+    return (cfgfile.TESTING_DIR + "/" + exercise.compiled_programs_directory,) if exercise.runs_compiled_programs else ()
 
 
 def normalised(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
