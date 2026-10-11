@@ -1,10 +1,17 @@
 name: CodeQL
 
+# A change that touches nothing but the documentation site starts none of these jobs: no suite reads a
+# file under documentation/, and documentation-ci.yml is that site's own gate. Lint keeps running on such
+# a change, because yamllint and editorconfig-checker read documentation/ too.
 on:
   pull_request:
     branches: [ "main" ]
+    paths-ignore:
+      - "documentation/**"
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - "documentation/**"
   schedule:
     - cron: "0 16 * * 0"
   workflow_dispatch:
