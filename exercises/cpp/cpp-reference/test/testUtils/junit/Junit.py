@@ -36,7 +36,7 @@ class Junit:
         tree: Et.ElementTree = Et.ElementTree(root)
         self.createOutputPath(outputPath)
         tree.write(outputPath, xml_declaration=True)
-        chmod(outputPath, 0o644)
+        chmod(outputPath, 0o600)
 
     @staticmethod
     def strip_ansi_codes(text: str) -> str:
