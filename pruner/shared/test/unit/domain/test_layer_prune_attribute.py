@@ -342,3 +342,48 @@ def elf_with_interpreter(interpreter: bytes) -> bytes:
     program_header[8:16] = offset.to_bytes(8, "little")
     program_header[32:40] = (len(interpreter) + 1).to_bytes(8, "little")
     return bytes(elf + program_header + interpreter + b"\x00")
+
+
+def test_a_refused_pty_request_on_the_master_asks_for_ioctl_with_the_request_named():
+    denial = only_denial("300 ioctl(3</dev/pts/ptmx>, TIOCSPTLCK, [0]) = -1 EACCES (Permission denied)")
+    assert denial.layer == record.LAYER_FILESYSTEM
+    assert denial.objects == ("/dev/pts/ptmx",)
+    assert denial.sections == frozenset({attribute.SECTION_IOCTL})
+    assert denial.detail == "TIOCSPTLCK"
+
+
+def test_a_refused_terminal_request_on_a_numbered_slave_asks_for_ioctl():
+    denial = only_denial("300 ioctl(4</dev/pts/3>, TCGETS, 0x7ffc1) = -1 EACCES (Permission denied)")
+    assert denial.layer == record.LAYER_FILESYSTEM
+    assert denial.objects == ("/dev/pts/3",)
+    assert denial.detail == "TCGETS"
+
+
+def test_a_request_the_replay_cannot_repeat_stays_a_fixed_refusal():
+    denial = only_denial("300 ioctl(4</dev/pts/3>, TIOCSCTTY, 0) = -1 EACCES (Permission denied)")
+    assert denial.layer == record.LAYER_FIXED
+    assert denial.sections == frozenset()
+
+
+def test_an_ioctl_on_any_other_device_stays_a_fixed_refusal():
+    denial = only_denial("300 ioctl(4</dev/tty>, TCGETS, 0x7ffc1) = -1 EACCES (Permission denied)")
+    assert denial.layer == record.LAYER_FIXED
+
+
+def test_a_path_that_only_looks_like_a_pty_device_stays_a_fixed_refusal():
+    for path in ("/dev/pts/ptmx2", "/dev/pts/1/x", "/dev/pts/", "/dev/ptmx2", "/dev/pts/a", "/tmp/dev/pts/3"):
+        denial = only_denial(f"300 ioctl(4<{path}>, TCGETS, 0x7ffc1) = -1 EACCES (Permission denied)")
+        assert denial.layer == record.LAYER_FIXED, path
+
+
+def test_a_request_of_the_other_side_of_the_pair_stays_a_fixed_refusal():
+    on_slave = only_denial("300 ioctl(4</dev/pts/3>, TIOCGPTN, 0x7ffc1) = -1 EACCES (Permission denied)")
+    on_master = only_denial("300 ioctl(3</dev/pts/ptmx>, TCGETS, 0x7ffc1) = -1 EACCES (Permission denied)")
+    assert on_slave.layer == record.LAYER_FIXED
+    assert on_master.layer == record.LAYER_FIXED
+
+
+def test_a_path_ending_in_a_newline_is_no_pty_device():
+    assert attribute.PSEUDO_TERMINAL_DEVICE.match("/dev/pts/3\n") is None
+    assert attribute.pseudo_terminal_request("/dev/pts/3\n", "TCGETS") is False
+    assert attribute.pseudo_terminal_request("/dev/pts/3", "TCGETS") is True

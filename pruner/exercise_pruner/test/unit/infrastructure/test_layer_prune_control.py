@@ -7,6 +7,7 @@ a temporary directory, so nothing outside it is opened, created or changed.
 
 from __future__ import annotations
 
+import errno
 import os
 import pathlib
 import socket
@@ -243,7 +244,7 @@ def execve_denial(path: str) -> record.Denial:
 
 def test_a_program_removed_again_beneath_a_declared_root_is_landlock_caused(tmp_path):
     gone = str(tmp_path / "assignment" / ".tmp" / "manifest")
-    assert control.landlock_caused(execve_denial(gone), (str(tmp_path / "assignment"),)) is True
+    assert control.landlock_caused(execve_denial(gone), compiled_roots=(str(tmp_path / "assignment"),)) is True
 
 
 def test_the_same_program_without_a_declared_root_is_not_landlock_caused(tmp_path):
@@ -253,14 +254,14 @@ def test_the_same_program_without_a_declared_root_is_not_landlock_caused(tmp_pat
 
 def test_a_program_removed_again_outside_the_declared_root_is_not_landlock_caused(tmp_path):
     gone = str(tmp_path / "test" / "manifest")
-    assert control.landlock_caused(execve_denial(gone), (str(tmp_path / "assignment"),)) is False
+    assert control.landlock_caused(execve_denial(gone), compiled_roots=(str(tmp_path / "assignment"),)) is False
     sibling = str(tmp_path / "assignment-other" / "manifest")
-    assert control.landlock_caused(execve_denial(sibling), (str(tmp_path / "assignment"),)) is False
+    assert control.landlock_caused(execve_denial(sibling), compiled_roots=(str(tmp_path / "assignment"),)) is False
 
 
 def test_only_a_refused_execve_is_confirmed_for_a_removed_file(tmp_path):
     gone = str(tmp_path / "assignment" / "file")
-    assert control.landlock_caused(read_denial(gone), (str(tmp_path / "assignment"),)) is False
+    assert control.landlock_caused(read_denial(gone), compiled_roots=(str(tmp_path / "assignment"),)) is False
 
 
 def test_a_path_that_cannot_be_looked_up_is_not_taken_for_a_removed_program(tmp_path):
@@ -271,11 +272,64 @@ def test_a_path_that_cannot_be_looked_up_is_not_taken_for_a_removed_program(tmp_
     try:
         if running_as_root():
             pytest.skip("root looks up inside a mode-000 directory")
-        assert control.landlock_caused(execve_denial(str(closed / "manifest")), (str(tmp_path / "assignment"),)) is False
+        assert control.landlock_caused(execve_denial(str(closed / "manifest")), compiled_roots=(str(tmp_path / "assignment"),)) is False
     finally:
         closed.chmod(0o700)
 
 
 def test_a_path_that_climbs_out_of_the_declared_root_is_not_confirmed(tmp_path):
     escaping = str(tmp_path / "assignment" / ".." / "test" / "manifest")
-    assert control.landlock_caused(execve_denial(escaping), (str(tmp_path / "assignment"),)) is False
+    assert control.landlock_caused(execve_denial(escaping), compiled_roots=(str(tmp_path / "assignment"),)) is False
+
+
+def close_pair_or_skip() -> None:
+    """Skips the test where this machine offers no pseudo-terminal, and closes the pair it just opened otherwise."""
+    try:
+        pair = os.openpty()
+    except OSError:
+        pytest.skip("this machine offers no pseudo-terminals")
+    os.close(pair[0])
+    os.close(pair[1])
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="the replay repeats Linux pseudo-terminal requests")
+@pytest.mark.parametrize("request_name", ["TIOCGPTN", "TIOCSPTLCK", "TCGETS", "TCSETS", "TCSETSW", "TCSETSF",
+                                          "TIOCGWINSZ", "TIOCSWINSZ"])
+def test_every_supported_pty_request_succeeds_outside_the_sandbox_on_a_fresh_pair(request_name):
+    close_pair_or_skip()
+    assert control.replay_pseudo_terminal(request_name) is True
+
+
+def test_a_pty_request_the_replay_does_not_know_is_never_confirmed():
+    assert control.replay_pseudo_terminal("TIOCSCTTY") is False
+    assert control.replay_pseudo_terminal("") is False
+
+
+def pty_ioctl_denial(request_name: str) -> record.Denial:
+    """A refused ioctl on the master clone device, as attribute.denials builds it."""
+    return record.Denial(pid=1, layer=record.LAYER_FILESYSTEM, operation="ioctl", objects=("/dev/pts/ptmx",),
+                         sections=frozenset({attribute.SECTION_IOCTL}), address=None, port=None, transport=None,
+                         errno="EACCES", detail=request_name)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="the replay repeats Linux pseudo-terminal requests")
+def test_a_supported_pty_ioctl_denial_is_landlock_caused_and_an_unsupported_one_is_not():
+    close_pair_or_skip()
+    assert control.landlock_caused(pty_ioctl_denial("TIOCSPTLCK"), True) is True
+    assert control.landlock_caused(pty_ioctl_denial("TIOCSCTTY"), True) is False
+    assert control.landlock_caused(pty_ioctl_denial("TIOCSPTLCK")) is False
+
+
+def test_a_numbered_slave_that_is_gone_is_replayed_on_the_master_clone_device_and_nothing_else_is(tmp_path):
+    assert control.pseudo_terminal_equivalent("/dev/pts/987654", True) == "/dev/pts/ptmx"
+    assert control.pseudo_terminal_equivalent("/dev/pts/987654") == "/dev/pts/987654"
+    assert control.pseudo_terminal_equivalent("/dev/pts/3\n", True) == "/dev/pts/3\n"
+    assert control.pseudo_terminal_equivalent("/dev/pts/ptmx2") == "/dev/pts/ptmx2"
+    assert control.pseudo_terminal_equivalent(str(tmp_path / "x")) == str(tmp_path / "x")
+
+
+def test_a_pair_the_pruner_cannot_allocate_confirms_nothing(monkeypatch):
+    def refused():
+        raise OSError(errno.ENOSPC, "no pseudo-terminals left")
+    monkeypatch.setattr(control.os, "openpty", refused)
+    assert control.replay_pseudo_terminal("TCGETS") is False

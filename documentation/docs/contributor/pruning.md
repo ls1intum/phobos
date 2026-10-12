@@ -142,6 +142,13 @@ Five rules for an exercise are worth knowing:
   `"runs_compiled_programs": true` in `prune.json`. Only then does the pruner grant `[execute]` on the assignment directory of the working directory,
   which holds a write-class right, and only there. The submission can then run any file it
   writes into that directory. Without the declaration, a run that executes what it wrote gets no execute grant.
+- An exercise whose tests open a pseudo-terminal, as the C GCC and C++ templates of Artemis do, declares
+  `"uses_pseudo_terminals": true` in `prune.json`. Only then does the pruner grant `[read]`, `[write]` and
+  `[ioctl]` on `/dev/pts`, and on nothing beneath it, because a slave has a number that changes with every
+  run. The control replay confirms an ioctl refusal only for the requests it can repeat on a fresh pair
+  (`TIOCGPTN`, `TIOCSPTLCK`, `TCGETS`, `TCSETS`, `TCSETSW`, `TCSETSF`, `TIOCGWINSZ` and `TIOCSWINSZ`).
+  Every other request, and every other device, stays a fixed refusal. The grant lands in the base of the
+  language, so every exercise graded with that base can open a pseudo-terminal.
 
 ### The Maven prune
 

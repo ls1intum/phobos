@@ -40,9 +40,10 @@ FILESYSTEM_SECTIONS = {
     "fs.make_sock": frozenset({attribute.SECTION_CREATE_IPC}),
     "fs.make_fifo": frozenset({attribute.SECTION_CREATE_IPC}),
     "fs.refer": frozenset({attribute.SECTION_RESTRUCTURE}),
+    "fs.ioctl_dev": frozenset({attribute.SECTION_IOCTL}),
 }
-# Blockers no section grants: a device ioctl, a device node, a pathname UNIX connect, a scope.
-UNGRANTABLE_BLOCKERS = frozenset({"fs.ioctl_dev", "fs.make_char", "fs.make_block", "fs.resolve_unix",
+# Blockers no section grants: a device node, a pathname UNIX connect, a scope.
+UNGRANTABLE_BLOCKERS = frozenset({"fs.make_char", "fs.make_block", "fs.resolve_unix",
                                   "scope.abstract_unix_socket", "scope.signal"})
 BIND_UDP = "net.bind_udp"
 NETWORK_BLOCKERS = frozenset({"net.bind_tcp", "net.connect_tcp", BIND_UDP, "net.connect_send_udp"})
