@@ -1,7 +1,7 @@
 """The layer pruner's command line: prune every exercise of one language key and write its artefacts (A.9).
 
     python3 main.py [--stage filesystem|network|limits|all] [--testing-root DIR] [--output-dir DIR]
-                    [--resolver ADDRESS] [--verify MERGED_DIR] [--kernel-observer audit] <key>
+                    [--resolver ADDRESS] [--verify MERGED_DIR | --verify-policy FILE] [--kernel-observer audit] <key>
 
 For each exercise of the key under <testing-root>/<family>/<exercise> (discovery.py says which exercises
 that are) it writes <key>_<exercise>.cfg, the policy, and
@@ -17,6 +17,12 @@ With --verify it prunes nothing: it runs every exercise of the key under the orc
 BaseLanguage-<key>.cfg and exercises/<key>_<exercise>.cfg in MERGED_DIR, as grading will apply them,
 writes verify/<key>_<exercise>.json beneath the output directory, and ends with status 1 naming each
 exercise that did not match its reference. It touches no artefact of the prune.
+
+With --verify-policy FILE it prunes nothing either: it runs the one exercise of the key under the bases
+beside phobos.sh and FILE, as grading applies a task configuration on top of the shipped base, writes
+verify/<key>_<exercise>.json with the digests of FILE and of every base it found, and ends with status 1
+when the exercise did not match its reference. phobos-cli.sh submissions uses it with the grading bases
+of a run-phase image mounted beside phobos.sh.
 
 With --kernel-observer audit, which runs only in a KVM guest (A.6.9), it prunes nothing either: for each
 exercise it reads <key>_<exercise>.cfg and its record from the output directory, checks strace's
@@ -165,6 +171,38 @@ def prune_one(directory: pathlib.Path, key: str, stage: str, environment: runner
     return None
 
 
+def verify_policy_one(directory: pathlib.Path, key: str, environment: runner.Environment, policy: pathlib.Path,
+                      output: pathlib.Path, pristine: generalise.Snapshot, origin: dict[str, str | int]) -> str | None:
+    """Verifies one exercise under the bases beside phobos.sh and the policy, and writes its record; the reason
+    it failed, or None.
+
+    The bases are applied as grading applies them, found beside phobos.sh rather than passed with --config,
+    so a path a base names that this architecture lacks is not refused as an exercise's would be. The record
+    names the digest of the policy and of every base found, so that whoever reads it can tell which files
+    were applied. The broad except writes any failure, a defect of the pruner included, as the result.
+    """
+    entry: dict = {"schema_version": SCHEMA_VERSION, "key": key, "exercise": directory.name, "configs": [str(policy)],
+                   "provenance": origin,
+                   "bases": {base.name: hashlib.sha256(base.read_bytes()).hexdigest()
+                             for base in sorted(pathlib.Path(environment.phobos_home).glob("Base*.cfg"))}}
+    if policy.is_file():
+        entry["configs_sha256"] = [hashlib.sha256(policy.read_bytes()).hexdigest()]
+    reason = None
+    try:
+        if not policy.is_file():
+            raise search.PruneAbort(f"the policy {policy} is not a file")
+        entry["log"] = stages.jsonable(stages.verify_merged(runner.read_exercise(directory), (policy,), environment,
+                                                            pristine))
+    except Exception as failure:  # noqa: BLE001
+        aborted = abort_record(failure)
+        entry |= aborted
+        reason = aborted["aborted"]
+    entry["verified"] = reason is None
+    (output / VERIFY_DIRECTORY).mkdir(parents=True, exist_ok=True)
+    write_atomically(output / VERIFY_DIRECTORY / f"{key}_{directory.name}.json", json.dumps(entry, indent=2, sort_keys=True) + "\n")
+    return reason
+
+
 def arguments(argv: list[str]) -> argparse.Namespace:
     """The command line."""
     parser = argparse.ArgumentParser(description="Prune every exercise of one key on the grading layers.")
@@ -174,6 +212,8 @@ def arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--resolver", default=None, help="the resolver phobos.sh is given for declared hosts")
     parser.add_argument("--verify", default=None, metavar="MERGED_DIR",
                         help="verify the orchestrator's merged configuration in MERGED_DIR instead of pruning")
+    parser.add_argument("--verify-policy", default=None, metavar="FILE",
+                        help="verify the one exercise under the bases beside phobos.sh and FILE instead of pruning")
     parser.add_argument("--kernel-observer", choices=("audit",), default=None,
                         help="in a KVM guest, check strace's attribution against Landlock's audit records and add ABI 10 rows")
     parser.add_argument("key")
@@ -255,6 +295,11 @@ def main(argv: list[str]) -> int:
     if options.verify is not None and options.stage != "all":
         print("--verify checks the merged configuration of a whole prune; it takes no --stage", file=sys.stderr)
         return EXIT_ABORTED
+    if options.verify_policy is not None and (options.verify is not None or options.kernel_observer is not None
+                                              or options.stage != "all"):
+        print("--verify-policy checks one policy on one exercise; it takes neither --verify, --kernel-observer nor --stage",
+              file=sys.stderr)
+        return EXIT_ABORTED
     if options.kernel_observer is not None and (options.verify is not None or options.stage != "all"):
         print("--kernel-observer checks a finished prune on this kernel; it takes neither --verify nor --stage",
               file=sys.stderr)
@@ -281,9 +326,13 @@ def main(argv: list[str]) -> int:
         return EXIT_ABORTED
     output = pathlib.Path(options.output_dir)
     output.mkdir(parents=True, exist_ok=True)
+    if options.verify_policy is not None and len(exercises) != 1:
+        print(f"--verify-policy needs exactly one exercise of the key {options.key}, and found {len(exercises)}",
+              file=sys.stderr)
+        return EXIT_ABORTED
     if options.kernel_observer is not None:
         pass
-    elif options.verify is None:
+    elif options.verify is None and options.verify_policy is None:
         remove_stale(output, options.key)
     else:
         for stale in (output / VERIFY_DIRECTORY).glob(f"{options.key}_*.json"):
@@ -297,7 +346,11 @@ def main(argv: list[str]) -> int:
         return kernel_observe(options, environment, exercises, output, origin, pristine)
     aborted = {}
     for directory in exercises:
-        if options.verify is None:
+        if options.verify_policy is not None:
+            reason = verify_policy_one(directory, options.key, environment, pathlib.Path(options.verify_policy), output,
+                                       pristine, origin)
+            done = "verified"
+        elif options.verify is None:
             reason = prune_one(directory, options.key, options.stage, environment, output, origin, pristine)
             done = "pruned"
         else:

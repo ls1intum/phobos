@@ -60,13 +60,16 @@ e2e tests` jobs run them, in an ordinary container:
 - `record_networked.sh`, which runs the recorder against a stand-in server on a Docker network
   with no route out and replays the generated host name rule through the egress broker
 
-Three suites cover `phobos-cli.sh`. `phobos_cli.sh` needs no Docker. It reads the commands a dry run prints
+Five suites cover `phobos-cli.sh`. `phobos_cli.sh` needs no Docker. It reads the commands a dry run prints
 and answers with a stand-in `docker`. That holds the option contract and the dispatch of `run`, `prune`,
 `record` and `build`. The same suite pins the claim that nothing the script builds gives a container a privilege.
 `phobos_cli_docker.sh` starts real containers in the `Protecter e2e CLI tests` job of `build.yml` and inspects them.
 `phobos_cli_menu.sh` drives the menu under a pseudo-terminal from `script(1)`. A stand-in `dialog` answers it from a
 plan, and the suite compares the call each way through makes with the same call on the command line. The same job
 then drives the real `dialog` of the Java image once.
+`phobos_cli_submissions.sh` plays the containers of `submissions` with a stand-in `docker` and holds the
+command to its calls and statuses, and `phobos_cli_submissions_docker.sh` prunes, merges and verifies the
+fixture's submissions for real on full runs.
 
 The Python suites cover the modules of both pruners too, from a recorded `strace` log and
 captured packets in the `fixtures/` folders beside the unit tests.

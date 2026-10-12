@@ -115,6 +115,7 @@ integration requirement in SECURITY.md.
 ./phobos-cli.sh record generate --name tool
 ./phobos-cli.sh --dry-run run --exercise ./my-exercise -- true    # print the commands, start nothing
 ./phobos-cli.sh                     # on a terminal: a menu (needs dialog) that builds the call, runs it and prints it
+./phobos-cli.sh submissions --template ./tests --submissions ./past --output ./runs --assignment-is-student-code   # vetted submissions only
 ```
 
 Inside an image the same `run`, `prune` and `record` start `phobos.sh` and the helpers of the pruners

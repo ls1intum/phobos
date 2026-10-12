@@ -71,7 +71,7 @@ bootstrap_refused() {
 require_modules() {
   local module
   for module in phobos-cli-common.sh phobos-cli-help.sh phobos-cli-run.sh phobos-cli-prune.sh phobos-cli-record.sh phobos-cli-build.sh \
-                phobos-cli-ui.sh phobos-cli-pick.sh phobos-cli-wizard.sh phobos-cli-menu.sh; do
+                phobos-cli-submissions.sh phobos-cli-ui.sh phobos-cli-pick.sh phobos-cli-wizard.sh phobos-cli-menu.sh; do
     [[ -f "${HERE}/phobos-cli/${module}" && -r "${HERE}/phobos-cli/${module}" ]] || bootstrap_refused "${HERE}/phobos-cli/${module}"
   done
 }
@@ -93,6 +93,8 @@ source "${HERE}/phobos-cli/phobos-cli-prune.sh" || bootstrap_refused "${HERE}/ph
 source "${HERE}/phobos-cli/phobos-cli-record.sh" || bootstrap_refused "${HERE}/phobos-cli/phobos-cli-record.sh"
 # shellcheck source=phobos-cli/phobos-cli-build.sh
 source "${HERE}/phobos-cli/phobos-cli-build.sh" || bootstrap_refused "${HERE}/phobos-cli/phobos-cli-build.sh"
+# shellcheck source=phobos-cli/phobos-cli-submissions.sh
+source "${HERE}/phobos-cli/phobos-cli-submissions.sh" || bootstrap_refused "${HERE}/phobos-cli/phobos-cli-submissions.sh"
 # shellcheck source=phobos-cli/phobos-cli-ui.sh
 source "${HERE}/phobos-cli/phobos-cli-ui.sh" || bootstrap_refused "${HERE}/phobos-cli/phobos-cli-ui.sh"
 # shellcheck source=phobos-cli/phobos-cli-pick.sh
@@ -136,6 +138,7 @@ main() {
     prune) command_prune "$@" ;;
     record) command_record "$@" ;;
     build) command_build "$@" ;;
+    submissions) command_submissions "$@" ;;
     *) fail_usage "unknown command '$command'" ;;
   esac
 }

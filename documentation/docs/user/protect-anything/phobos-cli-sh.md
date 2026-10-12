@@ -84,6 +84,14 @@ with its status, unless you keep its result. The menu saves the policy the same 
 one, and can run a command under it. Inside an image this works only in the prune image, which
 mounts the helpers of the pruners, and the replay needs a host.
 
+**Derive a policy from past student submissions** runs the command described under
+[A policy from submissions](#a-policy-from-submissions), on a host only. The menu warns first and goes
+on only on Yes. It asks for the template, the directory of the submissions and which of them to use,
+your declaration about the assignment directory, where the run goes and whether to verify. It then
+lists every row of the candidate policy, those the fewest submissions needed first, for you to
+untick the rows you do not want the policy to grant. The menu always checks the rows you keep against the run
+and saves them the same way as a written policy.
+
 Inside an image the menu first copies the policy into a private directory under `/var/tmp` and has the
 policy system check it there. The policy system checks a new policy the same way, beside its
 destination. The policy system refuses a policy that lets the sandboxed command
@@ -168,6 +176,41 @@ The recording pruner runs the program with no sandbox at all, for the instructor
 program and never for a submission. `--language <java|python|c-fact|r|swift|c-gcc|cpp>` chooses the image the recorder is
 built on (the default is `java`), `--exercise <dir>` mounts the exercise read-only, and `--networked`
 selects the service that has a network. The verbs are `record`, `generate`, `check` and `diff`.
+
+## A policy from submissions
+
+```bash
+./phobos-cli.sh submissions --template ./tests --submissions ./past --output ./runs --assignment-is-student-code
+./phobos-cli.sh submissions verify --run ./runs/submissions-run.ab12CD34 --policy ./edited.cfg
+```
+
+The command derives a policy for an exercise from past student submissions, on a host. Each child
+directory of `--submissions` replaces the `assignment` directory of a copy of `--template`, the
+exercise's test repository. The layer pruner then prunes each copy in a fresh container without
+network, and the command merges the policies beside the grading bases of the run-phase image the
+template's key names. Build that image first with `build`. The layers must start under the result
+with every submission, and unless `--no-verify` every submission must match its own reference under
+it. Everything goes to a new directory beneath `--output`: the staged copies, what the pruner wrote,
+`union/candidate.cfg`, `union/report.json` with how many submissions needed each row, and
+`policy.cfg` once the verification passes.
+
+:::warning[Vetted submissions only]
+The pruner runs each submission once without Phobos, so a submission can shape its own result, and
+through it the merged policy. Use past submissions you have vetted and consider harmless, never
+untrusted ones. A submission cannot change the template, another submission or anything on the host
+outside its own output directory, and the command refuses a result changed after the pruner wrote it.
+:::
+
+`--assignment-is-student-code` is your declaration that the template's `assignment` directory holds
+only student material, while the tests, the build script and `prune.json` lie outside it. The command
+refuses a template that holds a link or a special file, a key it does not prune for, declared hosts,
+and a report glob that could reach the `assignment` directory. A submission that is or holds a link
+or a special file is left out, and the command says why. `--submission <name>` limits the run to the
+submissions named.
+
+`verify` checks an edited policy against a finished run again: the layers start under it and, unless
+`--layers-only`, every pruned submission must match. It ends with 0 when all matched, 1 when a
+submission did not, and 15 when a step failed for another reason, such as a changed input.
 
 ## Building the image
 
