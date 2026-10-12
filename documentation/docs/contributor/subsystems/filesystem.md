@@ -107,8 +107,9 @@ so with `--no-own-reporter`.
 
 The group lock's refusals are the one exception to "never decides". The filter that refuses
 `setsid`, `setpgid` and foreign-ABI calls hands them to the supervisor, which answers `EACCES`
-itself and prints the line. With no supervisor listening the kernel refuses them on its own with
-`ENOSYS`, so a dead supervisor never grants one.
+itself and prints the line. Where it can continue a call, it answers `setsid` and `setpgid`
+from its ledger of virtual groups instead (see the timeout page). With no supervisor listening
+the kernel refuses them on its own with `ENOSYS`, so a dead supervisor never grants one.
 
 The reporter keeps one line per distinct blocked action and prints at most 100. It quotes a path
 the way bash does. It ends with `PHB-ESTATUS` (16) when it cannot read the command's exit status.

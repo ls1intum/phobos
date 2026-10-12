@@ -13,6 +13,7 @@
 #include "phobos-seccomp-networksystem-seccomp-compat.h"
 #include "phobos-seccomp-networksystem-socket-types.h"
 
+#include "../phobos-seccomp-filesystem/phobos-seccomp-filesystem-groups.h"
 #include "../phobos-seccomp-filesystem/phobos-seccomp-filesystem-refusals.h"
 #include "../phobos-seccomp-filesystem/phobos-seccomp-filesystem-reporter.h"
 
@@ -548,6 +549,10 @@ void service_one(int notify_descriptor, struct seccomp_notif *request,
                  struct seccomp_notif_resp *response, size_t request_size) {
     memset(request, 0, request_size);
     if (ioctl(notify_descriptor, SECCOMP_IOCTL_NOTIF_RECV, request) != 0) {
+        return;
+    }
+    if (groups_enabled() && is_group_call(&request->data)) {
+        answer_group_call(notify_descriptor, request, response);
         return;
     }
     if (is_filter_refusal(&request->data)) {

@@ -30,8 +30,8 @@ of the chain:
 
 ```
 if arch != <native>            -> refuse
-if syscall is setsid           -> refuse
-if syscall is setpgid          -> refuse
+if syscall is setsid           -> refuse (a supervisor can answer it from its ledger)
+if syscall is setpgid          -> refuse (the same)
 otherwise                      -> allow
 ```
 
@@ -73,7 +73,9 @@ What the filter traps or refuses:
 | `socket` | notify | a raw, packet or ICMP socket is refused before it exists, and a stream socket is created by the supervisor so it can be held |
 | `listen` | notify | the supervisor runs it on its own descriptor for a socket it holds, so a socket never bound cannot become a listener on a port nothing judged |
 | `io_uring_setup` and its siblings | refuse | a second syscall interface that would reach `connect` unseen |
-| `setsid`, `setpgid` | refuse | the same escape the process-group lock closes |
+| `setsid`, `setpgid` | notify | the supervisor answers from its ledger of virtual groups and never runs the call, or refuses it where it cannot continue a call |
+| `getpgid`, `getsid`, `getpgrp` | notify | the supervisor answers for a process in its ledger and passes the call on for any other |
+| `kill` with a pid of zero or below | notify | a signal to a virtual group goes to its members through process descriptors, and the kernel takes anything else |
 
 **The supervisor connects on the command's behalf rather than letting the call continue.**
 Seccomp offers `SECCOMP_USER_NOTIF_FLAG_CONTINUE`, which re-runs the original call, and that
@@ -113,8 +115,8 @@ present, the supervisor takes over the lock's refusals as well. A run has one ef
 so the supervisor runs only when the network layer is off. With the network layer on, the connect
 guard is the run's one supervisor and does this work too: it links the same reporter, adds `bind`
 and, with `--report-filesystem`, the path calls to its own filter, and answers its own refusals
-(`io_uring`, `setsid`, `setpgid`, a foreign ABI) with `EACCES` through the reporter's refusal
-handler, which has no way to continue a call. Each kind of trap has one answer: observation traps
+(`io_uring`, a foreign ABI) with `EACCES` through the reporter's refusal handler, which has no way
+to continue a call. It answers the group calls from its ledger as well when it can continue a call. Each kind of trap has one answer: observation traps
 `CONTINUE`, refusal traps `EACCES`, and the guard's enforcement traps as before.
 
 ## Where seccomp sits relative to Landlock
@@ -126,11 +128,12 @@ rules remain a second, kernel-enforced expression of the same ports rather than 
 
 ## Both filters stack
 
-The connect guard refuses `setsid` and `setpgid` for the command it supervises, and so does the
+The connect guard traps `setsid` and `setpgid` for the command it supervises, and so does the
 process-group lock. That is not duplication to remove: the guard's cover belongs to the network
-layer, and the lock's belongs to the timeout layer, so a run with the network restriction
-disabled keeps the group kill unescapable. Where both filters speak, the kernel takes the
-stricter action, and denying one call twice denies it once.
+layer, and the lock's belongs to the timeout layer, so a run with no supervisor keeps the group
+kill unescapable. Where both filters speak, the kernel takes the stricter action. The lock
+refuses with `ENOSYS` only when no newer filter has a listener to ask; the supervisor's listener
+answers the notification when there is one.
 
 ## Further reading
 

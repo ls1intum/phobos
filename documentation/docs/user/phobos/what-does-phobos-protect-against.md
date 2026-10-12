@@ -49,7 +49,7 @@ allow-list in two places, with a third for host names:
   and port, and a raw system call cannot step around it. It refuses a raw, packet or ICMP
   socket before the socket exists, judges a datagram that carries its own destination the way
   it judges a connect, refuses `io_uring` as a second syscall interface that would reach
-  `connect` unseen, and refuses `setsid` and `setpgid`. It makes every datagram connect and
+  `connect` unseen, and answers `setsid` and `setpgid` itself without running them. It makes every datagram connect and
   every send that names a destination itself, from a copy of the address and the data it took once, so a second thread cannot
   change a destination after it was judged; what that costs is listed under
   [what Phobos does not protect against](what-does-phobos-not-protect-against.md).
@@ -73,7 +73,8 @@ The timeout layer runs the rest of the chain under GNU `timeout`, which puts the
 own process group and signals the whole group on expiry, escalating to `SIGKILL` for a command
 that ignores `SIGTERM`. Underneath it sits a seccomp filter that refuses `setsid` and
 `setpgid`, so nothing under the timeout can leave the group the kill targets and outlive its
-limit.
+limit. Where a supervisor runs, it answers those two calls from a ledger instead, so a program that
+wants a group of its own gets one on paper while every process stays in the real group.
 
 A run is reported as a timeout only where GNU `timeout` says so **and** the run lasted at least
 its limit, so a command's own exit status 124, or a `SIGKILL` from the out-of-memory killer,

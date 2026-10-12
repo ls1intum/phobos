@@ -23,7 +23,7 @@ group kill to escape. Where a timeout is set it runs the rest under GNU `timeout
 | File | Purpose |
 | --- | --- |
 | `phobos-timeoutsystem.sh` | the layer: the run, the wait, the timeout decision |
-| `phobos-seccomp-timeoutsystem.c` | the seccomp filter refusing `setsid` and `setpgid`, then `execvp` |
+| `phobos-seccomp-timeoutsystem.c` | the seccomp filter refusing `setsid` and `setpgid` where no supervisor answers them, then `execvp` |
 | `phobos-time.sh` | how a timeout is spelled, converted and compared |
 
 ## The contract for a timeout value

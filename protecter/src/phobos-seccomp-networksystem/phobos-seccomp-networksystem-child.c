@@ -162,6 +162,9 @@ static size_t append_observation_traps(struct sock_filter *out, size_t room,
 size_t build_connect_filter(struct sock_filter *instructions, int bootstrap_descriptor,
                             enum guard_report_mode mode) {
     size_t used = append_enforced_calls(instructions);
+    if (mode != GUARD_REPORT_NONE) {
+        used += append_group_traps(&instructions[used]);
+    }
     used += append_observation_traps(&instructions[used], GUARD_FILTER_MAXIMUM - used, mode);
     used += append_send_blocks(&instructions[used], bootstrap_descriptor);
     return used;

@@ -16,7 +16,7 @@
 #              not vouch for stops the merge. The verification runs in the container the prune ran in,
 #              whose index holds what the prune's last run left, which Compose's fresh verify_java_gradle
 #              container would not;
-#   wrong reasons  a flaky reference, NO-SOURCE, a needed setsid, a needed external host and a
+#   wrong reasons  a flaky reference, NO-SOURCE, a needed raw socket, a needed external host and a
 #              failure no refused call explains each abort the exercise and write no policy.
 #
 # Runs inside the prune image with the repository mounted at /repo, read-only, in an ordinary
@@ -247,7 +247,7 @@ check_wrong_reasons() {
   local reason
   local key
   for variant in "FIXTURE_FLAKY:flaky reference" "FIXTURE_NO_SOURCE:ran no tests" \
-                 "FIXTURE_SETSID:incompatible with a fixed rule" "FIXTURE_NEEDS_NET:needs external network" \
+                 "FIXTURE_RAW_SOCKET:incompatible with a fixed rule" "FIXTURE_NEEDS_NET:needs external network" \
                  "FIXTURE_UNATTRIBUTABLE:without an attributable denial"; do
     key="java-${variant%%:*}"
     reason="${variant#*:}"

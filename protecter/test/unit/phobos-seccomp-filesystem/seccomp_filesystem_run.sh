@@ -53,6 +53,7 @@ MODULES=(
   "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-refusals.c"
   "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-filter.c"
   "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-handoff.c"
+  "${CORE}/phobos-seccomp-filesystem/phobos-seccomp-filesystem-groups.c"
 )
 # What the reporter links from beside it: the enforcer's diagnostics-free model, without its
 # diagnostics, and the connect guard's handoff module.

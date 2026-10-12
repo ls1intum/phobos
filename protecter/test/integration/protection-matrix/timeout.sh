@@ -61,16 +61,18 @@ run_pm_timed --config "$a_t8000" -- "$P" sleep 1
 if (( PM_STATUS == 0 )) && grep -q SLEPT "$PM_OUT"; then ok "and a command that ends within an Ares timeout is left alone"; else bad "a command within an Ares timeout is left alone" "status ${PM_STATUS} after ${PM_ELAPSED_MS} ms: $(pm_describe)"; fi
 
 echo
-echo "== leaving the process group is refused by two things at once =="
+echo "== leaving the process group: answered from the supervisor's ledger, or refused where there is none =="
 for call in setsid setpgid; do
   run_pm --config "$c_t5" -- "$P" "$call"
-  if op_failed_with "$call" $DENIED_ERRNOS; then ok "${call} is refused"; else bad "${call} is refused" "$(pm_describe)"; fi
+  if op_ok "$call"; then ok "${call} succeeds, answered from the ledger (the process stays in the group the timeout kills)"; else bad "${call} succeeds with the supervisor on" "$(pm_describe)"; fi
   run_pm --no-timeoutsystem-restriction --config "$c_t5" -- "$P" "$call"
-  if op_failed_with "$call" $DENIED_ERRNOS; then ok "${call} is still refused with the timeout layer off, by the connect guard"; else bad "${call} is still refused by the connect guard" "$(pm_describe)"; fi
+  if op_ok "$call"; then ok "${call} succeeds with the timeout layer off, answered by the connect guard"; else bad "${call} succeeds with the timeout layer off" "$(pm_describe)"; fi
   run_pm --no-networksystem-restriction --config "$c_t5" -- "$P" "$call"
-  if op_failed_with "$call" $DENIED_ERRNOS; then ok "${call} is still refused with the network layer off, by the timeout's group lock"; else bad "${call} is still refused by the group lock" "$(pm_describe)"; fi
+  if op_ok "$call"; then ok "${call} succeeds with the network layer off, answered by the report-only supervisor"; else bad "${call} succeeds with the network layer off" "$(pm_describe)"; fi
+  run_pm --no-networksystem-restriction --no-filesystem-restriction --config "$c_t5" -- "$P" "$call"
+  if op_failed_with "$call" $DENIED_ERRNOS; then ok "${call} is refused by the group lock alone when no supervisor runs"; else bad "${call} is refused by the group lock alone" "$(pm_describe)"; fi
   run_pm --no-timeoutsystem-restriction --no-networksystem-restriction --config "$c_t5" -- "$P" "$call"
-  if op_ok "$call"; then ok "${call} works with both off, so those two are what refused it"; else bad "${call} works with both off" "$(pm_describe)"; fi
+  if op_ok "$call"; then ok "${call} works with the timeout and network layers off"; else bad "${call} works with both off" "$(pm_describe)"; fi
 done
 
 echo

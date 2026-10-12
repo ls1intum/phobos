@@ -134,6 +134,18 @@ allow-list never named. It has costs, and they are the price of closing it:
 - A connect or send on a socket that was never bound is refused unless the policy grants an
   ephemeral UDP bind.
 
+## Virtual groups are a ledger, not the kernel's groups
+
+A program that starts another with `setsid` or `setpgid` gets a group and a session on paper. The
+supervisor records them and answers `getpgid`, `getsid`, `getpgrp` and a `kill` to the group from that
+record, and the real group never changes. The record follows the process tree at the time of the
+question. A process whose parent has ended is no longer found, and then the kernel answers with the
+real group. `waitpid` on a group, the terminal calls such as `TIOCSPGRP`, and `/proc/<pid>/stat` show
+the real ids. A `kill` to a virtual group reaches its members with the supervisor's credentials, and
+a Landlock scope that the sandboxed lineage sets up for itself does not limit it. The kernel's real checks
+apply only where the supervisor passes a call on. The ledger holds 1024 groups, and a full ledger
+refuses a new group with `ENOMEM`.
+
 ## A host name in a `udp` rule is a snapshot
 
 The addresses of a name in a `udp` rule are the ones it had when the run began, and the name's

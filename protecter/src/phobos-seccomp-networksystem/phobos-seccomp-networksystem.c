@@ -108,6 +108,7 @@
 #include "phobos-seccomp-networksystem-supervisor.h"
 
 #include "../phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-policy.h"
+#include "../phobos-seccomp-filesystem/phobos-seccomp-filesystem-groups.h"
 #include "../phobos-seccomp-filesystem/phobos-seccomp-filesystem-handoff.h"
 #include "../phobos-seccomp-filesystem/phobos-seccomp-filesystem-message.h"
 
@@ -202,6 +203,7 @@ int main(int argument_count, char *arguments[]) {
     int landlock_version = options.landlock_bin != nullptr ? query_landlock_version() : 0;
     enum guard_report_mode mode = decide_report_mode(&options, landlock_version);
     configure_reporting(options.landlock_bin, landlock_version);
+    groups_configure(mode != GUARD_REPORT_NONE, nullptr);
     configure_group_lock_attribution(options.group_lock_above && group_lock_present());
 
     int pair[2];

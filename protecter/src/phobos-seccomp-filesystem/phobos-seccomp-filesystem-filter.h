@@ -26,6 +26,12 @@ size_t append_report_traps(struct sock_filter *instructions, size_t room);
  * when it reports no filesystem denial. */
 size_t append_network_report_traps(struct sock_filter *instructions, size_t room);
 
+/* Writes the traps of the virtual process groups (getpgid, getsid, getpgrp where the architecture has it,
+ * and a kill whose pid is zero or below), with the call number in the accumulator before and after.
+ * Answers the number of instructions written, which is at most GROUP_TRAPS_MAXIMUM. */
+size_t append_group_traps(struct sock_filter *instructions);
+static constexpr size_t GROUP_TRAPS_MAXIMUM = 13;
+
 /* Writes the whole filter into instructions: the native-ABI check, the refusal traps when
  * refusal_traps, the observation traps when file_traps, and ALLOW for everything else. A foreign
  * ABI is trapped as a refusal when refusal_traps and allowed otherwise. Answers the number of

@@ -935,6 +935,7 @@ jobs:
               bind-port-test.sh \
               scoping-test.sh \
               ioctl-device-test.sh \
+              process-groups-test.sh \
               seccomp-networksystem-test.sh \
               network-cleanup-test.sh; do
             echo "::group::${suite}"
