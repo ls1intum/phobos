@@ -95,7 +95,7 @@ the Docker socket, and no option or option value can add them.
 | `all` | The seventeen jobs of the layer pruner in order: the eight prunes, the merge, and the eight verifications. It stops at the first job that fails and ends with that job's status. |
 
 Every job is rebuilt first, so an image that already exists is never reused on a stale base. The
-key decides the run-phase image: `python` uses the Python image, `c-fact` the C image, `r` the R image, `swift` the Swift image, `c-gcc` the GCC image, `cpp` the C++ image, the others the Java image. Inside
+key decides the run-phase image. `python` uses the Python image, `c-fact` the C image, `r` the R image, `swift` the Swift image, `c-gcc` the GCC image, `cpp` the C++ image, the others the Java image. Inside
 an image, `prune` starts `/var/tmp/helpers/exercise_pruner/src/interface/main.py` when you mount the helpers there.
 There, `java-egress` needs `--resolver <ip[:port]>`, and `all` needs a host because the merge is a
 separate image.
