@@ -147,3 +147,35 @@ ui_form() {
   done
   return 0
 }
+
+# Offers several choices under the title $1 with the prompt $2. The words after those come in
+# threes, a numeric tag, the text shown for it and on or off for whether it starts ticked. UI_FIELDS
+# holds the ticked tags when UI_MOVE is next, none when nothing was ticked. A tag is used as an
+# index by the callers, so an answer that is not one of the tags offered ends the script.
+ui_checklist() {
+  local title="$1"
+  local prompt="$2"
+  local -a tags=()
+  local -a ticked=()
+  local index
+  local tag
+  local known
+  shift 2
+  for (( index = 1; index <= $#; index += 3 )); do
+    tags+=("${!index}")
+  done
+  ui_box --title "$title" --separate-output --checklist "$prompt" 0 0 0 "$@"
+  UI_FIELDS=()
+  [[ "$UI_MOVE" == "next" ]] || return 0
+  mapfile -t ticked <<<"$UI_RESULT"
+  for tag in "${ticked[@]}"; do
+    [[ -n "$tag" ]] || continue
+    known="no"
+    for index in "${tags[@]}"; do
+      [[ "$tag" == "$index" ]] && known="yes"
+    done
+    [[ "$known" == "yes" ]] || fail_environment "dialog answered the checklist with a choice it did not offer"
+    UI_FIELDS+=("$tag")
+  done
+  return 0
+}
