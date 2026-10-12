@@ -10,7 +10,9 @@
     "The two lint container images are named in env values of a run step, and Renovate's github-actions manager reads only uses: docker://, container: and services:, so pinDigests would leave both digests frozen for good. The custom manager below extracts them as docker dependencies. It matches image:tag@sha256:... rather than any string, so it cannot claim an unrelated value, and it is scoped to the workflow directory.",
     "The second custom manager exists for the same reason as the first: Renovate reads no Python dependency out of a shell command, so the versions pinned in the lint workflow's pip install lines and in the Python run-phase image would rot exactly as a lock nobody could regenerate would. It matches name==version only where there is no space around the ==, which is what keeps it off the workflow expressions that compare with == and spaces.",
     "The Gradle reference exercise names the Gradle distribution the run-phase image carries (the base image ships gradle-9.8.0-bin), because the exercise runs offline. A Renovate bump of its wrapper to a newer Gradle made the wrapper try to download it and the reference prune fail, so its wrapper is left alone; moving it is a change of the base image and of the pinned repository, made by hand.",
-    "TypeScript stays below 7 for the documentation site. The current typescript-eslint (8.71.1) declares typescript >=4.8.4 <6.1.0 and refuses to load under 7.0, so a bump to 7 turns the lint:code step of the documentation build red. The hold ends when typescript-eslint supports the TypeScript 7 API."
+    "TypeScript stays below 7 for the documentation site. The current typescript-eslint (8.71.1) declares typescript >=4.8.4 <6.1.0 and refuses to load under 7.0, so a bump to 7 turns the lint:code step of the documentation build red. The hold ends when typescript-eslint supports the TypeScript 7 API.",
+    "The clang Python bindings of the C (FACT) image stay below 15. FACT pins the 14.0 bindings and the image carries libclang 19; a bump to 21 made the bindings look for symbols libclang 19 lacks (clang_getOffsetOfBase), so FACT's CodeStructure test ended with an internal error, with and without Phobos.",
+    "The Swift image stays on the release Artemis's own Swift image names (6.2), and only its digest moves. BaseLanguage-swift.cfg was pruned against that toolchain, and under a bump to 6.4 the Swift reference exercise ran into its timeout. Moving the release is a change of the base, made by hand with a prune."
   ],
   "pinDigests": true,
   "customManagers": [
@@ -47,6 +49,29 @@
     {
       "matchFileNames": [
         "exercises/java/gradle-reference/gradle/wrapper/gradle-wrapper.properties"
+      ],
+      "enabled": false
+    },
+    {
+      "matchFileNames": [
+        "protecter/image/fact-requirements.txt"
+      ],
+      "matchPackageNames": [
+        "clang"
+      ],
+      "allowedVersions": "<15"
+    },
+    {
+      "matchFileNames": [
+        "docker/protecter/swift/Dockerfile"
+      ],
+      "matchPackageNames": [
+        "swift"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
       ],
       "enabled": false
     }
