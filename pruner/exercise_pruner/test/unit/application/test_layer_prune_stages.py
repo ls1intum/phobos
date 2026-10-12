@@ -78,6 +78,15 @@ def test_a_permissive_run_that_matches_passes_whatever_it_was_refused(tmp_path, 
     stages.permissive_run(pruning(tmp_path))
 
 
+def test_the_compiled_programs_root_is_the_assignment_directory_unless_the_exercise_names_another(tmp_path):
+    found = pruning(tmp_path)
+    assert stages.compiled_roots(found) == ()
+    found.exercise = runner.Exercise(**{**found.exercise.__dict__, "runs_compiled_programs": True})
+    assert stages.compiled_roots(found) == ("/var/tmp/testing-dir/assignment",)
+    found.exercise = runner.Exercise(**{**found.exercise.__dict__, "compiled_programs_directory": "test"})
+    assert stages.compiled_roots(found) == ("/var/tmp/testing-dir/test",)
+
+
 def test_the_baseline_aborts_on_a_flaky_reference_and_on_a_run_without_tests(tmp_path, monkeypatch):
     outcomes = iter([PASSED, FAILED])
     monkeypatch.setattr(runner, "run_reference", lambda exercise, environment: runner.RunResult(

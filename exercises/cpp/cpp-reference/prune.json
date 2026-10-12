@@ -1,0 +1,1 @@
+{"report_globs": ["test/test-reports/*.xml"], "seed": "cpp.cfg", "runs_compiled_programs": true, "compiled_programs_directory": "test", "uses_pseudo_terminals": true, "address_space_unbounded": true, "key": "cpp"}
