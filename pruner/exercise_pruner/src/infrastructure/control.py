@@ -48,6 +48,8 @@ from shared.src.domain.record import LAYER_FILESYSTEM, LAYER_NETWORK, Denial
 # The flags every replayed open carries: never block on a FIFO, never follow a final symbolic link,
 # never leak the descriptor.
 REPLAY_OPEN_FLAGS = os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
+# The operations that execute a file.
+EXECUTE_OPERATIONS = frozenset({"execve", "execveat"})
 # A path under one process's procfs directory: its thread, if it names one, and the rest of the path.
 PROCESS_PATH = re.compile(r"^/proc/(?P<pid>0|[1-9][0-9]*)(?P<task>/task/(?:0|[1-9][0-9]*))?(?P<rest>/.*)?$")
 # A descriptor entry, which names a descriptor of that process and none of the pruner's.
@@ -289,7 +291,30 @@ def replay(path: str, section: str, pid: int = 0, pseudo_terminals: bool = False
     return replay_directory_change(path)
 
 
-def landlock_caused(denial: Denial, pseudo_terminals: bool = False) -> bool:
+def is_absent(path: str) -> bool:
+    """Whether nothing exists at the path: the lookup fails because a component is missing, not for any other reason."""
+    try:
+        os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def vanished_program(path: str, denial: Denial, compiled_roots: tuple[str, ...]) -> bool:
+    """Whether an execve was refused on a file the run wrote beneath a declared compiled root and has removed again.
+
+    A program such as SwiftPM's package manifest is written, run and deleted within one build, so the replay finds
+    nothing to execute. Its directory is the one the exercise declared with runs_compiled_programs, and an
+    execve refused there with EACCES is the sandbox's answer; nothing outside such a root is ever confirmed this way.
+    """
+    path = os.path.normpath(path)
+    return (denial.operation in EXECUTE_OPERATIONS and denial.errno == "EACCES" and is_absent(path)
+            and any(path == root or path.startswith(root + "/") for root in compiled_roots))
+
+
+def landlock_caused(denial: Denial, pseudo_terminals: bool = False, compiled_roots: tuple[str, ...] = ()) -> bool:
     """Whether granting the denial could help, because the access it was refused succeeds unsandboxed.
 
     A refused connect or datagram is replayed with a datagram connect, because the guard passes the
@@ -306,5 +331,5 @@ def landlock_caused(denial: Denial, pseudo_terminals: bool = False) -> bool:
         return False
     if SECTION_IOCTL in denial.sections:
         return pseudo_terminals and replay_pseudo_terminal(denial.detail)
-    return all(replay(path, section, denial.pid, pseudo_terminals)
+    return all(replay(path, section, denial.pid, pseudo_terminals) or vanished_program(path, denial, compiled_roots)
                for path in denial.objects for section in sorted(denial.sections))
