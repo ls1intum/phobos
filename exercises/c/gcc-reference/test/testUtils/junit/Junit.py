@@ -18,7 +18,7 @@ class Junit:
         self.createOutputPath(outputPath)
         tree.write(outputPath, xml_declaration=True)
         # Ensure nobody can edit our results:
-        chmod(outputPath, 0o744)
+        chmod(outputPath, 0o600)
 
     @staticmethod
     def createOutputPath(outputPath: str):
