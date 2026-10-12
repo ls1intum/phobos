@@ -48,6 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc-14 \
     g++-14 \
     binutils \
+    dialog \
     catch2 \
     cmake \
     haproxy \

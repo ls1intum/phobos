@@ -70,7 +70,8 @@ bootstrap_refused() {
 # physical directory of this script.
 require_modules() {
   local module
-  for module in phobos-cli-common.sh phobos-cli-help.sh phobos-cli-run.sh phobos-cli-prune.sh phobos-cli-record.sh phobos-cli-build.sh; do
+  for module in phobos-cli-common.sh phobos-cli-help.sh phobos-cli-run.sh phobos-cli-prune.sh phobos-cli-record.sh phobos-cli-build.sh \
+                phobos-cli-ui.sh phobos-cli-pick.sh phobos-cli-menu.sh; do
     [[ -f "${HERE}/phobos-cli/${module}" && -r "${HERE}/phobos-cli/${module}" ]] || bootstrap_refused "${HERE}/phobos-cli/${module}"
   done
 }
@@ -92,8 +93,16 @@ source "${HERE}/phobos-cli/phobos-cli-prune.sh" || bootstrap_refused "${HERE}/ph
 source "${HERE}/phobos-cli/phobos-cli-record.sh" || bootstrap_refused "${HERE}/phobos-cli/phobos-cli-record.sh"
 # shellcheck source=phobos-cli/phobos-cli-build.sh
 source "${HERE}/phobos-cli/phobos-cli-build.sh" || bootstrap_refused "${HERE}/phobos-cli/phobos-cli-build.sh"
+# shellcheck source=phobos-cli/phobos-cli-ui.sh
+source "${HERE}/phobos-cli/phobos-cli-ui.sh" || bootstrap_refused "${HERE}/phobos-cli/phobos-cli-ui.sh"
+# shellcheck source=phobos-cli/phobos-cli-pick.sh
+source "${HERE}/phobos-cli/phobos-cli-pick.sh" || bootstrap_refused "${HERE}/phobos-cli/phobos-cli-pick.sh"
+# shellcheck source=phobos-cli/phobos-cli-menu.sh
+source "${HERE}/phobos-cli/phobos-cli-menu.sh" || bootstrap_refused "${HERE}/phobos-cli/phobos-cli-menu.sh"
 
-# Reads the global options and the command, and starts it. Takes the whole command line.
+# Reads the global options and the command, and starts it. Takes the whole command line. Without a
+# command it opens the menu when its standard input and output are a terminal, and prints the
+# manual and refuses the call otherwise, so a script or a pipeline never waits for an answer.
 main() {
   local mode_option=""
   while (( $# > 0 )); do
@@ -105,13 +114,19 @@ main() {
       *) break ;;
     esac
   done
-  (( $# > 0 )) || { help_text 2; exit "${EXIT_USAGE}"; }
+  if (( $# == 0 )) && ! [[ -t 0 && -t 1 ]]; then
+    help_text 2
+    exit "${EXIT_USAGE}"
+  fi
   refuse_leaked_environment
   case "$mode_option" in
     "" | host | image) ;;
     *) fail_usage "--mode takes host or image" ;;
   esac
   choose_mode "$mode_option"
+  if (( $# == 0 )); then
+    menu_main
+  fi
   local command="$1"
   shift
   case "$command" in
