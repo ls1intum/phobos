@@ -159,7 +159,8 @@ jobs:
       # the narrow half that a machine can: that a comment line immediately precedes each
       # function. It says nothing about whether the comment states the assumptions, which
       # stays a reviewer's job, and it does not find a comment inside a body. The helpers moved
-      # into phobos-tools-* subfolders, so the check globs those beside the top-level layers.
+      # into phobos-tools-* subfolders, so the check globs those beside the top-level layers, and
+      # the command line's into phobos-cli/, which it globs beside phobos-cli.sh.
       - name: Every function in the core shell scripts is preceded by a comment
         if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: |
@@ -171,7 +172,8 @@ jobs:
                  }
                }
                { previous = $0 }
-               END { exit undocumented }' protecter/src/*.sh protecter/src/phobos-tools-*/*.sh
+               END { exit undocumented }' protecter/src/*.sh protecter/src/phobos-tools-*/*.sh \
+                                          phobos-cli.sh phobos-cli/*.sh
 
       # .editorconfig has been advisory since it was written: it asks editors for LF, and
       # AGENTS.md calls LF load-bearing, because a carriage return ends up inside a path and

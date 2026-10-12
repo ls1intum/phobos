@@ -55,12 +55,16 @@ printf 'name: policy\n' > "${WORK}/configs/policy.yaml"
 
 # The stand-in docker: records one line per call and ends with the status the plan names for that
 # call number (0 when the plan has no line for it). With a marker named by the plan it waits to be
-# stopped, which is how the signal is measured.
+# stopped, which is how the signal is measured. With STUB_ENV set it also writes the MODULES and
+# module it inherited there, which is how an environment left unchanged is measured.
 cat > "${STUBS}/docker" <<'STUB'
 #!/bin/bash
 log="${STUB_LOG:?}"
 plan="${STUB_PLAN:?}"
 printf '%s\n' "$*" >> "$log"
+if [[ -n "${STUB_ENV:-}" ]]; then
+  printf '%s|%s\n' "${MODULES-unset}" "${module-unset}" > "${STUB_ENV}"
+fi
 calls="$(wc -l < "$log")"
 want="$(sed -n "${calls}p" "$plan" 2> /dev/null)"
 if [[ "$want" == "wait" ]]; then
@@ -469,6 +473,7 @@ FAKE="${WORK}/checkout"
 mkdir -p "${FAKE}/protecter/src" "${FAKE}/.github/scripts" "${FAKE}/docker/protecter/java" "${FAKE}/docker/protecter/python"
 cp -R "${REPOSITORY}/protecter/src/phobos-tools-common" "${FAKE}/protecter/src/"
 cp "${CLI}" "${FAKE}/phobos-cli.sh"
+cp -R "${REPOSITORY}/phobos-cli" "${FAKE}/"
 printf '#!/bin/bash\necho "assembler $*" >> "%s/steps"\nexit "${ASSEMBLER_STATUS:-0}"\n' "${WORK}" > "${FAKE}/.github/scripts/assemble-run-phase-context.sh"
 chmod +x "${FAKE}/.github/scripts/assemble-run-phase-context.sh"
 mkdir -p "${WORK}/decoy/.github/scripts"
@@ -491,6 +496,53 @@ plan 5
 OUT="$(cd "${WORK}/decoy" && env STUB_LOG="${LOG}" STUB_PLAN="${PLAN}" PATH="${STUBS}:/usr/bin:/bin" bash "${FAKE}/phobos-cli.sh" build python 2> "${WORK}/err")"
 STATUS=$?
 check "a failing compose build is passed on unchanged" 5 "${STATUS}"
+
+echo "== the files of phobos-cli/"
+# Runs the copy of phobos-cli.sh in the directory $1 from the decoy working directory with the arguments
+# after it, against the stand-in docker, and keeps what it printed and its status in OUT, ERR and STATUS.
+copied_cli() {
+  local copy="$1"
+  shift
+  : > "${LOG}"
+  OUT="$(cd "${WORK}/decoy" && env STUB_LOG="${LOG}" STUB_PLAN="${PLAN}" PATH="${STUBS}:/usr/bin:/bin" bash "${copy}/phobos-cli.sh" "$@" 2> "${WORK}/err")"
+  STATUS=$?
+  ERR="$(cat "${WORK}/err")"
+}
+mkdir -p "${WORK}/decoy/phobos-cli"
+printf '#!/bin/bash\necho "decoy module" >&2\nexit 7\n' > "${WORK}/decoy/phobos-cli/phobos-cli-common.sh"
+plan 0
+copied_cli "${FAKE}" --dry-run build java
+check "a phobos-cli/ in the working directory is not read" 0 "${STATUS}"
+if grep -q 'decoy module' <<<"${ERR}"; then bad "the decoy module stays unread" "${ERR}"; else ok "the decoy module stays unread"; fi
+for missing in phobos-cli-common.sh phobos-cli-build.sh; do
+  BROKEN="${WORK}/broken-${missing%.sh}"
+  rm -rf -- "${BROKEN}"
+  cp -R "${FAKE}" "${BROKEN}"
+  rm -f -- "${BROKEN}/phobos-cli/${missing}"
+  plan 0
+  copied_cli "${BROKEN}" build java
+  check "without ${missing} the call cannot start" "${PHB_ERUNTIME}" "${STATUS}"
+  if grep -qF -- "${BROKEN}/phobos-cli/${missing}" <<<"${ERR}"; then ok "the refusal names ${missing}"; else bad "the refusal names ${missing}" "${ERR}"; fi
+  check "and without ${missing} docker is not called" 0 "$(wc -l < "${LOG}" | tr -d ' ')"
+done
+INSTALLED="${WORK}/installed"
+mkdir -p "${INSTALLED}"
+cp "${CLI}" "${INSTALLED}/phobos-cli.sh"
+cp -R "${REPOSITORY}/protecter/src/phobos-tools-common" "${REPOSITORY}/phobos-cli" "${INSTALLED}/"
+copied_cli "${INSTALLED}" --dry-run build java
+check "the image layout reads its files from beside the script" "${PHB_ERUNTIME}" "${STATUS}"
+if grep -q "sits in an image's installation" <<<"${ERR}"; then ok "and words the refusal with the helpers it read there"; else bad "and words the refusal with the helpers it read there" "${ERR}"; fi
+rm -f -- "${INSTALLED}/phobos-cli/phobos-cli-run.sh"
+copied_cli "${INSTALLED}" --dry-run build java
+check "the image layout without one of its files cannot start" "${PHB_ERUNTIME}" "${STATUS}"
+if grep -qF -- "${INSTALLED}/phobos-cli/phobos-cli-run.sh" <<<"${ERR}"; then ok "and names the missing file"; else bad "and names the missing file" "${ERR}"; fi
+
+: > "${WORK}/env"
+plan 0
+OUT="$(cd "${WORK}/cwd" && env MODULES=caller-modules module=caller-module STUB_ENV="${WORK}/env" STUB_LOG="${LOG}" STUB_PLAN="${PLAN}" PATH="${STUBS}:/usr/bin:/bin" bash "${CLI}" run --exercise "${WORK}/exercise" -- true 2> "${WORK}/err")"
+STATUS=$?
+check "a run whose caller exports MODULES and module ends with 0" 0 "${STATUS}"
+check "docker inherits the caller's MODULES and module unchanged" "caller-modules|caller-module" "$(cat "${WORK}/env")"
 
 echo "== the places"
 cli --mode image --dry-run run -- true

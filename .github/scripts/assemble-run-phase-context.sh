@@ -2,7 +2,7 @@
 # Assembles the build context the run-phase image expects.
 #
 # The Dockerfile copies the layer scripts flat (*.sh, phobos-cli.sh among them), the
-# phobos-tools-* helper folders whole,
+# phobos-tools-* helper folders and phobos-cli/ whole,
 # the four C source folders whole (phobos-landlock-filesystem-and-networksystem,
 # phobos-seccomp-networksystem, phobos-seccomp-filesystem and phobos-seccomp-timeoutsystem) for its
 # build stage, config/*.cfg and the folder config/language-configurations/, and, for the two stages that
@@ -50,6 +50,8 @@ cp "${REPOSITORY}"/protecter/src/*.sh "${DESTINATION}/"
 # The command line that starts phobos.sh and the pruners lives at the root of the repository and is shipped
 # beside the layer scripts, so that an image can start what it holds through it.
 cp "${REPOSITORY}/phobos-cli.sh" "${DESTINATION}/"
+# The files of its commands keep their folder, which phobos-cli.sh sources from beside itself.
+cp -R "${REPOSITORY}/phobos-cli" "${DESTINATION}/"
 # The per-subsystem and shared helpers keep their folders, which the layer scripts source by
 # name, so the context mirrors the repository layout.
 cp -R "${REPOSITORY}"/protecter/src/phobos-tools-* "${DESTINATION}/"
