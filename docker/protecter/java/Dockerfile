@@ -121,11 +121,13 @@ ENV PHOBOS_HOME=/var/tmp/opt/core
 RUN mkdir -p "${PHOBOS_HOME}"
 COPY *.sh                ${PHOBOS_HOME}/
 # The shared and per-subsystem helpers keep their folders, which the layer scripts source by
-# name, so the image mirrors the repository layout rather than flattening them.
+# name, so the image mirrors the repository layout rather than flattening them. phobos-cli/ is
+# the same for phobos-cli.sh, which sources the files of its commands from beside itself.
 COPY phobos-tools-common        ${PHOBOS_HOME}/phobos-tools-common
 COPY phobos-tools-policysystem  ${PHOBOS_HOME}/phobos-tools-policysystem
 COPY phobos-tools-filesystem    ${PHOBOS_HOME}/phobos-tools-filesystem
 COPY phobos-tools-networksystem ${PHOBOS_HOME}/phobos-tools-networksystem
+COPY phobos-cli                 ${PHOBOS_HOME}/phobos-cli
 COPY --from=enforcers /build/bin/phobos-landlock-filesystem-and-networksystem ${PHOBOS_HOME}/
 COPY --from=enforcers /build/bin/phobos-seccomp-networksystem ${PHOBOS_HOME}/
 COPY --from=enforcers /build/bin/phobos-seccomp-timeoutsystem ${PHOBOS_HOME}/
@@ -161,7 +163,7 @@ RUN readelf -h ${PHOBOS_HOME}/phobos-landlock-filesystem-and-networksystem > /tm
  && grep -q 'Type:[[:space:]]*DYN' /tmp/reporter-header.txt \
  && grep -q 'BIND_NOW' /tmp/reporter-dynamic.txt \
  && rm -f /tmp/wrapper-header.txt /tmp/wrapper-dynamic.txt /tmp/guard-header.txt /tmp/guard-dynamic.txt /tmp/lock-header.txt /tmp/lock-dynamic.txt /tmp/reporter-header.txt /tmp/reporter-dynamic.txt
-# The six entry points and the command line that starts them, and not the helpers under phobos-tools-*,
+# The six entry points and the command line that starts them, and not the helpers under phobos-tools-* or phobos-cli/,
 # which are only ever sourced: a mode on those would say they can be run, which is what the check in
 # test.yml states they cannot.
 RUN chmod +x ${PHOBOS_HOME}/phobos.sh ${PHOBOS_HOME}/phobos-policysystem.sh \

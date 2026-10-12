@@ -89,13 +89,13 @@ yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 actionlint
 ec --no-color
-awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print FILENAME":"FNR; e=1}} {p=$0} END{exit e}' protecter/src/*.sh protecter/src/phobos-tools-*/*.sh
+awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print FILENAME":"FNR; e=1}} {p=$0} END{exit e}' protecter/src/*.sh protecter/src/phobos-tools-*/*.sh phobos-cli.sh phobos-cli/*.sh
 ```
 
 `shellcheck -x` matters: without it the shared library is analysed in isolation and every
 caller reports findings that are not real, and `.shellcheckrc` (`source-path=SCRIPTDIR`) is what
 lets it find them. The last command is the `conventions` job, which checks that every function in
-`protecter/src/*.sh` and `protecter/src/phobos-tools-*/*.sh` carries a comment above it.
+`protecter/src/*.sh`, `protecter/src/phobos-tools-*/*.sh`, `phobos-cli.sh` and `phobos-cli/*.sh` carries a comment above it.
 
 This documentation has a gate of its own, run by `documentation-ci.yml`:
 
@@ -115,7 +115,7 @@ pnpm run test           # Playwright, against the built site
 ## Documenting shell, C and Python
 
 - One field, variable or function declaration per line, in every language.
-- Every function in `protecter/src/*.sh` and `protecter/src/phobos-tools-*/*.sh` carries a comment saying what it does and what it assumes about
+- Every function in `protecter/src/*.sh`, `protecter/src/phobos-tools-*/*.sh`, `phobos-cli.sh` and `phobos-cli/*.sh` carries a comment saying what it does and what it assumes about
   the environment it runs in. A sandbox wrapper that assumes a mount, a capability or an
   environment variable and does not say so is a trap for the next reader.
 - No comments inside a function body. A function that needs one is a function that should be

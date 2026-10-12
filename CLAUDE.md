@@ -142,7 +142,7 @@ yamllint --strict .
 find . -name 'Dockerfile*' -type f -exec sh -c 'hadolint --config .hadolint.yaml < "$1"' _ {} \;
 actionlint
 ec --no-color                      # editorconfig-checker, configured by .editorconfig-checker.json
-awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print FILENAME":"FNR; e=1}} {p=$0} END{exit e}' protecter/src/*.sh protecter/src/phobos-tools-*/*.sh
+awk 'FNR==1{p=""} /^[a-zA-Z_][a-zA-Z0-9_]*\(\)/{if(p !~ /^[[:space:]]*#/){print FILENAME":"FNR; e=1}} {p=$0} END{exit e}' protecter/src/*.sh protecter/src/phobos-tools-*/*.sh phobos-cli.sh phobos-cli/*.sh
 ```
 
 One of those is narrower than it looks: `bandit` runs over exactly two directories, not the
@@ -240,6 +240,7 @@ docker/protecter/          the images an exercise actually runs in, one per lang
 exercises/                 the reference exercises: the pruners' input and the protecter's acceptance fixtures
 phobos-cli.sh              one command line for phobos.sh, the layer pruner, the recording pruner and the image build; on a host it
                            starts Docker, in an image it starts what the image holds, and it refuses every switch that turns a layer off
+phobos-cli/                the files phobos-cli.sh sources from beside itself: the helpers its commands share and one file per command
 documentation/             the Docusaurus site, with its own gate
 build/                     generated and ignored: the assembled image context, and pruner/ with path sets, recordings and the merged config
 ```
@@ -248,7 +249,7 @@ build/                     generated and ignored: the assembled image context, a
 
 - One variable or function declaration per line, in every language.
 - British English in all prose, comments and messages.
-- Every function in the shell scripts of the protecter (`protecter/src/*.sh` and `protecter/src/phobos-tools-*/*.sh`) says what it does and what it assumes about its environment.
+- Every function in the shell scripts of the protecter and of the command line (`protecter/src/*.sh`, `protecter/src/phobos-tools-*/*.sh`, `phobos-cli.sh` and `phobos-cli/*.sh`) says what it does and what it assumes about its environment.
   AGENTS.md states this in full.
 - Shell is POSIX where it can be and bash where it must be; say which at the top of a file.
 - A `shellcheck` directive carries a comment on the line above saying why the finding is

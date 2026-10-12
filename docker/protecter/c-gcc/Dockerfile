@@ -62,6 +62,7 @@ COPY phobos-tools-common        ${PHOBOS_HOME}/phobos-tools-common
 COPY phobos-tools-policysystem  ${PHOBOS_HOME}/phobos-tools-policysystem
 COPY phobos-tools-filesystem    ${PHOBOS_HOME}/phobos-tools-filesystem
 COPY phobos-tools-networksystem ${PHOBOS_HOME}/phobos-tools-networksystem
+COPY phobos-cli                 ${PHOBOS_HOME}/phobos-cli
 COPY --from=enforcers /build/bin/phobos-landlock-filesystem-and-networksystem ${PHOBOS_HOME}/
 COPY --from=enforcers /build/bin/phobos-seccomp-networksystem ${PHOBOS_HOME}/
 COPY --from=enforcers /build/bin/phobos-seccomp-timeoutsystem ${PHOBOS_HOME}/

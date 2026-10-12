@@ -296,7 +296,8 @@ it is for, in the comment syntax the file has.
 **Rule:**
 
 - One field, variable or function declaration per line, in every language.
-- Every function in the core shell scripts (`protecter/src/*.sh` and `protecter/src/phobos-tools-*/*.sh`)
+- Every function in the core shell scripts (`protecter/src/*.sh`, `protecter/src/phobos-tools-*/*.sh`,
+  `phobos-cli.sh` and `phobos-cli/*.sh`)
   carries a comment saying what it does and what it assumes about the environment it runs in.
   A sandbox wrapper that assumes a mount, a capability or an environment variable and does not
   say so is a trap for the next reader.
