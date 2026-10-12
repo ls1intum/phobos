@@ -32,6 +32,9 @@ DIALOG_LOG="${WORK}/dialog.log"
 DIALOG_PLAN="${WORK}/dialog.plan"
 DOCKER_LOG="${WORK}/docker.log"
 DOCKER_WAIT=""
+DOCKER_STATUS=0
+HOOK_CALL=""
+HOOK=""
 IMAGE_HOME=/var/tmp/opt/core
 MADE_IMAGE_HOME="no"
 OUT=""
@@ -48,7 +51,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "${STUBS}" "${BARE}" "${WORK}/exercise/sub" "${WORK}/policies/nested" "${WORK}/cwd"
+mkdir -p "${STUBS}" "${BARE}" "${WORK}/exercise/sub" "${WORK}/policies/nested" "${WORK}/cwd" "${WORK}/out"
+printf '[read]\n/kept\n' > "${WORK}/out/existing.cfg"
 printf '[read]\n/usr\n' > "${WORK}/policies/exercise.cfg"
 printf 'name: policy\n' > "${WORK}/policies/nested/policy.yaml"
 printf '[read]\n/usr\n' > "${WORK}/exercise/planted.cfg"
@@ -66,13 +70,18 @@ printf '[read]\n/opt/specification\n' > "${WORK}/policies/specification"
 
 # The stand-in dialog: records its arguments, one line per box, and answers with the status and the
 # text of the plan's line for that box, the text on the descriptor named by --output-fd. A box
-# without a line is answered with Esc (status 5, as phobos-cli-ui.sh sets DIALOG_ESC).
+# without a line is answered with Esc (status 5, as phobos-cli-ui.sh sets DIALOG_ESC). Before the box
+# numbered STUB_DIALOG_HOOK_CALL it runs STUB_DIALOG_HOOK, which is how a change on disk while the
+# menu waits for an answer is measured.
 cat > "${STUBS}/dialog" <<'STUB'
 #!/bin/bash
 log="${STUB_DIALOG_LOG:?}"
 plan="${STUB_DIALOG_PLAN:?}"
 printf '%s\n' "$*" >> "$log"
 calls="$(wc -l < "$log")"
+if [[ -n "${STUB_DIALOG_HOOK:-}" && "${calls}" == "${STUB_DIALOG_HOOK_CALL:-}" ]]; then
+  bash "${STUB_DIALOG_HOOK}"
+fi
 line="$(sed -n "${calls}p" "$plan")"
 status="5"
 answer=""
@@ -93,9 +102,9 @@ exit "$status"
 STUB
 chmod +x "${STUBS}/dialog"
 
-# The stand-in docker: records its arguments, and with STUB_DOCKER_WAIT set writes the PID of the
-# menu (the parent of the phobos-cli.sh that started it) beside that file, marks it as started and
-# waits to be stopped, which is how a signal to the menu is measured.
+# The stand-in docker: records its arguments and ends with STUB_DOCKER_STATUS. With STUB_DOCKER_WAIT
+# set it writes the PID of the menu (the parent of the phobos-cli.sh that started it) beside that
+# file, marks it as started and waits to be stopped, which is how a signal to the menu is measured.
 cat > "${STUBS}/docker" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" >> "${STUB_DOCKER_LOG:?}"
@@ -106,7 +115,7 @@ if [[ -n "${STUB_DOCKER_WAIT:-}" ]]; then
   sleep 30 &
   wait $!
 fi
-exit 0
+exit "${STUB_DOCKER_STATUS:-0}"
 STUB
 chmod +x "${STUBS}/docker"
 
@@ -117,7 +126,7 @@ on_terminal() {
   local path="$1"
   shift
   local command
-  command="cd $(printf '%q' "${WORK}/cwd") && exec env STUB_DIALOG_LOG=$(printf '%q' "${DIALOG_LOG}") STUB_DIALOG_PLAN=$(printf '%q' "${DIALOG_PLAN}") STUB_DOCKER_LOG=$(printf '%q' "${DOCKER_LOG}") STUB_DOCKER_WAIT=$(printf '%q' "${DOCKER_WAIT}") PATH=$(printf '%q' "${path}") TERM=xterm bash $(printf '%q ' "${CLI}" "$@")"
+  command="cd $(printf '%q' "${WORK}/cwd") && exec env STUB_DIALOG_LOG=$(printf '%q' "${DIALOG_LOG}") STUB_DIALOG_PLAN=$(printf '%q' "${DIALOG_PLAN}") STUB_DOCKER_LOG=$(printf '%q' "${DOCKER_LOG}") STUB_DOCKER_WAIT=$(printf '%q' "${DOCKER_WAIT}") STUB_DOCKER_STATUS=$(printf '%q' "${DOCKER_STATUS}") STUB_DIALOG_HOOK=$(printf '%q' "${HOOK}") STUB_DIALOG_HOOK_CALL=$(printf '%q' "${HOOK_CALL}") PATH=$(printf '%q' "${path}") TERM=xterm bash $(printf '%q ' "${CLI}" "$@")"
   OUT="$(SHELL=/bin/bash script -qec "${command}" /dev/null < /dev/null | tr -d '\r')"
   STATUS="${PIPESTATUS[0]}"
 }
@@ -180,7 +189,7 @@ if head -1 "${DIALOG_LOG}" | grep -q -- '--msgbox' && sed -n 2p "${DIALOG_LOG}" 
 if grep -q -- '--output-fd 3' "${DIALOG_LOG}" && ! grep -q -- '--no-mouse' "${DIALOG_LOG}"; then ok "dialog answers on descriptor 3 and keeps the mouse"; else bad "dialog answers on descriptor 3 and keeps the mouse" "$(cat "${DIALOG_LOG}")"; fi
 menu --dry-run -- "0|" "0|5"
 check "the Exit entry ends the menu with 0" 0 "${STATUS}"
-for later in 2 3 4; do
+for later in 3 4; do
   menu --dry-run -- "0|" "0|${later}" "0|" "5|"
   check "entry ${later} ends with 0 after saying it comes later" 0 "${STATUS}"
   if asked 'later version'; then ok "entry ${later} says it comes in a later version"; else bad "entry ${later} says it comes in a later version" "$(cat "${DIALOG_LOG}")"; fi
@@ -287,13 +296,130 @@ else
   DOCKER_WAIT=""
 fi
 
+echo "== write a new policy step by step, on a host"
+if [[ -e "${IMAGE_HOME}" ]]; then
+  skip "the host form of the policy assistant" "${IMAGE_HOME} exists, so this is an image"
+else
+  written=$'[read]\n/srv/data\n[connect]\nallow repo.example.org:443\n[limits]\ntimeout=120\nmem_mb=2048\n'
+  menu --dry-run -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/new.cfg" "0|1\n10\n13" \
+    "0|1" "0|/srv/data" "0|3" "0|1" "0|repo.example.org:443" "0|1" "0|3" "0|120\n\n2048\n\n\n" "0|"
+  check "a dry run through the assistant ends with 0" 0 "${STATUS}"
+  shown="$(awk 'found { print } /would have been saved to/ { found = 1 }' <<<"${OUT}" | sed '/^$/d')"
+  check "it prints the policy the answers make" "${written%$'\n'}" "${shown}"
+  if [[ -e "${WORK}/out/new.cfg" ]]; then bad "and writes nothing" "${WORK}/out/new.cfg"; else ok "and writes nothing"; fi
+  if grep -q '^COMMAND$' <<<"${OUT}"; then bad "and starts nothing" "${OUT}"; else ok "and starts nothing"; fi
+
+  : > "${DOCKER_LOG}"
+  menu -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/new.cfg" "0|1\n10\n13" \
+    "0|1" "0|/srv/data" "0|3" "0|1" "0|repo.example.org:443" "0|1" "0|3" "0|120\n\n2048\n\n\n" "0|" \
+    "0|" "0|" "0|./gradlew test" "1|" "0|"
+  check "the assistant saves, checks and runs, ending with the status of the run" 0 "${STATUS}"
+  check "the saved policy is exactly the one the answers make" "${written}x" "$(cat "${WORK}/out/new.cfg"; printf x)"
+  check "two calls reached docker, the check and the run" 2 "$(wc -l < "${DOCKER_LOG}" | tr -d ' ')"
+  if head -1 "${DOCKER_LOG}" | grep -q -- '-- /bin/true$' && tail -1 "${DOCKER_LOG}" | grep -q -- '-- ./gradlew test$'; then ok "the check runs /bin/true and the run the command, in that order"; else bad "the check runs /bin/true and the run the command, in that order" "$(cat "${DOCKER_LOG}")"; fi
+  if [[ "$(grep -c -- '--config /srv/phobos-cli/config/1/new.cfg' "${DOCKER_LOG}")" == 2 ]]; then ok "both under the saved policy"; else bad "both under the saved policy" "$(cat "${DOCKER_LOG}")"; fi
+  if asked 'accepted the policy'; then ok "a check that ended with 0 says so"; else bad "a check that ended with 0 says so" "$(cat "${DIALOG_LOG}")"; fi
+
+  DOCKER_STATUS=7
+  menu -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/failing.cfg" "0|1" \
+    "0|1" "0|/srv/data" "0|3" "0|" "0|" "0|" "1|" "0|./gradlew test" "1|" "0|"
+  DOCKER_STATUS=0
+  check "after a failed check that is kept, the menu ends with the status of the run" 7 "${STATUS}"
+  if asked 'The check ended with status 7'; then ok "a failed check shows its status"; else bad "a failed check shows its status" "$(cat "${DIALOG_LOG}")"; fi
+  if asked 'Go back and change the policy'; then ok "and offers to change the policy"; else bad "and offers to change the policy" "$(cat "${DIALOG_LOG}")"; fi
+
+  menu --dry-run -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/exercise/inside.cfg" "0|" \
+    "0|${WORK}/out/policy.yaml" "0|" "0|${WORK}/out/existing.cfg" "1|" "5|" "5|" "5|" "5|"
+  check "refused places end the way with 0" 0 "${STATUS}"
+  if asked 'inside the exercise directory'; then ok "a policy is never saved inside the exercise"; else bad "a policy is never saved inside the exercise" "$(cat "${DIALOG_LOG}")"; fi
+  if asked 'ending in .cfg'; then ok "a policy is saved only as a .cfg file"; else bad "a policy is saved only as a .cfg file" "$(cat "${DIALOG_LOG}")"; fi
+  if asked 'exists. Replace it?'; then ok "an existing file is replaced only after a question"; else bad "an existing file is replaced only after a question" "$(cat "${DIALOG_LOG}")"; fi
+  check "and No leaves it as it was" $'[read]\n/kept\nx' "$(cat "${WORK}/out/existing.cfg"; printf x)"
+
+  menu --dry-run -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/e.cfg" "0|1\n11\n12\n13" \
+    "0|1" "0|relative/path" "0|" "0|/srv/x" "0|3" \
+    "0|1" "0|70000" "0|" "0|8080" "0|1" "0|3" \
+    "0|1" "0|80\n8080\n198.51.100.0/24" "0|" "0|18080\n8080\n198.51.100.0/24, 203.0.113.1" "0|3" \
+    "0|1.5\n\n\n\n\n" "0|" "0|2.500\n\n\n\n\n0" "0|" "0|"
+  shown="$(awk 'found { print } /would have been saved to/ { found = 1 }' <<<"${OUT}" | sed '/^$/d')"
+  check "answers given again after a refusal make the policy" $'[read]\n/srv/x\n[bind]\nallow 8080\n[accept]\nexpose 18080 to 8080 from 198.51.100.0/24, 203.0.113.1\n[limits]\ntimeout=2.500\nfsize_mb=0' "${shown}"
+  for refusal in 'must be absolute' 'from 0 to 65535' 'from 1024 to 65535' 'exactly three decimals' 'switches these limits off'; do
+    if asked "${refusal}"; then ok "the assistant says '${refusal}'"; else bad "the assistant says '${refusal}'" "$(cat "${DIALOG_LOG}")"; fi
+  done
+
+  menu --dry-run -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/r.cfg" "0|1\n10" \
+    "0|1" "0|/a" "0|2" "0|/b" "0|1" "0|" "0|3" \
+    "0|1" "0|host:0" "0|" "0|[2001:db8::1]:443" "0|2" "0|3" "0|"
+  shown="$(awk 'found { print } /would have been saved to/ { found = 1 }' <<<"${OUT}" | sed '/^$/d')"
+  check "an entry removed is gone, and an address of the sixth version keeps its brackets" $'[read]\n/b\n[connect]\nallow [2001:db8::1]:443 udp' "${shown}"
+  if asked 'from 1 to 65535, or *'; then ok "a [connect] port of 0 is refused"; else bad "a [connect] port of 0 is refused" "$(cat "${DIALOG_LOG}")"; fi
+  menu --dry-run -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/u.cfg" "0|1\n13" \
+    "0|1" "0|/a" "0|3" "0|120\n\n\n\n\n" "5|" "5|" "0|1" "0|3" "0|"
+  shown="$(awk 'found { print } /would have been saved to/ { found = 1 }' <<<"${OUT}" | sed '/^$/d')"
+  check "a section unticked after it was filled grants nothing" $'[read]\n/a' "${shown}"
+  menu --dry-run -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/z.cfg" "0|13" \
+    "0|0.000\n\n\n\n\n" "1|" "0|120\n\n\n\n\n" "0|"
+  shown="$(awk 'found { print } /would have been saved to/ { found = 1 }' <<<"${OUT}" | sed '/^$/d')"
+  if asked 'whatever the base names: timeout'; then ok "a timeout of 0.000 is confirmed like 0"; else bad "a timeout of 0.000 is confirmed like 0" "$(cat "${DIALOG_LOG}")"; fi
+  check "and declining keeps asking" $'[limits]\ntimeout=120' "${shown}"
+
+  printf 'ln -s %q %q\n' "${WORK}/exercise" "${WORK}/out/planted.cfg" > "${WORK}/hook.sh"
+  HOOK="${WORK}/hook.sh"
+  HOOK_CALL=10
+  before_exercise="$(find "${WORK}/exercise" | sort)"
+  menu -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/planted.cfg" "0|1" "0|1" "0|/srv/data" "0|3" "0|" "0|" \
+    "5|" "5|" "5|" "5|" "5|" "5|"
+  HOOK=""
+  HOOK_CALL=""
+  if asked 'not a regular file'; then ok "a link planted at the destination while the policy is written is refused"; else bad "a link planted at the destination while the policy is written is refused" "$(cat "${DIALOG_LOG}")"; fi
+  check "and nothing is written where it leads" "${before_exercise}" "$(find "${WORK}/exercise" | sort)"
+  if [[ -L "${WORK}/out/planted.cfg" ]]; then ok "and the link is left as it was"; else bad "and the link is left as it was" "$(ls -la "${WORK}/out")"; fi
+
+  printf 'printf "[read]\\n/appeared\\n" > %q\n' "${WORK}/out/appeared.cfg" > "${WORK}/hook.sh"
+  HOOK="${WORK}/hook.sh"
+  HOOK_CALL=10
+  menu -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/appeared.cfg" "0|1" "0|1" "0|/srv/data" "0|3" "0|" "1|" \
+    "5|" "5|" "5|" "5|" "5|" "5|"
+  HOOK=""
+  HOOK_CALL=""
+  if asked 'appeared while the policy was being written'; then ok "a file that appeared at the destination meanwhile is replaced only after a question"; else bad "a file that appeared at the destination meanwhile is replaced only after a question" "$(cat "${DIALOG_LOG}")"; fi
+  check "and No leaves it as it was" $'[read]\n/appeared\nx' "$(cat "${WORK}/out/appeared.cfg"; printf x)"
+
+  : > "${DOCKER_LOG}"
+  DOCKER_WAIT="${WORK}/check.wait"
+  rm -f "${DOCKER_WAIT}" "${DOCKER_WAIT}.menu"
+  captures_before="$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'phobos-cli-check.*' | wc -l | tr -d ' ')"
+  : > "${DIALOG_LOG}"
+  printf '%s\n' "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/interrupted.cfg" "0|1" "0|1" "0|/srv/data" "0|3" "0|" "0|" > "${DIALOG_PLAN}"
+  ( on_terminal "${STUBS}:/usr/bin:/bin"; printf '%s' "${STATUS}" > "${WORK}/check.status" ) &
+  terminal_pid=$!
+  waited=0
+  until [[ -s "${DOCKER_WAIT}.menu" ]] || (( waited >= 100 )); do
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  menu_pid="$(cat "${DOCKER_WAIT}.menu" 2> /dev/null)"
+  if [[ "${menu_pid}" =~ ^[0-9]+$ ]]; then
+    kill -TERM "${menu_pid}"
+    wait "${terminal_pid}"
+    check "a SIGTERM during the check ends the menu with 143" 143 "$(cat "${WORK}/check.status")"
+    check "and leaves no output of the check behind" "${captures_before}" "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'phobos-cli-check.*' | wc -l | tr -d ' ')"
+  else
+    bad "the check the menu runs was started" "no PID within 20 seconds"
+    wait "${terminal_pid}"
+  fi
+  DOCKER_WAIT=""
+  menu --dry-run -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/t.cfg" "0|1\n99"
+  check "a section the checklist did not offer ends the menu" "${PHB_ERUNTIME}" "${STATUS}"
+fi
+
 echo "== run a command under an existing policy, inside an image"
 if [[ -e "${IMAGE_HOME}" ]] || ! mkdir -p "${IMAGE_HOME}" 2> /dev/null; then
   skip "the image form of the menu" "${IMAGE_HOME} exists or cannot be made here"
 else
   MADE_IMAGE_HOME="yes"
   printf '#!/bin/bash\nprintf "phobos.sh"; for a in "$@"; do printf " [%%s]" "$a"; done; printf "\\n"\n' > "${IMAGE_HOME}/phobos.sh"
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\nwhile (( $# > 0 )); do [[ "$1" == --config ]] && cat -- "$2" >> %q; shift; done\nexit "$(cat %q 2> /dev/null || echo 0)"\n' "${WORK}/policysystem.log" "${WORK}/policysystem.log" "${WORK}/policysystem.status" > "${IMAGE_HOME}/phobos-policysystem.sh"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\nwhile (( $# > 0 )); do [[ "$1" == --config ]] && cat -- "$2" >> %q; shift; done\n[[ -f %q ]] && bash %q\nexit "$(cat %q 2> /dev/null || echo 0)"\n' "${WORK}/policysystem.log" "${WORK}/policysystem.log" "${WORK}/policysystem.hook" "${WORK}/policysystem.hook" "${WORK}/policysystem.status" > "${IMAGE_HOME}/phobos-policysystem.sh"
   chmod +x "${IMAGE_HOME}/phobos.sh" "${IMAGE_HOME}/phobos-policysystem.sh"
   before="$(find /var/tmp -maxdepth 1 -name 'phobos-cli-menu.*' | wc -l | tr -d ' ')"
   : > "${WORK}/policysystem.log"
@@ -329,6 +455,31 @@ else
   menu --dry-run -- "0|" "0|1" "0|${WORK}/policies" "0|1" "0|./build_script.sh" "1|" "0|"
   has_pair --config "${WORK}/policies/exercise.cfg" && ok "a dry run inside an image names the policy itself" || bad "a dry run inside an image names the policy itself" "${OUT}"
   check "and copies and checks nothing" "" "$(cat "${WORK}/policysystem.log")"
+  : > "${WORK}/policysystem.log"
+  menu -- "0|" "0|2" "0|${WORK}/out/image.cfg" "0|1" "0|1" "0|/srv/data" "0|3" "0|" "1|" "0|./build_script.sh" "1|" "0|"
+  check "the assistant inside an image ends with the status of phobos.sh" 0 "${STATUS}"
+  check "and saves the policy the answers make" $'[read]\n/srv/data\nx' "$(cat "${WORK}/out/image.cfg"; printf x)"
+  if grep -qE -- "--spec-dir ${WORK}/out/\.phobos-policy\.[A-Za-z0-9]+/specification --config ${WORK}/out/\.phobos-policy\.[A-Za-z0-9]+/policy\.cfg" "${WORK}/policysystem.log"; then ok "after the policy system read it beside its destination"; else bad "after the policy system read it beside its destination" "$(cat "${WORK}/policysystem.log")"; fi
+  if [[ -n "$(find "${WORK}/out" -maxdepth 1 -name '.phobos-policy.*')" ]]; then bad "and leaves nothing beside it" "$(ls -a "${WORK}/out")"; else ok "and leaves nothing beside it"; fi
+  printf '[read]\n/old\n' > "${WORK}/out/race.cfg"
+  printf 'rm -f %q && ln -s %q %q\n' "${WORK}/out/race.cfg" "${WORK}/exercise" "${WORK}/out/race.cfg" > "${WORK}/policysystem.hook"
+  before_exercise="$(find "${WORK}/exercise" | sort)"
+  menu -- "0|" "0|2" "0|${WORK}/out/race.cfg" "0|" "0|1" "0|1" "0|/srv/data" "0|3" "0|" "1|" "1|" "5|" "5|" "5|"
+  rm -f "${WORK}/policysystem.hook"
+  check "a link that replaces an agreed destination in the last moment is replaced, not followed" "${before_exercise}" "$(find "${WORK}/exercise" | sort)"
+  check "and the policy is saved under its own name" $'[read]\n/srv/data\nx' "$(cat "${WORK}/out/race.cfg"; printf x)"
+  if [[ -L "${WORK}/out/race.cfg" ]]; then bad "as a file, not through the link" "$(ls -la "${WORK}/out")"; else ok "as a file, not through the link"; fi
+  printf 'printf "[read]\\n/appeared-late\\n" > %q\n' "${WORK}/out/late.cfg" > "${WORK}/policysystem.hook"
+  menu -- "0|" "0|2" "0|${WORK}/out/late.cfg" "0|1" "0|1" "0|/srv/data" "0|3" "0|" "1|" "5|" "5|" "5|" "5|"
+  rm -f "${WORK}/policysystem.hook"
+  if asked 'appeared while the policy was being saved'; then ok "a file that appears in the last moment before an unagreed save is asked about"; else bad "a file that appears in the last moment before an unagreed save is asked about" "$(cat "${DIALOG_LOG}")"; fi
+  check "and No leaves it as it was" $'[read]\n/appeared-late\nx' "$(cat "${WORK}/out/late.cfg"; printf x)"
+  printf '13\n' > "${WORK}/policysystem.status"
+  menu -- "0|" "0|2" "0|${WORK}/out/refused.cfg" "0|1" "0|1" "0|/srv/data" "0|3" "0|" "0|" "5|" "5|" "5|" "5|"
+  rm -f "${WORK}/policysystem.status"
+  if [[ -e "${WORK}/out/refused.cfg" ]]; then bad "a policy the policy system refuses is not saved" "${WORK}/out/refused.cfg"; else ok "a policy the policy system refuses is not saved"; fi
+  if asked 'Policy refused'; then ok "and the refusal is shown"; else bad "and the refusal is shown" "$(cat "${DIALOG_LOG}")"; fi
+  if [[ -n "$(find "${WORK}/out" -maxdepth 1 -name '.phobos-policy.*')" ]]; then bad "and nothing is left beside it" "$(ls -a "${WORK}/out")"; else ok "and nothing is left beside it"; fi
   after="$(find /var/tmp -maxdepth 1 -name 'phobos-cli-menu.*' | wc -l | tr -d ' ')"
   check "no private directory is left behind" "${before}" "${after}"
 fi

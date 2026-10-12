@@ -65,8 +65,18 @@ the exercise. A submission can place a policy file there that grants it anything
 policy inside the exercise only after a second confirmation. The command is split into words at
 spaces. Quotes, variables and wildcards are not interpreted, so what you see is what runs.
 
+**Write a new policy step by step** asks where to save the policy and which of the thirteen sections
+to fill, then for the entries of each. Each section asks in the shape its grammar takes: a path, a
+host and a port, a port, an exposed listener, or the limits in one form. The menu asks again for an
+answer the grammar cannot hold, such as a relative path, a port out of range or a timeout without
+exactly three decimals. The menu never saves the policy inside the exercise, and it replaces an
+existing file only after a question. Before the command, the menu can run `/bin/true` under the new policy. That shows
+whether the policy system accepts it and the layers start with it. A dry run saves nothing and prints
+the policy instead.
+
 Inside an image the menu first copies the policy into a private directory under `/var/tmp` and has the
-policy system check it there. The policy system refuses a policy that lets the sandboxed command
+policy system check it there. The policy system checks a new policy the same way, beside its
+destination. The policy system refuses a policy that lets the sandboxed command
 change anything where that copy lies. The sandboxed command can therefore never change the policy it
 runs under. Such a policy has to be run from a host, where the copy stays outside the container. A
 dry run copies nothing.

@@ -19,10 +19,18 @@ MENU_LOG=()
 MENU_STATUS=0
 # Whether the way through the menu ended in a call.
 MENU_RAN="no"
+# What the menu prints after the calls when it ends, such as the policy a dry run would have saved.
+MENU_NOTES=()
+# Whether the last check of a new policy ended with 0.
+MENU_CHECKED="no"
 # The private directory a run inside an image reads its policy from, removed when the menu ends.
 MENU_STAGING=""
 # The private copy of the policy in it, empty when the policy system refused the policy.
 MENU_STAGED=""
+# The private directory a new policy is read in beside its destination, and the file a check's
+# output is kept in, while they exist, so that the menu removes them on every exit.
+MENU_PROBE=""
+MENU_CAPTURE=""
 # The call of phobos-cli.sh running as the menu's child, and the status a signal to the menu asked
 # the menu to end with once that child has ended.
 MENU_CHILD=""
@@ -36,6 +44,10 @@ FLOW_PROJECT_ROOT=""
 FLOW_COMMAND_TEXT=""
 FLOW_WORDS=()
 FLOW_OPTIONS=()
+# Where the way through "write a new policy" saves the policy, and whether replacing a file there
+# was agreed to.
+FLOW_DESTINATION=""
+FLOW_REPLACE="no"
 # The call the answers make, as phobos-cli.sh is given it, and as it is shown.
 FLOW_ARGV=()
 FLOW_SHOWN=()
@@ -46,16 +58,26 @@ menu_cleanup() {
   if [[ -n "$MENU_STAGING" && -d "$MENU_STAGING" ]]; then
     rm -rf -- "$MENU_STAGING"
   fi
+  if [[ -n "$MENU_PROBE" && -d "$MENU_PROBE" ]]; then
+    rm -rf -- "$MENU_PROBE"
+  fi
+  if [[ -n "$MENU_CAPTURE" ]]; then
+    rm -f -- "$MENU_CAPTURE"
+  fi
 }
 
 # Prints, on stderr, every call of phobos-cli.sh the menu started and how it ended, quoted as bash
-# would read it, so that it can be repeated without the menu.
+# would read it, so that it can be repeated without the menu, and then the notes of the way through.
 menu_report() {
   local entry
-  (( ${#MENU_LOG[@]} > 0 )) || return 0
-  printf '\nThe menu ran (quoted for bash):\n' >&2
-  for entry in "${MENU_LOG[@]}"; do
-    printf '  %s\n' "$entry" >&2
+  if (( ${#MENU_LOG[@]} > 0 )); then
+    printf '\nThe menu ran (quoted for bash):\n' >&2
+    for entry in "${MENU_LOG[@]}"; do
+      printf '  %s\n' "$entry" >&2
+    done
+  fi
+  for entry in "${MENU_NOTES[@]}"; do
+    printf '\n%s\n' "$entry" >&2
   done
 }
 
@@ -88,23 +110,53 @@ menu_finish() {
 
 # Starts phobos-cli.sh as a child with the words given as its call, the global options of this call
 # in front, waits for it, and records the call as shown in FLOW_SHOWN, with its status, in MENU_LOG.
-# The child keeps the terminal as its input and output. It runs as a background job, so that the
-# menu's wait can be interrupted: a SIGINT or SIGTERM to the menu, Ctrl-C included, reaches the
-# child as SIGTERM through menu_signalled, as run_child passes a signal on to its own command, and
-# once the child has ended the menu ends with the status of the signal. Sets MENU_STATUS.
+# The child keeps the terminal as its input and output. Sets MENU_STATUS.
 menu_spawn() {
   local -a global=()
-  local shown
   [[ "$DRY_RUN" == "yes" ]] && global+=(--dry-run)
+  menu_wait_child "-" "$BASH" "${HERE}/phobos-cli.sh" "${global[@]}" "$@"
+  menu_log_call "${global[@]}"
+}
+
+# Starts phobos-cli.sh as menu_spawn does, but with its input from /dev/null and its output kept in
+# the file $1 rather than shown, so that the menu can show it in a box. Takes the file, then the call.
+menu_spawn_captured() {
+  local file="$1"
+  local -a global=()
+  shift
+  [[ "$DRY_RUN" == "yes" ]] && global+=(--dry-run)
+  menu_wait_child "$file" "$BASH" "${HERE}/phobos-cli.sh" "${global[@]}" "$@"
+  menu_log_call "${global[@]}"
+}
+
+# Starts the command after $1 as a background job and waits for it, with $1 either "-", for a child
+# that keeps the terminal as its input and output, or a file its output goes to, its input then
+# being /dev/null. It runs as a background job so that the menu's wait can be interrupted: a SIGINT
+# or SIGTERM to the menu, Ctrl-C included, reaches the child as SIGTERM through menu_signalled, as
+# run_child passes a signal on to its own command. Sets MENU_STATUS.
+menu_wait_child() {
+  local output="$1"
+  shift
   MENU_STATUS=0
-  "$BASH" "${HERE}/phobos-cli.sh" "${global[@]}" "$@" <&0 &
+  if [[ "$output" == "-" ]]; then
+    "$@" <&0 &
+  else
+    "$@" > "$output" 2>&1 < /dev/null &
+  fi
   MENU_CHILD=$!
   wait "$MENU_CHILD" || MENU_STATUS=$?
   while kill -0 "$MENU_CHILD" 2> /dev/null; do
     wait "$MENU_CHILD" || MENU_STATUS=$?
   done
   MENU_CHILD=""
-  shown="$(printf '%q ' "${HERE}/phobos-cli.sh" "${global[@]}" "${FLOW_SHOWN[@]}")"
+}
+
+# Adds the call shown in FLOW_SHOWN, with the global options given in front and MENU_STATUS after
+# it, to MENU_LOG, quoted as bash would read it. After a signal to the menu it then ends the menu,
+# with the status of the signal, so that no further call starts.
+menu_log_call() {
+  local shown
+  shown="$(printf '%q ' "${HERE}/phobos-cli.sh" "$@" "${FLOW_SHOWN[@]}")"
   MENU_LOG+=("${shown% } (ended with status ${MENU_STATUS})")
   [[ -z "$MENU_SIGNAL" ]] || menu_interrupted "$MENU_SIGNAL"
 }
@@ -128,13 +180,14 @@ menu_main() {
   while :; do
     ui_menu "Main menu" "What would you like to do?" \
       1 "Run a command under an existing policy" \
-      2 "Write a new policy step by step (in a later version)" \
+      2 "Write a new policy step by step" \
       3 "Record a reference program and derive a policy (in a later version)" \
       4 "Derive a policy from past student submissions (in a later version)" \
       5 "Exit"
     [[ "$UI_MOVE" == "next" && "$UI_RESULT" != "5" ]] || menu_finish 0
     case "$UI_RESULT" in
       1) menu_flow_run ;;
+      2) menu_flow_write ;;
       *) ui_message "Not yet" "This part of the menu arrives in a later version of Phobos." ;;
     esac
     [[ "$MENU_RAN" == "yes" ]] && menu_finish "$MENU_STATUS"
@@ -143,7 +196,8 @@ menu_main() {
 
 # Walks the steps named by the words given, forwards on an answer and backwards on Esc, each step
 # being the function menu_step_<word>. Sets UI_MOVE to next when the last step was answered and to
-# back when the first one was left.
+# back when the first one was left. A step that sets UI_MOVE to stop ends the walk there, with
+# UI_MOVE left at stop.
 menu_walk() {
   local -a steps=("$@")
   local position=0
@@ -151,6 +205,7 @@ menu_walk() {
   while (( position >= 0 && position < ${#steps[@]} )); do
     UI_MOVE="$direction"
     "menu_step_${steps[position]}"
+    [[ "$UI_MOVE" == "stop" ]] && return 0
     direction="$UI_MOVE"
     if [[ "$UI_MOVE" == "next" ]]; then
       position=$((position + 1))
@@ -341,16 +396,21 @@ menu_stage_in_image() {
   MENU_STAGED="$copy"
 }
 
-# Tells the person that the policy system refused the policy, with the last lines it printed. A
-# line that holds a control character is left out rather than drawn.
+# Tells the person that the policy system refused the policy, with the last lines it printed.
 menu_show_refusal() {
+  menu_show_tail "Policy refused" "The policy system refused this policy, so nothing was run. Where it says the specification directory lies beneath a write path, the policy lets the command change where the menu keeps its copy of the policy; run it from a host instead, which keeps the copy outside the container." "$1"
+}
+
+# Shows the text $2 under the title $1, followed by the last lines of the file $3. A line that holds
+# a control character is left out rather than drawn.
+menu_show_tail() {
   local line
-  local text="The policy system refused this policy, so nothing was run. Where it says the specification directory lies beneath a write path, the policy lets the command change where the menu keeps its copy of the policy; run it from a host instead, which keeps the copy outside the container.\n"
+  local text="${2}\n"
   while IFS= read -r line; do
     ui_printable "$line"
     [[ "$REPLY" == "yes" ]] && text+="\n${line}"
-  done < <(tail -n 8 "$1")
-  ui_message "Policy refused" "$text"
+  done < <(tail -n 8 "$3")
+  ui_message "$1" "$text"
 }
 
 # Runs the call the answers make. Inside an image, and not in a dry run, the policy is first copied
@@ -365,4 +425,255 @@ menu_execute_run() {
   menu_build_run "$policy"
   MENU_RAN="yes"
   menu_spawn "${FLOW_ARGV[@]}"
+}
+
+# The way through "write a new policy step by step": the destination, the sections and their
+# entries, saving, an optional check, then the run as in "run a command under an existing policy".
+menu_flow_write() {
+  local -a steps=()
+  MENU_RAN="no"
+  wizard_reset
+  FLOW_PROJECT_ROOT=""
+  [[ "$MODE" == "host" ]] && steps+=(language exercise)
+  steps+=(destination sections editors save check command advanced confirm)
+  menu_walk "${steps[@]}"
+  [[ "$UI_MOVE" == "next" ]] || return 0
+  menu_execute_run
+}
+
+# Sets REPLY to the reason the policy file $1 cannot be written there, or to empty when it can, and
+# FLOW_DESTINATION to its path with the directory made physical. A policy is never kept inside the
+# exercise, which the sandboxed command may change, and an existing one is replaced only when it is
+# a regular file, never through a link.
+menu_destination_problem() {
+  local directory
+  local exercise
+  REPLY=""
+  ui_printable "$1"
+  if [[ "$REPLY" != "yes" || "$1" != *.cfg || "$1" == */ ]]; then
+    REPLY="Give the path of a file ending in .cfg, without control characters. A .yaml file would be read as an Ares 2 policy."
+    return 0
+  fi
+  REPLY=""
+  directory="$(dirname -- "$1")"
+  if [[ ! -d "$directory" ]]; then
+    REPLY="The directory ${directory} does not exist."
+    return 0
+  fi
+  directory="$(cd -- "$directory" && pwd -P)"
+  FLOW_DESTINATION="${directory}/${1##*/}"
+  menu_exercise_directory
+  exercise="$REPLY"
+  REPLY=""
+  if [[ "$directory" == "$exercise" || "$directory" == "${exercise}/"* ]]; then
+    REPLY="That lies inside the exercise directory, which the sandboxed command may change. Keep the policy with your own files."
+  elif [[ -L "$FLOW_DESTINATION" || ( -e "$FLOW_DESTINATION" && ! -f "$FLOW_DESTINATION" ) ]]; then
+    REPLY="${FLOW_DESTINATION} exists and is not a regular file. Choose another name."
+  fi
+  return 0
+}
+
+# Asks where to save the new policy until the place can take it, and whether to replace a file
+# that is there already.
+menu_step_destination() {
+  local offered="${FLOW_DESTINATION:-${PWD}/phobos-exercise.cfg}"
+  while :; do
+    ui_input "Policy file" "Where should the new policy be saved? Keep it with your own files, never inside the exercise." "$offered"
+    [[ "$UI_MOVE" == "next" ]] || return 0
+    offered="$UI_RESULT"
+    menu_destination_problem "$offered"
+    if [[ -n "$REPLY" ]]; then
+      ui_message "Policy file" "$REPLY"
+      continue
+    fi
+    FLOW_REPLACE="no"
+    [[ -e "$FLOW_DESTINATION" ]] || return 0
+    ui_yesno "Policy file" "${FLOW_DESTINATION} exists. Replace it?" no
+    if [[ "$UI_MOVE" == "next" && "$UI_ANSWER" == "yes" ]]; then
+      FLOW_REPLACE="yes"
+      return 0
+    fi
+  done
+}
+
+# Asks which sections the new policy fills.
+menu_step_sections() {
+  wizard_choose_sections
+}
+
+# Asks for the entries of every section chosen.
+menu_step_editors() {
+  wizard_edit_chosen
+}
+
+# Shows the policy the answers make and saves it on Yes. In a dry run nothing is written: the policy
+# is printed when the menu ends, and the way through stops here, because what follows would read
+# the file.
+menu_step_save() {
+  local shown
+  wizard_render
+  shown="${WIZARD_TEXT//$'\n'/\\n}"
+  [[ -n "$WIZARD_TEXT" ]] || shown="(nothing: under this policy the command gets the image's base policy alone)"
+  ui_yesno "Save the policy?" "The new policy for ${FLOW_DESTINATION}:\n\n${shown}\nSave it?"
+  [[ "$UI_MOVE" == "next" ]] || return 0
+  if [[ "$UI_ANSWER" == "no" ]]; then
+    UI_MOVE="back"
+    return 0
+  fi
+  if [[ "$DRY_RUN" == "yes" ]]; then
+    MENU_NOTES+=("A dry run writes nothing. The policy would have been saved to ${FLOW_DESTINATION}:" "$WIZARD_TEXT")
+    MENU_RAN="yes"
+    UI_MOVE="stop"
+    return 0
+  fi
+  menu_save_policy
+}
+
+# Writes WIZARD_TEXT to FLOW_DESTINATION by giving a complete file its name, so that no reader ever
+# sees half a policy. The destination is checked again first, since screens have passed since it was
+# chosen: it must still be a place the policy may go, in the same directory. A file that appeared
+# there is replaced only after a question, even one that appears in the last moment, because without
+# agreement the save replaces nothing. Inside an image the file is first read by the policy system
+# in a private directory beside the destination, which refuses a policy that lets the sandboxed
+# command change that directory, and is saved only when it is accepted. Where the policy is not
+# saved, UI_MOVE is back. Sets FLOW_POLICY.
+menu_save_policy() {
+  local confirmed="$FLOW_DESTINATION"
+  local directory="${FLOW_DESTINATION%/*}"
+  local probe
+  local status=0
+  menu_destination_problem "$confirmed"
+  [[ -z "$REPLY" && "$FLOW_DESTINATION" != "$confirmed" ]] && REPLY="The directory of ${confirmed} now leads somewhere else."
+  FLOW_DESTINATION="$confirmed"
+  if [[ -n "$REPLY" ]]; then
+    ui_message "Policy file" "Nothing was saved. ${REPLY}"
+    UI_MOVE="back"
+    return 0
+  fi
+  if [[ -e "$FLOW_DESTINATION" && "$FLOW_REPLACE" != "yes" ]]; then
+    ui_yesno "Policy file" "${FLOW_DESTINATION} appeared while the policy was being written. Replace it?" no
+    if [[ "$UI_MOVE" != "next" || "$UI_ANSWER" != "yes" ]]; then
+      UI_MOVE="back"
+      return 0
+    fi
+    FLOW_REPLACE="yes"
+  fi
+  probe="$(mktemp -d "${directory}/.phobos-policy.XXXXXXXX")" || fail_environment "cannot write in ${directory}"
+  MENU_PROBE="$probe"
+  mkdir "${probe}/specification"
+  printf '%s' "$WIZARD_TEXT" > "${probe}/policy.cfg"
+  chmod 0644 "${probe}/policy.cfg"
+  if [[ "$MODE" == "image" ]]; then
+    "${IMAGE_HOME}/phobos-policysystem.sh" --spec-dir "${probe}/specification" --config "${probe}/policy.cfg" \
+      > "${probe}/check.log" 2>&1 || status=$?
+    if (( status != 0 )); then
+      menu_show_refusal "${probe}/check.log"
+      rm -rf -- "$probe"
+      MENU_PROBE=""
+      UI_MOVE="back"
+      return 0
+    fi
+  fi
+  if [[ "$FLOW_REPLACE" == "yes" ]]; then
+    menu_rename "${probe}/policy.cfg" "$FLOW_DESTINATION"
+  else
+    menu_link_new "${probe}/policy.cfg" "$FLOW_DESTINATION"
+  fi
+  rm -rf -- "$probe"
+  MENU_PROBE=""
+  if [[ "$REPLY" == "exists" ]]; then
+    ui_yesno "Policy file" "${FLOW_DESTINATION} appeared while the policy was being saved. Replace it?" no
+    if [[ "$UI_MOVE" != "next" || "$UI_ANSWER" != "yes" ]]; then
+      UI_MOVE="back"
+      return 0
+    fi
+    FLOW_REPLACE="yes"
+    menu_save_policy
+    return 0
+  fi
+  FLOW_POLICY="$FLOW_DESTINATION"
+}
+
+# Gives the file $1 the further name $2 with a single link(2), which never replaces anything: it
+# fails when anything is named $2, a file, a directory or a link, and never follows a link there. So
+# a destination nobody agreed to replace is never overwritten, even when something appears there in
+# the last moment. Sets REPLY to "exists" when something was there and to empty when the name was
+# given. perl's link does it, and GNU ln with -T. Ends the script when neither is there, or when the
+# link failed for another reason.
+menu_link_new() {
+  local status=0
+  if command -v perl > /dev/null 2>&1; then
+    perl -e 'link($ARGV[0], $ARGV[1]) or exit 1' -- "$1" "$2" || status=$?
+  elif ln --version > /dev/null 2>&1; then
+    ln -T -- "$1" "$2" 2> /dev/null || status=$?
+  else
+    fail_environment "cannot save $2 safely: neither perl nor GNU ln is there to link it"
+  fi
+  REPLY=""
+  if (( status != 0 )); then
+    [[ -e "$2" || -L "$2" ]] || fail_environment "cannot save $2"
+    REPLY="exists"
+  fi
+  return 0
+}
+
+# Renames the file $1 to the name $2 with a single rename(2), which replaces a file or a link named
+# $2 itself and never follows a link there to a directory, as mv would by moving the file into it.
+# GNU mv does that with -T, and elsewhere, macOS among them, perl's rename does. Ends the script
+# when neither is there or the rename fails. Sets REPLY to empty.
+menu_rename() {
+  if mv --version > /dev/null 2>&1; then
+    mv -f -T -- "$1" "$2" || fail_environment "cannot save $2"
+  elif command -v perl > /dev/null 2>&1; then
+    perl -e 'rename($ARGV[0], $ARGV[1]) or exit 1' -- "$1" "$2" || fail_environment "cannot save $2"
+  else
+    fail_environment "cannot save $2 safely: neither GNU mv nor perl is there to rename it"
+  fi
+  REPLY=""
+  return 0
+}
+
+# Offers to run /bin/true under the new policy, which shows whether the policy system accepts it
+# and the layers start with it, and shows how that ended. Its answer is kept apart from the run
+# that follows: a failed check leads back to the policy only when asked.
+menu_step_check() {
+  local -a words=("${FLOW_WORDS[@]}")
+  local -a options=("${FLOW_OPTIONS[@]}")
+  ui_yesno "Check the policy" "Run /bin/true under the new policy now? It shows whether the policy system accepts the policy and the layers start with it."
+  [[ "$UI_MOVE" == "next" && "$UI_ANSWER" == "yes" ]] || return 0
+  FLOW_WORDS=(/bin/true)
+  FLOW_OPTIONS=()
+  menu_execute_check
+  FLOW_WORDS=("${words[@]}")
+  FLOW_OPTIONS=("${options[@]}")
+  [[ "$MENU_CHECKED" == "yes" ]] && return 0
+  ui_yesno "Check the policy" "Go back and change the policy?"
+  [[ "$UI_MOVE" == "next" && "$UI_ANSWER" == "yes" ]] && UI_MOVE="back"
+  return 0
+}
+
+# Runs /bin/true under the saved policy as the way through would run its command, with its output
+# kept rather than shown, and shows how it ended. Inside an image the policy is copied and checked
+# first, as for any run. Sets MENU_CHECKED to yes when the check ended with 0.
+menu_execute_check() {
+  local policy="$FLOW_POLICY"
+  local output
+  MENU_CHECKED="no"
+  if [[ "$MODE" == "image" ]]; then
+    menu_stage_in_image
+    [[ -n "$MENU_STAGED" ]] || return 0
+    policy="$MENU_STAGED"
+  fi
+  menu_build_run "$policy"
+  output="$(mktemp "${TMPDIR:-/tmp}/phobos-cli-check.XXXXXXXX")"
+  MENU_CAPTURE="$output"
+  menu_spawn_captured "$output" "${FLOW_ARGV[@]}"
+  if (( MENU_STATUS == 0 )); then
+    MENU_CHECKED="yes"
+    ui_message "Check the policy" "The policy system accepted the policy, and /bin/true ran under it."
+  else
+    menu_show_tail "Check the policy" "The check ended with status ${MENU_STATUS}. The last lines it printed:" "$output"
+  fi
+  rm -f -- "$output"
+  MENU_CAPTURE=""
 }
