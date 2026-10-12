@@ -6,7 +6,7 @@
 # the four C source folders whole (phobos-landlock-filesystem-and-networksystem,
 # phobos-seccomp-networksystem, phobos-seccomp-filesystem and phobos-seccomp-timeoutsystem) for its
 # build stage, config/*.cfg and the folder config/language-configurations/, and, for the two stages that
-# pre-load the dependency repositories, pin/ (pin-repository.sh, the two committed manifests and fact-requirements.txt) and
+# pre-load the dependency repositories, pin/ (pin-repository.sh, the two committed manifests, fact-requirements.txt and swift-mirrors.json) and
 # exercises/ (the two reference exercises those stages build). The C folders keep
 # their names because the report-only supervisor's sources include the other three folders'
 # headers by paths relative to their own. Those files live across several directories of this
@@ -67,6 +67,7 @@ cp "${REPOSITORY}"/protecter/image/pin-repository.sh "${DESTINATION}/pin/"
 cp "${REPOSITORY}"/protecter/image/maven-repository.sha256 "${DESTINATION}/pin/"
 cp "${REPOSITORY}"/protecter/image/gradle-repository.sha256 "${DESTINATION}/pin/"
 cp "${REPOSITORY}"/protecter/image/fact-requirements.txt "${DESTINATION}/pin/"
+cp "${REPOSITORY}"/protecter/image/swift-mirrors.json "${DESTINATION}/pin/"
 cp -R "${REPOSITORY}"/exercises/java/maven-reference "${DESTINATION}/exercises/java/"
 cp -R "${REPOSITORY}"/exercises/java/gradle-reference "${DESTINATION}/exercises/java/"
 

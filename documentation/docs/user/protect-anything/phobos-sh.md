@@ -66,6 +66,13 @@ from Artemis's `artemis-r-docker`, so an Artemis R exercise graded under Phobos 
 exercise installs its packages into `R_LIBS_USER`, a library under the working directory. The image does not
 set that variable. The grading script sets it and creates the directory, as the reference's `build_script.sh` does.
 
+The Swift image for Artemis exercises that use the Swift template is built from `docker/protecter/swift/docker-compose.yaml`
+and carries `BaseLanguage-swift.cfg`. It starts from the official Swift image and holds the three packages the test
+package needs, so a build fetches nothing. Like the FACT base, this base permits executing a file the run itself wrote
+in the directory of the solution only, because SwiftPM runs the manifest it compiles. The grading script points
+`TMPDIR` into that directory, `HOME` into the working directory, and SwiftPM at the packages the image holds with
+a mirror file, as the reference's `build_script.sh` does.
+
 ## Running a command
 
 ```bash

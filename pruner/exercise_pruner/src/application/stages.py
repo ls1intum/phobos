@@ -325,8 +325,9 @@ def filesystem_grants(pruning: Pruning, current: list[record.Denial], snapshot: 
 
     `held` is the policy the run held, whose write-class rights the narrowing of [execute] counts too.
     """
+    roots = compiled_roots(pruning)
     confirmed = [denial for denial in current if denial.layer == record.LAYER_FILESYSTEM
-                 and control.landlock_caused(denial, pruning.exercise.uses_pseudo_terminals)]
+                 and control.landlock_caused(denial, pruning.exercise.uses_pseudo_terminals, roots)]
     pseudo_terminal_grants, ordinary = pseudo_terminal_split(pruning, confirmed)
     combined = pruning.history + ordinary
     taken = generalise.classify_per_run(combined)
