@@ -4,6 +4,7 @@
 #
 # Sourced by phobos-cli.sh alone, at the top level, after phobos-cli-common.sh, whose places, state
 # and helpers it uses. It starts nothing while it is sourced.
+
 # The command build: assembles the image context and builds the image of a language. Host only.
 command_build() {
   local language=""

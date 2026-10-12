@@ -4,6 +4,7 @@
 #
 # Sourced by phobos-cli.sh alone, at the top level, after phobos-cli-common.sh, whose places, state
 # and helpers it uses. It starts nothing while it is sourced.
+
 # Ends the script unless the pruner or recorder file $1 exists in this image, naming what is missing.
 require_helper() {
   [[ -f "$1" ]] || fail_environment "$1 is missing: the helpers of the pruners are mounted into the prune image, and are not part of the run-phase image"

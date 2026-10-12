@@ -4,6 +4,7 @@
 #
 # Sourced by phobos-cli.sh alone, at the top level, after phobos-cli-common.sh, whose places, state
 # and helpers it uses. It starts nothing while it is sourced.
+
 # Copies the configuration $1 into the private staging directory as number $STAGED_COUNT, and sets
 # REPLY to the path the container sees it under. Content only (cp of a file, not a link), so that no
 # writable alias of it can exist; the directory is made on first use and removed on exit. In a dry

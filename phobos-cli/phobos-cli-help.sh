@@ -4,6 +4,7 @@
 #
 # Sourced by phobos-cli.sh alone, at the top level, after phobos-cli-common.sh. It starts nothing
 # while it is sourced.
+
 # Prints the manual on the file descriptor named by $1. Assumes nothing.
 help_text() {
   cat >&"$1" <<'PHOBOS_CLI_HELP'

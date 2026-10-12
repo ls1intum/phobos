@@ -4,6 +4,7 @@
 #
 # Sourced by phobos-cli.sh alone, at the top level, after phobos-cli-common.sh, whose places, state
 # and helpers it uses. It starts nothing while it is sourced.
+
 # The command record: the recording pruner. Takes the words after "record".
 command_record() {
   local language="java"
