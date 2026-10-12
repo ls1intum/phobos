@@ -73,6 +73,13 @@ in the directory of the solution only, because SwiftPM runs the manifest it comp
 `TMPDIR` into that directory, `HOME` into the working directory, and SwiftPM at the packages the image holds with
 a mirror file, as the reference's `build_script.sh` does.
 
+The GCC image for Artemis exercises that use the GCC template is built from `docker/protecter/c-gcc/docker-compose.yaml`
+and carries `BaseLanguage-c-gcc.cfg`. It starts from the official Debian image, not from Artemis's
+`artemis-c-minimal-docker`, so an Artemis GCC exercise graded under Phobos must select this image. Like the FACT
+base, this base permits executing a file the run itself wrote, in the directory of the solution only. It grants
+`/dev/pts` the `ioctl` right, because the tester starts the program on a pseudo-terminal. The tester's sanitizers
+need the address-space cap off, so the exercise's configuration sets `mem_mb=0` in `[limits]`.
+
 ## Running a command
 
 ```bash

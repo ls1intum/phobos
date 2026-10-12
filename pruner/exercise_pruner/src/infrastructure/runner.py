@@ -48,7 +48,8 @@ REAP_SECONDS = 10
 REAP_INTERVAL_SECONDS = 0.05
 # The keys prune.json may hold, with the type each value must have (A.6.8).
 SETTING_TYPES = {"report_globs": list, "declared_hosts": list, "heap_pinned": bool, "pinned_read_roots": list,
-                 "seed": str, "key": str, "runs_compiled_programs": bool, "uses_pseudo_terminals": bool}
+                 "seed": str, "key": str, "runs_compiled_programs": bool, "uses_pseudo_terminals": bool,
+                 "address_space_unbounded": bool}
 
 
 class PrunerDefect(Exception):
@@ -85,6 +86,7 @@ class Exercise:
     seed: str | None = None
     runs_compiled_programs: bool = False
     uses_pseudo_terminals: bool = False
+    address_space_unbounded: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -195,7 +197,8 @@ def read_exercise(directory: pathlib.Path) -> Exercise:
                     declared_hosts=declared, heap_pinned=bool(settings.get("heap_pinned", False)),
                     pinned_read_roots=pinned.parse(settings.get("pinned_read_roots", []), str(directory / "prune.json")),
                     seed=settings.get("seed"), runs_compiled_programs=bool(settings.get("runs_compiled_programs", False)),
-                    uses_pseudo_terminals=bool(settings.get("uses_pseudo_terminals", False)))
+                    uses_pseudo_terminals=bool(settings.get("uses_pseudo_terminals", False)),
+                    address_space_unbounded=bool(settings.get("address_space_unbounded", False)))
 
 
 def restore(exercise: Exercise, environment: Environment) -> pathlib.Path:

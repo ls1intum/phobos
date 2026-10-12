@@ -1,0 +1,1 @@
+{"report_globs": ["test-reports/*.xml"], "seed": "c.cfg", "runs_compiled_programs": true, "uses_pseudo_terminals": true, "address_space_unbounded": true, "key": "c-gcc"}

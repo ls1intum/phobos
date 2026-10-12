@@ -118,6 +118,13 @@ The prune image is built on the Swift run-phase image there and prunes `exercise
 to end in a policy. That exercise declares `runs_compiled_programs`, because SwiftPM runs the package manifest it
 compiles. The seed `swift.cfg` grants `/tmp`, where the toolchain names its temporaries at random.
 
+## The GCC run-phase image, run by the `run-phase-c-gcc` job of `build.yml`
+
+The prune image is built on the GCC run-phase image there and prunes `exercises/c/gcc-reference`, which has to
+end in a policy. That exercise declares `runs_compiled_programs` (the tester runs what it compiles),
+`uses_pseudo_terminals` (it starts the program on a pseudo-terminal) and `address_space_unbounded` (the sanitizers
+reserve terabytes). The seed `c.cfg` grants `/tmp`, where gcc names its temporaries at random.
+
 ## The environment variables the suites read
 
 | Variable | Read by | Meaning |
