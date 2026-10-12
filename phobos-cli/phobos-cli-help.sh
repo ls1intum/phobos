@@ -15,12 +15,19 @@ USAGE
   phobos-cli.sh [--mode host|image] [--dry-run] prune <java-gradle|java-maven|python|c-fact|r|swift|c-gcc|cpp|java-egress|all>
   phobos-cli.sh [--mode host|image] [--dry-run] record [options] <record|generate|check|diff> [args...]
   phobos-cli.sh [--mode host|image] [--dry-run] build <java|python|c-fact|r|swift|c-gcc|cpp>
+  phobos-cli.sh [--mode host|image] [--dry-run]           on a terminal: the menu
   phobos-cli.sh --help
 
 PLACES
   Inside an image (the directory /var/tmp/opt/core exists) the command starts what the image holds.
   On a host it starts Docker. --mode may confirm the place and never overrides it. --dry-run prints
   what would be started, one block per command: COMMAND, one argument per line, END.
+
+MENU
+  Called with no command while its standard input and output are a terminal, it opens a menu (it
+  needs dialog) that asks for the answers of a call, runs phobos-cli.sh with exactly that call, and
+  prints the call at the end. --dry-run and --mode apply to it. Without a terminal, no command is a
+  usage error, so a script never waits for an answer.
 
 run
   Starts the command under phobos.sh. Accepted in both places:

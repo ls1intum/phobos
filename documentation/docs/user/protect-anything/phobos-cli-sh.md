@@ -40,6 +40,37 @@ The script needs bash 4.4 or newer. On macOS the system bash is 3.2, so the scri
 `/opt/homebrew/bin/bash` or `/usr/local/bin/bash` when it finds one there, and says what to
 install when it does not.
 
+## The menu
+
+```bash
+./phobos-cli.sh
+```
+
+Called without a command while its input and output are a terminal, the script opens a menu. The
+menu asks for the answers of one call and shows the call they make. It then runs `phobos-cli.sh`
+with exactly that call and prints it at the end, quoted as bash reads it, so that you can repeat it
+without the menu. The menu is a front end and nothing more: every check and every refusal of the
+command line applies to what it runs. Without a terminal, a call with no command is still a usage
+error, so a script or a pipeline never waits for an answer. `--dry-run` and `--mode` apply to the
+menu as to a command.
+
+The menu is drawn by `dialog`, which every run-phase image ships. On a host, install it first
+(`brew install dialog` on macOS, `apt-get install dialog` on Debian or Ubuntu); without it the menu
+ends with status 15 and says so. Choose with the arrow keys or the mouse and Enter; Esc goes back.
+
+**Run a command under an existing policy** asks for a policy directory, a policy in it and the
+command. On a host it first asks for the language and the exercise directory. On request it sets the
+limits, the network, a resolver and the debug report. Look for policies among your own files, not in
+the exercise. A submission can place a policy file there that grants it anything, so the menu uses a
+policy inside the exercise only after a second confirmation. The command is split into words at
+spaces. Quotes, variables and wildcards are not interpreted, so what you see is what runs.
+
+Inside an image the menu first copies the policy into a private directory under `/var/tmp` and has the
+policy system check it there. The policy system refuses a policy that lets the sandboxed command
+change anything where that copy lies. The sandboxed command can therefore never change the policy it
+runs under. Such a policy has to be run from a host, where the copy stays outside the container. A
+dry run copies nothing.
+
 ## Running a command
 
 ```bash

@@ -53,7 +53,8 @@ builds the image (`./phobos-cli.sh build java`), runs a command in an ordinary c
 those limits and no network (`./phobos-cli.sh run --exercise ./my-exercise -- ./gradlew test`), and
 starts the layer pruner and the recording pruner (`prune`, `record`). Inside an image it starts
 what the image holds. It refuses every switch that turns a layer off; `phobos.sh` stays the entry
-point for grading.
+point for grading. Called on a terminal without a command, it opens a menu that asks for the
+answers, runs the call they make, and prints that call so that it can be repeated without the menu.
 
 ## Documentation
 

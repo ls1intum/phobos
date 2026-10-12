@@ -744,6 +744,17 @@ jobs:
         if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
         run: bash protecter/test/integration/phobos_cli.sh
 
+      # The menu phobos-cli.sh opens on a terminal when it is given no command: each way through it ends
+      # in exactly the call its answers make, an answer the command line refuses starts nothing, and
+      # inside an image the policy is read from a private copy the policy system checked first. It runs
+      # under the pseudo-terminal script(1) gives it, with a stand-in dialog, so it measures the menu
+      # rather than dialog's drawing; script must be there, or every check would be skipped.
+      - name: The menu of the command line makes exactly the call its answers make
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: |
+          command -v script
+          bash protecter/test/integration/phobos_cli_menu.sh
+
       # The manual, usage errors, the command line and streams, the override options, the tail
       # flags and policy files that are odd or empty.
       - name: The command line and odd policy files behave as the manual says
@@ -761,6 +772,19 @@ jobs:
       - name: The repository's command line starts an ordinary container and the sandbox holds in it
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         run: bash protecter/test/integration/phobos_cli_docker.sh phobos-run-phase:ci
+
+      # The menu with the dialog the image ships, on a pseudo-terminal: it draws the welcome and the main
+      # menu, takes keys, and ends with 0 when Exit is chosen. The suite above stands dialog in; this is
+      # the one place the real one is driven.
+      - name: The menu draws its boxes with the dialog the image ships
+        if: ${{ !cancelled() && steps.load.outcome == 'success' }}
+        run: |
+          docker run --rm --network none -e TERM=xterm phobos-run-phase:ci bash -c \
+            '(sleep 3; printf "\r"; sleep 3; printf "5\r"; sleep 3) \
+               | timeout 60 script -qec /var/tmp/opt/core/phobos-cli.sh /tmp/menu.typescript > /dev/null
+             status=$?
+             grep -q "Welcome to Phobos" /tmp/menu.typescript && grep -q "Main menu" /tmp/menu.typescript \
+               && exit "${status}"'
 
   exercise-pruner:
     name: Exercise-Pruner e2e tests
