@@ -35,6 +35,12 @@ DOCKER_WAIT=""
 DOCKER_STATUS=0
 HOOK_CALL=""
 HOOK=""
+DOCKER_STATUSES=""
+RECORDING="menu-suite-$$"
+HELPERS=/var/tmp/helpers
+RECORDINGS=/var/tmp/recordings
+MADE_HELPERS="no"
+MADE_RECORDINGS="no"
 IMAGE_HOME=/var/tmp/opt/core
 MADE_IMAGE_HOME="no"
 OUT=""
@@ -43,6 +49,14 @@ STATUS=0
 # Removes what this suite made, and only that: its own directory, and the stand-in installation if
 # it made it. A directory it did not make is never touched.
 cleanup() {
+  rm -rf -- "${REPOSITORY}/build/pruner/recordings/${RECORDING}"
+  if [[ "${MADE_HELPERS}" == "yes" ]]; then
+    rm -rf -- "${HELPERS}/runtime_pruner"
+    rmdir "${HELPERS}" 2> /dev/null || true
+  fi
+  if [[ "${MADE_RECORDINGS}" == "yes" ]]; then
+    rm -rf -- "${RECORDINGS}"
+  fi
   if [[ "${MADE_IMAGE_HOME}" == "yes" ]]; then
     rm -rf -- "${IMAGE_HOME}"
     rmdir /var/tmp/opt 2> /dev/null || true
@@ -102,7 +116,8 @@ exit "$status"
 STUB
 chmod +x "${STUBS}/dialog"
 
-# The stand-in docker: records its arguments and ends with STUB_DOCKER_STATUS. With STUB_DOCKER_WAIT
+# The stand-in docker: records its arguments and ends with STUB_DOCKER_STATUS, or, where
+# STUB_DOCKER_STATUSES names one status per call, with the status of this call. With STUB_DOCKER_WAIT
 # set it writes the PID of the menu (the parent of the phobos-cli.sh that started it) beside that
 # file, marks it as started and waits to be stopped, which is how a signal to the menu is measured.
 cat > "${STUBS}/docker" <<'STUB'
@@ -115,6 +130,11 @@ if [[ -n "${STUB_DOCKER_WAIT:-}" ]]; then
   sleep 30 &
   wait $!
 fi
+if [[ -n "${STUB_DOCKER_STATUSES:-}" ]]; then
+  read -r -a planned <<<"${STUB_DOCKER_STATUSES}"
+  calls="$(wc -l < "${STUB_DOCKER_LOG}")"
+  exit "${planned[calls - 1]:-0}"
+fi
 exit "${STUB_DOCKER_STATUS:-0}"
 STUB
 chmod +x "${STUBS}/docker"
@@ -126,7 +146,7 @@ on_terminal() {
   local path="$1"
   shift
   local command
-  command="cd $(printf '%q' "${WORK}/cwd") && exec env STUB_DIALOG_LOG=$(printf '%q' "${DIALOG_LOG}") STUB_DIALOG_PLAN=$(printf '%q' "${DIALOG_PLAN}") STUB_DOCKER_LOG=$(printf '%q' "${DOCKER_LOG}") STUB_DOCKER_WAIT=$(printf '%q' "${DOCKER_WAIT}") STUB_DOCKER_STATUS=$(printf '%q' "${DOCKER_STATUS}") STUB_DIALOG_HOOK=$(printf '%q' "${HOOK}") STUB_DIALOG_HOOK_CALL=$(printf '%q' "${HOOK_CALL}") PATH=$(printf '%q' "${path}") TERM=xterm bash $(printf '%q ' "${CLI}" "$@")"
+  command="cd $(printf '%q' "${WORK}/cwd") && exec env STUB_DIALOG_LOG=$(printf '%q' "${DIALOG_LOG}") STUB_DIALOG_PLAN=$(printf '%q' "${DIALOG_PLAN}") STUB_DOCKER_LOG=$(printf '%q' "${DOCKER_LOG}") STUB_DOCKER_WAIT=$(printf '%q' "${DOCKER_WAIT}") STUB_DOCKER_STATUS=$(printf '%q' "${DOCKER_STATUS}") STUB_DOCKER_STATUSES=$(printf '%q' "${DOCKER_STATUSES}") STUB_DIALOG_HOOK=$(printf '%q' "${HOOK}") STUB_DIALOG_HOOK_CALL=$(printf '%q' "${HOOK_CALL}") PATH=$(printf '%q' "${path}") TERM=xterm bash $(printf '%q ' "${CLI}" "$@")"
   OUT="$(SHELL=/bin/bash script -qec "${command}" /dev/null < /dev/null | tr -d '\r')"
   STATUS="${PIPESTATUS[0]}"
 }
@@ -189,11 +209,9 @@ if head -1 "${DIALOG_LOG}" | grep -q -- '--msgbox' && sed -n 2p "${DIALOG_LOG}" 
 if grep -q -- '--output-fd 3' "${DIALOG_LOG}" && ! grep -q -- '--no-mouse' "${DIALOG_LOG}"; then ok "dialog answers on descriptor 3 and keeps the mouse"; else bad "dialog answers on descriptor 3 and keeps the mouse" "$(cat "${DIALOG_LOG}")"; fi
 menu --dry-run -- "0|" "0|5"
 check "the Exit entry ends the menu with 0" 0 "${STATUS}"
-for later in 3 4; do
-  menu --dry-run -- "0|" "0|${later}" "0|" "5|"
-  check "entry ${later} ends with 0 after saying it comes later" 0 "${STATUS}"
-  if asked 'later version'; then ok "entry ${later} says it comes in a later version"; else bad "entry ${later} says it comes in a later version" "$(cat "${DIALOG_LOG}")"; fi
-done
+menu --dry-run -- "0|" "0|4" "0|" "5|"
+check "entry 4 ends with 0 after saying it comes later" 0 "${STATUS}"
+if asked 'later version'; then ok "entry 4 says it comes in a later version"; else bad "entry 4 says it comes in a later version" "$(cat "${DIALOG_LOG}")"; fi
 
 echo "== a dialog that misbehaves"
 menu --dry-run -- "6|"
@@ -413,6 +431,75 @@ else
   check "a section the checklist did not offer ends the menu" "${PHB_ERUNTIME}" "${STATUS}"
 fi
 
+echo "== record a reference program, on a host"
+if [[ -e "${IMAGE_HOME}" ]]; then
+  skip "the host form of recording" "${IMAGE_HOME} exists, so this is an image"
+else
+  menu --dry-run -- "0|" "0|3" "1|" "5|"
+  check "declining the warning ends the way with 0" 0 "${STATUS}"
+  if asked 'never a student submission'; then ok "recording warns that the program runs without a sandbox"; else bad "recording warns that the program runs without a sandbox" "$(cat "${DIALOG_LOG}")"; fi
+  if grep -q -- '--defaultno' "${DIALOG_LOG}"; then ok "with No as the default answer"; else bad "with No as the default answer" "$(cat "${DIALOG_LOG}")"; fi
+  if grep -q '^COMMAND$' <<<"${OUT}"; then bad "and declining starts nothing" "${OUT}"; else ok "and declining starts nothing"; fi
+  if sed -n 4p "${DIALOG_LOG}" | grep -q 'Main menu'; then ok "and leads straight back to the main menu"; else bad "and leads straight back to the main menu" "$(cat "${DIALOG_LOG}")"; fi
+
+  menu --dry-run -- "0|" "0|3" "0|" "0|1" "0|${WORK}/exercise" "1|" "0|bad name" "0|" "0|tool" "0|./build_script.sh"
+  check "a dry run through recording ends with 0" 0 "${STATUS}"
+  walked="$(blocks_of "${OUT}")"
+  if asked 'up to 64'; then ok "a recording name the recording pruner refuses is asked for again"; else bad "a recording name the recording pruner refuses is asked for again" "$(cat "${DIALOG_LOG}")"; fi
+  if grep -q 'A dry run records nothing' <<<"${OUT}"; then ok "and says there is no policy to save"; else bad "and says there is no policy to save" "${OUT}"; fi
+  on_terminal "${STUBS}:/usr/bin:/bin" --dry-run record --language java --exercise "${WORK}/exercise" record --name tool -- ./build_script.sh
+  direct="$(blocks_of "${OUT}")"
+  on_terminal "${STUBS}:/usr/bin:/bin" --dry-run record --language java --exercise "${WORK}/exercise" generate --name tool
+  direct+=$'\n'"$(blocks_of "${OUT}")"
+  check "it records and generates exactly as the same calls on the command line" "${direct}" "${walked}"
+
+  mkdir -p "${REPOSITORY}/build/pruner/recordings/${RECORDING}"
+  printf '[read]\n/recorded\n' > "${REPOSITORY}/build/pruner/recordings/${RECORDING}/policy.cfg"
+  : > "${DOCKER_LOG}"
+  menu -- "0|" "0|3" "0|" "0|1" "0|${WORK}/exercise" "1|" "0|${RECORDING}" "0|./build_script.sh" \
+    "1|" "0|" "0|${WORK}/out/recorded.cfg" "0|" "0|./build_script.sh" "1|" "0|"
+  check "recording, generating, replaying, saving and running ends with the status of the run" 0 "${STATUS}"
+  check "four calls reached docker" 4 "$(wc -l < "${DOCKER_LOG}" | tr -d ' ')"
+  if sed -n 1p "${DOCKER_LOG}" | grep -qF -- "record record --name ${RECORDING} -- ./build_script.sh" \
+     && sed -n 2p "${DOCKER_LOG}" | grep -qF -- "record generate --name ${RECORDING}" \
+     && sed -n 3p "${DOCKER_LOG}" | grep -qF -- "record check --name ${RECORDING} -- ./build_script.sh" \
+     && sed -n 4p "${DOCKER_LOG}" | grep -qF -- "--config /srv/phobos-cli/config/1/recorded.cfg"; then
+    ok "in the order record, generate, check, run"
+  else
+    bad "in the order record, generate, check, run" "$(cat "${DOCKER_LOG}")"
+  fi
+  if cmp -s "${REPOSITORY}/build/pruner/recordings/${RECORDING}/policy.cfg" "${WORK}/out/recorded.cfg"; then ok "the saved policy is the one the recording yielded"; else bad "the saved policy is the one the recording yielded" "$(cat "${WORK}/out/recorded.cfg")"; fi
+
+  DOCKER_STATUSES="0 0 9"
+  : > "${DOCKER_LOG}"
+  menu -- "0|" "0|3" "0|" "0|1" "0|${WORK}/exercise" "1|" "0|${RECORDING}" "0|./build_script.sh" "1|" "0|" "1|"
+  check "a failed replay whose policy is not kept ends the menu with its status" 9 "${STATUS}"
+  check "and nothing follows it" 3 "$(wc -l < "${DOCKER_LOG}" | tr -d ' ')"
+  check "and no further question is asked" 11 "$(wc -l < "${DIALOG_LOG}" | tr -d ' ')"
+  DOCKER_STATUSES="0 5"
+  : > "${DOCKER_LOG}"
+  menu -- "0|" "0|3" "0|" "0|1" "0|${WORK}/exercise" "1|" "0|${RECORDING}" "0|./build_script.sh" "1|"
+  check "a failed generate ends the menu with its status" 5 "${STATUS}"
+  check "and nothing follows it" 2 "$(wc -l < "${DOCKER_LOG}" | tr -d ' ')"
+  check "and no further question is asked" 9 "$(wc -l < "${DIALOG_LOG}" | tr -d ' ')"
+  DOCKER_STATUSES="3"
+  : > "${DOCKER_LOG}"
+  menu -- "0|" "0|3" "0|" "0|1" "0|${WORK}/exercise" "1|" "0|${RECORDING}" "0|./build_script.sh" "1|"
+  check "a session that ended with a status not kept ends the menu with it" 3 "${STATUS}"
+  check "and nothing follows it" 1 "$(wc -l < "${DOCKER_LOG}" | tr -d ' ')"
+  check "and no further question is asked" 9 "$(wc -l < "${DIALOG_LOG}" | tr -d ' ')"
+  DOCKER_STATUSES=""
+  : > "${DOCKER_LOG}"
+  menu -- "0|" "0|3" "0|" "0|1" "0|${WORK}/exercise" "0|" "0|${RECORDING}" "0|./build_script.sh" "1|" "0|" "0|10.0.0.53" "5|"
+  if sed -n 1p "${DOCKER_LOG}" | grep -qF -- "--profile record run --build --rm record_networked record --name ${RECORDING}"; then ok "a program that needs the network is recorded on the networked service"; else bad "a program that needs the network is recorded on the networked service" "$(cat "${DOCKER_LOG}")"; fi
+  if sed -n 3p "${DOCKER_LOG}" | grep -qF -- "check --name ${RECORDING} --resolver 10.0.0.53 -- ./build_script.sh"; then ok "and its replay gets the resolver given"; else bad "and its replay gets the resolver given" "$(cat "${DOCKER_LOG}")"; fi
+  : > "${DOCKER_LOG}"
+  menu -- "0|" "0|3" "0|" "0|1" "0|${WORK}/exercise" "0|" "0|${RECORDING}" "0|./build_script.sh" "1|" "0|" "5|" "5|"
+  check "Esc at the resolver starts no replay" 2 "$(wc -l < "${DOCKER_LOG}" | tr -d ' ')"
+  DOCKER_STATUSES=""
+  rm -rf -- "${REPOSITORY}/build/pruner/recordings/${RECORDING}"
+fi
+
 echo "== run a command under an existing policy, inside an image"
 if [[ -e "${IMAGE_HOME}" ]] || ! mkdir -p "${IMAGE_HOME}" 2> /dev/null; then
   skip "the image form of the menu" "${IMAGE_HOME} exists or cannot be made here"
@@ -482,6 +569,44 @@ else
   if [[ -n "$(find "${WORK}/out" -maxdepth 1 -name '.phobos-policy.*')" ]]; then bad "and nothing is left beside it" "$(ls -a "${WORK}/out")"; else ok "and nothing is left beside it"; fi
   after="$(find /var/tmp -maxdepth 1 -name 'phobos-cli-menu.*' | wc -l | tr -d ' ')"
   check "no private directory is left behind" "${before}" "${after}"
+fi
+
+
+echo "== record a reference program, inside an image"
+if [[ "${MADE_IMAGE_HOME}" != "yes" ]]; then
+  skip "the image form of recording" "there is no stand-in installation"
+elif [[ -e "${HELPERS}" || -e "${RECORDINGS}" ]]; then
+  skip "the image form of recording" "${HELPERS} or ${RECORDINGS} exists already"
+else
+  menu -- "0|" "0|3" "0|" "5|"
+  if asked 'not possible here: it needs the prune image'; then ok "without the helpers of the pruners, recording says why it is not possible"; else bad "without the helpers of the pruners, recording says why it is not possible" "$(cat "${DIALOG_LOG}")"; fi
+  if grep -q 'derive a policy (not here)' "${DIALOG_LOG}"; then ok "and the main menu marks it"; else bad "and the main menu marks it" "$(cat "${DIALOG_LOG}")"; fi
+  MADE_HELPERS="yes"
+  MADE_RECORDINGS="yes"
+  mkdir -p "${HELPERS}/runtime_pruner/src/interface" "${RECORDINGS}"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\nif [[ "$1" == generate ]]; then mkdir -p %q/"$3" && printf "[read]\\\\n/recorded-in-image\\\\n" > %q/"$3"/policy.cfg; fi\n' \
+    "${WORK}/recorder.log" "${RECORDINGS}" "${RECORDINGS}" > "${HELPERS}/runtime_pruner/src/interface/phobos-record"
+  chmod +x "${HELPERS}/runtime_pruner/src/interface/phobos-record"
+  : > "${WORK}/recorder.log"
+  : > "${WORK}/policysystem.log"
+  menu -- "0|" "0|3" "0|" "0|${RECORDING}" "0|./build_script.sh" "1|" "0|" "0|${WORK}/out/image-recorded.cfg" "1|"
+  check "recording inside the prune image ends with 0" 0 "${STATUS}"
+  if sed -n 1p "${WORK}/recorder.log" | grep -qxF -- "record --name ${RECORDING} -- ./build_script.sh" && sed -n 2p "${WORK}/recorder.log" | grep -qxF -- "generate --name ${RECORDING}"; then ok "it records and generates through the image's recorder"; else bad "it records and generates through the image's recorder" "$(cat "${WORK}/recorder.log")"; fi
+  if asked 'needs a container of its own'; then ok "and says the replay needs a host"; else bad "and says the replay needs a host" "$(cat "${DIALOG_LOG}")"; fi
+  check "the policy is saved as the recording yielded it" $'[read]\n/recorded-in-image\nx' "$(cat "${WORK}/out/image-recorded.cfg"; printf x)"
+  if asked 'base policy grants nothing'; then ok "and a run here is said not to be the run grading makes"; else bad "and a run here is said not to be the run grading makes" "$(cat "${DIALOG_LOG}")"; fi
+  if asked '--exercise <reference directory> check --name'; then ok "the replay is shown with the language and the reference directory it needs"; else bad "the replay is shown with the language and the reference directory it needs" "$(cat "${DIALOG_LOG}")"; fi
+  printf '13\n' > "${WORK}/policysystem.status"
+  menu -- "0|" "0|3" "0|" "0|${RECORDING}" "0|./build_script.sh" "1|" "0|" "0|${WORK}/out/refused-recorded.cfg" "0|" "5|"
+  rm -f "${WORK}/policysystem.status"
+  check "a recorded policy the policy system refuses to save ends the menu with the refusal" 13 "${STATUS}"
+  if [[ -e "${WORK}/out/refused-recorded.cfg" ]]; then bad "and is not saved" "${WORK}/out/refused-recorded.cfg"; else ok "and is not saved"; fi
+  printf 'if [[ -e %q ]]; then printf "13\\n" > %q; else : > %q; fi\n' "${WORK}/policysystem.counter" "${WORK}/policysystem.status" "${WORK}/policysystem.counter" > "${WORK}/policysystem.hook"
+  rm -f "${WORK}/policysystem.counter" "${WORK}/policysystem.status"
+  menu -- "0|" "0|3" "0|" "0|${RECORDING}" "0|./build_script.sh" "1|" "0|" "0|${WORK}/out/run-refused.cfg" "0|" "0|./build_script.sh" "1|" "0|" "0|"
+  rm -f "${WORK}/policysystem.hook" "${WORK}/policysystem.counter" "${WORK}/policysystem.status"
+  check "a run under the saved policy that the policy system refuses ends the menu with the refusal" 13 "${STATUS}"
+  if grep -q '^phobos.sh' <<<"${OUT}"; then bad "and phobos.sh is not started" "${OUT}"; else ok "and phobos.sh is not started"; fi
 fi
 
 finish

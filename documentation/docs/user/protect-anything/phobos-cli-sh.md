@@ -74,6 +74,16 @@ existing file only after a question. Before the command, the menu can run `/bin/
 whether the policy system accepts it and the layers start with it. A dry run saves nothing and prints
 the policy instead.
 
+**Record a reference program and derive a policy** runs the recording pruner, described under
+[Recording](#recording). The program runs with no sandbox while the pruner records it, so the menu warns
+first and goes on only on Yes: record your own reference program, never a submission. The menu asks
+for the exercise, whether the program needs the network, a name for the recording and the command.
+It then records one session or more, generates the policy and, on a host, offers a replay in a new
+container that fails on every refusal of something the recording did. A failed step ends the menu
+with its status, unless you keep its result. The menu saves the policy the same way as a written
+one, and can run a command under it. Inside an image this works only in the prune image, which
+mounts the helpers of the pruners, and the replay needs a host.
+
 Inside an image the menu first copies the policy into a private directory under `/var/tmp` and has the
 policy system check it there. The policy system checks a new policy the same way, beside its
 destination. The policy system refuses a policy that lets the sandboxed command
