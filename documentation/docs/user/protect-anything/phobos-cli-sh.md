@@ -15,9 +15,8 @@ round the back, on purpose.
 `phobos-cli.sh` sits at the root of the repository. It starts `phobos.sh`, the layer pruner and
 the recording pruner, and it builds the run-phase image. It is a convenience around those, never
 a second implementation: everything it starts is the script or the container it names. Its
-commands live in the folder `phobos-cli/` beside it, one file each, which it reads from beside
-itself in a checkout and in the image alike; without that folder it starts nothing and ends with
-status 15.
+commands live in the folder `phobos-cli/` beside it, one file each, in a checkout and in the image
+alike. Without that folder it starts nothing and ends with status 15.
 
 It is not the entry point for grading. A grader calls `phobos.sh`, which can switch a layer off for
 diagnosis. `phobos-cli.sh` refuses those switches, so nothing started through it runs less confined
