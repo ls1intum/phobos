@@ -213,3 +213,19 @@ def test_a_path_with_a_control_character_or_invalid_utf8_is_refused(path):
 
 def test_comment_text_writes_everything_but_printable_ascii_and_hash_as_hex():
     assert cfgfile.comment_text("a b\nc#dé") == "a b\\x0ac\\x23d\\xc3\\xa9"
+
+
+def test_the_permissive_policy_opens_the_terminal_directory_only_when_the_exercise_declares_it():
+    declared = cfgfile.permissive_policy(pathlib.Path("/"), (), True)
+    assert declared.fs[cfgfile.PSEUDO_TERMINAL_DIRECTORY] == frozenset({"read", "write", "ioctl"})
+    assert {path for path, sections in declared.fs.items() if "ioctl" in sections} == {"/dev/pts"}
+    undeclared = cfgfile.permissive_policy(pathlib.Path("/"))
+    assert not any("ioctl" in sections for sections in undeclared.fs.values())
+
+
+def test_an_ioctl_section_is_written_and_read_back_and_is_no_write_class_section():
+    result = policy({"/dev/pts": {"read", "write", "ioctl"}})
+    text = cfgfile.render(result)
+    assert "[ioctl]\n/dev/pts\n" in text
+    assert "ioctl" not in cfgfile.WRITE_SECTIONS
+    assert cfgfile.SECTION_RIGHTS["ioctl"] == frozenset("i")

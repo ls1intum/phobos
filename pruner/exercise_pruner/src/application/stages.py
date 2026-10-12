@@ -162,7 +162,8 @@ def diagnose_declared_reference(pruning: Pruning, reference: verdict.Verdict) ->
     test is not a failure and never starts this diagnosis. A diagnosis run that matches the reference
     is reported as such, since then the failure is not the layers' doing.
     """
-    policy = cfgfile.permissive_policy(pathlib.Path("/"), pruning.exercise.declared_hosts)
+    policy = cfgfile.permissive_policy(pathlib.Path("/"), pruning.exercise.declared_hosts,
+                                      pruning.exercise.uses_pseudo_terminals)
     result = pruning.run(policy, OBSERVED_NETWORK, "reference diagnosis")
     external = network.network_rules(denials_of(pruning, result), frozenset(),
                                      pruning.exercise.declared_hosts).refused_external
@@ -188,7 +189,8 @@ def permissive_run(pruning: Pruning) -> None:
     UNIX-domain connect comes after the external destination because nearly every run makes one (an
     nscd lookup) and does without it.
     """
-    policy = cfgfile.permissive_policy(pathlib.Path("/"), pruning.exercise.declared_hosts)
+    policy = cfgfile.permissive_policy(pathlib.Path("/"), pruning.exercise.declared_hosts,
+                                      pruning.exercise.uses_pseudo_terminals)
     result = pruning.run(policy, OBSERVED_NETWORK, "permissive")
     if pruning.matches(result):
         return
@@ -323,14 +325,16 @@ def filesystem_grants(pruning: Pruning, current: list[record.Denial], snapshot: 
 
     `held` is the policy the run held, whose write-class rights the narrowing of [execute] counts too.
     """
-    confirmed = [denial for denial in current if denial.layer == record.LAYER_FILESYSTEM and control.landlock_caused(denial)]
-    combined = pruning.history + confirmed
+    confirmed = [denial for denial in current if denial.layer == record.LAYER_FILESYSTEM
+                 and control.landlock_caused(denial, pruning.exercise.uses_pseudo_terminals)]
+    pseudo_terminal_grants, ordinary = pseudo_terminal_split(pruning, confirmed)
+    combined = pruning.history + ordinary
     taken = generalise.classify_per_run(combined)
     offset = len(pruning.history)
     grants: dict[str, set[str]] = {}
     remaining = []
     per_run_reported = []
-    for position, denial in enumerate(confirmed):
+    for position, denial in enumerate(ordinary):
         kept = []
         for path in denial.objects:
             if (offset + position, path) in taken:
@@ -354,7 +358,33 @@ def filesystem_grants(pruning: Pruning, current: list[record.Denial], snapshot: 
     pruning.note("denials", run=pruning.observed_runs, reported=notes.reported,
                  confirmed=jsonable([dataclasses.asdict(denial) for denial in confirmed]),
                  not_landlock=jsonable([dataclasses.asdict(denial) for denial in current if denial not in confirmed]))
+    grants.update({path: set(sections) for path, sections in pseudo_terminal_grants.items()})
     return {path: frozenset(sections) for path, sections in grants.items()}
+
+
+def pseudo_terminal_split(pruning: Pruning, confirmed: list[record.Denial]
+                          ) -> tuple[dict[str, frozenset[str]], list[record.Denial]]:
+    """The grant for a pseudo-terminal, and the denials that go through the ordinary generalisation.
+
+    Only an exercise that declares uses_pseudo_terminals gets one, and it is /dev/pts read, written and open to
+    ioctl, never a path beneath it: a slave has a number that changes with every run, and a master is opened
+    read and write, so the one directory is what a later run needs. A confirmed ioctl denial of any other
+    exercise asks for nothing, so a run that needs one still ends in "failed without an attributable denial".
+    The open denials of an undeclared exercise are left to the ordinary path, as they always were.
+    """
+    declared = pruning.exercise.uses_pseudo_terminals
+    asked = False
+    ordinary = []
+    for denial in confirmed:
+        on_terminal = bool(denial.objects) and all(attribute.PSEUDO_TERMINAL_DEVICE.match(path) for path in denial.objects)
+        if attribute.SECTION_IOCTL in denial.sections:
+            asked = asked or declared
+        elif on_terminal and declared:
+            asked = True
+        else:
+            ordinary.append(denial)
+    grants = {cfgfile.PSEUDO_TERMINAL_DIRECTORY: frozenset({"read", "write", "ioctl"})} if asked else {}
+    return grants, ordinary
 
 
 def compiled_roots(pruning: Pruning) -> tuple[str, ...]:
