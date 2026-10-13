@@ -27,6 +27,8 @@ MENU_CHECKED="no"
 MENU_STAGING=""
 # The private copy of the policy in it, empty when the policy system refused the policy.
 MENU_STAGED=""
+# The status the policy system refused the last policy it read with, empty when it accepted it.
+MENU_REFUSAL=""
 # The private directory a new policy is read in beside its destination, and the file a check's
 # output is kept in, while they exist, so that the menu removes them on every exit.
 MENU_PROBE=""
@@ -48,6 +50,11 @@ FLOW_OPTIONS=()
 # was agreed to.
 FLOW_DESTINATION=""
 FLOW_REPLACE="no"
+# The name of a recording, whether the recorded program needs the network, and the resolver a
+# replay of it is given.
+FLOW_RECORDING="reference"
+FLOW_NETWORKED="no"
+FLOW_RESOLVER=""
 # The call the answers make, as phobos-cli.sh is given it, and as it is shown.
 FLOW_ARGV=()
 FLOW_SHOWN=()
@@ -172,7 +179,12 @@ menu_welcome() {
 # Shows the main menu until a way through it ends in a call or the menu is left, then ends the menu.
 # Assumes MODE and DRY_RUN are set and the terminal is the one the menu runs on.
 menu_main() {
+  local record_label="Record a reference program and derive a policy"
+  local record_reason
   ui_require_dialog
+  record_unavailable
+  record_reason="$REPLY"
+  [[ -n "$record_reason" ]] && record_label+=" (not here)"
   trap 'menu_signalled 130' INT
   trap 'menu_signalled 143' TERM
   trap menu_cleanup EXIT
@@ -181,13 +193,14 @@ menu_main() {
     ui_menu "Main menu" "What would you like to do?" \
       1 "Run a command under an existing policy" \
       2 "Write a new policy step by step" \
-      3 "Record a reference program and derive a policy (in a later version)" \
+      3 "$record_label" \
       4 "Derive a policy from past student submissions (in a later version)" \
       5 "Exit"
     [[ "$UI_MOVE" == "next" && "$UI_RESULT" != "5" ]] || menu_finish 0
     case "$UI_RESULT" in
       1) menu_flow_run ;;
       2) menu_flow_write ;;
+      3) menu_flow_record "$record_reason" ;;
       *) ui_message "Not yet" "This part of the menu arrives in a later version of Phobos." ;;
     esac
     [[ "$MENU_RAN" == "yes" ]] && menu_finish "$MENU_STATUS"
@@ -390,9 +403,11 @@ menu_stage_in_image() {
   "${IMAGE_HOME}/phobos-policysystem.sh" --spec-dir "${MENU_STAGING}/specification" "${root[@]}" --config "$copy" \
     > "${MENU_STAGING}/policy-check.log" 2>&1 || status=$?
   if (( status != 0 )); then
+    MENU_REFUSAL="$status"
     menu_show_refusal "${MENU_STAGING}/policy-check.log"
     return 0
   fi
+  MENU_REFUSAL=""
   MENU_STAGED="$copy"
 }
 
@@ -529,9 +544,10 @@ menu_step_save() {
   menu_save_policy
 }
 
-# Writes WIZARD_TEXT to FLOW_DESTINATION by giving a complete file its name, so that no reader ever
-# sees half a policy. The destination is checked again first, since screens have passed since it was
-# chosen: it must still be a place the policy may go, in the same directory. A file that appeared
+# Writes WIZARD_TEXT, or a copy of the file $1 when one is given, to FLOW_DESTINATION by giving a
+# complete file its name, so that no reader ever sees half a policy. The destination is checked
+# again first, since screens have passed since it was chosen: it must still be a place the policy
+# may go, in the same directory. A file that appeared
 # there is replaced only after a question, even one that appears in the last moment, because without
 # agreement the save replaces nothing. Inside an image the file is first read by the policy system
 # in a private directory beside the destination, which refuses a policy that lets the sandboxed
@@ -561,12 +577,17 @@ menu_save_policy() {
   probe="$(mktemp -d "${directory}/.phobos-policy.XXXXXXXX")" || fail_environment "cannot write in ${directory}"
   MENU_PROBE="$probe"
   mkdir "${probe}/specification"
-  printf '%s' "$WIZARD_TEXT" > "${probe}/policy.cfg"
+  if (( $# > 0 )); then
+    cp -- "$1" "${probe}/policy.cfg"
+  else
+    printf '%s' "$WIZARD_TEXT" > "${probe}/policy.cfg"
+  fi
   chmod 0644 "${probe}/policy.cfg"
   if [[ "$MODE" == "image" ]]; then
     "${IMAGE_HOME}/phobos-policysystem.sh" --spec-dir "${probe}/specification" --config "${probe}/policy.cfg" \
       > "${probe}/check.log" 2>&1 || status=$?
     if (( status != 0 )); then
+      MENU_REFUSAL="$status"
       menu_show_refusal "${probe}/check.log"
       rm -rf -- "$probe"
       MENU_PROBE=""
@@ -588,9 +609,10 @@ menu_save_policy() {
       return 0
     fi
     FLOW_REPLACE="yes"
-    menu_save_policy
+    menu_save_policy "$@"
     return 0
   fi
+  MENU_REFUSAL=""
   FLOW_POLICY="$FLOW_DESTINATION"
 }
 
@@ -676,4 +698,176 @@ menu_execute_check() {
   fi
   rm -f -- "$output"
   MENU_CAPTURE=""
+}
+
+# The way through "record a reference program": the questions, the recording and the policy it
+# yields, then the policy saved and, when wanted, a command run under it. Takes the reason
+# recording is not possible here, empty when it is. Since the recording itself has run, the menu
+# ends after this way through; a refusal of the policy system that was not overcome by a later
+# save is the status it ends with.
+menu_flow_record() {
+  local -a steps=(record_warning)
+  MENU_RAN="no"
+  if [[ -n "$1" ]]; then
+    ui_message "Record" "Recording is not possible here: ${1}."
+    return 0
+  fi
+  FLOW_PROJECT_ROOT=""
+  [[ "$MODE" == "host" ]] && steps+=(language record_exercise networked)
+  steps+=(recording command)
+  menu_walk "${steps[@]}"
+  [[ "$UI_MOVE" == "next" ]] || return 0
+  MENU_RAN="yes"
+  menu_record_sessions
+  menu_record_generate
+  if [[ "$DRY_RUN" == "yes" ]]; then
+    MENU_NOTES+=("A dry run records nothing, so there is no policy yet to check, save or run.")
+    return 0
+  fi
+  menu_record_check
+  MENU_REFUSAL=""
+  menu_walk destination save_recorded run_now command advanced confirm
+  if [[ "$UI_MOVE" == "back" ]]; then
+    record_policy_file "$FLOW_RECORDING"
+    MENU_NOTES+=("The policy of the recording stays where it was generated: ${REPLY}")
+  fi
+  [[ "$UI_MOVE" == "next" ]] && menu_execute_run
+  [[ -n "$MENU_REFUSAL" ]] && MENU_STATUS="$MENU_REFUSAL"
+  return 0
+}
+
+# Warns that the program runs without a sandbox while it is recorded, and goes on only on Yes.
+menu_step_record_warning() {
+  ui_yesno "Record a reference program" "While it is recorded, the program runs with no sandbox at all: the recording pruner grants it everything and watches what it uses. Record your own reference program only, never a student submission.\n\nGo on?" no
+  [[ "$UI_MOVE" == "next" && "$UI_ANSWER" == "no" ]] && UI_MOVE="back"
+  return 0
+}
+
+# Asks for the directory of the reference program, which a host mounts read-only for the recording.
+menu_step_record_exercise() {
+  pick_directory "Reference exercise" "The directory of the reference program. It is mounted read-only and copied into the directory the program runs in." "${FLOW_EXERCISE:-$PWD}"
+  [[ "$UI_MOVE" == "next" ]] && FLOW_EXERCISE="$PICKED_DIRECTORY"
+  return 0
+}
+
+# Asks whether the recorded program needs to reach hosts on the network.
+menu_step_networked() {
+  ui_yesno "Network" "Does the program need to reach hosts on the network while it is recorded?" no
+  [[ "$UI_MOVE" == "next" ]] && FLOW_NETWORKED="$UI_ANSWER"
+  return 0
+}
+
+# Asks for the name of the recording until it is one the recording pruner takes.
+menu_step_recording() {
+  local offered="$FLOW_RECORDING"
+  while :; do
+    ui_input "Recording" "A name for the recording. Sessions recorded under one name make one policy." "$offered"
+    [[ "$UI_MOVE" == "next" ]] || return 0
+    offered="$UI_RESULT"
+    if [[ "$offered" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+      FLOW_RECORDING="$offered"
+      return 0
+    fi
+    ui_message "Recording" "A name is up to 64 letters, digits, dots, hyphens and underscores, and begins with a letter or a digit."
+  done
+}
+
+# Sets FLOW_ARGV and FLOW_SHOWN to the call of phobos-cli.sh's record command with the words given
+# after it: on a host with the language, the exercise and the network chosen, inside an image as
+# they are, since there is nothing to choose there.
+menu_build_record() {
+  local -a host=()
+  if [[ "$MODE" == "host" ]]; then
+    host=(--language "$FLOW_LANGUAGE" --exercise "$FLOW_EXERCISE")
+    [[ "$FLOW_NETWORKED" == "yes" ]] && host+=(--networked)
+  fi
+  FLOW_ARGV=(record "${host[@]}" "$@")
+  FLOW_SHOWN=("${FLOW_ARGV[@]}")
+  return 0
+}
+
+# Records sessions of the program until no further one is wanted. The program has the terminal for
+# each. A session that ends with a status other than 0 is kept only on Yes, since that status may
+# be the program's own result or the recording's failure; otherwise the menu ends with it.
+menu_record_sessions() {
+  while :; do
+    menu_build_record record --name "$FLOW_RECORDING" -- "${FLOW_WORDS[@]}"
+    menu_spawn "${FLOW_ARGV[@]}"
+    [[ "$DRY_RUN" == "yes" ]] && return 0
+    if (( MENU_STATUS != 0 )); then
+      ui_yesno "Record" "The session ended with status ${MENU_STATUS}. That may be the program's own result, or the recording may have failed; the output above the menu says which.\n\nKeep the recording and go on?" no
+      [[ "$UI_MOVE" == "next" && "$UI_ANSWER" == "yes" ]] || menu_finish "$MENU_STATUS"
+    fi
+    ui_yesno "Record" "Record another session of the program, for a path the first did not take?" no
+    [[ "$UI_MOVE" == "next" && "$UI_ANSWER" == "yes" ]] || return 0
+  done
+}
+
+# Generates the policy of the recording from its sessions, and ends the menu with the status of
+# generate when that is not 0.
+menu_record_generate() {
+  menu_build_record generate --name "$FLOW_RECORDING"
+  menu_spawn "${FLOW_ARGV[@]}"
+  (( MENU_STATUS == 0 )) || menu_finish "$MENU_STATUS"
+  return 0
+}
+
+# Offers on a host to replay a session under phobos.sh with the generated policy, in a new
+# container, which fails on every refusal of something the recording did, and asks for a resolver
+# when the program needs the network. A failed replay ends the menu with its status unless the
+# policy is kept on Yes. Inside an image a replay is not possible, because it needs a container of
+# its own, and the menu says how to make it from a host.
+menu_record_check() {
+  local -a resolver=()
+  local command
+  if [[ "$MODE" == "image" ]]; then
+    command="$(printf '%q ' "${FLOW_WORDS[@]}")"
+    ui_message "Check" "A replay of the recording needs a container of its own, which cannot be started from here. Make it from a host whose checkout holds this recording in build/pruner/recordings, with the language and the reference directory it was recorded from, and --networked when it needed the network:\n\nphobos-cli.sh record --language <language> --exercise <reference directory> check --name ${FLOW_RECORDING} -- ${command% }"
+    return 0
+  fi
+  ui_yesno "Check" "Replay the session under phobos.sh with the generated policy, in a new container? The replay fails on every refusal of something the recording did."
+  [[ "$UI_MOVE" == "next" && "$UI_ANSWER" == "yes" ]] || return 0
+  while [[ "$FLOW_NETWORKED" == "yes" ]]; do
+    ui_input "Check" "The resolver phobos.sh gives the network layer for a host name in the policy, as ip or ip:port. Leave it empty when the policy names no host by name." "$FLOW_RESOLVER"
+    [[ "$UI_MOVE" == "next" ]] || return 0
+    if [[ -z "$UI_RESULT" || "$UI_RESULT" =~ ^[0-9A-Fa-f.:]+$ ]]; then
+      FLOW_RESOLVER="$UI_RESULT"
+      break
+    fi
+    ui_message "Check" "A resolver is an address with an optional port, such as 10.0.0.53 or 10.0.0.53:53."
+  done
+  [[ -n "$FLOW_RESOLVER" ]] && resolver=(--resolver "$FLOW_RESOLVER")
+  menu_build_record check --name "$FLOW_RECORDING" "${resolver[@]}" -- "${FLOW_WORDS[@]}"
+  menu_spawn "${FLOW_ARGV[@]}"
+  (( MENU_STATUS == 0 )) && return 0
+  ui_yesno "Check" "The replay ended with status ${MENU_STATUS}, so the policy may lack something the program needs.\n\nSave the policy all the same?" no
+  [[ "$UI_MOVE" == "next" && "$UI_ANSWER" == "yes" ]] || menu_finish "$MENU_STATUS"
+  return 0
+}
+
+# Saves the policy the recording yielded to the destination chosen, through the same save as a
+# written policy, once generate is seen to have left a regular file there and not a link, and checks
+# that the saved file is that policy. Ends the menu when there is no policy to save.
+menu_step_save_recorded() {
+  local source
+  record_policy_file "$FLOW_RECORDING"
+  source="$REPLY"
+  if [[ -L "$source" || ! -f "$source" ]]; then
+    ui_message "Save" "The recording left no policy at ${source}, so there is nothing to save."
+    menu_finish "${EXIT_ENVIRONMENT}"
+  fi
+  menu_save_policy "$source"
+  [[ "$UI_MOVE" == "next" ]] || return 0
+  cmp -s -- "$source" "$FLOW_DESTINATION" || fail_environment "${FLOW_DESTINATION} is not the policy the recording yielded"
+  return 0
+}
+
+# Asks whether to run a command under the saved policy now, and ends the way through on No. Inside
+# the prune image it says that such a run is not the run grading makes.
+menu_step_run_now() {
+  local text="The policy is saved. Run a command under it now?"
+  [[ "$MODE" == "image" ]] && text+="\n\nThis is the prune image, whose base policy grants nothing, so a run here is not the run grading makes in a run-phase image."
+  ui_yesno "Run" "$text"
+  [[ "$UI_MOVE" == "next" && "$UI_ANSWER" == "no" ]] && UI_MOVE="stop"
+  return 0
 }

@@ -62,3 +62,29 @@ record_on_host() {
   [[ -t 0 ]] || prefix+=(-T)
   step "${prefix[@]}" "$service" "$@"
 }
+
+# Sets REPLY to empty when the recording pruner can be started from here, and to the reason it
+# cannot otherwise: inside an image only where the helpers of the pruners are mounted, which the
+# prune image does and the run-phase image does not, and on a host only from a checkout, whose
+# compose file starts it.
+record_unavailable() {
+  REPLY=""
+  if [[ "$MODE" == "image" ]]; then
+    [[ -f "${IMAGE_HELPERS}/runtime_pruner/src/interface/phobos-record" ]] || REPLY="it needs the prune image, which mounts the helpers of the pruners"
+  elif [[ "$LAYOUT" != "checkout" ]]; then
+    REPLY="it needs a checkout of the repository"
+  fi
+  return 0
+}
+
+# Sets REPLY to the file generate writes the policy of the recording named $1 to: beneath the
+# directory of recordings inside the prune image, and beneath the checkout's build directory on a
+# host, which the compose file mounts there.
+record_policy_file() {
+  if [[ "$MODE" == "image" ]]; then
+    REPLY="/var/tmp/recordings/$1/policy.cfg"
+  else
+    REPLY="${HERE}/build/pruner/recordings/$1/policy.cfg"
+  fi
+  return 0
+}
