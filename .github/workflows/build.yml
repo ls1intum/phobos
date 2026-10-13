@@ -1270,8 +1270,8 @@ jobs:
     name: Build the Swift run-phase image (${{ matrix.platform }}) and hold it to the Swift reference exercise
     if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.scope == 'full') }}
     runs-on: ${{ matrix.platform == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-26.04' }}
-    # The prune below is allowed 45 minutes, and the build and the suites before it take about seven.
-    timeout-minutes: 60
+    # The prune below is allowed an hour, and the build and the suites before it take about seven minutes.
+    timeout-minutes: 75
     permissions:
       contents: read
     strategy:
@@ -1321,11 +1321,12 @@ jobs:
             -f docker/pruner/layers/Dockerfile -t phobos-prune-layers-swift:ci .
 
       # Longer than the other languages' prunes: every run builds the reference with SwiftPM under strace, and
-      # on amd64 the whole prune took 1605 and 1777 seconds in two passing runs on 2026-10-12 and 2026-10-13,
-      # and ran past 30 minutes in two runs of a branch; on arm64 it took between 1428 and 1569 seconds.
+      # on amd64 the whole prune took between 1605 and 2298 seconds in the passing runs of 2026-10-12 and
+      # 2026-10-13, and ran past 30 minutes three times; on arm64 it took between 1428 and 1569 seconds. An hour
+      # leaves room for that spread and still ends a prune that hangs.
       - name: The layer pruner prunes the Swift reference exercise on the Swift image
         if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
-        timeout-minutes: 45
+        timeout-minutes: 60
         run: |
           output="$(mktemp -d)"
           docker run --rm --network none --memory 3g --pids-limit 1024 \
