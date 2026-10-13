@@ -172,6 +172,8 @@ has_pair -- echo && ok "a command without -- starts at the first word that is no
 
 cli --dry-run run --language python --exercise "${WORK}/exercise" -- true
 has_line "phobos-run-phase-python" && ok "--language python selects the Python image" || bad "--language python selects the Python image" "${OUT}"
+cli --dry-run run --language generic --exercise "${WORK}/exercise" -- true
+has_line "phobos-run-phase-generic" && ok "--language generic selects the generic image" || bad "--language generic selects the generic image" "${OUT}"
 cli --dry-run run --image phobos-run-phase:ci --exercise "${WORK}/exercise" -- true
 has_line "phobos-run-phase:ci" && ok "--image names the image" || bad "--image names the image" "${OUT}"
 cli --dry-run run --image phobos-run-phase:ci --language java --exercise "${WORK}/exercise" -- true
@@ -366,7 +368,7 @@ for name in COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_PATH_SEPA
 done
 ok "the variables that select a file, a project or a profile are unset"
 has_line prune_java_gradle && has_line --build && has_line --no-deps && ok "the service is rebuilt and started alone" || bad "the service is rebuilt and started alone" "${OUT}"
-for key in "java-gradle prune_java_gradle" "java-maven prune_java_maven" "python prune_python" "c-fact prune_c_fact" "r prune_r" "swift prune_swift" "c-gcc prune_c_gcc" "cpp prune_cpp"; do
+for key in "java-gradle prune_java_gradle" "java-maven prune_java_maven" "python prune_python" "c-fact prune_c_fact" "r prune_r" "swift prune_swift" "c-gcc prune_c_gcc" "cpp prune_cpp" "generic prune_generic"; do
   cli --dry-run prune "${key%% *}"
   has_line "${key##* }" && ok "prune ${key%% *} runs ${key##* }" || bad "prune ${key%% *} runs ${key##* }" "${OUT}"
 done
@@ -384,14 +386,14 @@ if grep -q "java-gradle" <<<"${ERR}"; then ok "and the refusal names java-gradle
 cli --dry-run prune
 expect_refused "prune without a key is refused" "${PHB_EXIT_USAGE}"
 cli --dry-run prune all
-check "prune all builds seventeen commands" 17 "$(count_line COMMAND)"
-order="$(grep -E '^(prune_java_gradle|prune_java_maven|prune_python|prune_c_fact|prune_r|prune_swift|prune_c_gcc|prune_cpp|orchestrate|verify_java_gradle|verify_java_maven|verify_python|verify_c_fact|verify_r|verify_swift|verify_c_gcc|verify_cpp)$' <<<"${OUT}" | tr '\n' ' ')"
-check "in the order of the pipeline" "prune_java_gradle prune_java_maven prune_python prune_c_fact prune_r prune_swift prune_c_gcc prune_cpp orchestrate verify_java_gradle verify_java_maven verify_python verify_c_fact verify_r verify_swift verify_c_gcc verify_cpp " "${order}"
+check "prune all builds nineteen commands" 19 "$(count_line COMMAND)"
+order="$(grep -E '^(prune_java_gradle|prune_java_maven|prune_python|prune_c_fact|prune_r|prune_swift|prune_c_gcc|prune_cpp|prune_generic|orchestrate|verify_java_gradle|verify_java_maven|verify_python|verify_c_fact|verify_r|verify_swift|verify_c_gcc|verify_cpp|verify_generic)$' <<<"${OUT}" | tr '\n' ' ')"
+check "in the order of the pipeline" "prune_java_gradle prune_java_maven prune_python prune_c_fact prune_r prune_swift prune_c_gcc prune_cpp prune_generic orchestrate verify_java_gradle verify_java_maven verify_python verify_c_fact verify_r verify_swift verify_c_gcc verify_cpp verify_generic " "${order}"
 declared="$(awk '/^  [a-z_]+:$/ { name = $1; sub(":", "", name) } /command: \["--(stage|verify|langs)"/ { print name }' "${REPOSITORY}/docker-compose.yaml" | sort | tr '\n' ' ')"
-listed="$(grep -E '^(prune_java_gradle|prune_java_maven|prune_python|prune_c_fact|prune_r|prune_swift|prune_c_gcc|prune_cpp|orchestrate|verify_java_gradle|verify_java_maven|verify_python|verify_c_fact|verify_r|verify_swift|verify_c_gcc|verify_cpp)$' <<<"${OUT}" | sort | tr '\n' ' ')"
+listed="$(grep -E '^(prune_java_gradle|prune_java_maven|prune_python|prune_c_fact|prune_r|prune_swift|prune_c_gcc|prune_cpp|prune_generic|orchestrate|verify_java_gradle|verify_java_maven|verify_python|verify_c_fact|verify_r|verify_swift|verify_c_gcc|verify_cpp|verify_generic)$' <<<"${OUT}" | sort | tr '\n' ' ')"
 check "and those are the services of docker-compose.yaml that carry a pipeline command" "${declared}" "${listed}"
 
-for position in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17; do
+for position in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19; do
   statuses=()
   for ((call = 1; call < position; call++)); do statuses+=(0); done
   statuses+=($((40 + position)))
@@ -400,11 +402,11 @@ for position in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17; do
   check "prune all stops at the failing job ${position} with its status" "$((40 + position))" "${STATUS}"
   check "and runs no job after it" "${position}" "$(wc -l < "${LOG}" | tr -d ' ')"
 done
-plan 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+plan 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
 cli prune all
-check "prune all ends with 0 when all seventeen jobs end with 0" 0 "${STATUS}"
-check "after exactly seventeen jobs" 17 "$(wc -l < "${LOG}" | tr -d ' ')"
-if [[ "$(grep -c -- '--build' "${LOG}")" == 17 ]]; then ok "every job is rebuilt first"; else bad "every job is rebuilt first" "$(cat "${LOG}")"; fi
+check "prune all ends with 0 when all nineteen jobs end with 0" 0 "${STATUS}"
+check "after exactly nineteen jobs" 19 "$(wc -l < "${LOG}" | tr -d ' ')"
+if [[ "$(grep -c -- '--build' "${LOG}")" == 19 ]]; then ok "every job is rebuilt first"; else bad "every job is rebuilt first" "$(cat "${LOG}")"; fi
 
 plan wait
 rm -f "${WORK}/started"
@@ -463,6 +465,9 @@ check "the first is the assembler of this checkout" "${REPOSITORY}/.github/scrip
 has_pair --project-directory "${REPOSITORY}/docker/protecter/java" && has_pair -f "${REPOSITORY}/docker/protecter/java/docker-compose.yaml" && ok "the second builds the compose file of the language" || bad "the second builds the compose file of the language" "${OUT}"
 cli --dry-run build python
 has_pair -f "${REPOSITORY}/docker/protecter/python/docker-compose.yaml" && ok "build python builds the Python compose file" || bad "build python builds the Python compose file" "${OUT}"
+cli --dry-run build generic
+check "build generic is accepted" 0 "${STATUS}"
+has_pair -f "${REPOSITORY}/docker/protecter/generic/docker-compose.yaml" && ok "and builds the generic image's compose file" || bad "and builds the generic image's compose file" "${OUT}"
 cli --dry-run build
 expect_refused "build without a language is refused" "${PHB_EXIT_USAGE}"
 cli --dry-run build java python

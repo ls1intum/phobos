@@ -12,9 +12,9 @@ phobos-cli.sh - run a command under Phobos, prune or record a reference program,
 
 USAGE
   phobos-cli.sh [--mode host|image] [--dry-run] run [options] [--] <command> [args...]
-  phobos-cli.sh [--mode host|image] [--dry-run] prune <java-gradle|java-maven|python|c-fact|r|swift|c-gcc|cpp|java-egress|all>
+  phobos-cli.sh [--mode host|image] [--dry-run] prune <java-gradle|java-maven|python|c-fact|r|swift|c-gcc|cpp|generic|java-egress|all>
   phobos-cli.sh [--mode host|image] [--dry-run] record [options] <record|generate|check|diff> [args...]
-  phobos-cli.sh [--mode host|image] [--dry-run] build <java|python|c-fact|r|swift|c-gcc|cpp>
+  phobos-cli.sh [--mode host|image] [--dry-run] build <java|python|c-fact|r|swift|c-gcc|cpp|generic>
   phobos-cli.sh [--mode host] [--dry-run] submissions --template <dir> --submissions <dir> --output <dir>
                 [--submission <name>]... [--no-verify] --assignment-is-student-code
   phobos-cli.sh [--mode host] [--dry-run] submissions verify --run <dir> --policy <file> [--layers-only]
@@ -43,7 +43,7 @@ run
   phobos.sh directly. Everything after -- (or after the first word that is not an option) is the
   command, options of its own included.
   On a host also:
-    --language <java|python|c-fact|r|swift|c-gcc|cpp> the run-phase image to use (default java)
+    --language <java|python|c-fact|r|swift|c-gcc|cpp|generic> the run-phase image to use (default java)
     --image <name>               a run-phase image by name; not with --language
     --exercise <dir>             required; mounted read-write as /var/tmp/testing-dir, the working
                                  directory of the command
@@ -55,14 +55,14 @@ run
   command can never write one. --project-root is then relative to --exercise.
 
 prune
-  Host: runs the Compose service of the key, rebuilt first; "all" runs the seventeen jobs of the layer
-  pruner in order (the eight prunes, the merge, the eight verifications) and stops at the first one
+  Host: runs the Compose service of the key, rebuilt first; "all" runs the nineteen jobs of the layer
+  pruner in order (the nine prunes, the merge, the nine verifications) and stops at the first one
   that fails. Image: runs the layer pruner (/var/tmp/helpers/exercise_pruner/src/interface/main.py); java-egress needs
   --resolver <ip[:port]>.
 
 record
   Runs the recording pruner, which runs the program unsandboxed: for the instructor's reference
-  program only, never for a submission. On a host also --language <java|python|c-fact|r|swift|c-gcc|cpp> (default java),
+  program only, never for a submission. On a host also --language <java|python|c-fact|r|swift|c-gcc|cpp|generic> (default java),
   --exercise <dir> (mounted read-only) and --networked.
 
 build

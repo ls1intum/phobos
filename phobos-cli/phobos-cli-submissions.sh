@@ -84,7 +84,7 @@ subs_read_key() {
 subs_language() {
   case "$SUBS_KEY" in
     java-gradle | java-maven) SUBS_LANGUAGE="java" ;;
-    python | c-fact | r | swift | c-gcc | cpp) SUBS_LANGUAGE="$SUBS_KEY" ;;
+    python | c-fact | r | swift | c-gcc | cpp | generic) SUBS_LANGUAGE="$SUBS_KEY" ;;
     *) fail_usage "the key ${SUBS_KEY} is not one a policy from submissions is pruned for" ;;
   esac
 }

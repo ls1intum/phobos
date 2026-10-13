@@ -34,6 +34,7 @@ IMAGE_R="phobos-run-phase-r"
 IMAGE_SWIFT="phobos-run-phase-swift"
 IMAGE_C_GCC="phobos-run-phase-c-gcc"
 IMAGE_CPP="phobos-run-phase-cpp"
+IMAGE_GENERIC="phobos-run-phase-generic"
 
 MODE=""
 DRY_RUN="no"
@@ -268,7 +269,7 @@ refuse_socket_directory() {
   fi
 }
 
-# Sets IMAGE_NAME from the language $1 (java, python, c-fact, r, swift, c-gcc or cpp), and ends the script for any other word.
+# Sets IMAGE_NAME from the language $1 (java, python, c-fact, r, swift, c-gcc, cpp or generic), and ends the script for any other word.
 image_of_language() {
   case "$1" in
     java) IMAGE_NAME="${IMAGE_JAVA}" ;;
@@ -278,6 +279,7 @@ image_of_language() {
     swift) IMAGE_NAME="${IMAGE_SWIFT}" ;;
     c-gcc) IMAGE_NAME="${IMAGE_C_GCC}" ;;
     cpp) IMAGE_NAME="${IMAGE_CPP}" ;;
-    *) fail_usage "--language takes java, python, c-fact, r, swift, c-gcc or cpp, not '$1'" ;;
+    generic) IMAGE_NAME="${IMAGE_GENERIC}" ;;
+    *) fail_usage "--language takes java, python, c-fact, r, swift, c-gcc, cpp or generic, not '$1'" ;;
   esac
 }

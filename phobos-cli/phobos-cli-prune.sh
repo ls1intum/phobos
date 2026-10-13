@@ -24,8 +24,9 @@ prune_service() {
     swift) REPLY="prune_swift" ;;
     c-gcc) REPLY="prune_c_gcc" ;;
     cpp) REPLY="prune_cpp" ;;
+    generic) REPLY="prune_generic" ;;
     java-egress) REPLY="prune_java_egress"; PROFILE="egress" ;;
-    *) fail_usage "prune takes java-gradle, java-maven, python, c-fact, r, swift, c-gcc, cpp, java-egress or all, not '$1'" ;;
+    *) fail_usage "prune takes java-gradle, java-maven, python, c-fact, r, swift, c-gcc, cpp, generic, java-egress or all, not '$1'" ;;
   esac
 }
 
@@ -55,7 +56,7 @@ command_prune() {
       *) [[ -z "$key" ]] || fail_usage "prune takes one key"; key="$1"; shift ;;
     esac
   done
-  [[ -n "$key" ]] || fail_usage "prune needs a key: java-gradle, java-maven, python, c-fact, r, swift, c-gcc, cpp, java-egress or all"
+  [[ -n "$key" ]] || fail_usage "prune needs a key: java-gradle, java-maven, python, c-fact, r, swift, c-gcc, cpp, generic, java-egress or all"
   if [[ "$MODE" == "image" ]]; then
     prune_in_image "$key" "$resolver"
   else
@@ -70,7 +71,7 @@ prune_in_image() {
   local resolver="$2"
   case "$key" in
     java) fail_usage "the prune key java is now java-gradle" ;;
-    java-gradle | java-maven | python | c-fact | r | swift | c-gcc | cpp)
+    java-gradle | java-maven | python | c-fact | r | swift | c-gcc | cpp | generic)
       [[ -z "$resolver" ]] || fail_usage "--resolver belongs to java-egress"
       require_helper "${IMAGE_HELPERS}/exercise_pruner/src/interface/main.py"
       hand_over python3 "${IMAGE_HELPERS}/exercise_pruner/src/interface/main.py" --stage all "$key" ;;
@@ -79,11 +80,11 @@ prune_in_image() {
       require_helper "${IMAGE_HELPERS}/exercise_pruner/src/interface/main.py"
       hand_over python3 "${IMAGE_HELPERS}/exercise_pruner/src/interface/main.py" --resolver "$resolver" --output-dir /var/tmp/path_sets/egress java-egress ;;
     all) fail_usage "prune all needs a host: the merge and the verification are separate images" ;;
-    *) fail_usage "prune takes java-gradle, java-maven, python, c-fact, r, swift, c-gcc, cpp, java-egress or all, not '$key'" ;;
+    *) fail_usage "prune takes java-gradle, java-maven, python, c-fact, r, swift, c-gcc, cpp, generic, java-egress or all, not '$key'" ;;
   esac
 }
 
-# Host mode of prune: runs the Compose service of the key, or the seventeen jobs of all in order.
+# Host mode of prune: runs the Compose service of the key, or the nineteen jobs of all in order.
 prune_on_host() {
   local key="$1"
   local service
@@ -91,7 +92,7 @@ prune_on_host() {
   require_docker
   compose_prefix "$CHECKOUT_ROOT" "${CHECKOUT_ROOT}/docker-compose.yaml"
   if [[ "$key" == "all" ]]; then
-    for service in prune_java_gradle prune_java_maven prune_python prune_c_fact prune_r prune_swift prune_c_gcc prune_cpp orchestrate verify_java_gradle verify_java_maven verify_python verify_c_fact verify_r verify_swift verify_c_gcc verify_cpp; do
+    for service in prune_java_gradle prune_java_maven prune_python prune_c_fact prune_r prune_swift prune_c_gcc prune_cpp prune_generic orchestrate verify_java_gradle verify_java_maven verify_python verify_c_fact verify_r verify_swift verify_c_gcc verify_cpp verify_generic; do
       compose_run "$service" ""
     done
     return 0
