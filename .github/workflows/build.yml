@@ -1563,15 +1563,15 @@ jobs:
           CORE: ${{ steps.remainder.outputs.core }}
         run: |
           records="$(mktemp -d)"
+          # The prune image's own base, BasePrune.cfg, grants nothing, so the shipped base mounted beside it is
+          # exactly what grading applies; the record names the digest of each.
           docker run --rm --network none --memory 3g --pids-limit 1024 \
             -v "${PWD}/exercises:/srv/phobos-prune-exercises:ro" -v "${PWD}/pruner:/var/tmp/helpers:ro" \
-            -v "${PWD}/protecter/src/config/BaseLanguage-generic.cfg:/srv/phobos-shipped/BaseLanguage-generic.cfg:ro" \
+            -v "${PWD}/protecter/src/config/BaseLanguage-generic.cfg:/var/tmp/opt/core/BaseLanguage-generic.cfg:ro" \
             -v "${CORE}/exercises:/srv/phobos-remainder:ro" -v "${records}:/var/tmp/path_sets" \
-            --entrypoint bash phobos-prune-layers-generic:ci -c \
-            'rm -f "${PHOBOS_HOME}"/Base*.cfg \
-            && cp /srv/phobos-shipped/BaseLanguage-generic.cfg "${PHOBOS_HOME}/" \
-            && exec python3 /var/tmp/helpers/exercise_pruner/src/interface/main.py \
-            --verify-policy /srv/phobos-remainder/generic_shell-reference.cfg generic'
+            --entrypoint python3 phobos-prune-layers-generic:ci \
+            /var/tmp/helpers/exercise_pruner/src/interface/main.py \
+            --verify-policy /srv/phobos-remainder/generic_shell-reference.cfg generic
           record="$(find "${records}" -name 'generic_shell-reference.json' -print -quit)"
           test -n "${record}"
           grep -q '"verified": true' "${record}"
