@@ -67,7 +67,7 @@ sudo rm -rf "${WORK}/root"
 
 # The data disk: what the guest mounts as the prune container's volumes.
 mkdir -p "${WORK}/data"
-cp -R "${INPUTS}/exercises" "${INPUTS}/helpers" "${INPUTS}/setup.sh" "${INPUTS}/env.sh" "${WORK}/data/"
+cp -R "${INPUTS}/exercises" "${INPUTS}/helpers" "${INPUTS}/manifest" "${INPUTS}/setup.sh" "${INPUTS}/env.sh" "${WORK}/data/"
 mkdir -p "${WORK}/data/path_sets"
 cp -R "${PATH_SETS}/." "${WORK}/data/path_sets/"
 truncate -s "${DATA_DISK_MB}M" "${WORK}/data.img"
