@@ -1,0 +1,86 @@
+# Builds a run-phase image from an assembled context with the BuildKit cache of build-image-cached.sh, kept
+# between runs in actions/cache. One place for the four steps every workflow that builds a run-phase image
+# needs, so that the cache key, the restore order and who may write a cache cannot drift between them.
+#
+# The cache key is a snapshot: buildkit-v1-<name>-<arch>-<recipe>-<run id>-<attempt>. A restore takes the newest
+# snapshot of the same recipe, and failing that the newest of the same image and architecture. A new snapshot is
+# saved when nothing of the same recipe was found, and always after a fresh build, so that a fresh build's
+# layers are the ones later runs reuse. Only trusted runs save: a push or the schedule on main, and a dispatch
+# (whose entry is scoped to its own branch). A pull request restores and never saves.
+name: Build a run-phase image with a layer cache
+description: Builds a run-phase image with a BuildKit cache kept in actions/cache between runs.
+
+inputs:
+  name:
+    description: "The image's name in the cache key, for example java or python"
+    required: true
+  dockerfile:
+    description: The Dockerfile, relative to the repository root
+    required: true
+  tag:
+    description: The tag the built image is loaded under
+    required: true
+  context:
+    description: The assembled build context
+    required: true
+  fresh:
+    description: "true for a build that re-resolves the base image and reruns every layer, as the weekly run does"
+    required: true
+  buildkit-image:
+    description: The BuildKit image of the docker-container builder, pinned by tag and digest
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Name the recipe
+      id: recipe
+      shell: bash
+      env:
+        CONTEXT: ${{ inputs.context }}
+        DOCKERFILE: ${{ inputs.dockerfile }}
+        BUILDKIT_IMAGE: ${{ inputs.buildkit-image }}
+        NAME: ${{ inputs.name }}
+        ARCH: ${{ runner.arch }}
+      run: |
+        recipe="$(.github/scripts/build-image-cached.sh recipe "${CONTEXT}" "${DOCKERFILE}" "${BUILDKIT_IMAGE}")"
+        printf 'prefix=buildkit-v1-%s-%s-%s-\n' "${NAME}" "${ARCH}" "${recipe}" >> "${GITHUB_OUTPUT}"
+        printf 'family=buildkit-v1-%s-%s-\n' "${NAME}" "${ARCH}" >> "${GITHUB_OUTPUT}"
+
+    - name: Restore the layer cache
+      id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/buildkit-cache/${{ inputs.name }}/current
+        key: ${{ steps.recipe.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          ${{ steps.recipe.outputs.prefix }}
+          ${{ steps.recipe.outputs.family }}
+
+    - name: Build the image
+      shell: bash
+      env:
+        CACHE: ${{ runner.temp }}/buildkit-cache/${{ inputs.name }}
+        BUILDKIT_IMAGE: ${{ inputs.buildkit-image }}
+        DOCKERFILE: ${{ inputs.dockerfile }}
+        TAG: ${{ inputs.tag }}
+        CONTEXT: ${{ inputs.context }}
+        FRESH: ${{ inputs.fresh }}
+      run: |
+        fresh=()
+        if [[ "${FRESH}" == "true" ]]; then
+          fresh=(--pull --no-cache)
+        fi
+        .github/scripts/build-image-cached.sh build "${CACHE}" "${BUILDKIT_IMAGE}" -- \
+          "${fresh[@]}" -f "${DOCKERFILE}" -t "${TAG}" "${CONTEXT}"
+
+    - name: Save the layer cache
+      if: >-
+        ${{ (inputs.fresh == 'true'
+        || !startsWith(steps.restore.outputs.cache-matched-key, steps.recipe.outputs.prefix))
+        && (github.event_name == 'workflow_dispatch'
+        || (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule'))) }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/buildkit-cache/${{ inputs.name }}/current
+        key: ${{ steps.restore.outputs.cache-primary-key }}
