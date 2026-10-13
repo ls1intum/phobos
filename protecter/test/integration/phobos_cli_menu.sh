@@ -206,6 +206,8 @@ check "Esc in the main menu ends the menu with 0" 0 "${STATUS}"
 if grep -q '^COMMAND$' <<<"${OUT}"; then bad "and starts nothing" "${OUT}"; else ok "and starts nothing"; fi
 check "two boxes were shown, the welcome and the main menu" 2 "$(wc -l < "${DIALOG_LOG}" | tr -d ' ')"
 if head -1 "${DIALOG_LOG}" | grep -q -- '--msgbox' && sed -n 2p "${DIALOG_LOG}" | grep -q -- '--menu'; then ok "in that order"; else bad "in that order" "$(cat "${DIALOG_LOG}")"; fi
+if head -1 "${DIALOG_LOG}" | grep -qF -- '- the files it may read or change\n- the hosts it may reach\n- how long and how large it may run'; then ok "the welcome lists what a policy allows"; else bad "the welcome lists what a policy allows" "$(head -1 "${DIALOG_LOG}")"; fi
+if head -1 "${DIALOG_LOG}" | grep -qF '\n1 Run a command' && head -1 "${DIALOG_LOG}" | grep -qF '\n2 Write a new policy' && head -1 "${DIALOG_LOG}" | grep -qF '\n3 Record your own reference program' && head -1 "${DIALOG_LOG}" | grep -qF '\n4 Derive a policy from vetted past submissions'; then ok "and names the four ways through the main menu"; else bad "and names the four ways through the main menu" "$(head -1 "${DIALOG_LOG}")"; fi
 if grep -q -- '--output-fd 3' "${DIALOG_LOG}" && ! grep -q -- '--no-mouse' "${DIALOG_LOG}"; then ok "dialog answers on descriptor 3 and keeps the mouse"; else bad "dialog answers on descriptor 3 and keeps the mouse" "$(cat "${DIALOG_LOG}")"; fi
 menu --dry-run -- "0|" "0|5"
 check "the Exit entry ends the menu with 0" 0 "${STATUS}"
@@ -267,6 +269,48 @@ else
 
   menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/missing" "0|" "5|" "5|"
   if asked 'not an existing directory'; then ok "a directory that does not exist is asked for again"; else bad "a directory that does not exist is asked for again" "$(cat "${DIALOG_LOG}")"; fi
+  if asked 'A dry run creates nothing' && ! asked 'Create it?'; then ok "a dry run does not offer to create it, and says why"; else bad "a dry run does not offer to create it, and says why" "$(cat "${DIALOG_LOG}")"; fi
+  if [[ -e "${WORK}/missing" ]]; then bad "and creates nothing" "${WORK}/missing exists"; else ok "and creates nothing"; fi
+  menu -- "0|" "0|1" "0|1" "0|${WORK}/created/deep" "0|"
+  check "creating the exercise directory and then leaving the menu ends with 0" 0 "${STATUS}"
+  if asked 'created/deep does not exist. Create it?'; then ok "a directory that does not exist is offered to be created"; else bad "a directory that does not exist is offered to be created" "$(cat "${DIALOG_LOG}")"; fi
+  if [[ -d "${WORK}/created/deep" ]]; then ok "and Yes creates it with its parents"; else bad "and Yes creates it with its parents" "${WORK}/created/deep is missing"; fi
+  if asked 'Policy directory'; then ok "and the walk goes on with it"; else bad "and the walk goes on with it" "$(cat "${DIALOG_LOG}")"; fi
+  if grep -q '^COMMAND$' <<<"${OUT}"; then bad "and starts nothing" "${OUT}"; else ok "and starts nothing"; fi
+  menu -- "0|" "0|1" "0|1" "0|${WORK}/declined/deep" "1|"
+  if [[ -e "${WORK}/declined" ]]; then bad "No creates nothing" "${WORK}/declined exists"; else ok "No creates nothing"; fi
+  if sed -n 6p "${DIALOG_LOG}" | grep -q -- '--inputbox' && ! asked 'not an existing directory'; then ok "and asks for the directory again, without a refusal"; else bad "and asks for the directory again, without a refusal" "$(cat "${DIALOG_LOG}")"; fi
+  : > "${WORK}/cwd/plain-file"
+  menu -- "0|" "0|1" "0|1" "0|${WORK}/cwd/plain-file" "0|"
+  if asked 'Create it?'; then bad "a path that names a file is not offered to be created" "$(cat "${DIALOG_LOG}")"; else ok "a path that names a file is not offered to be created"; fi
+  if asked 'not an existing directory'; then ok "and is refused"; else bad "and is refused" "$(cat "${DIALOG_LOG}")"; fi
+  menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/cwd/plain-file" "0|"
+  if asked 'A dry run creates nothing'; then bad "a dry run does not claim a file would be offered to be created" "$(cat "${DIALOG_LOG}")"; else ok "a dry run does not claim a file would be offered to be created"; fi
+  ln -s "${WORK}/nowhere" "${WORK}/cwd/dangling.link"
+  menu -- "0|" "0|1" "0|1" "0|${WORK}/cwd/dangling.link" "0|"
+  if asked 'Create it?'; then bad "a dangling link is not offered to be created" "$(cat "${DIALOG_LOG}")"; else ok "a dangling link is not offered to be created"; fi
+  if [[ -e "${WORK}/nowhere" ]]; then bad "and nothing is created through it" "${WORK}/nowhere exists"; else ok "and nothing is created through it"; fi
+  menu -- "0|" "0|1" "0|1" "0|${WORK}/escaped" "5|"
+  if [[ -e "${WORK}/escaped" ]]; then bad "Esc on the question creates nothing" "${WORK}/escaped exists"; else ok "Esc on the question creates nothing"; fi
+  if sed -n 6p "${DIALOG_LOG}" | grep -q -- '--inputbox'; then ok "and asks for the directory again"; else bad "and asks for the directory again" "$(cat "${DIALOG_LOG}")"; fi
+  menu -- "0|" "0|1" "0|1" "0|${WORK}/cwd/plain-file/below" "0|" "0|"
+  if asked 'could not be created'; then ok "a directory that cannot be created is said to be so"; else bad "a directory that cannot be created is said to be so" "$(cat "${DIALOG_LOG}")"; fi
+  if sed -n 7p "${DIALOG_LOG}" | grep -q -- '--inputbox' && ! asked 'not an existing directory'; then ok "and is asked for again"; else bad "and is asked for again" "$(cat "${DIALOG_LOG}")"; fi
+  menu -- "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/new-policies" "0|"
+  if [[ -d "${WORK}/new-policies" ]]; then ok "the policy directory is created on Yes too"; else bad "the policy directory is created on Yes too" "$(cat "${DIALOG_LOG}")"; fi
+
+  menu --dry-run -- "0|" "0|1" "0|0" "0|bad name" "0|" "0|registry.example/phobos:1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "1|" "0|"
+  check "a run in an image named in the menu ends with 0" 0 "${STATUS}"
+  walked="$(blocks_of "${OUT}")"
+  if asked 'Other image (name it)'; then ok "the language list offers an image by name"; else bad "the language list offers an image by name" "$(cat "${DIALOG_LOG}")"; fi
+  if asked 'That is not an image name'; then ok "a name --image refuses is asked for again"; else bad "a name --image refuses is asked for again" "$(cat "${DIALOG_LOG}")"; fi
+  on_terminal "${STUBS}:/usr/bin:/bin" --dry-run run --image registry.example/phobos:1 --exercise "${WORK}/exercise" --config "${WORK}/policies/exercise.cfg" -- ./gradlew test
+  direct="$(blocks_of "${OUT}")"
+  check "it starts exactly what the same call with --image starts" "${direct}" "${walked}"
+  if grep -qx 'registry.example/phobos:1' <<<"${walked}"; then ok "which runs the image named"; else bad "which runs the image named" "${walked}"; fi
+  menu --dry-run -- "0|" "0|1" "0|0" "5|" "0|1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "1|" "0|"
+  check "Esc on the image name goes back to the languages" 0 "${STATUS}"
+  if sed -n 5p "${DIALOG_LOG}" | grep -q 'Language' && grep -qx 'phobos-run-phase-java' <<<"${OUT}" && ! grep -qx -- '--image' <<<"${OUT}"; then ok "and a language chosen then runs its own image"; else bad "and a language chosen then runs its own image" "${OUT}"; fi
   menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew\\001 test" "0|" "0|./gradlew test" "1|" "0|"
   if asked 'without control characters'; then ok "a command with a control character is asked for again"; else bad "a command with a control character is asked for again" "$(cat "${DIALOG_LOG}")"; fi
   has_pair ./gradlew test && ok "and the command given then is the one run" || bad "and the command given then is the one run" "${OUT}"
@@ -334,6 +378,13 @@ else
   if head -1 "${DOCKER_LOG}" | grep -q -- '-- /bin/true$' && tail -1 "${DOCKER_LOG}" | grep -q -- '-- ./gradlew test$'; then ok "the check runs /bin/true and the run the command, in that order"; else bad "the check runs /bin/true and the run the command, in that order" "$(cat "${DOCKER_LOG}")"; fi
   if [[ "$(grep -c -- '--config /srv/phobos-cli/config/1/new.cfg' "${DOCKER_LOG}")" == 2 ]]; then ok "both under the saved policy"; else bad "both under the saved policy" "$(cat "${DOCKER_LOG}")"; fi
   if asked 'accepted the policy'; then ok "a check that ended with 0 says so"; else bad "a check that ended with 0 says so" "$(cat "${DIALOG_LOG}")"; fi
+
+  : > "${DOCKER_LOG}"
+  menu -- "0|" "0|2" "0|0" "0|registry.example/phobos:1" "0|${WORK}/exercise" "0|${WORK}/out/imaged.cfg" "0|1\n10\n13" \
+    "0|1" "0|/srv/data" "0|3" "0|1" "0|repo.example.org:443" "0|1" "0|3" "0|120\n\n2048\n\n\n" "0|" \
+    "0|" "0|" "0|./gradlew test" "1|" "0|"
+  check "writing a policy for an image named in the menu ends with 0" 0 "${STATUS}"
+  if [[ "$(grep -c -- ' registry.example/phobos:1 ' "${DOCKER_LOG}")" == 2 ]] && ! grep -q -- 'phobos-run-phase-' "${DOCKER_LOG}"; then ok "the check and the run both start the image named"; else bad "the check and the run both start the image named" "$(cat "${DOCKER_LOG}")"; fi
 
   DOCKER_STATUS=7
   menu -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/failing.cfg" "0|1" \
@@ -443,6 +494,7 @@ else
   check "a dry run through recording ends with 0" 0 "${STATUS}"
   walked="$(blocks_of "${OUT}")"
   if asked 'up to 64'; then ok "a recording name the recording pruner refuses is asked for again"; else bad "a recording name the recording pruner refuses is asked for again" "$(cat "${DIALOG_LOG}")"; fi
+  if asked 'Other image'; then bad "recording offers no image by name, since record takes no --image" "$(cat "${DIALOG_LOG}")"; else ok "recording offers no image by name, since record takes no --image"; fi
   if grep -q 'A dry run records nothing' <<<"${OUT}"; then ok "and says there is no policy to save"; else bad "and says there is no policy to save" "${OUT}"; fi
   on_terminal "${STUBS}:/usr/bin:/bin" --dry-run record --language java --exercise "${WORK}/exercise" record --name tool -- ./build_script.sh
   direct="$(blocks_of "${OUT}")"

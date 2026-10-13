@@ -10,7 +10,7 @@
 #   permitted  prunes the exercise, whose prune.json declares the pre-loaded repository a pinned read root that
 #              the pruner checks against its manifest first, merges the result into BaseLanguage-java-maven.cfg and its own file,
 #              and has the exercise pass under exactly that pair with every layer on;
-#   forbidden  reads the record: both tests passed in all three baseline runs, whose log shows the weaving
+#   forbidden  reads the record: the template's 13 tests passed in all three baseline runs, whose log shows the weaving
 #              step and the copy of the Ares runtime jars, every containment check refused, and under /root
 #              exactly one directory grant, [read] on the pinned repository with the comment saying why, and
 #              otherwise single files that exist, nothing on /root or /root/.m2 and no write-class right
@@ -139,12 +139,28 @@ from shared.src.domain import cfgfile
 record = json.load(open(sys.argv[1]))
 policy = cfgfile.read_policy(open(sys.argv[2]).read())
 baselines = [entry for entry in record["log"] if entry["stage"] == "baseline"]
+template_tests = {
+    "AttributeTest.testAttributes[Context]",
+    "AttributeTest.testAttributes[Policy]",
+    "ClassTest.testClass[BubbleSort]",
+    "ClassTest.testClass[MergeSort]",
+    "ClassTest.testClass[SortStrategy]",
+    "ConstructorTest.testConstructors[Policy]",
+    "MethodTest.testMethods[Context]",
+    "MethodTest.testMethods[Policy]",
+    "MethodTest.testMethods[SortStrategy]",
+    "SortingExampleBehaviorTest.testBubbleSort",
+    "SortingExampleBehaviorTest.testMergeSort",
+    "SortingExampleBehaviorTest.testUseBubbleSortForSmallList",
+    "SortingExampleBehaviorTest.testUseMergeSortForBigList",
+}
 good = [
     entry for entry in baselines
-    if entry["status"] == 0 and entry["verdict"]["exit_class"] == "success" and len(entry["verdict"]["tests"]) == 2
+    if entry["status"] == 0 and entry["verdict"]["exit_class"] == "success"
+    and len(entry["verdict"]["tests"]) == len(template_tests)
     and all(outcome == "passed" for _, outcome in entry["verdict"]["tests"])
-    and {name.rsplit(".", 1)[1].removesuffix("()") for name, _ in entry["verdict"]["tests"]}
-    == {"addsTwoNumbers", "addsANegativeNumber"}
+    and {name.removeprefix("de.phobos.reference.").removesuffix("()") for name, _ in entry["verdict"]["tests"]}
+    == template_tests
     and entry["verdict"]["tests_ran"] and not entry["verdict"]["no_source"] and not entry["verdict"]["infra_failure"]
 ]
 print("baseline", len(baselines), len(good))
@@ -172,7 +188,7 @@ print("tmp-beyond-seed", sorted(set(policy.fs.get("/tmp", ())) - {"read", "write
 print("seed-comment", "come from the java.cfg seed of the prune image, not from a refusal" in open(sys.argv[2]).read())
 PY
 )"
-  check "the baseline holds both test cases, passed, in all three runs, with tests run and no wrong-reason marker" \
+  check "the baseline holds the template's 13 tests, passed, in all three runs, with tests run and no wrong-reason marker" \
     "baseline 3 3" "$(grep '^baseline' <<<"${summary}")"
   check "the baseline log shows the weaving step and the copy of the Ares runtime jars" "ares-log True" \
     "$(grep '^ares-log' <<<"${summary}")"
