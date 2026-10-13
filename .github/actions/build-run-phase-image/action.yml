@@ -57,6 +57,25 @@ runs:
           ${{ steps.recipe.outputs.prefix }}
           ${{ steps.recipe.outputs.family }}
 
+    # A new snapshot is kept after a fresh build or when nothing of this recipe was restored, and only by a trusted
+    # run. The build exports a cache only then, since exporting one the run will not keep costs as long as it saves.
+    - name: Decide whether this run keeps a new snapshot
+      id: decide
+      shell: bash
+      env:
+        FRESH: ${{ inputs.fresh }}
+        MATCHED: ${{ steps.restore.outputs.cache-matched-key }}
+        PREFIX: ${{ steps.recipe.outputs.prefix }}
+        TRUSTED: >-
+          ${{ github.event_name == 'workflow_dispatch'
+          || (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule')) }}
+      run: |
+        keep=false
+        if [[ "${TRUSTED}" == "true" && ( "${FRESH}" == "true" || "${MATCHED}" != "${PREFIX}"* ) ]]; then
+          keep=true
+        fi
+        printf 'keep=%s\n' "${keep}" | tee -a "${GITHUB_OUTPUT}"
+
     - name: Build the image
       shell: bash
       env:
@@ -66,20 +85,21 @@ runs:
         TAG: ${{ inputs.tag }}
         CONTEXT: ${{ inputs.context }}
         FRESH: ${{ inputs.fresh }}
+        KEEP: ${{ steps.decide.outputs.keep }}
       run: |
         fresh=()
         if [[ "${FRESH}" == "true" ]]; then
           fresh=(--pull --no-cache)
         fi
-        .github/scripts/build-image-cached.sh build "${CACHE}" "${BUILDKIT_IMAGE}" -- \
+        mode=read
+        if [[ "${KEEP}" == "true" ]]; then
+          mode=export
+        fi
+        .github/scripts/build-image-cached.sh build "${CACHE}" "${BUILDKIT_IMAGE}" "${mode}" -- \
           "${fresh[@]}" -f "${DOCKERFILE}" -t "${TAG}" "${CONTEXT}"
 
     - name: Save the layer cache
-      if: >-
-        ${{ (inputs.fresh == 'true'
-        || !startsWith(steps.restore.outputs.cache-matched-key, steps.recipe.outputs.prefix))
-        && (github.event_name == 'workflow_dispatch'
-        || (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule'))) }}
+      if: ${{ steps.decide.outputs.keep == 'true' }}
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/buildkit-cache/${{ inputs.name }}/current

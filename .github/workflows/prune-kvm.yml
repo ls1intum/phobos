@@ -110,8 +110,8 @@ jobs:
             exit 1
           fi
           script="$(sha256sum .github/scripts/build-kvm-kernel.sh | cut -d ' ' -f 1)"
-          printf 'key=kvm-kernel-v1-%s-%s-%s-%s-%s\n' "${KERNEL_RUNNER}" "${RUNNER_ARCH}" "${ImageOS}" "${ImageVersion}" \
-            "${script}" | tee -a "${GITHUB_OUTPUT}"
+          printf 'key=kvm-kernel-v1-%s-%s-%s-%s-%s\n' "${KERNEL_RUNNER}" "${RUNNER_ARCH}" "${ImageOS}" \
+            "${ImageVersion}" "${script}" | tee -a "${GITHUB_OUTPUT}"
 
       - name: Restore the kernel of this runner image
         id: restore

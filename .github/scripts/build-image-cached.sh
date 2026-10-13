@@ -2,7 +2,7 @@
 # Builds a run-phase image with a BuildKit layer cache that the workflow keeps between runs in actions/cache.
 #
 #   build-image-cached.sh recipe <context directory> <Dockerfile> <BuildKit image>
-#   build-image-cached.sh build <cache directory> <BuildKit image> -- <docker build arguments>
+#   build-image-cached.sh build <cache directory> <BuildKit image> export|read -- <docker build arguments>
 #
 # recipe prints the SHA-256 that names what a build reads: a canonical manifest of the assembled context
 # (each entry's type, mode, content hash or link target, and path relative to the context, NUL-separated and
@@ -10,8 +10,9 @@
 # version. Any change to a file the build sees therefore names another cache line. It needs python3.
 #
 # build runs `docker buildx build --load` on a builder of the docker-container driver named phobos-cache,
-# reading the cache in <cache directory>/current when there is one and writing the build's whole cache to
-# <cache directory>/next, which replaces current only when the build succeeded. The docker-container driver is
+# reading the cache in <cache directory>/current when there is one. With export it writes the build's whole cache
+# to <cache directory>/next, which replaces current only when the build succeeded; with read it writes none, since
+# exporting a cache the run will not keep costs as long as the build saves. The docker-container driver is
 # used because it exports a cache on both image stores the runners have (the containerd store on amd64, the
 # classic one on arm64), where the default driver cannot on the classic one. Its BuildKit container runs
 # privileged, as that driver always does; it is a build service, and the containers the suites and the prunes
@@ -121,26 +122,30 @@ ensure_builder() {
     || docker buildx create --name "${BUILDER}" --driver docker-container --driver-opt "image=$1" > /dev/null
 }
 
-# Builds with the cache directory $1 and the BuildKit image $2, passing the arguments after them to the build;
-# ends with the build's status.
+# Builds with the cache directory $1 and the BuildKit image $2, exporting the cache when $3 is export, and passes
+# the arguments after them to the build; ends with the build's status.
 build() {
   local cache="$1"
+  local mode="$3"
   local sampler
   local status=0
   local samples
   local -a cache_from=()
+  local -a cache_to=()
   ensure_builder "$2"
-  shift 2
+  shift 3
   mkdir -p -- "${cache}"
   rm -rf -- "${cache}/next"
   if [[ -d "${cache}/current" && -f "${cache}/current/index.json" ]]; then
     cache_from=(--cache-from "type=local,src=${cache}/current")
   fi
+  if [[ "${mode}" == "export" ]]; then
+    cache_to=(--cache-to "type=local,dest=${cache}/next,mode=max")
+  fi
   samples="$(mktemp)"
   sample_disk "${samples}" &
   sampler=$!
-  docker buildx build --builder "${BUILDER}" --load "${cache_from[@]}" \
-    --cache-to "type=local,dest=${cache}/next,mode=max" "$@" || status=$?
+  docker buildx build --builder "${BUILDER}" --load "${cache_from[@]}" "${cache_to[@]}" "$@" || status=$?
   kill "${sampler}" 2> /dev/null || true
   wait "${sampler}" 2> /dev/null || true
   printf 'Lowest free space on the runner disk during the build: %s MiB\n' "$(cat "${samples}")"
@@ -148,7 +153,7 @@ build() {
   printf 'Build %s, cache before it %s, cache it wrote %s\n' \
     "$( (( ${#cache_from[@]} > 0 )) && printf 'on a restored cache' || printf 'without a cache')" \
     "$(cache_size "${cache}/current")" "$(cache_size "${cache}/next")"
-  if (( status == 0 )); then
+  if (( status == 0 )) && [[ "${mode}" == "export" ]]; then
     rm -rf -- "${cache}/current"
     mv -- "${cache}/next" "${cache}/current"
   fi
@@ -161,11 +166,13 @@ case "${1:-}" in
     recipe "$2" "$3" "$4"
     ;;
   build)
-    [[ $# -ge 5 && "$4" == "--" ]] || { printf 'usage: build-image-cached.sh build <cache> <BuildKit image> -- <docker build arguments>\n' >&2; exit "${EXIT_USAGE}"; }
+    [[ $# -ge 6 && ( "$4" == "export" || "$4" == "read" ) && "$5" == "--" ]] \
+      || { printf 'usage: build-image-cached.sh build <cache> <BuildKit image> export|read -- <docker build arguments>\n' >&2; exit "${EXIT_USAGE}"; }
     cache="$2"
     image="$3"
-    shift 4
-    build "${cache}" "${image}" "$@"
+    mode="$4"
+    shift 5
+    build "${cache}" "${image}" "${mode}" "$@"
     ;;
   *)
     printf 'usage: build-image-cached.sh recipe|build ...\n' >&2
