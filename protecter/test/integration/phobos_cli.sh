@@ -367,6 +367,11 @@ for name in COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_PATH_SEPA
   bad "${name} is unset for the call" "${OUT}"
 done
 ok "the variables that select a file, a project or a profile are unset"
+kept=""
+for name in $(grep -oE '\$\{RUN_PHASE_IMAGE[A-Z_]*' "${REPOSITORY}/docker-compose.yaml" | sed 's/^\${//' | sort -u); do
+  has_pair -u "${name}" || kept="${kept} ${name}"
+done
+check "every image variable docker-compose.yaml reads is unset for the call" "" "${kept}"
 has_line prune_java_gradle && has_line --build && has_line --no-deps && ok "the service is rebuilt and started alone" || bad "the service is rebuilt and started alone" "${OUT}"
 for key in "java-gradle prune_java_gradle" "java-maven prune_java_maven" "python prune_python" "c-fact prune_c_fact" "r prune_r" "swift prune_swift" "c-gcc prune_c_gcc" "cpp prune_cpp" "generic prune_generic"; do
   cli --dry-run prune "${key%% *}"

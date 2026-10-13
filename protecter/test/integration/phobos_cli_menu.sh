@@ -341,7 +341,7 @@ else
   DOCKER_WAIT="${WORK}/docker.wait"
   rm -f "${DOCKER_WAIT}" "${DOCKER_WAIT}.menu"
   : > "${DIALOG_LOG}"
-  printf '%s\n' "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "1|" "0|" > "${DIALOG_PLAN}"
+  printf '%s\n' "0|" "0|1" "0|3" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "1|" "0|" > "${DIALOG_PLAN}"
   ( on_terminal "${STUBS}:/usr/bin:/bin"; printf '%s' "${STATUS}" > "${WORK}/signal.status"; printf '%s\n' "${OUT}" > "${WORK}/signal.out" ) &
   terminal_pid=$!
   waited=0
@@ -354,6 +354,7 @@ else
     kill -TERM "${menu_pid}"
     wait "${terminal_pid}"
     check "a SIGTERM to the menu alone ends it with 143" 143 "$(cat "${WORK}/signal.status")"
+    if grep -q ' phobos-run-phase-java ' "${DOCKER_LOG}"; then ok "the run it interrupted was the Java run the answers chose"; else bad "the run it interrupted was the Java run the answers chose" "$(cat "${DOCKER_LOG}")"; fi
     if grep -q terminated "${DOCKER_WAIT}"; then ok "and reaches the command the menu runs"; else bad "and reaches the command the menu runs" "$(cat "${DOCKER_WAIT}")"; fi
     if grep -q 'the menu was interrupted' "${WORK}/signal.out" && grep -q 'ended with status' "${WORK}/signal.out"; then ok "and the interrupted call is reported"; else bad "and the interrupted call is reported" "$(cat "${WORK}/signal.out")"; fi
   else
@@ -464,7 +465,7 @@ else
   rm -f "${DOCKER_WAIT}" "${DOCKER_WAIT}.menu"
   captures_before="$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'phobos-cli-check.*' | wc -l | tr -d ' ')"
   : > "${DIALOG_LOG}"
-  printf '%s\n' "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/interrupted.cfg" "0|1" "0|1" "0|/srv/data" "0|3" "0|" "0|" > "${DIALOG_PLAN}"
+  printf '%s\n' "0|" "0|2" "0|3" "0|${WORK}/exercise" "0|${WORK}/out/interrupted.cfg" "0|1" "0|1" "0|/srv/data" "0|3" "0|" "0|" > "${DIALOG_PLAN}"
   ( on_terminal "${STUBS}:/usr/bin:/bin"; printf '%s' "${STATUS}" > "${WORK}/check.status" ) &
   terminal_pid=$!
   waited=0
@@ -477,6 +478,7 @@ else
     kill -TERM "${menu_pid}"
     wait "${terminal_pid}"
     check "a SIGTERM during the check ends the menu with 143" 143 "$(cat "${WORK}/check.status")"
+    if grep -q ' phobos-run-phase-java ' "${DOCKER_LOG}"; then ok "the check it interrupted ran in the Java image the answers chose"; else bad "the check it interrupted ran in the Java image the answers chose" "$(cat "${DOCKER_LOG}")"; fi
     check "and leaves no output of the check behind" "${captures_before}" "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'phobos-cli-check.*' | wc -l | tr -d ' ')"
   else
     bad "the check the menu runs was started" "no PID within 20 seconds"

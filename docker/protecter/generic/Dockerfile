@@ -40,8 +40,9 @@ RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
     /build/phobos-landlock-filesystem-and-networksystem/phobos-landlock-filesystem-and-networksystem-model.c \
     /build/phobos-seccomp-networksystem/phobos-seccomp-networksystem-handoff.c
 
-# bash, coreutils, findutils, grep, sed, gawk, diffutils and make are what an exercise runs with, and all its base
-# grants. The toolchain, binutils and haproxy stay for the reasons docker/protecter/java/Dockerfile gives: the suites
+# bash, coreutils, findutils, grep, sed, gawk, diffutils and make are the tools the shell reference exercise uses and
+# its base was derived from; the base grants /usr/bin as a directory, so the other programs installed there may run
+# as well. The toolchain, binutils and haproxy stay for the reasons docker/protecter/java/Dockerfile gives: the suites
 # compile their C probes inside the image they test, readelf checks the hardening below, and haproxy is the egress
 # broker. procps and openssl are what the suites look for leftover processes and send a ClientHello with, and dialog
 # draws the menu.
