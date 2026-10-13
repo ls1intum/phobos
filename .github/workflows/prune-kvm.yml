@@ -103,14 +103,14 @@ jobs:
       - name: Name the kernel this runner image needs
         id: image
         env:
-          RUNNER_NAME: ${{ matrix.runner }}
+          KERNEL_RUNNER: ${{ matrix.runner }}
         run: |
           if [ -z "${ImageOS:-}" ] || [ -z "${ImageVersion:-}" ]; then
             printf '::error::ImageOS or ImageVersion is not set\n'
             exit 1
           fi
           script="$(sha256sum .github/scripts/build-kvm-kernel.sh | cut -d ' ' -f 1)"
-          printf 'key=kvm-kernel-v1-%s-%s-%s-%s-%s\n' "${RUNNER_NAME}" "${RUNNER_ARCH}" "${ImageOS}" "${ImageVersion}" \
+          printf 'key=kvm-kernel-v1-%s-%s-%s-%s-%s\n' "${KERNEL_RUNNER}" "${RUNNER_ARCH}" "${ImageOS}" "${ImageVersion}" \
             "${script}" | tee -a "${GITHUB_OUTPUT}"
 
       - name: Restore the kernel of this runner image
