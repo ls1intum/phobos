@@ -92,11 +92,11 @@ sorted into the layers domain, infrastructure, application and interface (`prune
 - `cfgfile.py` writes the result as a policy the parser accepts.
 
 The image, `docker/pruner/layers/Dockerfile`, adds `strace` and `python3` to the run-phase
-image of the language being pruned (`phobos-run-phase-java`, `phobos-run-phase-python`, `phobos-run-phase-c-fact`, `phobos-run-phase-r`, `phobos-run-phase-swift`, `phobos-run-phase-c-gcc` or `phobos-run-phase-cpp`). Its only base, `BasePrune.cfg`, grants nothing, so every grant in a pruned policy has a
+image of the language being pruned (`phobos-run-phase-java`, `phobos-run-phase-python`, `phobos-run-phase-c-fact`, `phobos-run-phase-r`, `phobos-run-phase-swift`, `phobos-run-phase-c-gcc`, `phobos-run-phase-cpp` or `phobos-run-phase-generic`). Its only base, `BasePrune.cfg`, grants nothing, so every grant in a pruned policy has a
 refusal behind it.
 
 `phobos-cli.sh prune <key>` runs one Compose service of the layer pruner, rebuilt first, and `phobos-cli.sh prune all`
-runs the seventeen jobs of the pipeline in order and stops at the first that fails (see
+runs the nineteen jobs of the pipeline in order and stops at the first that fails (see
 [`phobos-cli.sh`](/user/protect-anything/phobos-cli-sh)). Compose itself runs the layer pruner for every language. Build the prune image on a run-phase image and prune every
 exercise under one key by hand, in an ordinary container:
 
@@ -255,6 +255,15 @@ That base writes the whole tests directory, which holds the tester. Code that th
 `CMakeLists.txt` of the submission, can therefore change the tester's files between its phases. The GCC base has
 the same property for the whole working directory. Neither base stops a submission from tampering with its own
 grading; they stop it from reaching anything outside the working directory.
+
+`protecter/src/config/BaseLanguage-generic.cfg` is the result for the shell reference exercise,
+`exercises/generic/shell-reference`, on the generic run-phase image, the image for an exercise in none of the
+languages above. Its tests use each tool the image carries for exercises: bash, coreutils, findutils, grep, sed,
+gawk, diffutils and make. The pruner grants a program's directory rather than the program. The base therefore grants
+`/usr/bin` whole, so any program there can run, gcc's driver included. It grants none of gcc's internals or the C
+headers, so Landlock refuses a C compilation. Two observations make up the base, one on aarch64 and one on x86_64 by
+the KVM run, joined with the orchestrator's own `union_policy`. The `run-phase-generic` job of `build.yml` verifies
+it with `main.py --verify-policy` on both architectures.
 
 Each base is only as good as its reference exercise. An exercise that needs a path the
 reference never touched fails until its own exercise configuration grants that path.

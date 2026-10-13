@@ -85,6 +85,13 @@ carries `BaseLanguage-cpp.cfg`. It adds CMake, g++ and Catch2 to the GCC image's
 directory, so this base permits executing a file the run wrote there, and nowhere else. It reads `/proc` whole, for
 the sanitizer runtime. The exercise's configuration sets `mem_mb=0` here as well.
 
+The generic image, for an exercise in none of these languages, is built from
+`docker/protecter/generic/docker-compose.yaml` and carries `BaseLanguage-generic.cfg`. It starts from the official
+Debian image and carries bash, coreutils, findutils, grep, sed, gawk, diffutils and make, and its base grants what a
+shell reference exercise needs of them. The base grants `/usr/bin` as a directory, so any program there can run,
+but none of gcc's internals or the C headers, so Landlock refuses a C compilation. An exercise that needs more widens
+the base through its own configuration, or runs in an image of its own with `--image`.
+
 ## Running a command
 
 ```bash

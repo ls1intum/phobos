@@ -64,7 +64,8 @@ its missing parents, and only on Yes. A dry run creates nothing and asks for an 
 instead.
 
 **Run a command under an existing policy** asks for a policy directory, a policy in it and the
-command. On a host it first asks for the language and the exercise directory. Instead of a language
+command. On a host it first asks for the language and the exercise directory. The list starts with
+"Unknown / None of the following", the generic image for an exercise in none of the languages. Instead of a language
 you can name an image of your own, such as a grading image built on a run-phase image. The call then
 carries `--image` rather than `--language`, and the run applies the base policy that image ships.
 Writing a policy offers the same; recording does not, since `record` takes no `--image`. On request
@@ -124,7 +125,7 @@ sit inside the exercise directory: the copy is what the run reads.
 | `--project-root <dir>` | both | The directory an Ares 2 policy resolves its relative paths against. On a host it is relative to `--exercise` and must stay inside it. |
 | `--resolver <ip[:port]>` | both | The resolver the egress broker uses for an exact host name. |
 | `--debug`, `-d` | both | Report what each layer does, on stderr. |
-| `--language <java\|python\|c-fact\|r\|swift\|c-gcc\|cpp>` | host | The run-phase image. The default is `java`. |
+| `--language <java\|python\|c-fact\|r\|swift\|c-gcc\|cpp\|generic>` | host | The run-phase image. The default is `java`. |
 | `--image <name>` | host | A run-phase image by name. Not together with `--language`. |
 | `--exercise <dir>` | host | Required. |
 | `--network <name>` | host | A Docker network, `none` by default. The script refuses the network of the host and the network of another container. |
@@ -159,12 +160,12 @@ the Docker socket, and no option or option value can add them.
 
 | Key | What runs on a host |
 | --- | --- |
-| `java-gradle`, `java-maven`, `python`, `c-fact`, `r`, `swift`, `c-gcc`, `cpp` | The Compose service `prune_java_gradle`, `prune_java_maven`, `prune_python`, `prune_c_fact`, `prune_r`, `prune_swift`, `prune_c_gcc` or `prune_cpp`. |
+| `java-gradle`, `java-maven`, `python`, `c-fact`, `r`, `swift`, `c-gcc`, `cpp`, `generic` | The Compose service `prune_java_gradle`, `prune_java_maven`, `prune_python`, `prune_c_fact`, `prune_r`, `prune_swift`, `prune_c_gcc`, `prune_cpp` or `prune_generic`. |
 | `java-egress` | The service `prune_java_egress`, under the `egress` profile. |
-| `all` | The seventeen jobs of the layer pruner in order: the eight prunes, the merge, and the eight verifications. It stops at the first job that fails and ends with that job's status. |
+| `all` | The nineteen jobs of the layer pruner in order: the nine prunes, the merge, and the nine verifications. It stops at the first job that fails and ends with that job's status. |
 
 Every job is rebuilt first, so an image that already exists is never reused on a stale base. The
-key decides the run-phase image. `python` uses the Python image, `c-fact` the C image, `r` the R image, `swift` the Swift image, `c-gcc` the GCC image, `cpp` the C++ image, the others the Java image. Inside
+key decides the run-phase image. `python` uses the Python image, `c-fact` the C image, `r` the R image, `swift` the Swift image, `c-gcc` the GCC image, `cpp` the C++ image, `generic` the generic image, the others the Java image. Inside
 an image, `prune` starts `/var/tmp/helpers/exercise_pruner/src/interface/main.py` when you mount the helpers there.
 There, `java-egress` needs `--resolver <ip[:port]>`, and `all` needs a host because the merge is a
 separate image.
@@ -181,7 +182,7 @@ On a host the command line anchors Docker Compose to the checkout it sits in. A 
 ```
 
 The recording pruner runs the program with no sandbox at all, for the instructor's own reference
-program and never for a submission. `--language <java|python|c-fact|r|swift|c-gcc|cpp>` chooses the image the recorder is
+program and never for a submission. `--language <java|python|c-fact|r|swift|c-gcc|cpp|generic>` chooses the image the recorder is
 built on (the default is `java`), `--exercise <dir>` mounts the exercise read-only, and `--networked`
 selects the service that has a network. The verbs are `record`, `generate`, `check` and `diff`.
 
