@@ -1,6 +1,11 @@
-# Builds a run-phase image from an assembled context with the BuildKit cache of build-image-cached.sh, kept
-# between runs in actions/cache. One place for the four steps every workflow that builds a run-phase image
-# needs, so that the cache key, the restore order and who may write a cache cannot drift between them.
+# Builds a run-phase image from an assembled context, with the BuildKit cache of build-image-cached.sh kept between
+# runs in actions/cache when the input cache is true, and with a plain docker build when it is false. One place for
+# the steps every workflow that builds a run-phase image needs, so that the cache key, the restore order and who
+# may write a cache cannot drift between them.
+#
+# Only the Java image is cached: it is the one every pull request builds, and the repository's 10 GB of cache
+# held the layers of every image only by evicting the entries of other workflows, the guest kernel of
+# prune-kvm.yml among them.
 #
 # The cache key is a snapshot: buildkit-v1-<name>-<arch>-<recipe>-<run id>-<attempt>. A restore takes the newest
 # snapshot of the same recipe, and failing that the newest of the same image and architecture. A new snapshot is
@@ -26,6 +31,9 @@ inputs:
   fresh:
     description: "true for a build that re-resolves the base image and reruns every layer, as the weekly run does"
     required: true
+  cache:
+    description: "true to build with the layer cache, false for a plain docker build without one"
+    required: true
   buildkit-image:
     description: The BuildKit image of the docker-container builder, pinned by tag and digest
     required: true
@@ -34,6 +42,7 @@ runs:
   using: composite
   steps:
     - name: Name the recipe
+      if: ${{ inputs.cache == 'true' }}
       id: recipe
       shell: bash
       env:
@@ -48,6 +57,7 @@ runs:
         printf 'family=buildkit-v1-%s-%s-\n' "${NAME}" "${ARCH}" >> "${GITHUB_OUTPUT}"
 
     - name: Restore the layer cache
+      if: ${{ inputs.cache == 'true' }}
       id: restore
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -66,13 +76,16 @@ runs:
         FRESH: ${{ inputs.fresh }}
         MATCHED: ${{ steps.restore.outputs.cache-matched-key }}
         PREFIX: ${{ steps.recipe.outputs.prefix }}
+        CACHE: ${{ inputs.cache }}
         TRUSTED: >-
           ${{ github.event_name == 'workflow_dispatch'
           || (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule')) }}
       run: |
         keep=false
-        if [[ "${TRUSTED}" == "true" && ( "${FRESH}" == "true" || "${MATCHED}" != "${PREFIX}"* ) ]]; then
-          keep=true
+        if [[ "${CACHE}" == "true" && "${TRUSTED}" == "true" ]]; then
+          if [[ "${FRESH}" == "true" || "${MATCHED}" != "${PREFIX}"* ]]; then
+            keep=true
+          fi
         fi
         printf 'keep=%s\n' "${keep}" | tee -a "${GITHUB_OUTPUT}"
 
@@ -86,10 +99,15 @@ runs:
         CONTEXT: ${{ inputs.context }}
         FRESH: ${{ inputs.fresh }}
         KEEP: ${{ steps.decide.outputs.keep }}
+        CACHED: ${{ inputs.cache }}
       run: |
         fresh=()
         if [[ "${FRESH}" == "true" ]]; then
           fresh=(--pull --no-cache)
+        fi
+        if [[ "${CACHED}" != "true" ]]; then
+          docker build "${fresh[@]}" -f "${DOCKERFILE}" -t "${TAG}" "${CONTEXT}"
+          exit 0
         fi
         mode=read
         if [[ "${KEEP}" == "true" ]]; then

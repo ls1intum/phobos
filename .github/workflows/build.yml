@@ -62,8 +62,8 @@ env:
   FRESH_BUILD: >-
     ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.fresh))
     && 'true' || 'false' }}
-  # The BuildKit image of the builder the run-phase images are built with, pinned by tag and by the
-  # digest of its multi-architecture index, so amd64 and arm64 runners run the same release.
+  # The BuildKit image of the builder the Java run-phase image is built with, the one image whose layers
+  # are cached between runs, pinned by tag and by the digest of its multi-architecture index.
   BUILDKIT_IMAGE: moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
 concurrency:
@@ -100,6 +100,7 @@ jobs:
           tag: phobos-run-phase:ci
           context: ${{ runner.temp }}/run-phase-context
           fresh: ${{ env.FRESH_BUILD }}
+          cache: "true"
           buildkit-image: ${{ env.BUILDKIT_IMAGE }}
 
       # The prune image is the run-phase image just built plus strace, python3 and the protection
@@ -1001,6 +1002,7 @@ jobs:
           tag: phobos-run-phase-python:ci
           context: ${{ runner.temp }}/run-phase-context
           fresh: ${{ env.FRESH_BUILD }}
+          cache: "false"
           buildkit-image: ${{ env.BUILDKIT_IMAGE }}
 
       # The same ordinary containers as the Java job: --network none, and no --privileged, no
@@ -1128,6 +1130,7 @@ jobs:
           tag: phobos-run-phase-c-fact:ci
           context: ${{ runner.temp }}/run-phase-context
           fresh: ${{ env.FRESH_BUILD }}
+          cache: "false"
           buildkit-image: ${{ env.BUILDKIT_IMAGE }}
 
       - name: The shipped C base runs the FACT reference exercise both ways
@@ -1218,6 +1221,7 @@ jobs:
           tag: phobos-run-phase-r:ci
           context: ${{ runner.temp }}/run-phase-context
           fresh: ${{ env.FRESH_BUILD }}
+          cache: "false"
           buildkit-image: ${{ env.BUILDKIT_IMAGE }}
 
       - name: The shipped R base runs the R reference exercise both ways
@@ -1308,6 +1312,7 @@ jobs:
           tag: phobos-run-phase-swift:ci
           context: ${{ runner.temp }}/run-phase-context
           fresh: ${{ env.FRESH_BUILD }}
+          cache: "false"
           buildkit-image: ${{ env.BUILDKIT_IMAGE }}
 
       - name: The shipped Swift base runs the Swift reference exercise both ways
@@ -1376,6 +1381,7 @@ jobs:
           tag: phobos-run-phase-c-gcc:ci
           context: ${{ runner.temp }}/run-phase-context
           fresh: ${{ env.FRESH_BUILD }}
+          cache: "false"
           buildkit-image: ${{ env.BUILDKIT_IMAGE }}
 
       - name: The shipped GCC base runs the GCC reference exercise both ways
@@ -1444,6 +1450,7 @@ jobs:
           tag: phobos-run-phase-cpp:ci
           context: ${{ runner.temp }}/run-phase-context
           fresh: ${{ env.FRESH_BUILD }}
+          cache: "false"
           buildkit-image: ${{ env.BUILDKIT_IMAGE }}
 
       - name: The shipped C++ base runs the C++ reference exercise both ways

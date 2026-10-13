@@ -57,6 +57,7 @@ jobs:
           tag: phobos-run-phase:ci
           context: ${{ runner.temp }}/run-phase-context
           fresh: "false"
+          cache: "true"
           buildkit-image: ${{ env.BUILDKIT_IMAGE }}
 
       - name: Build the prune image on the run-phase image
