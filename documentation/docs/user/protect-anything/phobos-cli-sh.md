@@ -58,9 +58,17 @@ The menu is drawn by `dialog`, which every run-phase image ships. On a host, ins
 (`brew install dialog` on macOS, `apt-get install dialog` on Debian or Ubuntu); without it the menu
 ends with status 15 and says so. Choose with the arrow keys or the mouse and Enter; Esc goes back.
 
+The menu offers to create a directory that does not exist yet in three places: the exercise
+directory, the policy directory and where a run from submissions goes. It creates the directory with
+its missing parents, and only on Yes. A dry run creates nothing and asks for an existing directory
+instead.
+
 **Run a command under an existing policy** asks for a policy directory, a policy in it and the
-command. On a host it first asks for the language and the exercise directory. On request it sets the
-limits, the network, a resolver and the debug report. Look for policies among your own files, not in
+command. On a host it first asks for the language and the exercise directory. Instead of a language
+you can name an image of your own, such as a grading image built on a run-phase image. The call then
+carries `--image` rather than `--language`, and the run applies the base policy that image ships.
+Writing a policy offers the same; recording does not, since `record` takes no `--image`. On request
+it sets the limits, the network, a resolver and the debug report. Look for policies among your own files, not in
 the exercise. A submission can place a policy file there that grants it anything, so the menu uses a
 policy inside the exercise only after a second confirmation. The command is split into words at
 spaces. Quotes, variables and wildcards are not interpreted, so what you see is what runs.

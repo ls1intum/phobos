@@ -42,6 +42,7 @@ MENU_CHILD=""
 MENU_SIGNAL=""
 # The answers of the way through "run a command under an existing policy".
 FLOW_LANGUAGE="java"
+FLOW_IMAGE=""
 FLOW_EXERCISE=""
 FLOW_POLICY_DIRECTORY=""
 FLOW_POLICY=""
@@ -188,7 +189,7 @@ menu_log_call() {
 
 # The first box: what Phobos is and how the menu is used.
 menu_welcome() {
-  local text="Phobos runs a program, such as the tests of a student submission, with access to only what a policy allows: the files it may read or change, the hosts it may reach, and how long and how large it may run.\n\nThis menu builds a call of phobos-cli.sh from your answers, runs it, and prints it at the end, so that you can repeat it without the menu. Choose with the arrow keys or the mouse and Enter; Esc goes back."
+  local text="Phobos runs a program, such as the tests of a student submission, with access to only what a policy allows:\n- the files it may read or change\n- the hosts it may reach\n- how long and how large it may run\n\nThe main menu offers four ways through:\n1 Run a command under a policy you already have.\n2 Write a new policy by answering questions, section by section.\n3 Record your own reference program and derive a policy from what it did.\n4 Derive a policy from vetted past submissions of an exercise.\n\nThis menu builds a call of phobos-cli.sh from your answers, runs it, and prints it at the end, so that you can repeat it without the menu. Choose with the arrow keys or the mouse and Enter; Esc goes back."
   [[ "$MODE" == "image" ]] && text+="\n\nThis is an image: the command runs here, in ${CONTAINER_EXERCISE}, the working directory the image's policy sets."
   [[ "$DRY_RUN" == "yes" ]] && text+="\n\nThis is a dry run: nothing is started or written; the commands are printed instead."
   ui_message "Welcome to Phobos" "$text"
@@ -263,23 +264,37 @@ menu_flow_run() {
   menu_execute_run
 }
 
-# Asks for the language, which decides the run-phase image on a host.
+# Asks for the language, which decides the run-phase image on a host, or for an image by name.
 menu_step_language() {
+  pick_language image
+  if [[ "$UI_MOVE" == "next" ]]; then
+    FLOW_LANGUAGE="$PICKED_LANGUAGE"
+    FLOW_IMAGE="$PICKED_IMAGE"
+  fi
+  return 0
+}
+
+# Asks for the language a recording is made in. record takes no --image, since the language decides
+# the run-phase image the prune image is built on, so no image is offered by name here.
+menu_step_record_language() {
   pick_language
-  [[ "$UI_MOVE" == "next" ]] && FLOW_LANGUAGE="$PICKED_LANGUAGE"
+  if [[ "$UI_MOVE" == "next" ]]; then
+    FLOW_LANGUAGE="$PICKED_LANGUAGE"
+    FLOW_IMAGE=""
+  fi
   return 0
 }
 
 # Asks for the exercise directory a host mounts as the working directory of the command.
 menu_step_exercise() {
-  pick_directory "Exercise" "The exercise directory. It becomes the working directory of the command, which may change it as far as the policy lets it." "${FLOW_EXERCISE:-$PWD}"
+  pick_directory "Exercise" "The exercise directory. It becomes the working directory of the command, which may change it as far as the policy lets it." "${FLOW_EXERCISE:-$PWD}" create
   [[ "$UI_MOVE" == "next" ]] && FLOW_EXERCISE="$PICKED_DIRECTORY"
   return 0
 }
 
 # Asks where to look for policy files.
 menu_step_policy_directory() {
-  pick_directory "Policy directory" "Where should the menu look for policy files? Choose the instructor's own files rather than the exercise: a submission can place a policy file in the exercise." "${FLOW_POLICY_DIRECTORY:-$PWD}"
+  pick_directory "Policy directory" "Where should the menu look for policy files? Choose the instructor's own files rather than the exercise: a submission can place a policy file in the exercise." "${FLOW_POLICY_DIRECTORY:-$PWD}" create
   [[ "$UI_MOVE" == "next" ]] && FLOW_POLICY_DIRECTORY="$PICKED_DIRECTORY"
   return 0
 }
@@ -380,7 +395,11 @@ menu_build_run() {
   local policy="$1"
   local -a host=()
   local -a root=()
-  [[ "$MODE" == "host" ]] && host=(--language "$FLOW_LANGUAGE" --exercise "$FLOW_EXERCISE")
+  if [[ "$MODE" == "host" && -n "$FLOW_IMAGE" ]]; then
+    host=(--image "$FLOW_IMAGE" --exercise "$FLOW_EXERCISE")
+  elif [[ "$MODE" == "host" ]]; then
+    host=(--language "$FLOW_LANGUAGE" --exercise "$FLOW_EXERCISE")
+  fi
   [[ -n "$FLOW_PROJECT_ROOT" ]] && root=(--project-root "$FLOW_PROJECT_ROOT")
   FLOW_ARGV=(run "${host[@]}" --config "$policy" "${root[@]}" "${FLOW_OPTIONS[@]}" -- "${FLOW_WORDS[@]}")
   FLOW_SHOWN=(run "${host[@]}" --config "$FLOW_POLICY" "${root[@]}" "${FLOW_OPTIONS[@]}" -- "${FLOW_WORDS[@]}")
@@ -743,7 +762,7 @@ menu_flow_record() {
     return 0
   fi
   FLOW_PROJECT_ROOT=""
-  [[ "$MODE" == "host" ]] && steps+=(language record_exercise networked)
+  [[ "$MODE" == "host" ]] && steps+=(record_language record_exercise networked)
   steps+=(recording command)
   menu_walk "${steps[@]}"
   [[ "$UI_MOVE" == "next" ]] || return 0
@@ -1011,7 +1030,7 @@ menu_step_submissions_declaration() {
 menu_step_submissions_output() {
   local directory
   while :; do
-    pick_directory "Output" "Where should the run go? The menu makes a new directory in it, and the command keeps everything there: the staged submissions, what the pruner wrote, the candidate policy and its report." "${FLOW_OUTPUT:-$PWD}"
+    pick_directory "Output" "Where should the run go? The menu makes a new directory in it, and the command keeps everything there: the staged submissions, what the pruner wrote, the candidate policy and its report." "${FLOW_OUTPUT:-$PWD}" create
     [[ "$UI_MOVE" == "next" ]] || return 0
     directory="$PICKED_DIRECTORY"
     if [[ "$directory" != "$FLOW_TEMPLATE" && "$directory" != "${FLOW_TEMPLATE}/"* && "$FLOW_TEMPLATE" != "${directory}/"*
@@ -1078,6 +1097,7 @@ menu_submissions_run() {
   SUBS_KEY="$(cat "${FLOW_RUN}/key")"
   subs_language
   FLOW_LANGUAGE="$SUBS_LANGUAGE"
+  FLOW_IMAGE=""
   [[ "$MENU_STATUS" == "1" ]] && ui_message "Rows" "The candidate did not match every submission's reference. Choose the rows below, and the menu verifies the choice again."
   return 0
 }

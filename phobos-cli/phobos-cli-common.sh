@@ -223,9 +223,15 @@ check_network() {
   [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || fail_usage "--network takes a Docker network name, not '$1'"
 }
 
+# Returns 0 when $1 is the name of an image as --image takes it, and 1 otherwise. The menu asks with
+# it too, so that both refuse the same names.
+image_name() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]]
+}
+
 # Ends the script with a usage error unless $1 is the name of an image.
 check_image_name() {
-  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]] || fail_usage "--image takes an image name, not '$1'"
+  image_name "$1" || fail_usage "--image takes an image name, not '$1'"
 }
 
 # Ends the script with a usage error unless $1 is a resolver as phobos.sh takes it: an address with an

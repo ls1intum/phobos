@@ -26,45 +26,114 @@ PICK_SEARCH_DEPTH=8
 PICK_SEARCH_LIMIT=200
 # What the choices were answered with.
 PICKED_LANGUAGE=""
+PICKED_IMAGE=""
 PICKED_DIRECTORY=""
 PICKED_POLICY=""
 PICKED_WORDS=()
 # The policy files the last search found.
 PICK_FOUND=()
 
-# Asks for the language of the exercise, which decides the run-phase image. PICKED_LANGUAGE holds it
-# when UI_MOVE is next.
+# Asks for the language of the exercise, which decides the run-phase image. With $1 set to image it
+# first offers to name an image instead, for a command that runs it with --image. When UI_MOVE is
+# next, PICKED_LANGUAGE holds the language and PICKED_IMAGE is empty, or PICKED_IMAGE holds the image
+# and PICKED_LANGUAGE is empty.
 pick_language() {
   local -a items=()
   local index
+  [[ "${1:-}" == "image" ]] && items+=(0 "Other image (name it)")
   for index in "${!PICK_LANGUAGES[@]}"; do
     items+=("$((index + 1))" "${PICK_LANGUAGE_TITLES[index]}")
   done
-  ui_menu "Language" "Which language is the exercise written in? It decides the image the command runs in." "${items[@]}"
-  [[ "$UI_MOVE" == "next" ]] && PICKED_LANGUAGE="${PICK_LANGUAGES[UI_RESULT - 1]}"
-  return 0
+  while :; do
+    ui_menu "Language" "Which language is the exercise written in? It decides the image the command runs in." "${items[@]}"
+    [[ "$UI_MOVE" == "next" ]] || return 0
+    if [[ "$UI_RESULT" != "0" ]]; then
+      PICKED_LANGUAGE="${PICK_LANGUAGES[UI_RESULT - 1]}"
+      PICKED_IMAGE=""
+      return 0
+    fi
+    pick_image
+    if [[ "$UI_MOVE" == "next" ]]; then
+      PICKED_LANGUAGE=""
+      return 0
+    fi
+  done
+}
+
+# Asks for the name of a run-phase image, such as a grading image that embeds Phobos, until the name
+# is one --image takes. PICKED_IMAGE holds it when UI_MOVE is next. The run applies the base policy
+# that image ships, so naming one grants nothing beyond what the image itself grants. Assumes
+# IMAGE_HOME is set.
+pick_image() {
+  local offered="$PICKED_IMAGE"
+  while :; do
+    ui_input "Image" "The name of a run-phase image that holds Phobos in ${IMAGE_HOME}, such as a grading image built on one. The command runs in it under the base policy that image ships." "$offered"
+    [[ "$UI_MOVE" == "next" ]] || return 0
+    offered="$UI_RESULT"
+    if image_name "$offered"; then
+      PICKED_IMAGE="$offered"
+      return 0
+    fi
+    ui_message "Image" "That is not an image name. Give one such as registry.example/phobos:latest: letters, digits and . _ / : @ -, beginning with a letter or a digit."
+  done
 }
 
 # Asks for a directory under the title $1 with the prompt $2, offering $3, until the answer names an
-# existing directory. PICKED_DIRECTORY holds its physical path when UI_MOVE is next.
+# existing directory. With $4 set to create, a path that names nothing yet is created after a
+# question, except in a dry run, which creates nothing. PICKED_DIRECTORY holds its physical path when
+# UI_MOVE is next. Assumes DRY_RUN is set.
 pick_directory() {
   local title="$1"
   local prompt="$2"
   local offered="$3"
+  local create="${4:-}"
+  local usable
+  local asked
   local physical
   while :; do
     ui_input "$title" "$prompt" "$offered"
     [[ "$UI_MOVE" == "next" ]] || return 0
     offered="$UI_RESULT"
     ui_printable "$offered"
-    if [[ "$REPLY" == "yes" && -n "$offered" && -d "$offered" ]]; then
+    usable="$REPLY"
+    [[ -n "$offered" ]] || usable="no"
+    REPLY=""
+    [[ "$usable" == "yes" && "$create" == "create" ]] && pick_create_directory "$title" "$offered"
+    asked="$REPLY"
+    if [[ "$usable" == "yes" && -d "$offered" ]]; then
       physical="$(cd -- "$offered" && pwd -P; printf x)"
       physical="${physical%x}"
       PICKED_DIRECTORY="${physical%$'\n'}"
       return 0
     fi
-    ui_message "$title" "That is not an existing directory. Give the path of one, absolute or relative to the directory the menu was started in."
+    [[ "$asked" == "asked" ]] || pick_directory_refused "$title" "$create" "$offered"
   done
+}
+
+# Offers, under the title $1, to create the directory $2 with its missing parents when $2 names
+# nothing yet, and creates it on Yes. Asks nothing for a path that exists, of whatever kind, nor in a
+# dry run. Sets REPLY to asked when it asked, whatever the answer, and to nothing otherwise, and
+# leaves UI_MOVE at next, since Esc only declines. Assumes $2 holds no control character and
+# DRY_RUN is set.
+pick_create_directory() {
+  REPLY=""
+  [[ -e "$2" || -L "$2" || "$DRY_RUN" == "yes" ]] && return 0
+  ui_yesno "$1" "${2} does not exist. Create it?"
+  if [[ "$UI_MOVE" == "next" && "$UI_ANSWER" == "yes" ]]; then
+    mkdir -p -- "$2" 2> /dev/null || ui_message "$1" "${2} could not be created. Give another directory, or create it yourself first."
+  fi
+  UI_MOVE="next"
+  REPLY="asked"
+  return 0
+}
+
+# Says, under the title $1, that the answer $3 named no existing directory, and, where $2 is create,
+# this is a dry run and $3 names nothing at all, why it was not offered to be created. Assumes
+# DRY_RUN is set.
+pick_directory_refused() {
+  local text="That is not an existing directory. Give the path of one, absolute or relative to the directory the menu was started in."
+  [[ "$2" == "create" && "$DRY_RUN" == "yes" && -n "$3" && ! -e "$3" && ! -L "$3" ]] && text+=" A dry run creates nothing; without --dry-run the menu offers to create it."
+  ui_message "$1" "$text"
 }
 
 # Sets PICK_FOUND to the policy files beneath the directory $1, sorted and at most PICK_SEARCH_LIMIT
