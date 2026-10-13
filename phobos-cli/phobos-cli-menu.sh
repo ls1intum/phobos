@@ -11,6 +11,9 @@
 #
 # Sourced by phobos-cli.sh alone, at the top level, after phobos-cli-common.sh, phobos-cli-ui.sh and
 # phobos-cli-pick.sh. It starts nothing while it is sourced.
+# Some values set here, SUBS_KEY among them, are read by the other files of this folder and never in
+# this one, so SC2034 fires on them by design when this file is checked on its own.
+# shellcheck disable=SC2034
 
 # The calls of phobos-cli.sh the menu has started, each as bash would quote it, and the status each
 # ended with.
@@ -55,6 +58,21 @@ FLOW_REPLACE="no"
 FLOW_RECORDING="reference"
 FLOW_NETWORKED="no"
 FLOW_RESOLVER=""
+# Directories besides the exercise that a policy is never saved in, such as the template and the
+# submissions of a policy from submissions.
+FLOW_PROTECTED=()
+# The answers of the way through "derive a policy from past student submissions": the template, the
+# directory of the submissions and those chosen in it, where the run goes, whether to verify, the run
+# directory the command made, and the status a kept failed verification leaves the menu to end with.
+FLOW_TEMPLATE=""
+FLOW_SUBMISSIONS=""
+FLOW_CHOSEN=()
+FLOW_OUTPUT=""
+FLOW_VERIFY="yes"
+FLOW_RUN=""
+FLOW_KEPT=0
+# The policy file the rows chosen were written to.
+FLOW_SELECTED=""
 # The call the answers make, as phobos-cli.sh is given it, and as it is shown.
 FLOW_ARGV=()
 FLOW_SHOWN=()
@@ -181,7 +199,11 @@ menu_welcome() {
 menu_main() {
   local record_label="Record a reference program and derive a policy"
   local record_reason
+  local submissions_label="Derive a policy from past student submissions"
+  local submissions_reason=""
   ui_require_dialog
+  [[ "$MODE" == "host" && "$LAYOUT" == "checkout" ]] || submissions_reason="it needs a host with a checkout of the repository and Docker"
+  [[ -n "$submissions_reason" ]] && submissions_label+=" (not here)"
   record_unavailable
   record_reason="$REPLY"
   [[ -n "$record_reason" ]] && record_label+=" (not here)"
@@ -194,14 +216,15 @@ menu_main() {
       1 "Run a command under an existing policy" \
       2 "Write a new policy step by step" \
       3 "$record_label" \
-      4 "Derive a policy from past student submissions (in a later version)" \
+      4 "$submissions_label" \
       5 "Exit"
     [[ "$UI_MOVE" == "next" && "$UI_RESULT" != "5" ]] || menu_finish 0
+    FLOW_PROTECTED=()
     case "$UI_RESULT" in
       1) menu_flow_run ;;
       2) menu_flow_write ;;
       3) menu_flow_record "$record_reason" ;;
-      *) ui_message "Not yet" "This part of the menu arrives in a later version of Phobos." ;;
+      4) menu_flow_submissions "$submissions_reason" ;;
     esac
     [[ "$MENU_RAN" == "yes" ]] && menu_finish "$MENU_STATUS"
   done
@@ -458,11 +481,12 @@ menu_flow_write() {
 
 # Sets REPLY to the reason the policy file $1 cannot be written there, or to empty when it can, and
 # FLOW_DESTINATION to its path with the directory made physical. A policy is never kept inside the
-# exercise, which the sandboxed command may change, and an existing one is replaced only when it is
-# a regular file, never through a link.
+# exercise, which the sandboxed command may change, nor inside a directory of FLOW_PROTECTED, and an
+# existing one is replaced only when it is a regular file, never through a link.
 menu_destination_problem() {
   local directory
   local exercise
+  local protected
   REPLY=""
   ui_printable "$1"
   if [[ "$REPLY" != "yes" || "$1" != *.cfg || "$1" == */ ]]; then
@@ -480,9 +504,15 @@ menu_destination_problem() {
   menu_exercise_directory
   exercise="$REPLY"
   REPLY=""
-  if [[ "$directory" == "$exercise" || "$directory" == "${exercise}/"* ]]; then
-    REPLY="That lies inside the exercise directory, which the sandboxed command may change. Keep the policy with your own files."
-  elif [[ -L "$FLOW_DESTINATION" || ( -e "$FLOW_DESTINATION" && ! -f "$FLOW_DESTINATION" ) ]]; then
+  for protected in "$exercise" "${FLOW_PROTECTED[@]}"; do
+    [[ -n "$protected" ]] || continue
+    if [[ "$directory" == "$protected" || "$directory" == "${protected}/"* ]]; then
+      REPLY="That lies inside ${protected}, which a submission can shape. Keep the policy with your own files."
+      [[ "$protected" == "$exercise" ]] && REPLY="That lies inside the exercise directory, which the sandboxed command may change. Keep the policy with your own files."
+      return 0
+    fi
+  done
+  if [[ -L "$FLOW_DESTINATION" || ( -e "$FLOW_DESTINATION" && ! -f "$FLOW_DESTINATION" ) ]]; then
     REPLY="${FLOW_DESTINATION} exists and is not a regular file. Choose another name."
   fi
   return 0
@@ -870,4 +900,288 @@ menu_step_run_now() {
   ui_yesno "Run" "$text"
   [[ "$UI_MOVE" == "next" && "$UI_ANSWER" == "no" ]] && UI_MOVE="stop"
   return 0
+}
+
+# The way through "derive a policy from past student submissions": the questions, the run of
+# phobos-cli.sh submissions, then the rows of its policy to choose from, a verification of the
+# choice, the save and, when wanted, a command run under it. Takes the reason it is not possible
+# here, empty when it is. Since the submissions have run, the menu ends after this way through; a
+# verification that failed and whose policy was kept all the same leaves it to end with 1.
+menu_flow_submissions() {
+  MENU_RAN="no"
+  if [[ -n "$1" ]]; then
+    ui_message "Submissions" "A policy from submissions is not possible here: ${1}."
+    return 0
+  fi
+  menu_walk submissions_warning submissions_template submissions_directory submissions_choice \
+    submissions_declaration submissions_output submissions_verify submissions_confirm
+  [[ "$UI_MOVE" == "next" ]] || return 0
+  MENU_RAN="yes"
+  menu_submissions_run
+  [[ -n "$FLOW_RUN" ]] || return 0
+  FLOW_PROTECTED=("$FLOW_TEMPLATE" "$FLOW_SUBMISSIONS" "$FLOW_OUTPUT")
+  FLOW_KEPT=0
+  FLOW_EXERCISE=""
+  FLOW_PROJECT_ROOT=""
+  menu_walk submissions_rows destination save_selected run_now exercise command advanced confirm
+  [[ "$UI_MOVE" == "next" ]] && menu_execute_run
+  (( FLOW_KEPT != 0 && MENU_STATUS == 0 )) && MENU_STATUS="$FLOW_KEPT"
+  return 0
+}
+
+# Warns that the pruner runs every submission without Phobos once, so that a submission can shape its
+# own result, and goes on only on Yes.
+menu_step_submissions_warning() {
+  ui_yesno "Policy from submissions" "Each submission is pruned in a fresh container without network, but the pruner runs it once without Phobos, so a submission can shape its own result, and that result goes into the shared policy. Use past submissions you have vetted and consider harmless, never untrusted ones.\n\nGo on?" no
+  [[ "$UI_MOVE" == "next" && "$UI_ANSWER" == "no" ]] && UI_MOVE="back"
+  return 0
+}
+
+# Asks for the template: the exercise's test repository, with an assignment directory the submissions
+# replace.
+menu_step_submissions_template() {
+  pick_directory "Template" "The exercise's template: its tests, its build script, a prune.json naming the key, and an assignment directory, which each submission replaces." "${FLOW_TEMPLATE:-$PWD}"
+  [[ "$UI_MOVE" == "next" ]] && FLOW_TEMPLATE="$PICKED_DIRECTORY"
+  return 0
+}
+
+# Asks for the directory that holds one directory per submission, never inside the template.
+menu_step_submissions_directory() {
+  while :; do
+    pick_directory "Submissions" "The directory that holds one directory per submission, each with the student's material only." "${FLOW_SUBMISSIONS:-$PWD}"
+    [[ "$UI_MOVE" == "next" ]] || return 0
+    if [[ "$PICKED_DIRECTORY" != "$FLOW_TEMPLATE" && "$PICKED_DIRECTORY" != "${FLOW_TEMPLATE}/"* && "$FLOW_TEMPLATE" != "${PICKED_DIRECTORY}/"* ]]; then
+      FLOW_SUBMISSIONS="$PICKED_DIRECTORY"
+      return 0
+    fi
+    ui_message "Submissions" "The submissions and the template must not lie in one another."
+  done
+}
+
+# Offers the directories in the submissions directory, all ticked, and asks again for an empty choice,
+# which the command would read as every submission. A hidden directory, and one whose name holds a
+# control character, is not offered.
+menu_step_submissions_choice() {
+  local -a names=()
+  local -a items=()
+  local entry
+  local index
+  local tag
+  while IFS= read -r -d '' entry; do
+    entry="${entry##*/}"
+    [[ "$entry" == .* ]] && continue
+    ui_printable "$entry"
+    [[ "$REPLY" == "yes" ]] && names+=("$entry")
+  done < <(find "$FLOW_SUBMISSIONS" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) -print0 | sort -z)
+  if (( ${#names[@]} == 0 )); then
+    ui_message "Submissions" "${FLOW_SUBMISSIONS} holds no submission directory."
+    UI_MOVE="back"
+    return 0
+  fi
+  for index in "${!names[@]}"; do
+    items+=("$((index + 1))" "./${names[index]}" on)
+  done
+  while :; do
+    ui_checklist "Submissions" "Which submissions should the policy be derived from? A submission that holds a link or a special file is left out by the command, and says so." "${items[@]}"
+    [[ "$UI_MOVE" == "next" ]] || return 0
+    if (( ${#UI_FIELDS[@]} > 0 )); then
+      FLOW_CHOSEN=()
+      for tag in "${UI_FIELDS[@]}"; do
+        FLOW_CHOSEN+=("${names[tag - 1]}")
+      done
+      return 0
+    fi
+    ui_message "Submissions" "Choose at least one submission."
+  done
+}
+
+# Asks for the declaration the command needs: that the template's assignment directory holds only
+# student material, which each submission replaces. No leads back.
+menu_step_submissions_declaration() {
+  ui_yesno "Template" "Does the template's assignment directory hold only student material, which each submission replaces, while the tests, the build script and prune.json lie outside it?" no
+  if [[ "$UI_MOVE" == "next" && "$UI_ANSWER" == "no" ]]; then
+    ui_message "Template" "Then a submission could replace what the runs trust, so the command refuses the template. Move the trusted files out of assignment first."
+    UI_MOVE="back"
+  fi
+  return 0
+}
+
+# Asks where the run goes: an existing directory outside the template and the submissions, in which
+# the menu makes a new directory for this run.
+menu_step_submissions_output() {
+  local directory
+  while :; do
+    pick_directory "Output" "Where should the run go? The menu makes a new directory in it, and the command keeps everything there: the staged submissions, what the pruner wrote, the candidate policy and its report." "${FLOW_OUTPUT:-$PWD}"
+    [[ "$UI_MOVE" == "next" ]] || return 0
+    directory="$PICKED_DIRECTORY"
+    if [[ "$directory" != "$FLOW_TEMPLATE" && "$directory" != "${FLOW_TEMPLATE}/"* && "$FLOW_TEMPLATE" != "${directory}/"*
+          && "$directory" != "$FLOW_SUBMISSIONS" && "$directory" != "${FLOW_SUBMISSIONS}/"* && "$FLOW_SUBMISSIONS" != "${directory}/"* ]]; then
+      FLOW_OUTPUT="$directory"
+      return 0
+    fi
+    ui_message "Output" "The output must not lie in the template or the submissions, nor they in it."
+  done
+}
+
+# Asks whether every submission is to be verified under the policy, which replays each one again.
+menu_step_submissions_verify() {
+  ui_yesno "Verify" "Verify every submission under the policy, which replays each one in a fresh container? Without it, the menu checks only that the layers start under the policy."
+  [[ "$UI_MOVE" == "next" ]] && FLOW_VERIFY="$UI_ANSWER"
+  return 0
+}
+
+# Sets FLOW_ARGV and FLOW_SHOWN to the call of phobos-cli.sh submissions the answers make, with the
+# output directory $1.
+menu_build_submissions() {
+  local -a chosen=()
+  local -a verify=()
+  local name
+  for name in "${FLOW_CHOSEN[@]}"; do
+    chosen+=(--submission "$name")
+  done
+  [[ "$FLOW_VERIFY" == "no" ]] && verify=(--no-verify)
+  FLOW_ARGV=(submissions --template "$FLOW_TEMPLATE" --submissions "$FLOW_SUBMISSIONS" --output "$1" "${chosen[@]}"
+    "${verify[@]}" --assignment-is-student-code)
+  FLOW_SHOWN=("${FLOW_ARGV[@]}")
+  return 0
+}
+
+# Shows the call the answers make and asks whether to start it.
+menu_step_submissions_confirm() {
+  local shown
+  menu_build_submissions "${FLOW_OUTPUT}/phobos-submissions.<new>"
+  shown="$(printf '%q ' phobos-cli.sh "${FLOW_SHOWN[@]}")"
+  ui_yesno "Start it?" "The answers make this call, which prunes every submission chosen and can take a while:\n\n${shown% }\n\nStart it now?"
+  [[ "$UI_MOVE" == "next" && "$UI_ANSWER" == "no" ]] && UI_MOVE="back"
+  return 0
+}
+
+# Starts phobos-cli.sh submissions in a new directory beneath the output and sets FLOW_RUN to the run
+# directory it made there, and FLOW_LANGUAGE to the language of its key. A dry run makes nothing and
+# leaves FLOW_RUN empty. A status other than 0 or 1, or a run without rows, ends the menu with it.
+menu_submissions_run() {
+  local holder="$FLOW_OUTPUT"
+  local entry
+  FLOW_RUN=""
+  [[ "$DRY_RUN" == "yes" ]] || holder="$(mktemp -d "${FLOW_OUTPUT}/phobos-submissions.XXXXXXXX")"
+  menu_build_submissions "$holder"
+  menu_spawn "${FLOW_ARGV[@]}"
+  if [[ "$DRY_RUN" == "yes" ]]; then
+    MENU_NOTES+=("A dry run prunes nothing, so there are no rows yet to choose from.")
+    return 0
+  fi
+  [[ "$MENU_STATUS" == "0" || "$MENU_STATUS" == "1" ]] || menu_finish "$MENU_STATUS"
+  while IFS= read -r -d '' entry; do
+    FLOW_RUN="$entry"
+  done < <(find "$holder" -mindepth 1 -maxdepth 1 -type d -name 'submissions-run.*' -print0)
+  [[ -n "$FLOW_RUN" && -f "${FLOW_RUN}/union/rows.tsv" && -f "${FLOW_RUN}/key" ]] || menu_finish "${EXIT_ENVIRONMENT}"
+  SUBS_KEY="$(cat "${FLOW_RUN}/key")"
+  subs_language
+  FLOW_LANGUAGE="$SUBS_LANGUAGE"
+  [[ "$MENU_STATUS" == "1" ]] && ui_message "Rows" "The candidate did not match every submission's reference. Choose the rows below, and the menu verifies the choice again."
+  return 0
+}
+
+# Writes the rows chosen, by their positions in $2 onwards, of the rows in the file $1 as a policy
+# file in the run directory, sections in the order of a policy file, and sets FLOW_SELECTED to it.
+menu_write_selection() {
+  local table="$1"
+  local -a lines=()
+  local -a chosen=()
+  local section
+  local tag
+  local count
+  local of
+  local kind
+  local entry
+  local text=""
+  local body
+  local number=1
+  shift
+  mapfile -t lines < "$table"
+  for tag in "$@"; do
+    chosen+=("${lines[tag - 1]}")
+  done
+  for section in "${WIZARD_SECTIONS[@]}"; do
+    body=""
+    for entry in "${chosen[@]}"; do
+      IFS=$'\t' read -r count of kind entry <<<"$entry"
+      [[ "$kind" == "$section" ]] && body+="${entry}"$'\n'
+    done
+    [[ -n "$body" ]] && text+="[${section}]"$'\n'"${body}"
+  done
+  while [[ -e "${FLOW_RUN}/selected-${number}.cfg" ]]; do
+    number=$((number + 1))
+  done
+  FLOW_SELECTED="${FLOW_RUN}/selected-${number}.cfg"
+  printf '%s' "$text" > "$FLOW_SELECTED"
+  return 0
+}
+
+# Offers every row of the candidate, all ticked, the rarest first with how many submissions' policies
+# hold it, writes the choice as a policy, and has phobos-cli.sh submissions verify it against the run:
+# the layers must start under it, and unless verifying was declined every submission must match. A
+# limit of 0, which switches it off, needs a separate Yes. A choice that did not match is kept only on
+# Yes, and the menu then ends with 1; any other failure leads back to the rows on Yes and ends the
+# menu with its status on No.
+menu_step_submissions_rows() {
+  local table="${FLOW_RUN}/union/rows.tsv"
+  local -a items=()
+  local -a zero=()
+  local -a layers=()
+  local line
+  local count
+  local of
+  local kind
+  local entry
+  local index=0
+  local tag
+  local -a lines=()
+  mapfile -t lines < "$table"
+  for line in "${lines[@]}"; do
+    IFS=$'\t' read -r count of kind entry <<<"$line"
+    index=$((index + 1))
+    items+=("$index" "[${kind}] ${entry} (in ${count} of ${of})" on)
+  done
+  [[ "$FLOW_VERIFY" == "no" ]] && layers=(--layers-only)
+  while :; do
+    ui_checklist "Rows" "Untick what the policy should not grant. The rows the fewest submissions needed come first and deserve a second look; a row in no submission's policy was added so that the policy stands beside the image's base." "${items[@]}"
+    [[ "$UI_MOVE" == "next" ]] || return 0
+    zero=()
+    for tag in "${UI_FIELDS[@]}"; do
+      IFS=$'\t' read -r count of kind entry <<<"${lines[tag - 1]}"
+      [[ "$kind" == "limits" && "${entry#*=}" =~ ^0(\.000)?$ ]] && zero+=("${entry%%=*}")
+    done
+    if (( ${#zero[@]} > 0 )); then
+      ui_yesno "Rows" "A value of 0 switches these limits off for every run under this policy: ${zero[*]}.\n\nKeep them off?" no
+      [[ "$UI_MOVE" == "next" && "$UI_ANSWER" == "yes" ]] || continue
+    fi
+    menu_write_selection "$table" "${UI_FIELDS[@]}"
+    FLOW_ARGV=(submissions verify --run "$FLOW_RUN" --policy "$FLOW_SELECTED" "${layers[@]}")
+    FLOW_SHOWN=("${FLOW_ARGV[@]}")
+    menu_spawn "${FLOW_ARGV[@]}"
+    case "$MENU_STATUS" in
+      0)
+        FLOW_KEPT=0
+        UI_MOVE="next"
+        return 0
+        ;;
+      1)
+        ui_yesno "Rows" "Under the rows chosen, a submission did not match its reference. Keep them all the same? The menu then ends with 1." no
+        if [[ "$UI_MOVE" == "next" && "$UI_ANSWER" == "yes" ]]; then
+          FLOW_KEPT=1
+          return 0
+        fi
+        ;;
+      *)
+        ui_yesno "Rows" "The check of the rows chosen ended with status ${MENU_STATUS}; the output above the menu says why. Change the choice?"
+        [[ "$UI_MOVE" == "next" && "$UI_ANSWER" == "yes" ]] || menu_finish "$MENU_STATUS"
+        ;;
+    esac
+  done
+}
+
+# Saves the rows chosen to the destination chosen, through the same save as any policy.
+menu_step_save_selected() {
+  menu_save_policy "$FLOW_SELECTED"
 }

@@ -755,6 +755,16 @@ jobs:
           command -v script
           bash protecter/test/integration/phobos_cli_menu.sh
 
+      # phobos-cli.sh submissions with a stand-in docker: the template it refuses, how it stages each
+      # submission (names, links and special files left out, the input unchanged), the exact container
+      # calls with no network, the limits, read-only inputs and no privilege, the status it ends with
+      # for each outcome of a step, its verify form, and the menu's way through it.
+      - name: The submissions command stages, calls and ends as its outcomes say
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
+        run: |
+          command -v script
+          bash protecter/test/integration/phobos_cli_submissions.sh
+
       # The manual, usage errors, the command line and streams, the override options, the tail
       # flags and policy files that are odd or empty.
       - name: The command line and odd policy files behave as the manual says
@@ -785,6 +795,37 @@ jobs:
              status=$?
              grep -q "Welcome to Phobos" /tmp/menu.typescript && grep -q "Main menu" /tmp/menu.typescript \
                && exit "${status}"'
+
+  # phobos-cli.sh submissions with real containers on the Java image this run built: the fixture's
+  # submissions are pruned, merged, verified and checked again with an edited policy, and a submission
+  # that tries to change what it must not is refused at the seal. Every submission is pruned for real,
+  # which takes a while, so it runs on full runs only.
+  cli-submissions:
+    name: Protecter e2e submissions
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.scope == 'full') }}
+    needs: reference
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the Java run-phase image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: java-run-phase-images
+          path: ${{ runner.temp }}/images
+
+      - name: Load the Java run-phase image
+        shell: bash
+        run: zstd --decompress --stdout "${RUNNER_TEMP}/images/java-run-phase-images.tar.zst" | docker load
+
+      - name: Submissions are pruned, merged and verified, and a forged result is refused
+        run: bash protecter/test/integration/phobos_cli_submissions_docker.sh phobos-run-phase:ci
 
   exercise-pruner:
     name: Exercise-Pruner e2e tests

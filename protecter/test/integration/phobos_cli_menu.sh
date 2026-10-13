@@ -209,9 +209,6 @@ if head -1 "${DIALOG_LOG}" | grep -q -- '--msgbox' && sed -n 2p "${DIALOG_LOG}" 
 if grep -q -- '--output-fd 3' "${DIALOG_LOG}" && ! grep -q -- '--no-mouse' "${DIALOG_LOG}"; then ok "dialog answers on descriptor 3 and keeps the mouse"; else bad "dialog answers on descriptor 3 and keeps the mouse" "$(cat "${DIALOG_LOG}")"; fi
 menu --dry-run -- "0|" "0|5"
 check "the Exit entry ends the menu with 0" 0 "${STATUS}"
-menu --dry-run -- "0|" "0|4" "0|" "5|"
-check "entry 4 ends with 0 after saying it comes later" 0 "${STATUS}"
-if asked 'later version'; then ok "entry 4 says it comes in a later version"; else bad "entry 4 says it comes in a later version" "$(cat "${DIALOG_LOG}")"; fi
 
 echo "== a dialog that misbehaves"
 menu --dry-run -- "6|"
@@ -580,6 +577,9 @@ elif [[ -e "${HELPERS}" || -e "${RECORDINGS}" ]]; then
 else
   menu -- "0|" "0|3" "0|" "5|"
   if asked 'not possible here: it needs the prune image'; then ok "without the helpers of the pruners, recording says why it is not possible"; else bad "without the helpers of the pruners, recording says why it is not possible" "$(cat "${DIALOG_LOG}")"; fi
+  menu -- "0|" "0|4" "0|" "5|"
+  if asked 'not possible here: it needs a host'; then ok "inside an image, a policy from submissions says why it is not possible"; else bad "inside an image, a policy from submissions says why it is not possible" "$(cat "${DIALOG_LOG}")"; fi
+  if grep -q 'past student submissions (not here)' "${DIALOG_LOG}"; then ok "and the main menu marks it"; else bad "and the main menu marks it" "$(cat "${DIALOG_LOG}")"; fi
   if grep -q 'derive a policy (not here)' "${DIALOG_LOG}"; then ok "and the main menu marks it"; else bad "and the main menu marks it" "$(cat "${DIALOG_LOG}")"; fi
   MADE_HELPERS="yes"
   MADE_RECORDINGS="yes"

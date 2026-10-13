@@ -15,6 +15,9 @@ USAGE
   phobos-cli.sh [--mode host|image] [--dry-run] prune <java-gradle|java-maven|python|c-fact|r|swift|c-gcc|cpp|java-egress|all>
   phobos-cli.sh [--mode host|image] [--dry-run] record [options] <record|generate|check|diff> [args...]
   phobos-cli.sh [--mode host|image] [--dry-run] build <java|python|c-fact|r|swift|c-gcc|cpp>
+  phobos-cli.sh [--mode host] [--dry-run] submissions --template <dir> --submissions <dir> --output <dir>
+                [--submission <name>]... [--no-verify] --assignment-is-student-code
+  phobos-cli.sh [--mode host] [--dry-run] submissions verify --run <dir> --policy <file> [--layers-only]
   phobos-cli.sh [--mode host|image] [--dry-run]           on a terminal: the menu
   phobos-cli.sh --help
 
@@ -64,6 +67,18 @@ record
 
 build
   Host only: assembles build/run-phase-context and builds the image of the language.
+
+submissions
+  Host only: a policy for an exercise from past student submissions. Each child directory of
+  --submissions (or each one named by --submission) replaces the assignment directory of a copy of
+  --template, is pruned by the layer pruner in a fresh container without network, and the policies
+  are merged beside the grading bases of the run-phase image of the template's key, which must be
+  built. The layers must start under the result with every submission, and unless --no-verify every
+  submission must match its own reference under it. Everything goes to a new directory beneath
+  --output. The pruner runs each submission once without Phobos, so a submission can shape its own
+  result: use vetted, harmless past submissions only, never untrusted ones. Ends with 0 for a
+  verified (or, with --no-verify, an unverified) policy, 1 when a submission did not match, 15 when
+  a step failed. verify checks an edited policy against such a run again.
 
 EXIT STATUSES
   The command's own, when it ran; 2 for a call made the wrong way; 15 (PHB-ERUNTIME) when a

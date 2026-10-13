@@ -74,6 +74,15 @@ rest exists to take privileges away. None of the following is a vulnerability.
   `protecter/src/` names it. It refuses the grading options and a command whose words name a file of the layers
   (a wrapper script that starts them is not caught); the policy it generates covers only what the
   recorded sessions did, and says so.
+  `phobos-cli.sh submissions` runs the layer pruner on past student submissions, each staged over the
+  exercise's template, and merges their policies. The pruner runs each baseline without Phobos, so a
+  submission can shape its own pruned policy and so the merged one: this rests on the instructor's
+  assumption that the submissions are vetted and harmless, and is no defence against a malicious
+  one. What it does hold is that each submission runs in a fresh container without network, with
+  only its own staged exercise (read-only) and its own output directory mounted, so it cannot change
+  the template, the helpers, the extracted grading bases, another submission's input or result, or
+  any host file outside its own output, and that every input is sealed by its digest and checked
+  again before it is merged or verified.
   Nothing in either phase uses Bubblewrap any more.
 - The Dockerfiles under `docker/` extend the Artemis Java test image and, for Python, the official
   Python image, and compile the C products.
