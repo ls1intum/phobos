@@ -88,10 +88,10 @@ def test_two_inventories_that_a_line_format_would_confuse_digest_differently(tmp
     second = tmp_path / "second"
     (first / "a").mkdir(parents=True)
     (first / "b").mkdir()
-    (second / "a\nd 0o755 b").mkdir(parents=True)
-    os.chmod(first / "a", 0o755)
-    os.chmod(first / "b", 0o755)
-    os.chmod(second / "a\nd 0o755 b", 0o755)
+    (second / "a\nd 0o700 b").mkdir(parents=True)
+    os.chmod(first / "a", 0o700)
+    os.chmod(first / "b", 0o700)
+    os.chmod(second / "a\nd 0o700 b", 0o700)
     assert submissions.tree_digest(first) != submissions.tree_digest(second)
 
 
@@ -188,8 +188,9 @@ def test_a_run_is_sealed_and_merged(tmp_path):
 
 def test_a_base_whose_mode_changed_after_the_seal_is_refused(tmp_path):
     run, helpers = make_run(tmp_path)
+    (run / "bases" / "BaseLanguage-java-gradle.cfg").chmod(0o400)
     submissions.write_json(run / "seal" / "manifest.json", submissions.seal(run, KEY, helpers, "run", "prune"))
-    (run / "bases" / "BaseLanguage-java-gradle.cfg").chmod(0o666)
+    (run / "bases" / "BaseLanguage-java-gradle.cfg").chmod(0o600)
     with pytest.raises(submissions.Refused):
         submissions.validated_manifest(run, KEY, helpers)
 
