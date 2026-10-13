@@ -15,12 +15,17 @@
 # phobos-cli.sh, which sources every file, it does not.
 # shellcheck disable=SC2034
 
-# The languages a run-phase image exists for, in the order the menu offers them.
-PICK_LANGUAGES=(java python c-fact r swift c-gcc cpp)
+# The languages a run-phase image exists for, in the order the menu offers them. generic is the image for
+# an exercise in none of the others, offered as "Unknown".
+PICK_LANGUAGES=(generic java python c-fact r swift c-gcc cpp)
 # What each language is called in the menu.
-PICK_LANGUAGE_TITLES=("Java (Gradle or Maven)" "Python" "C (FACT template)" "R" "Swift" "C (GCC template)" "C++")
+PICK_LANGUAGE_TITLES=("Unknown / None of the following" "Java (Gradle or Maven)" "Python" "C (FACT template)" "R" "Swift" "C (GCC template)" "C++")
 # The command offered for a language whose exercise has no build script.
-PICK_COMMANDS=("./gradlew test" "python3 -m pytest" "make" "" "swift test" "make" "make")
+PICK_COMMANDS=("make test" "./gradlew test" "python3 -m pytest" "make" "" "swift test" "make" "make")
+# The menu tag of each language, in the order of PICK_LANGUAGES. Tag 2 is left to an image named by hand.
+PICK_LANGUAGE_TAGS=(1 3 4 5 6 7 8 9)
+# The menu tag of an image named by hand.
+PICK_IMAGE_TAG=2
 # How deep and how many policy files the search goes and lists, so that a large tree stays quick.
 PICK_SEARCH_DEPTH=8
 PICK_SEARCH_LIMIT=200
@@ -34,21 +39,24 @@ PICKED_WORDS=()
 PICK_FOUND=()
 
 # Asks for the language of the exercise, which decides the run-phase image. With $1 set to image it
-# first offers to name an image instead, for a command that runs it with --image. When UI_MOVE is
+# offers, second, to name an image instead, for a command that runs it with --image. When UI_MOVE is
 # next, PICKED_LANGUAGE holds the language and PICKED_IMAGE is empty, or PICKED_IMAGE holds the image
 # and PICKED_LANGUAGE is empty.
 pick_language() {
   local -a items=()
   local index
-  [[ "${1:-}" == "image" ]] && items+=(0 "Other image (name it)")
   for index in "${!PICK_LANGUAGES[@]}"; do
-    items+=("$((index + 1))" "${PICK_LANGUAGE_TITLES[index]}")
+    items+=("${PICK_LANGUAGE_TAGS[index]}" "${PICK_LANGUAGE_TITLES[index]}")
+    if (( index == 0 )) && [[ "${1:-}" == "image" ]]; then
+      items+=("${PICK_IMAGE_TAG}" "Other image (name it)")
+    fi
   done
   while :; do
     ui_menu "Language" "Which language is the exercise written in? It decides the image the command runs in." "${items[@]}"
     [[ "$UI_MOVE" == "next" ]] || return 0
-    if [[ "$UI_RESULT" != "0" ]]; then
-      PICKED_LANGUAGE="${PICK_LANGUAGES[UI_RESULT - 1]}"
+    if [[ "$UI_RESULT" != "${PICK_IMAGE_TAG}" ]]; then
+      pick_language_of_tag "$UI_RESULT"
+      PICKED_LANGUAGE="$REPLY"
       PICKED_IMAGE=""
       return 0
     fi
@@ -58,6 +66,19 @@ pick_language() {
       return 0
     fi
   done
+}
+
+# Sets REPLY to the language whose menu tag is $1, and to nothing for a tag no language has. Assumes $1
+# is a tag ui_menu accepted.
+pick_language_of_tag() {
+  local index
+  REPLY=""
+  for index in "${!PICK_LANGUAGE_TAGS[@]}"; do
+    if [[ "${PICK_LANGUAGE_TAGS[index]}" == "$1" ]]; then
+      REPLY="${PICK_LANGUAGES[index]}"
+    fi
+  done
+  return 0
 }
 
 # Asks for the name of a run-phase image, such as a grading image that embeds Phobos, until the name
