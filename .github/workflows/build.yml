@@ -43,8 +43,28 @@ on:
         options:
           - pull-request
           - full
+      fresh:
+        description: "Build every run-phase image from scratch, as the weekly run does"
+        required: false
+        default: false
+        type: boolean
 
 permissions: {}
+
+env:
+  # The weekly run is the one that has to notice a moved base image or a changed apt package, and a
+  # layer that is simply reused, from this run's builder or from the layer cache, is precisely what
+  # would hide that. A fresh build passes --pull, which re-resolves the base image, and --no-cache,
+  # which reruns the layers; neither does the other's half. Its layers then become the newest cache
+  # snapshot of main. The weekly run builds amd64 only, so that bound holds for amd64 on main; an arm64
+  # snapshot, or one a branch's own dispatch saved, which that branch finds first, is refreshed only
+  # by a dispatch with the input fresh, which does on demand what the weekly run does.
+  FRESH_BUILD: >-
+    ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.fresh))
+    && 'true' || 'false' }}
+  # The BuildKit image of the builder the Java run-phase image is built with, the one image whose layers
+  # are cached between runs, pinned by tag and by the digest of its multi-architecture index.
+  BUILDKIT_IMAGE: moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
 concurrency:
   group: build-${{ github.event.pull_request.number || github.ref }}
@@ -69,23 +89,19 @@ jobs:
       - name: Assemble the build context
         run: .github/scripts/assemble-run-phase-context.sh "${RUNNER_TEMP}/run-phase-context"
 
-      # docker build rather than docker/build-push-action: this organisation allows only actions
-      # it owns and actions GitHub publishes, so every third-party one is refused before the run
-      # starts. Docker and buildx are on the runner already.
+      # The repository's own action rather than docker/build-push-action: this organisation allows
+      # only actions it owns and actions GitHub publishes, so every third-party one is refused before
+      # the run starts. Docker and buildx are on the runner already.
       - name: Build the run-phase image
-        env:
-          # The weekly run is the one that has to notice a moved base image or a changed
-          # apt package, and a layer that is simply reused is precisely what would hide
-          # that. --no-cache reruns the layers, --pull re-resolves the base image;
-          # neither does the other's half.
-          FRESH: ${{ github.event_name == 'schedule' && '--pull --no-cache' || '' }}
-        run: |
-          # FRESH is either empty or two flags, so it must be split into words.
-          # shellcheck disable=SC2086
-          docker build ${FRESH} \
-            -f docker/protecter/java/Dockerfile \
-            -t phobos-run-phase:ci \
-            "${RUNNER_TEMP}/run-phase-context"
+        uses: ./.github/actions/build-run-phase-image
+        with:
+          name: java
+          dockerfile: docker/protecter/java/Dockerfile
+          tag: phobos-run-phase:ci
+          context: ${{ runner.temp }}/run-phase-context
+          fresh: ${{ env.FRESH_BUILD }}
+          cache: "true"
+          buildkit-image: ${{ env.BUILDKIT_IMAGE }}
 
       # The prune image is the run-phase image just built plus strace, python3 and the protection
       # matrix's probe, with a base that grants nothing. It is built on top of that exact image, so
@@ -979,14 +995,15 @@ jobs:
 
       - name: Build the Python run-phase image
         id: build
-        env:
-          FRESH: ${{ github.event_name == 'schedule' && '--pull --no-cache' || '' }}
-        run: |
-          # shellcheck disable=SC2086
-          docker build ${FRESH} \
-            -f docker/protecter/python/Dockerfile \
-            -t phobos-run-phase-python:ci \
-            "${RUNNER_TEMP}/run-phase-context"
+        uses: ./.github/actions/build-run-phase-image
+        with:
+          name: python
+          dockerfile: docker/protecter/python/Dockerfile
+          tag: phobos-run-phase-python:ci
+          context: ${{ runner.temp }}/run-phase-context
+          fresh: ${{ env.FRESH_BUILD }}
+          cache: "false"
+          buildkit-image: ${{ env.BUILDKIT_IMAGE }}
 
       # The same ordinary containers as the Java job: --network none, and no --privileged, no
       # --cap-add, no --security-opt. These five need no Java and take seconds, and each one puts a
@@ -1106,15 +1123,15 @@ jobs:
 
       - name: Build the C (FACT) run-phase image
         id: build
-        env:
-          FRESH: ${{ github.event_name == 'schedule' && '--pull --no-cache' || '' }}
-        run: |
-          # FRESH is either empty or two flags, so it must be split into words.
-          # shellcheck disable=SC2086
-          docker build ${FRESH} \
-            -f docker/protecter/c-fact/Dockerfile \
-            -t phobos-run-phase-c-fact:ci \
-            "${RUNNER_TEMP}/run-phase-context"
+        uses: ./.github/actions/build-run-phase-image
+        with:
+          name: c-fact
+          dockerfile: docker/protecter/c-fact/Dockerfile
+          tag: phobos-run-phase-c-fact:ci
+          context: ${{ runner.temp }}/run-phase-context
+          fresh: ${{ env.FRESH_BUILD }}
+          cache: "false"
+          buildkit-image: ${{ env.BUILDKIT_IMAGE }}
 
       - name: The shipped C base runs the FACT reference exercise both ways
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -1197,15 +1214,15 @@ jobs:
 
       - name: Build the R run-phase image
         id: build
-        env:
-          FRESH: ${{ github.event_name == 'schedule' && '--pull --no-cache' || '' }}
-        run: |
-          # FRESH is either empty or two flags, so it must be split into words.
-          # shellcheck disable=SC2086
-          docker build ${FRESH} \
-            -f docker/protecter/r/Dockerfile \
-            -t phobos-run-phase-r:ci \
-            "${RUNNER_TEMP}/run-phase-context"
+        uses: ./.github/actions/build-run-phase-image
+        with:
+          name: r
+          dockerfile: docker/protecter/r/Dockerfile
+          tag: phobos-run-phase-r:ci
+          context: ${{ runner.temp }}/run-phase-context
+          fresh: ${{ env.FRESH_BUILD }}
+          cache: "false"
+          buildkit-image: ${{ env.BUILDKIT_IMAGE }}
 
       - name: The shipped R base runs the R reference exercise both ways
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -1289,15 +1306,15 @@ jobs:
 
       - name: Build the Swift run-phase image
         id: build
-        env:
-          FRESH: ${{ github.event_name == 'schedule' && '--pull --no-cache' || '' }}
-        run: |
-          # FRESH is either empty or two flags, so it must be split into words.
-          # shellcheck disable=SC2086
-          docker build ${FRESH} \
-            -f docker/protecter/swift/Dockerfile \
-            -t phobos-run-phase-swift:ci \
-            "${RUNNER_TEMP}/run-phase-context"
+        uses: ./.github/actions/build-run-phase-image
+        with:
+          name: swift
+          dockerfile: docker/protecter/swift/Dockerfile
+          tag: phobos-run-phase-swift:ci
+          context: ${{ runner.temp }}/run-phase-context
+          fresh: ${{ env.FRESH_BUILD }}
+          cache: "false"
+          buildkit-image: ${{ env.BUILDKIT_IMAGE }}
 
       - name: The shipped Swift base runs the Swift reference exercise both ways
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -1362,15 +1379,15 @@ jobs:
 
       - name: Build the GCC run-phase image
         id: build
-        env:
-          FRESH: ${{ github.event_name == 'schedule' && '--pull --no-cache' || '' }}
-        run: |
-          # FRESH is either empty or two flags, so it must be split into words.
-          # shellcheck disable=SC2086
-          docker build ${FRESH} \
-            -f docker/protecter/c-gcc/Dockerfile \
-            -t phobos-run-phase-c-gcc:ci \
-            "${RUNNER_TEMP}/run-phase-context"
+        uses: ./.github/actions/build-run-phase-image
+        with:
+          name: c-gcc
+          dockerfile: docker/protecter/c-gcc/Dockerfile
+          tag: phobos-run-phase-c-gcc:ci
+          context: ${{ runner.temp }}/run-phase-context
+          fresh: ${{ env.FRESH_BUILD }}
+          cache: "false"
+          buildkit-image: ${{ env.BUILDKIT_IMAGE }}
 
       - name: The shipped GCC base runs the GCC reference exercise both ways
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -1431,15 +1448,15 @@ jobs:
 
       - name: Build the C++ run-phase image
         id: build
-        env:
-          FRESH: ${{ github.event_name == 'schedule' && '--pull --no-cache' || '' }}
-        run: |
-          # FRESH is either empty or two flags, so it must be split into words.
-          # shellcheck disable=SC2086
-          docker build ${FRESH} \
-            -f docker/protecter/cpp/Dockerfile \
-            -t phobos-run-phase-cpp:ci \
-            "${RUNNER_TEMP}/run-phase-context"
+        uses: ./.github/actions/build-run-phase-image
+        with:
+          name: cpp
+          dockerfile: docker/protecter/cpp/Dockerfile
+          tag: phobos-run-phase-cpp:ci
+          context: ${{ runner.temp }}/run-phase-context
+          fresh: ${{ env.FRESH_BUILD }}
+          cache: "false"
+          buildkit-image: ${{ env.BUILDKIT_IMAGE }}
 
       - name: The shipped C++ base runs the C++ reference exercise both ways
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}

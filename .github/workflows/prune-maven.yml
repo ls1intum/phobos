@@ -15,6 +15,10 @@ on:
 
 permissions: {}
 
+env:
+  # The BuildKit image the run-phase image is built with, as in build.yml, whose layer cache this run shares.
+  BUILDKIT_IMAGE: moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+
 concurrency:
   group: prune-maven-${{ github.ref }}
   cancel-in-progress: false
@@ -46,8 +50,15 @@ jobs:
       # The Dockerfile's two repository stages hold the image to the committed manifests while it is
       # built, so an image that builds holds the bytes grading will read.
       - name: Build the run-phase image
-        run: |
-          docker build -f docker/protecter/java/Dockerfile -t phobos-run-phase:ci "${RUNNER_TEMP}/run-phase-context"
+        uses: ./.github/actions/build-run-phase-image
+        with:
+          name: java
+          dockerfile: docker/protecter/java/Dockerfile
+          tag: phobos-run-phase:ci
+          context: ${{ runner.temp }}/run-phase-context
+          fresh: "false"
+          cache: "true"
+          buildkit-image: ${{ env.BUILDKIT_IMAGE }}
 
       - name: Build the prune image on the run-phase image
         run: |
