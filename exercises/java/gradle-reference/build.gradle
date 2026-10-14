@@ -6,7 +6,7 @@ import org.gradle.process.CommandLineArgumentProvider
 plugins {
     id 'com.teamscale' version '39.0.0'
     id 'java'
-    id 'io.freefair.aspectj.post-compile-weaving' version '9.8.0'
+    id 'io.freefair.aspectj.post-compile-weaving' version '9.8.1'
 }
 
 java {
