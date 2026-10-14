@@ -42,8 +42,14 @@ mkdir -p "${STUBS}" "${WORK}/cwd"
 # check-template, seal, union, batch, validate and verify-report write what the step leaves and end
 # with STUB_STEP_<STEP>; a prune writes its submission's artefacts and ends with STUB_PRUNE_<NAME>; a
 # verification ends with STUB_VERIFY; the start of the layers under phobos.sh ends with STUB_LAYERS.
+# The question whether the daemon answers, `docker version`, is answered at once and is no line of
+# the log, so the log keeps naming the steps alone.
 cat > "${STUBS}/docker" <<'STUB'
 #!/bin/bash
+if [[ "${1:-}" == "version" ]]; then
+  printf '%s\n' "29.0.0"
+  exit 0
+fi
 printf '%s\n' "$*" >> "${STUB_LOG:?}"
 target_of() {
   local wanted="$1"

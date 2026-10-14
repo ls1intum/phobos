@@ -56,9 +56,21 @@ printf 'name: policy\n' > "${WORK}/configs/policy.yaml"
 # The stand-in docker: records one line per call and ends with the status the plan names for that
 # call number (0 when the plan has no line for it). With a marker named by the plan it waits to be
 # stopped, which is how the signal is measured. With STUB_ENV set it also writes the MODULES and
-# module it inherited there, which is how an environment left unchanged is measured.
+# module it inherited there, which is how an environment left unchanged is measured. The question
+# whether the daemon answers, `docker version`, is neither recorded nor counted, so the plans keep
+# naming the steps alone: it writes its arguments to STUB_PROBE_LOG when that is set, and with
+# STUB_DAEMON_DOWN set it says that text on stderr and fails, as a client without its daemon does.
 cat > "${STUBS}/docker" <<'STUB'
 #!/bin/bash
+if [[ "${1:-}" == "version" ]]; then
+  [[ -z "${STUB_PROBE_LOG:-}" ]] || printf '%s\n' "$*" >> "${STUB_PROBE_LOG}"
+  if [[ -n "${STUB_DAEMON_DOWN:-}" ]]; then
+    printf '%s\n' "${STUB_DAEMON_DOWN}" >&2
+    exit 1
+  fi
+  printf '%s\n' "29.0.0"
+  exit 0
+fi
 log="${STUB_LOG:?}"
 plan="${STUB_PLAN:?}"
 printf '%s\n' "$*" >> "$log"
@@ -82,6 +94,17 @@ chmod +x "${STUBS}/docker"
 # The stand-in docker is first on an absolute PATH, and the working directory is a directory of its own.
 cli() {
   OUT="$(cd "${WORK}/cwd" && env STUB_LOG="${LOG}" STUB_PLAN="${PLAN}" STUB_STARTED="${WORK}/started" PATH="${STUBS}:/usr/bin:/bin" bash "${CLI}" "$@" 2> "${WORK}/err")"
+  STATUS=$?
+  ERR="$(cat "${WORK}/err")"
+}
+
+# Runs phobos-cli.sh like cli, with the arguments after $1, recording each question to the daemon in
+# probe.log. With $1 not empty the daemon does not answer, and the client says $1.
+cli_daemon() {
+  local down="$1"
+  shift
+  : > "${WORK}/probe.log"
+  OUT="$(cd "${WORK}/cwd" && env STUB_PROBE_LOG="${WORK}/probe.log" STUB_DAEMON_DOWN="${down}" STUB_LOG="${LOG}" STUB_PLAN="${PLAN}" PATH="${STUBS}:/usr/bin:/bin" bash "${CLI}" "$@" 2> "${WORK}/err")"
   STATUS=$?
   ERR="$(cat "${WORK}/err")"
 }
@@ -316,6 +339,23 @@ check "a successful docker is a successful run" 0 "${STATUS}"
 if grep -q -- 'type=bind,source=.*,target=/srv/phobos-cli/config,readonly' "${LOG}"; then ok "the real call mounts the staged copy read-only"; else bad "the real call mounts the staged copy read-only" "$(cat "${LOG}")"; fi
 staged="$(sed -n 's|.*source=\([^,]*\),target=/srv/phobos-cli/config,readonly.*|\1|p' "${LOG}" | head -1)"
 if [[ -n "${staged}" && ! -e "${staged}" ]]; then ok "the staged copy is removed when the run has ended"; else bad "the staged copy is removed when the run has ended" "${staged}"; fi
+
+echo "== run: whether the Docker daemon answers"
+DAEMON_DOWN="Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"
+plan 0
+cli_daemon "${DAEMON_DOWN}" run --exercise "${WORK}/exercise" -- true
+expect_refused "a daemon that does not answer ends the run before it starts" "${PHB_ERUNTIME}"
+check "and docker is called for no step" 0 "$(wc -l < "${LOG}" | tr -d ' ')"
+if grep -qF 'its daemon does not answer' <<<"${ERR}" && grep -qF "Docker said: ${DAEMON_DOWN}" <<<"${ERR}"; then ok "and says so, with what Docker said"; else bad "and says so, with what Docker said" "${ERR}"; fi
+plan 0
+cli_daemon "" run --exercise "${WORK}/exercise" -- true
+check "a daemon that answers lets the run start" 0 "${STATUS}"
+check "after one question to it" 1 "$(wc -l < "${WORK}/probe.log" | tr -d ' ')"
+if [[ -s "${LOG}" ]]; then ok "and docker is then called for the run"; else bad "and docker is then called for the run" "an empty log"; fi
+plan 0
+cli_daemon "${DAEMON_DOWN}" --dry-run run --exercise "${WORK}/exercise" -- true
+check "a dry run starts nothing, so it needs no daemon" 0 "${STATUS}"
+check "and does not ask for one" 0 "$(wc -l < "${WORK}/probe.log" | tr -d ' ')"
 
 mkdir -p "${WORK}/exercise/tmp"
 plan 0
