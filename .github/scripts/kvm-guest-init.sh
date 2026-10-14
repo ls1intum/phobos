@@ -4,8 +4,9 @@
 #
 # The host puts this file into the root file system it exports from the prune image and boots the guest
 # with init=/phobos-kvm-init, root=/dev/vda and the data disk on /dev/vdb. phobos_key=<key> on the kernel
-# command line names the key to verify. The data disk holds exercises/, helpers/, path_sets/ (the
-# artefacts of the default prune, which this run reads and adds to), setup.sh and env.sh, as
+# command line names the key to verify. The data disk holds exercises/, helpers/, manifest/ (the
+# manifest of a pinned read root, for java-maven only, mounted read-only when it holds one), path_sets/
+# (the artefacts of the default prune, which this run reads and adds to), setup.sh and env.sh, as
 # stage-prune-inputs.sh made them. What the guest writes to the serial console is the host's log; the
 # line "PHOBOS-KVM-STATUS <n>" is the status of the observer and the last thing printed before power off.
 set -u
@@ -25,13 +26,14 @@ cmdline_value() {
 }
 
 # Ends the guest: the status line first, then everything written, then power off. The data disk is
-# unmounted after the three directories bound from it, which would otherwise keep it busy.
+# unmounted after the directories bound from it, which would otherwise keep it busy.
 finish() {
   printf 'PHOBOS-KVM-STATUS %s\n' "$1"
   sync
   umount /var/tmp/path_sets 2>/dev/null
   umount /var/tmp/helpers 2>/dev/null
   umount /srv/phobos-prune-exercises 2>/dev/null
+  umount /srv/phobos-manifest 2>/dev/null
   umount /mnt/data 2>/dev/null
   sync
   echo o > /proc/sysrq-trigger
@@ -68,6 +70,13 @@ mount /dev/vdb /mnt/data || { echo "the data disk cannot be mounted"; finish "${
 mount --bind /mnt/data/exercises /srv/phobos-prune-exercises
 mount --bind /mnt/data/helpers /var/tmp/helpers
 mount --bind /mnt/data/path_sets /var/tmp/path_sets
+# The manifests of pinned read roots, read-only where the prune container has them, and only when there are any,
+# as only the Maven prune's container has them.
+if [[ -n "$(ls -A /mnt/data/manifest 2>/dev/null)" ]]; then
+  mkdir -p /srv/phobos-manifest
+  mount --bind /mnt/data/manifest /srv/phobos-manifest
+  mount -o remount,bind,ro /srv/phobos-manifest || { echo "the manifests cannot be made read-only"; finish "${EXIT_SETUP}"; }
+fi
 # Loopback is the only network, as the prune container's --network none leaves it.
 ip link set lo up 2>/dev/null || python3 -c 'import fcntl, socket, struct
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

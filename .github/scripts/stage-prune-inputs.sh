@@ -12,7 +12,11 @@
 #            with the files it reads laid out by setup.sh and FIXTURE_UDP=1 set in env.sh, so that its
 #            build binds a UDP port that only a Landlock version 10 kernel refuses (A.6.9).
 #
-# It writes <destination>/exercises/<family>/<exercise>/..., helpers/, setup.sh and env.sh. The destination
+# manifest   the manifests of the repositories an exercise declares as pinned read roots, for the key java-maven
+#            the pre-loaded Maven repository's, which Compose mounts into prune_java_maven alone; for every other
+#            key the directory is empty and nothing mounts it.
+#
+# It writes <destination>/exercises/<family>/<exercise>/..., helpers/, manifest/, setup.sh and env.sh. The destination
 # is emptied first when this script made it, and refused when anything else lives there. The exercises of
 # a reference are chosen before the destination is touched, so a tree the pruner would refuse leaves an
 # earlier staging in place.
@@ -73,7 +77,10 @@ if [[ -e "${DESTINATION}" ]]; then
     exit 1
   fi
 fi
-mkdir -p "${DESTINATION}/exercises"
+mkdir -p "${DESTINATION}/exercises" "${DESTINATION}/manifest"
+if [[ "${KEY}" == java-maven ]]; then
+  cp "${REPOSITORY}/protecter/image/maven-repository.sha256" "${DESTINATION}/manifest/"
+fi
 for package in exercise_pruner runtime_pruner shared; do
   mkdir -p "${DESTINATION}/helpers/${package}"
   cp -R "${REPOSITORY}/pruner/${package}/src" "${DESTINATION}/helpers/${package}/src"
