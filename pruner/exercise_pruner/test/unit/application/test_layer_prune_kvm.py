@@ -3,6 +3,7 @@ the two checks of a policy on a newer kernel, and what main.py writes and ends w
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import pathlib
@@ -24,12 +25,21 @@ PASSED = verdict.Verdict(exit_class="success", tests=(("T.a", "passed"),), tests
                          infra_failure=False)
 FAILED = verdict.Verdict(exit_class="tests-failed", tests=(("T.a", "failed"),), tests_ran=True, no_source=False,
                          infra_failure=False)
+TIMED_OUT = verdict.Verdict(exit_class="timeout", tests=(("T.a", "passed"),), tests_ran=True, no_source=False,
+                            infra_failure=False)
 ORIGIN = {"pruner": "phobos layer pruner", "kernel": "7.2.9", "architecture": "x86_64", "landlock_abi": 10, "uid": 0,
           "strace": "strace -- version 6.8", "date": "2026-10-07T00:00:00Z"}
 READ_RECORD = 'audit: type=1423 audit(1.0:1): domain=a blockers=fs.read_file path="/etc/hostname"'
 UDP_RECORD = "audit: type=1423 audit(1.0:2): domain=a blockers=net.bind_udp lport=5000"
 POLICY = cfgfile.Policy(fs={"/a": frozenset({"read"}), "/b": frozenset({"read"}), "/c": frozenset({"read"})},
-                        connect=(), bind=("allow 0",), limits={"cpu": 30})
+                        connect=(), bind=("allow 0",),
+                        limits={"cpu": 30, "timeout": 150, "mem_mb": 2048, "nproc": 64, "nofile": 512, "fsize_mb": 16})
+
+
+def run_of(found: verdict.Verdict, status: int = 0) -> runner.RunResult:
+    """A run that ended with the verdict and status given."""
+    return runner.RunResult(verdict=found, status=status, trace=None, samples=None, wall_seconds=1.0,
+                            log_path=pathlib.Path("/dev/null"))
 
 
 class FakeCapture:
@@ -192,9 +202,26 @@ def fake_pruning(monkeypatch, tmp_path):
 
 
 def test_the_joint_verification_passing_on_the_new_kernel_adds_nothing(monkeypatch, tmp_path):
-    monkeypatch.setattr(stages, "joint_runs", lambda pruning, policy: True)
+    seen: list[cfgfile.Policy] = []
+    monkeypatch.setattr(kvm, "joint_verification", lambda pruning, policy: seen.append(policy) or True)
     final, rows = kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture())
     assert final == POLICY and rows == []
+    assert seen == [POLICY]
+
+
+@pytest.mark.parametrize("outcomes, expected", [([PASSED, PASSED, PASSED], True), ([PASSED, FAILED, PASSED], False)])
+def test_the_joint_verification_holds_every_run_to_the_reference(monkeypatch, tmp_path, outcomes, expected):
+    results = [run_of(found) for found in outcomes]
+    monkeypatch.setattr(stages.Pruning, "run", lambda self, policy, shape, stage: results.pop(0))
+    assert kvm.joint_verification(fake_pruning(monkeypatch, tmp_path), POLICY) is expected
+
+
+def test_a_joint_run_that_ran_out_of_time_is_inconclusive_rather_than_a_mismatch(monkeypatch, tmp_path):
+    results = [run_of(PASSED), run_of(TIMED_OUT, 14)]
+    monkeypatch.setattr(stages.Pruning, "run", lambda self, policy, shape, stage: results.pop(0))
+    with pytest.raises(kvm.Inconclusive) as undecided:
+        kvm.joint_verification(fake_pruning(monkeypatch, tmp_path), POLICY)
+    assert undecided.value.evidence["run"] == "joint verification" and undecided.value.evidence["status"] == 14
 
 
 def failing_then_passing(monkeypatch, decision: object, records: list[str]) -> list[cfgfile.Policy]:
@@ -204,10 +231,12 @@ def failing_then_passing(monkeypatch, decision: object, records: list[str]) -> l
     def joint(pruning, policy):
         runs.append(policy)
         return len(runs) > 1
-    monkeypatch.setattr(stages, "joint_runs", joint)
-    diagnosis = runner.RunResult(verdict=FAILED, status=1, trace=None, samples=None, wall_seconds=1.0,
-                                 log_path=pathlib.Path("/dev/null"))
-    monkeypatch.setattr(stages.Pruning, "run", lambda self, policy, shape, stage: diagnosis)
+
+    def diagnose(self, policy, shape, stage):
+        runs.append(policy)
+        return run_of(FAILED, 1)
+    monkeypatch.setattr(kvm, "joint_verification", joint)
+    monkeypatch.setattr(stages.Pruning, "run", diagnose)
     monkeypatch.setattr(stages, "network_decision", lambda pruning, result: decision)
     return runs
 
@@ -218,7 +247,105 @@ def test_a_udp_bind_the_kernel_refused_becomes_exactly_one_row_and_the_run_then_
     final, rows = kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture([], [UDP_RECORD]))
     assert [row["rule"] for row in rows] == ["allow 5000 udp"]
     assert final.bind == ("allow 0", "allow 5000 udp")
-    assert len(runs) == 2
+    assert len(runs) == 3
+    assert all(policy.limits == POLICY.limits for policy in runs)
+    assert final.limits == POLICY.limits
+    assert POLICY.limits == {"cpu": 30, "timeout": 150, "mem_mb": 2048, "nproc": 64, "nofile": 512, "fsize_mb": 16}
+
+
+def test_the_end_of_a_long_log_and_of_its_trace_is_read_from_the_end_of_the_file(tmp_path):
+    log = tmp_path / "run-0001-layers.log"
+    log.write_text("".join(f"line {number}\n" for number in range(200000)))
+    log.with_suffix(".trace").write_text("1 openat(...) = 3\n2 read(3, <unfinished ...>\n")
+    evidence = kvm.run_evidence(dataclasses.replace(run_of(TIMED_OUT, 14), log_path=log), "joint verification")
+    assert evidence["log_tail"] == [f"line {number}" for number in range(200000 - kvm.LOG_TAIL_LINES, 200000)]
+    assert evidence["trace_tail"] == ["1 openat(...) = 3", "2 read(3, <unfinished ...>"]
+    assert kvm.tail_lines(tmp_path / "missing.log", 5) == []
+
+
+def test_a_joint_run_that_ran_out_of_time_is_followed_by_one_observed_run_whose_trace_the_record_keeps(monkeypatch,
+                                                                                                    tmp_path):
+    log = tmp_path / "run-0002-layers.log"
+    log.write_text("Fetching swift-ast\n")
+    log.with_suffix(".trace").write_text("7 wait4(-1, <unfinished ...>\n")
+    shapes: list[runner.RunShape] = []
+
+    def time_out(pruning, policy):
+        raise kvm.Inconclusive("the joint verification on the guest kernel ran out of time",
+                               kvm.run_evidence(run_of(TIMED_OUT, 14), "joint verification"))
+
+    def observe(self, policy, shape, stage):
+        shapes.append(shape)
+        return dataclasses.replace(run_of(TIMED_OUT, 14), log_path=log)
+    monkeypatch.setattr(kvm, "joint_verification", time_out)
+    monkeypatch.setattr(stages.Pruning, "run", observe)
+    with pytest.raises(kvm.Inconclusive, match="joint verification") as undecided:
+        kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture([], [UDP_RECORD]))
+    assert shapes == [stages.OBSERVED_JOINT]
+    observed = undecided.value.evidence["observed"]
+    assert observed["trace_tail"] == ["7 wait4(-1, <unfinished ...>"] and observed["log_tail"] == ["Fetching swift-ast"]
+    assert observed["audit"] == [UDP_RECORD] and undecided.value.evidence["run"] == "joint verification"
+
+
+class BrokenCapture(FakeCapture):
+    """A capture whose kernel ring can no longer be read."""
+
+    def collect(self) -> list[str]:
+        """Fails as a ring that skipped records does."""
+        raise kvm.Indeterminate("the message ring skipped from record 4 to 9")
+
+
+@pytest.mark.parametrize("failure", ["run", "capture"])
+def test_an_observed_run_that_fails_keeps_the_timeout_it_was_to_explain(monkeypatch, tmp_path, failure):
+    def time_out(pruning, policy):
+        raise kvm.Inconclusive("the joint verification on the guest kernel ran out of time",
+                               kvm.run_evidence(run_of(TIMED_OUT, 14), "joint verification"))
+
+    def broken(self, policy, shape, stage):
+        raise runner.PrunerDefect(-1, pathlib.Path("/dev/null"), "render refused the candidate")
+    monkeypatch.setattr(kvm, "joint_verification", time_out)
+    monkeypatch.setattr(stages.Pruning, "run", broken)
+    capture = FakeCapture([]) if failure == "run" else BrokenCapture()
+    with pytest.raises(kvm.Inconclusive, match="joint verification") as undecided:
+        kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, capture)
+    assert undecided.value.evidence["run"] == "joint verification" and "observed" not in undecided.value.evidence
+    assert undecided.value.evidence["observed_failed"].startswith("PrunerDefect" if failure == "run" else "Indeterminate")
+
+
+def test_a_cross_check_run_that_ran_out_of_time_keeps_its_log_and_trace_tails_in_the_record(monkeypatch, tmp_path):
+    log = tmp_path / "run-0003-layers.log"
+    log.write_text("Computing version for swift-ast\n")
+    log.with_suffix(".trace").write_text("9 futex(0x7f, FUTEX_WAIT, 0, NULL <unfinished ...>\n")
+    monkeypatch.setattr(stages.Pruning, "run",
+                        lambda self, policy, shape, stage: dataclasses.replace(run_of(TIMED_OUT, 14), log_path=log))
+    cross = kvm.cross_check_run(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture([]))
+    assert cross["log_tail"] == ["Computing version for swift-ast"]
+    assert cross["trace_tail"] == ["9 futex(0x7f, FUTEX_WAIT, 0, NULL <unfinished ...>"]
+    entry, sidecar, reason = verify(monkeypatch, tmp_path, artefacts(tmp_path), {**cross, "strace_denials": 3}, [])
+    assert "cross-check run" in reason
+    assert entry["inconclusive"] is True and sidecar is None
+    assert entry["evidence"]["trace_tail"] == cross["trace_tail"] and entry["evidence"]["log_tail"] == cross["log_tail"]
+
+
+def test_a_diagnosis_run_that_ran_out_of_time_is_inconclusive_rather_than_a_difference(monkeypatch, tmp_path):
+    monkeypatch.setattr(kvm, "joint_verification", lambda pruning, policy: False)
+    monkeypatch.setattr(stages.Pruning, "run", lambda self, policy, shape, stage: run_of(TIMED_OUT, 14))
+    with pytest.raises(kvm.Inconclusive, match="ran out of time") as undecided:
+        kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture([]))
+    assert undecided.value.evidence["run"] == "diagnosis run"
+    assert undecided.value.evidence["verdict"]["exit_class"] == "timeout"
+
+
+@pytest.mark.parametrize("outcomes", [
+    [TIMED_OUT],
+    [PASSED, TIMED_OUT],
+    [dataclasses.replace(TIMED_OUT, tests=(), tests_ran=False)],
+])
+def test_a_reference_run_that_ran_out_of_time_makes_the_guest_baseline_inconclusive(monkeypatch, tmp_path, outcomes):
+    results = [run_of(found) for found in outcomes]
+    monkeypatch.setattr(runner, "run_reference", lambda exercise, environment: results.pop(0))
+    with pytest.raises(kvm.Inconclusive, match="reference run"):
+        stages.baseline(fake_pruning(monkeypatch, tmp_path), inspect=kvm.refuse_timed_out_reference)
 
 
 def test_a_refused_udp_connect_is_no_difference_since_the_guard_refuses_it_on_every_kernel(monkeypatch, tmp_path):
@@ -262,14 +389,21 @@ def verify(monkeypatch, tmp_path, output, cross: dict, rows: list[dict]):
     exercise.mkdir()
     (exercise / "build_script.sh").write_text("exit 0\n")
     (exercise / "build_script.sh").chmod(0o755)
-    monkeypatch.setattr(stages, "baseline", lambda pruning: PASSED)
+    def phase(*arguments):
+        if isinstance(rows, Exception):
+            raise rows
+        return POLICY, rows
+    monkeypatch.setattr(stages, "baseline", lambda pruning, inspect: PASSED)
     monkeypatch.setattr(kvm, "cross_check_run", lambda *arguments: cross)
-    monkeypatch.setattr(kvm, "abi10_phase", lambda *arguments: (POLICY, rows))
+    monkeypatch.setattr(kvm, "abi10_phase", phase)
     return kvm.verify_exercise(exercise, "java", runner.Environment(), output, None, ORIGIN, FakeCapture(),
                                main.abort_record)
 
 
-CLEAN = {"strace_denials": 3, "audit_records": 3, "unparsed": [], "mismatches": [], "audit_only": []}
+CLEAN = {"strace_denials": 3, "audit_records": 3, "unparsed": [], "mismatches": [], "audit_only": [], "status": 0,
+         "verdict": dataclasses.asdict(PASSED)}
+MISMATCHES = [{"operation": "openat", "objects": ["/x"], "sections": ["read"], "audit_for_object": []}]
+LATE_TIMEOUT = kvm.Inconclusive("the diagnosis run on the guest kernel ran out of time", {"run": "diagnosis run"})
 
 
 def test_a_clean_cross_check_and_no_row_writes_a_record_naming_the_cfg_it_verified_and_no_sidecar(monkeypatch, tmp_path):
@@ -278,6 +412,78 @@ def test_a_clean_cross_check_and_no_row_writes_a_record_naming_the_cfg_it_verifi
     assert reason is None and sidecar is None and entry["verified"] is True
     assert entry["verified_cfg_sha256"] == hashlib.sha256((output / "java_fixture.cfg").read_bytes()).hexdigest()
     assert entry["abi10_cfg_sha256"] is None
+    assert entry["inconclusive"] is False
+
+
+def test_a_clean_cross_check_that_ran_out_of_time_is_inconclusive_and_keeps_its_comparison(monkeypatch, tmp_path):
+    cross = {**CLEAN, **kvm.run_evidence(run_of(TIMED_OUT, 14), "cross-check run")}
+    entry, sidecar, reason = verify(monkeypatch, tmp_path, artefacts(tmp_path), cross, [])
+    assert "ran out of time" in reason and sidecar is None
+    assert entry["inconclusive"] is True and entry["verified"] is False
+    assert entry["cross_check"]["strace_denials"] == 3 and entry["evidence"]["run"] == "cross-check run"
+
+
+def test_a_mismatch_stays_the_reason_when_its_run_or_a_later_one_ran_out_of_time(monkeypatch, tmp_path):
+    cross = {**CLEAN, "mismatches": MISMATCHES, **kvm.run_evidence(run_of(TIMED_OUT, 14), "cross-check run")}
+    entry, sidecar, reason = verify(monkeypatch, tmp_path, artefacts(tmp_path), cross, LATE_TIMEOUT)
+    assert "do not agree" in reason and sidecar is None
+    assert entry["inconclusive"] is False and entry["verified"] is False
+    assert entry["abi10_inconclusive"]["aborted"] == str(LATE_TIMEOUT)
+
+
+def test_a_timeout_after_a_clean_cross_check_makes_the_exercise_inconclusive_without_a_sidecar(monkeypatch, tmp_path):
+    entry, sidecar, reason = verify(monkeypatch, tmp_path, artefacts(tmp_path), CLEAN, LATE_TIMEOUT)
+    assert reason == str(LATE_TIMEOUT) and sidecar is None
+    assert entry["inconclusive"] is True and entry["verified"] is False and entry["rows"] == []
+
+
+SIX_LIMITS = "[read]\n/a\n/b\n[bind]\nallow 0\n[limits]\ntimeout=150\ncpu=30\nmem_mb=2048\nnproc=64\nnofile=512\nfsize_mb=16\n"
+
+
+def through_the_udp_phase(monkeypatch, tmp_path, diagnosis: verdict.Verdict):
+    """verify_exercise over a cfg with all six limits, through the real ABI 10 phase, whose diagnosis sees a UDP refusal.
+
+    The first joint verification fails and the second passes; the policies the guest ran are kept in the result.
+    """
+    output = artefacts(tmp_path, SIX_LIMITS)
+    exercise = tmp_path / "fixture"
+    exercise.mkdir()
+    (exercise / "build_script.sh").write_text("exit 0\n")
+    (exercise / "build_script.sh").chmod(0o755)
+    ran: list[cfgfile.Policy] = []
+
+    def joint(pruning, policy):
+        ran.append(policy)
+        return len(ran) > 2
+
+    def diagnose(self, policy, shape, stage):
+        ran.append(policy)
+        return run_of(diagnosis, 14 if diagnosis.exit_class == "timeout" else 1)
+    decision = type("Decision", (), {"bind": ("allow 5000 udp",), "connect": ()})()
+    monkeypatch.setattr(stages, "baseline", lambda pruning, inspect: PASSED)
+    monkeypatch.setattr(kvm, "cross_check_run", lambda *arguments: CLEAN)
+    monkeypatch.setattr(kvm, "joint_verification", joint)
+    monkeypatch.setattr(stages.Pruning, "run", diagnose)
+    monkeypatch.setattr(stages, "network_decision", lambda pruning, result: decision)
+    result = kvm.verify_exercise(exercise, "java", runner.Environment(), output, None, ORIGIN,
+                                 FakeCapture([], [UDP_RECORD]), main.abort_record)
+    return result, output, ran
+
+
+def test_the_guest_runs_the_cfg_with_its_limits_and_leaves_the_cfg_and_the_sidecar_as_they_are(monkeypatch, tmp_path):
+    (entry, sidecar, reason), output, ran = through_the_udp_phase(monkeypatch, tmp_path, FAILED)
+    assert reason is None and entry["verified"] is True
+    assert (output / "java_fixture.cfg").read_text() == SIX_LIMITS
+    assert entry["verified_cfg_sha256"] == hashlib.sha256(SIX_LIMITS.encode()).hexdigest()
+    assert [policy.limits for policy in ran] == [cfgfile.read_policy(SIX_LIMITS).limits] * 3
+    assert cfgfile.read_policy(sidecar).bind == ("allow 5000 udp",) and cfgfile.read_policy(sidecar).limits == {}
+
+
+def test_a_diagnosis_that_ran_out_of_time_beside_a_udp_refusal_is_inconclusive_without_a_sidecar(monkeypatch, tmp_path):
+    (entry, sidecar, reason), output, _ = through_the_udp_phase(monkeypatch, tmp_path, TIMED_OUT)
+    assert "ran out of time" in reason and sidecar is None
+    assert entry["inconclusive"] is True and entry["evidence"]["run"] == "diagnosis run" and entry["rows"] == []
+    assert (output / "java_fixture.cfg").read_text() == SIX_LIMITS
 
 
 def test_a_cross_check_that_compared_nothing_although_grants_were_removed_fails_the_exercise(monkeypatch, tmp_path):
@@ -296,8 +502,7 @@ def test_a_row_gives_a_sidecar_whose_hash_the_record_carries(monkeypatch, tmp_pa
 
 
 def test_a_mismatch_fails_the_exercise_and_writes_no_sidecar_even_with_a_row(monkeypatch, tmp_path):
-    cross = {**CLEAN, "mismatches": [{"operation": "openat", "objects": ["/x"], "sections": ["read"],
-                                      "audit_for_object": []}]}
+    cross = {**CLEAN, "mismatches": MISMATCHES}
     entry, sidecar, reason = verify(monkeypatch, tmp_path, artefacts(tmp_path), cross,
                                     [{"rule": "allow 5000 udp", "audit": []}])
     assert "do not agree" in reason and sidecar is None and entry["verified"] is False
@@ -333,7 +538,7 @@ def kernel_run(monkeypatch, tmp_path, capture: object, results: list):
 
 
 def test_the_record_and_the_sidecar_are_written_and_a_stale_sidecar_is_removed(monkeypatch, tmp_path):
-    entry = {"schema_version": 1, "verified": True}
+    entry = {"schema_version": 1, "verified": True, "inconclusive": False}
     status, output = kernel_run(monkeypatch, tmp_path, FakeCapture(), [(entry, None, None)])
     assert status == 0
     assert json.loads((output / "java_fixture.abi10.json").read_text()) == entry
@@ -341,15 +546,39 @@ def test_the_record_and_the_sidecar_are_written_and_a_stale_sidecar_is_removed(m
 
 
 def test_a_sidecar_is_written_where_the_exercise_added_a_row(monkeypatch, tmp_path):
-    status, output = kernel_run(monkeypatch, tmp_path, FakeCapture(), [({"verified": True}, "[bind]\nallow 5000 udp\n", None)])
+    status, output = kernel_run(monkeypatch, tmp_path, FakeCapture(),
+                                [({"verified": True, "inconclusive": False}, "[bind]\nallow 5000 udp\n", None)])
     assert status == 0
     assert (output / "java_fixture.abi10.cfg").read_text() == "[bind]\nallow 5000 udp\n"
 
 
 def test_a_failed_exercise_ends_the_command_with_status_1_and_still_writes_its_record(monkeypatch, tmp_path):
-    status, output = kernel_run(monkeypatch, tmp_path, FakeCapture(), [({"verified": False}, None, "a mismatch")])
+    status, output = kernel_run(monkeypatch, tmp_path, FakeCapture(),
+                                [({"verified": False, "inconclusive": False}, None, "a mismatch")])
     assert status == main.EXIT_ABORTED
     assert (output / "java_fixture.abi10.json").exists()
+
+
+def two_exercises(tmp_path):
+    """A second exercise beside the fixture kernel_run makes, so that the observer checks two."""
+    second = tmp_path / "exercises" / "java" / "second"
+    second.mkdir(parents=True)
+    (second / "build_script.sh").write_text("exit 0\n")
+    (second / "build_script.sh").chmod(0o755)
+
+
+@pytest.mark.parametrize("second, expected", [
+    (({"verified": True, "inconclusive": False}, None, None), kvm.EXIT_INDETERMINATE),
+    (({"verified": False, "inconclusive": False}, None, "a mismatch"), main.EXIT_ABORTED),
+])
+def test_an_inconclusive_exercise_ends_the_command_with_status_3_unless_another_one_failed(monkeypatch, tmp_path,
+                                                                                         second, expected):
+    two_exercises(tmp_path)
+    undecided = ({"verified": False, "inconclusive": True}, None, "the diagnosis run ran out of time")
+    status, output = kernel_run(monkeypatch, tmp_path, FakeCapture(), [undecided, second])
+    assert status == expected
+    assert (output / "java_fixture.abi10.json").exists() and (output / "java_second.abi10.json").exists()
+    assert not (output / "java_fixture.abi10.cfg").exists()
 
 
 def test_a_guest_that_cannot_observe_ends_the_command_with_status_3_and_writes_nothing(monkeypatch, tmp_path):

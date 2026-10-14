@@ -13,6 +13,7 @@ import dataclasses
 import os
 import pathlib
 import shutil
+from collections.abc import Callable
 from typing import Any
 
 from exercise_pruner.src.application import containment, search
@@ -131,12 +132,21 @@ def canonical(path: str) -> str:
 FAILING_OUTCOMES = (verdict.FAILED, verdict.UNREADABLE)
 
 
-def baseline(pruning: Pruning) -> verdict.Verdict:
-    """Three reference runs that ran tests, without NO-SOURCE or an infrastructure failure, all alike (A.8)."""
+def accept_every_run(result: runner.RunResult) -> None:
+    """The default inspection of a reference run: it raises nothing, so the baseline's own checks decide alone."""
+
+
+def baseline(pruning: Pruning, *, inspect: Callable[[runner.RunResult], None] = accept_every_run) -> verdict.Verdict:
+    """Three reference runs that ran tests, without NO-SOURCE or an infrastructure failure, all alike (A.8).
+
+    `inspect` sees each reference run once it is in the record and before any of these checks, and may raise to end
+    the baseline there; the KVM guest has it refuse a run that ran out of time.
+    """
     reference = None
     for attempt in range(BASELINE_RUNS):
         result = runner.run_reference(pruning.exercise, pruning.environment)
         pruning.note("baseline", attempt=attempt + 1, status=result.status, verdict=dataclasses.asdict(result.verdict))
+        inspect(result)
         found = result.verdict
         if not found.tests_ran or found.no_source or found.infra_failure:
             raise search.PruneAbort("the reference run ran no tests or failed for an infrastructure reason",

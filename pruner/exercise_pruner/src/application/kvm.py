@@ -60,10 +60,24 @@ PROBE_SECONDS = 120
 LOG_VARIABLE = "PHOBOS_LANDLOCK_LOG_NEW_EXEC"
 # What the kernel prints when it drops audit records instead of queueing them.
 LOSS_MARKERS = ("audit_lost=", "audit_backlog=")
+# The verdict of a run that ran out of time: status 14, the timeout layer's or the pruner's own limit, or the command's.
+TIMEOUT = "timeout"
+# How much of a run that ran out of time its record keeps: the last lines of its log and, for an observed run, of its
+# strace trace, read from at most the last TAIL_BYTES of each file, which can be large after a long run.
+LOG_TAIL_LINES = 60
+TRACE_TAIL_LINES = 300
+TAIL_BYTES = 262144
 
 
 class Indeterminate(Exception):
     """The guest cannot observe Landlock's audit records, so no result of this run means anything."""
+
+
+class Inconclusive(search.PruneAbort):
+    """One exercise's run ran out of time on the guest, so it cannot tell whether the kernels differ.
+
+    It ends that exercise, which is then neither verified nor failed, and the job goes on with the next one.
+    """
 
 
 class Capture:
@@ -193,21 +207,98 @@ def narrowed(policy: cfgfile.Policy) -> cfgfile.Policy:
     return dataclasses.replace(policy, fs=kept, comments={path: text for path, text in policy.comments.items() if path in kept})
 
 
+def tail_lines(path: pathlib.Path, count: int) -> list[str]:
+    """The last `count` lines of the file, read from at most its last TAIL_BYTES; nothing when there is no such file."""
+    try:
+        with open(path, "rb") as stream:
+            stream.seek(max(0, os.fstat(stream.fileno()).st_size - TAIL_BYTES))
+            return stream.read().decode(errors="replace").splitlines()[-count:]
+    except OSError:
+        return []
+
+
+def run_evidence(result: runner.RunResult, run: str) -> dict:
+    """What a record keeps of one run: its name, status and verdict, its log's last lines and its trace's, if any."""
+    return {"run": run, "status": result.status, "verdict": dataclasses.asdict(result.verdict),
+            "log_tail": tail_lines(result.log_path, LOG_TAIL_LINES),
+            "trace_tail": tail_lines(result.log_path.with_suffix(".trace"), TRACE_TAIL_LINES)}
+
+
+def refuse_timeout(result: runner.RunResult, run: str) -> None:
+    """Raises Inconclusive with the run's evidence when the run ran out of time."""
+    if result.verdict.exit_class == TIMEOUT:
+        raise Inconclusive(f"the {run} on the guest kernel ran out of time, so it cannot tell whether the kernels differ",
+                           run_evidence(result, run))
+
+
+def refuse_timed_out_reference(result: runner.RunResult) -> None:
+    """The baseline's inspection on the guest: a reference run that ran out of time leaves nothing to compare with."""
+    refuse_timeout(result, "reference run")
+
+
 def cross_check_run(pruning: stages.Pruning, policy: cfgfile.Policy, capture: Capture) -> dict:
-    """One observed run under the narrowed policy, compared denial by denial with the kernel's records."""
+    """One observed run under the narrowed policy, compared denial by denial with the kernel's records.
+
+    The run's status and verdict go with the comparison, so that a run which ran out of time is known as one: what it
+    did before the timeout is compared all the same.
+    """
     capture.collect()
     result = pruning.run(stages.normalised(pruning, narrowed(policy)), stages.OBSERVED_FILESYSTEM, "kvm cross-check")
     records, unparsed, _ = read_records(capture)
     attributed = [denial for denial in stages.denials_of(pruning, result)
                   if denial.layer == record.LAYER_FILESYSTEM and control.landlock_caused(denial, pruning.exercise.uses_pseudo_terminals)]
     compared = audit.cross_check(attributed, audit.denials(records))
-    return {"strace_denials": len(attributed), "audit_records": len(records), "unparsed": unparsed, **compared}
+    timed_out = run_evidence(result, "cross-check run") if result.verdict.exit_class == TIMEOUT else {}
+    return {"strace_denials": len(attributed), "audit_records": len(records), "unparsed": unparsed, **compared,
+            "status": result.status, "verdict": dataclasses.asdict(result.verdict), **timed_out}
+
+
+def joint_verification(pruning: stages.Pruning, policy: cfgfile.Policy) -> bool:
+    """Whether the verification's unobserved runs with every layer on all match the reference, as stages.joint_runs.
+
+    Raises Inconclusive at the first run that ran out of time, which matches nothing and differs in nothing.
+    """
+    for _ in range(pruning.budget.verification_runs):
+        result = pruning.run(policy, stages.JOINT, "verification")
+        refuse_timeout(result, "joint verification")
+        if not pruning.matches(result):
+            return False
+    return True
+
+
+def observed_timeout(pruning: stages.Pruning, policy: cfgfile.Policy, capture: Capture) -> dict:
+    """One observed run with every layer on after a joint run ran out of time; its evidence and the kernel's records.
+
+    An unobserved run leaves no trace, so this run is what shows where the command stopped: the last lines of its
+    strace trace name the calls the processes were in when its time ran out.
+    """
+    capture.collect()
+    observed = pruning.run(policy, stages.OBSERVED_JOINT, "kvm timeout diagnosis")
+    records, _, _ = read_records(capture)
+    return {**run_evidence(observed, "observed run after the timeout"), "audit": [item.raw for item in records][:20]}
+
+
+def with_observed_timeout(undecided: Inconclusive, pruning: stages.Pruning, policy: cfgfile.Policy,
+                          capture: Capture) -> Inconclusive:
+    """The joint run's Inconclusive with the observed run's evidence added under `observed`.
+
+    The observed run only explains the timeout, so whatever ends it, a defect of the run, an unreadable trace or a
+    capture that cannot read the kernel's records, is kept as `observed_failed` instead of replacing the timeout.
+    The broad except is for that reason.
+    """
+    try:
+        found: dict = {"observed": observed_timeout(pruning, policy, capture)}
+    except Exception as failure:  # noqa: BLE001
+        found = {"observed_failed": f"{type(failure).__name__}: {failure}"}
+    return Inconclusive(undecided.reason, {**undecided.evidence, **found})
 
 
 def abi10_phase(pruning: stages.Pruning, policy: cfgfile.Policy, capture: Capture) -> tuple[cfgfile.Policy, list[dict]]:
     """The joint verification on this kernel; the policy it ends with and the UDP bind rows it added, each with its audit record.
 
-    A failing run is diagnosed with one observed run. Only a UDP bind the kernel names as refused, whose
+    A joint or diagnosis run that ran out of time raises Inconclusive, with the end of its log and, after a joint
+    run, one observed run of the same policy whose trace shows where it stopped. A failing run is diagnosed with one
+    observed run. Only a UDP bind the kernel names as refused, whose
     rule the strace derivation also asks for, is added (port 0 included, which its record names by no
     port); any other rule, or a failure with no refusal to explain it, aborts, because then the two
     kernels differ in something this run may not decide. The abort names the diagnosis run's status and
@@ -217,11 +308,16 @@ def abi10_phase(pruning: stages.Pruning, policy: cfgfile.Policy, capture: Captur
     current = policy
     added: list[dict] = []
     for _ in range(stages.ROUTING_ROUNDS + 1):
-        if stages.joint_runs(pruning, current):
+        try:
+            held = joint_verification(pruning, current)
+        except Inconclusive as undecided:
+            raise with_observed_timeout(undecided, pruning, current, capture) from undecided
+        if held:
             return current, added
         capture.collect()
         diagnosis = pruning.run(current, stages.OBSERVED_JOINT, "kvm abi10 diagnosis")
         records, _, _ = read_records(capture)
+        refuse_timeout(diagnosis, "diagnosis run")
         decision = stages.network_decision(pruning, diagnosis)
         rows, other = audit.abi10_rows(decision.bind, records, current.bind)
         connect = [rule for rule in decision.connect if not rule.endswith(" udp")]
@@ -252,12 +348,14 @@ def verify_exercise(directory: pathlib.Path, key: str, environment: runner.Envir
 
     The record is always made. The sidecar text is made only when a row was added and everything else
     held. A failure is a mismatch of the cross-check, an abort or a defect, each named by `describe`,
-    which turns the exception into the record's reason and evidence.
+    which turns the exception into the record's reason and evidence. A run that ran out of time makes the
+    exercise inconclusive instead (`inconclusive` in the record, no sidecar), unless the cross-check already
+    found a failure, which then stays the reason and keeps the timeout beside it as `abi10_inconclusive`.
     """
     base = f"{key}_{directory.name}"
     entry: dict = {"schema_version": ABI10_SCHEMA, "key": key, "exercise": directory.name, "provenance": origin,
                    "kernel": platform.release(), "landlock_abi": origin["landlock_abi"], "verified_cfg_sha256": None,
-                   "abi10_cfg_sha256": None, "mismatches": [], "audit_only": [], "rows": []}
+                   "abi10_cfg_sha256": None, "mismatches": [], "audit_only": [], "rows": [], "inconclusive": False}
     reason = None
     sidecar = None
     try:
@@ -270,7 +368,7 @@ def verify_exercise(directory: pathlib.Path, key: str, environment: runner.Envir
         policy = cfgfile.read_policy(text)
         pruning = stages.Pruning(exercise=runner.read_exercise(directory), budget=stages.Budget(),
                                  environment=environment, pristine=pristine)
-        pruning.reference = stages.baseline(pruning)
+        pruning.reference = stages.baseline(pruning, inspect=refuse_timed_out_reference)
         entry["cross_check"] = cross_check_run(pruning, policy, capture)
         entry["mismatches"] = entry["cross_check"]["mismatches"]
         entry["audit_only"] = entry["cross_check"]["audit_only"]
@@ -280,10 +378,23 @@ def verify_exercise(directory: pathlib.Path, key: str, environment: runner.Envir
         elif entry["cross_check"]["strace_denials"] == 0 and len(narrowed(policy).fs) < len(policy.fs):
             reason = ("the cross-check run was refused nothing strace could attribute, although it ran without "
                       f"{len(policy.fs) - len(narrowed(policy).fs)} grant(s) the policy holds, so nothing was compared")
-        _, entry["rows"] = abi10_phase(pruning, policy, capture)
+        elif entry["cross_check"]["verdict"]["exit_class"] == TIMEOUT:
+            raise Inconclusive("the cross-check run on the guest kernel ran out of time, so it cannot tell whether "
+                               "the kernels differ", {name: entry["cross_check"][name] for name in
+                                                      ("run", "status", "verdict", "log_tail", "trace_tail")})
+        try:
+            _, entry["rows"] = abi10_phase(pruning, policy, capture)
+        except Inconclusive as undecided:
+            if reason is None:
+                raise
+            entry["abi10_inconclusive"] = describe(undecided)
         if entry["rows"] and reason is None:
             sidecar = sidecar_text(origin, key, directory.name, entry["rows"])
             entry["abi10_cfg_sha256"] = hashlib.sha256(sidecar.encode()).hexdigest()
+    except Inconclusive as undecided:
+        entry |= describe(undecided)
+        entry["inconclusive"] = True
+        reason = entry["aborted"]
     except Exception as failure:  # noqa: BLE001
         described = describe(failure)
         entry |= described

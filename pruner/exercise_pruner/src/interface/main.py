@@ -260,8 +260,13 @@ def verify_one(directory: pathlib.Path, key: str, environment: runner.Environmen
 
 def kernel_observe(options: argparse.Namespace, environment: runner.Environment, exercises: list[pathlib.Path],
                    output: pathlib.Path, origin: dict[str, str | int], pristine: generalise.Snapshot) -> int:
-    """Runs the audit observer over every exercise of the key; 0 when all held, EXIT_ABORTED or EXIT_INDETERMINATE."""
+    """Runs the audit observer over every exercise of the key; 0 when all held, EXIT_ABORTED or EXIT_INDETERMINATE.
+
+    An exercise that failed makes it EXIT_ABORTED. Otherwise one that was inconclusive, a run of it having run out of
+    time on the guest, makes it EXIT_INDETERMINATE, as does an observer that cannot observe at all.
+    """
     failed = False
+    inconclusive = False
     with tempfile.TemporaryDirectory(prefix="layer-prune-kvm.") as scratch:
         capture = None
         try:
@@ -277,16 +282,20 @@ def kernel_observe(options: argparse.Namespace, environment: runner.Environment,
                 if sidecar is not None:
                     write_atomically(output / f"{base}.abi10.cfg", sidecar)
                 write_atomically(output / f"{base}.abi10.json", json.dumps(entry, indent=2, sort_keys=True) + "\n")
+                outcome = "inconclusive" if entry["inconclusive"] else "failed"
                 print(f"{options.key}/{directory.name}: "
-                      f"{'verified on this kernel' if reason is None else 'failed: ' + reason}", flush=True)
-                failed = failed or reason is not None
+                      f"{'verified on this kernel' if reason is None else outcome + ': ' + reason}", flush=True)
+                failed = failed or (reason is not None and not entry["inconclusive"])
+                inconclusive = inconclusive or entry["inconclusive"]
         except (kvm.Indeterminate, OSError) as failure:
             print(f"the guest cannot observe Landlock's audit records: {failure}", file=sys.stderr)
             return kvm.EXIT_INDETERMINATE
         finally:
             if capture is not None:
                 capture.close()
-    return EXIT_ABORTED if failed else 0
+    if failed:
+        return EXIT_ABORTED
+    return kvm.EXIT_INDETERMINATE if inconclusive else 0
 
 
 def main(argv: list[str]) -> int:
