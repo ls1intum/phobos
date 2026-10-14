@@ -22,6 +22,8 @@ from shared.src.domain import cfgfile, generalise
 
 PASSED = verdict.Verdict(exit_class="success", tests=(("T.a", "passed"),), tests_ran=True, no_source=False,
                          infra_failure=False)
+FAILED = verdict.Verdict(exit_class="tests-failed", tests=(("T.a", "failed"),), tests_ran=True, no_source=False,
+                         infra_failure=False)
 ORIGIN = {"pruner": "phobos layer pruner", "kernel": "7.2.9", "architecture": "x86_64", "landlock_abi": 10, "uid": 0,
           "strace": "strace -- version 6.8", "date": "2026-10-07T00:00:00Z"}
 READ_RECORD = 'audit: type=1423 audit(1.0:1): domain=a blockers=fs.read_file path="/etc/hostname"'
@@ -203,7 +205,9 @@ def failing_then_passing(monkeypatch, decision: object, records: list[str]) -> l
         runs.append(policy)
         return len(runs) > 1
     monkeypatch.setattr(stages, "joint_runs", joint)
-    monkeypatch.setattr(stages.Pruning, "run", lambda self, policy, shape, stage: object())
+    diagnosis = runner.RunResult(verdict=FAILED, status=1, trace=None, samples=None, wall_seconds=1.0,
+                                 log_path=pathlib.Path("/dev/null"))
+    monkeypatch.setattr(stages.Pruning, "run", lambda self, policy, shape, stage: diagnosis)
     monkeypatch.setattr(stages, "network_decision", lambda pruning, result: decision)
     return runs
 
@@ -236,8 +240,11 @@ def test_any_other_difference_between_the_kernels_aborts_instead_of_adding_a_row
                                                                                 lines):
     decision = type("Decision", (), {"bind": bind, "connect": connect})()
     failing_then_passing(monkeypatch, decision, lines)
-    with pytest.raises(search.PruneAbort, match="more than a UDP bind port"):
+    with pytest.raises(search.PruneAbort, match="more than a UDP bind port") as aborted:
         kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture([], lines))
+    assert aborted.value.evidence["status"] == 1
+    assert aborted.value.evidence["verdict"]["exit_class"] == "tests-failed"
+    assert aborted.value.evidence["verdict"]["tests"] == (("T.a", "failed"),)
 
 
 def artefacts(tmp_path: pathlib.Path, text: str = "[read]\n/a\n/b\n") -> pathlib.Path:
