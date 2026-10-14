@@ -120,8 +120,14 @@ chmod +x "${STUBS}/dialog"
 # STUB_DOCKER_STATUSES names one status per call, with the status of this call. With STUB_DOCKER_WAIT
 # set it writes the PID of the menu (the parent of the phobos-cli.sh that started it) beside that
 # file, marks it as started and waits to be stopped, which is how a signal to the menu is measured.
+# The question whether the daemon answers, `docker version`, is answered at once and neither recorded
+# nor counted, so the log and the statuses keep naming the steps alone.
 cat > "${STUBS}/docker" <<'STUB'
 #!/bin/bash
+if [[ "${1:-}" == "version" ]]; then
+  printf '%s\n' "29.0.0"
+  exit 0
+fi
 printf '%s\n' "$*" >> "${STUB_DOCKER_LOG:?}"
 if [[ -n "${STUB_DOCKER_WAIT:-}" ]]; then
   trap 'echo terminated >> "${STUB_DOCKER_WAIT}"; exit 143' TERM

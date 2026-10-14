@@ -237,7 +237,7 @@ needs a host with Docker.
 | --- | --- |
 | The command's own | The command ran. |
 | 2 | The call was made the wrong way. |
-| 15 | The command could not start: no Docker, a missing component, or a leaked `BASH_ENV`, `ENV`, `LD_PRELOAD`, `LD_LIBRARY_PATH` or `LD_AUDIT`. |
+| 15 | The command could not start: no Docker, a Docker daemon that does not answer, a missing component, or a leaked `BASH_ENV`, `ENV`, `LD_PRELOAD`, `LD_LIBRARY_PATH` or `LD_AUDIT`. |
 
 Bash and the loader read `BASH_ENV` and the `LD_*` variables before the first line of a script, so
 the script can only refuse to run when it finds one set. Start it without them. It cleans `PATH`,

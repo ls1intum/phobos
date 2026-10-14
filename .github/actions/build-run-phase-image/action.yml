@@ -1,0 +1,124 @@
+# Builds a run-phase image from an assembled context, with the BuildKit cache of build-image-cached.sh kept between
+# runs in actions/cache when the input cache is true, and with a plain docker build when it is false. One place for
+# the steps every workflow that builds a run-phase image needs, so that the cache key, the restore order and who
+# may write a cache cannot drift between them.
+#
+# Only the Java image is cached: it is the one every pull request builds, and the repository's 10 GB of cache
+# held the layers of every image only by evicting the entries of other workflows, the guest kernel of
+# prune-kvm.yml among them.
+#
+# The cache key is a snapshot: buildkit-v1-<name>-<arch>-<recipe>-<run id>-<attempt>. A restore takes the newest
+# snapshot of the same recipe, and failing that the newest of the same image and architecture. A new snapshot is
+# saved when nothing of the same recipe was found, and always after a fresh build, so that a fresh build's
+# layers are the ones later runs reuse. Only trusted runs save: a push or the schedule on main, and a dispatch
+# (whose entry is scoped to its own branch). A pull request restores and never saves.
+name: Build a run-phase image with a layer cache
+description: Builds a run-phase image with a BuildKit cache kept in actions/cache between runs.
+
+inputs:
+  name:
+    description: "The image's name in the cache key, for example java or python"
+    required: true
+  dockerfile:
+    description: The Dockerfile, relative to the repository root
+    required: true
+  tag:
+    description: The tag the built image is loaded under
+    required: true
+  context:
+    description: The assembled build context
+    required: true
+  fresh:
+    description: "true for a build that re-resolves the base image and reruns every layer, as the weekly run does"
+    required: true
+  cache:
+    description: "true to build with the layer cache, false for a plain docker build without one"
+    required: true
+  buildkit-image:
+    description: The BuildKit image of the docker-container builder, pinned by tag and digest
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Name the recipe
+      if: ${{ inputs.cache == 'true' }}
+      id: recipe
+      shell: bash
+      env:
+        CONTEXT: ${{ inputs.context }}
+        DOCKERFILE: ${{ inputs.dockerfile }}
+        BUILDKIT_IMAGE: ${{ inputs.buildkit-image }}
+        NAME: ${{ inputs.name }}
+        ARCH: ${{ runner.arch }}
+      run: |
+        recipe="$(.github/scripts/build-image-cached.sh recipe "${CONTEXT}" "${DOCKERFILE}" "${BUILDKIT_IMAGE}")"
+        printf 'prefix=buildkit-v1-%s-%s-%s-\n' "${NAME}" "${ARCH}" "${recipe}" >> "${GITHUB_OUTPUT}"
+        printf 'family=buildkit-v1-%s-%s-\n' "${NAME}" "${ARCH}" >> "${GITHUB_OUTPUT}"
+
+    - name: Restore the layer cache
+      if: ${{ inputs.cache == 'true' }}
+      id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/buildkit-cache/${{ inputs.name }}/current
+        key: ${{ steps.recipe.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          ${{ steps.recipe.outputs.prefix }}
+          ${{ steps.recipe.outputs.family }}
+
+    # A new snapshot is kept after a fresh build or when nothing of this recipe was restored, and only by a trusted
+    # run. The build exports a cache only then, since exporting one the run will not keep costs as long as it saves.
+    - name: Decide whether this run keeps a new snapshot
+      id: decide
+      shell: bash
+      env:
+        FRESH: ${{ inputs.fresh }}
+        MATCHED: ${{ steps.restore.outputs.cache-matched-key }}
+        PREFIX: ${{ steps.recipe.outputs.prefix }}
+        CACHE: ${{ inputs.cache }}
+        TRUSTED: >-
+          ${{ github.event_name == 'workflow_dispatch'
+          || (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule')) }}
+      run: |
+        keep=false
+        if [[ "${CACHE}" == "true" && "${TRUSTED}" == "true" ]]; then
+          if [[ "${FRESH}" == "true" || "${MATCHED}" != "${PREFIX}"* ]]; then
+            keep=true
+          fi
+        fi
+        printf 'keep=%s\n' "${keep}" | tee -a "${GITHUB_OUTPUT}"
+
+    - name: Build the image
+      shell: bash
+      env:
+        CACHE: ${{ runner.temp }}/buildkit-cache/${{ inputs.name }}
+        BUILDKIT_IMAGE: ${{ inputs.buildkit-image }}
+        DOCKERFILE: ${{ inputs.dockerfile }}
+        TAG: ${{ inputs.tag }}
+        CONTEXT: ${{ inputs.context }}
+        FRESH: ${{ inputs.fresh }}
+        KEEP: ${{ steps.decide.outputs.keep }}
+        CACHED: ${{ inputs.cache }}
+      run: |
+        fresh=()
+        if [[ "${FRESH}" == "true" ]]; then
+          fresh=(--pull --no-cache)
+        fi
+        if [[ "${CACHED}" != "true" ]]; then
+          docker build "${fresh[@]}" -f "${DOCKERFILE}" -t "${TAG}" "${CONTEXT}"
+          exit 0
+        fi
+        mode=read
+        if [[ "${KEEP}" == "true" ]]; then
+          mode=export
+        fi
+        .github/scripts/build-image-cached.sh build "${CACHE}" "${BUILDKIT_IMAGE}" "${mode}" -- \
+          "${fresh[@]}" -f "${DOCKERFILE}" -t "${TAG}" "${CONTEXT}"
+
+    - name: Save the layer cache
+      if: ${{ steps.decide.outputs.keep == 'true' }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/buildkit-cache/${{ inputs.name }}/current
+        key: ${{ steps.restore.outputs.cache-primary-key }}

@@ -275,8 +275,25 @@ versions 9 and 10 add, in particular a UDP bind to an explicit port, and they gi
 Landlock's own audit records. The manual workflow `prune-kvm.yml` therefore takes what the default
 prune wrote. It runs the same layers, in the root file system of the same prune image, on a
 pinned Linux 7.2 kernel in a QEMU guest under KVM, where the pruner owns the kernel. It runs on
-x86 runners only, in three jobs: the default prune in an ordinary container, the audit observer
-in the guest, and the orchestrator over both.
+x86 runners only, in three stages per key: the default prune in an ordinary container, the audit
+observer in a guest on each of two runner images, and the orchestrator over both. That makes four
+jobs per key, and 39 for a run of every key with its planning and kernel jobs.
+
+A dispatch names one key and a source, or the key `all`. That runs the fixture and the reference
+exercises of every key side by side, and ignores the source. The name of each artefact of a key
+ends in the key and the source, so the merged base of the Gradle reference is
+`merged-base-java-gradle-reference`:
+
+```bash
+gh workflow run prune-kvm.yml -f key=all
+gh run download <run id> -n merged-base-java-gradle-reference
+```
+
+One job per runner image builds the guest kernel for the whole run and hands it to every guest.
+GitHub's cache keeps it between runs, under the runner image's version and the hash of
+`build-kvm-kernel.sh`. Before a guest boots a restored kernel, the workflow holds it to the
+checks a fresh build passes. The kernel's artefact carries its configuration and `build.txt`,
+which names the compiler it came from.
 
 The observer, `main.py --kernel-observer audit`, writes nothing a prune writes. It proves first,
 inside the guest, that the kernel offers Landlock version 10 and that one deliberate refusal

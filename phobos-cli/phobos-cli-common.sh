@@ -119,10 +119,16 @@ require_checkout() {
   CHECKOUT_ROOT="$HERE"
 }
 
-# Ends the script unless Docker can be started. Skipped in a dry run, which starts nothing.
+# Ends the script unless Docker can be started and its daemon answers, so that a stopped Docker
+# Desktop or a socket this user may not open is named before the first step rather than by the
+# failure of one, with what Docker said on one line. Skipped in a dry run, which starts nothing.
+# Assumes the docker found on PATH is the client the steps start, as they look it up the same way.
 require_docker() {
+  local answer
   [[ "$DRY_RUN" == "yes" ]] && return 0
   command -v docker > /dev/null 2>&1 || fail_environment "docker is not on PATH"
+  answer="$(docker version --format '{{.Server.Version}}' 2>&1 > /dev/null)" \
+    || fail_environment "docker is installed, but its daemon does not answer; start Docker Desktop or the Docker service, or check DOCKER_HOST and whether this user may open its socket. Docker said: ${answer//$'\n'/ }"
   return 0
 }
 

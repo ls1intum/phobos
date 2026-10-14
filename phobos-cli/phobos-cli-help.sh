@@ -82,7 +82,8 @@ submissions
 
 EXIT STATUSES
   The command's own, when it ran; 2 for a call made the wrong way; 15 (PHB-ERUNTIME) when a
-  command cannot start: no Docker, a missing component, a leaked BASH_ENV or LD_PRELOAD.
+  command cannot start: no Docker or a daemon that does not answer, a missing component, a leaked
+  BASH_ENV or LD_PRELOAD.
   Start it without BASH_ENV, ENV, LD_PRELOAD, LD_LIBRARY_PATH and LD_AUDIT: bash and the loader
   read them before the first line, so this script can only refuse when it finds them set.
 PHOBOS_CLI_HELP
