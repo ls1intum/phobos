@@ -302,6 +302,12 @@ a pass. Then, per exercise, it compares each Landlock refusal strace attributed 
 record, and verifies the policy on this kernel. A mismatch fails the job and means the mapping from
 call to right is wrong for that call.
 
+The guest measures its own reference first and verifies under the policy's own limits. A run
+that runs out of time makes its exercise inconclusive rather than a difference between the
+kernels, unless the comparison had already found a mismatch. The job then ends with status 3,
+provided no exercise failed outright. The record keeps the end of that run's log, and after a
+joint run one observed run of the same policy, whose strace trace shows where it stopped.
+
 The one thing it can add is a `[bind] allow <port> udp` row for a UDP bind the kernel's record
 names as refused. The row goes in `<key>_<exercise>.abi10.cfg`, beside
 `<key>_<exercise>.abi10.json`, which names the SHA-256 of the `.cfg` it verified and of the
