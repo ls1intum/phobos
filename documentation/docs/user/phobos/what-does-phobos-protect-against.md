@@ -65,7 +65,14 @@ allow-list in two places, with a third for host names:
 A listener is bounded from the other direction: `[bind]` names the local ports the command may
 listen on, and an `[accept]` rule fronts one of them with an inbound HAProxy that admits only
 the source addresses the rule names. The connect guard runs every `listen()` itself on a socket it
-created, so a socket that was never bound cannot become a listener on a port nothing judged.
+created, so a socket that was never bound cannot become a listener on a port nothing judged, and it
+pins every listener to the loopback device first, so only a client on this host reaches it. A
+datagram socket carries a locked filter from the moment it exists, which takes a datagram only
+from this host or from a peer a `udp` `[connect]` rule names. Two runs go without that filter. One
+has a `udp` rule whose host the guard cannot tie to an address. The other runs on a kernel that
+refuses socket filters on datagram sockets, and says so on standard error. The command cannot move a socket off
+loopback or open its error queue: the guard refuses `SO_BINDTODEVICE`, `SO_BINDTOIFINDEX`,
+`IP_RECVERR` and `IPV6_RECVERR`. None of this needs a container without a network.
 
 ## The clock
 

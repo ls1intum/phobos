@@ -32,4 +32,12 @@ void report_refused_socket_kind(int domain, int type);
  * kernel over TCP". */
 void report_refused_listen(void);
 
+/* Reports a refused listen() on a socket that could not be pinned to the loopback device: "listen
+ * outside the Loopback Interface". */
+void report_refused_unpinned_listen(void);
+
+/* Reports a refused socket() for a datagram socket the receive filter could not be attached to:
+ * "open the Socket Type unfiltered (AF_INET6, SOCK_DGRAM)". */
+void report_refused_unfiltered_socket(int domain, int type);
+
 #endif

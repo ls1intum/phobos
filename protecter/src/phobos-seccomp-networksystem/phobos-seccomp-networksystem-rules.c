@@ -253,6 +253,14 @@ bool connection_permitted(int family, const void *address, uint16_t port, bool i
     return false;
 }
 
+size_t connect_rule_count_held(void) {
+    return connect_rule_count;
+}
+
+const struct connect_rule *connect_rule_at(size_t index) {
+    return &connect_rules[index];
+}
+
 #ifdef PHOBOS_CONNECT_GUARD_UNIT_TEST
 void connect_rules_reset_for_tests(void) {
     connect_rule_count = 0;

@@ -79,7 +79,9 @@ static const char *socket_kind(int domain, int base_type) {
     return base_type == SOCK_RAW ? "raw" : "icmp";
 }
 
-void report_refused_socket_kind(int domain, int type) {
+/* Reports a refused socket() of one kind: "open the Socket Type <kind> (<domain>, <type>)", the
+ * domain and the type by name where the report knows one and by number otherwise. */
+static void report_refused_socket_of_kind(const char *kind, int domain, int type) {
     int base_type = type & BASE_TYPE_MASK;
     char domain_text[DOMAIN_TEXT_SIZE];
     char type_text[DOMAIN_TEXT_SIZE];
@@ -88,12 +90,24 @@ void report_refused_socket_kind(int domain, int type) {
     const char *known_type = type_name(base_type);
     snprintf(domain_text, sizeof(domain_text), "domain %d", domain);
     snprintf(type_text, sizeof(type_text), "type %d", base_type);
-    snprintf(object, sizeof(object), "%s (%s, %s)", socket_kind(domain, base_type),
+    snprintf(object, sizeof(object), "%s (%s, %s)", kind,
              known_domain != nullptr ? known_domain : domain_text,
              known_type != nullptr ? known_type : type_text);
     report_blocked(REPORT_LAYER_NETWORK, "open", "Socket Type", object, false, nullptr);
 }
 
+void report_refused_socket_kind(int domain, int type) {
+    report_refused_socket_of_kind(socket_kind(domain, type & BASE_TYPE_MASK), domain, type);
+}
+
+void report_refused_unfiltered_socket(int domain, int type) {
+    report_refused_socket_of_kind("unfiltered", domain, type);
+}
+
 void report_refused_listen(void) {
     report_blocked(REPORT_LAYER_NETWORK, "listen on", "Port", "chosen by the kernel over TCP", false, nullptr);
+}
+
+void report_refused_unpinned_listen(void) {
+    report_blocked(REPORT_LAYER_NETWORK, "listen outside", "Loopback Interface", "", false, nullptr);
 }

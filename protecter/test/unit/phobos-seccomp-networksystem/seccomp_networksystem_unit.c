@@ -56,6 +56,7 @@
 #include "../../../src/phobos-seccomp-networksystem/phobos-seccomp-networksystem-child.h"
 #include "../../../src/phobos-seccomp-networksystem/phobos-seccomp-networksystem-destination.h"
 #include "../../../src/phobos-seccomp-networksystem/phobos-seccomp-networksystem-held-sockets.h"
+#include "../../../src/phobos-seccomp-networksystem/phobos-seccomp-networksystem-receive-filter.h"
 #include "../../../src/phobos-seccomp-networksystem/phobos-seccomp-networksystem-socket-types.h"
 #include "../../../src/phobos-seccomp-networksystem/phobos-seccomp-networksystem-report.h"
 #include "../../../src/phobos-seccomp-networksystem/phobos-seccomp-networksystem-broker-log.h"
@@ -101,6 +102,11 @@ static constexpr size_t FAKE_DATAGRAM_LENGTH = 16;              /* the length of
 static constexpr uint16_t FAKE_DNS_ID = 0xBEEF;                 /* what the wrapped getrandom hands out, so a case knows the id */
 static constexpr size_t DNS_TEST_HEADER = 12;                   /* the length of a DNS message's header */
 static constexpr size_t DNS_TEST_OPT_RECORD = 11;               /* the EDNS0 record the query ends with */
+
+/* The port the wrapped getsockname reports once the guard has bound a socket itself, and the index
+ * the wrapped if_nametoindex gives the loopback interface. */
+static constexpr uint16_t FAKE_KERNEL_PORT = 50123;
+static constexpr unsigned int FAKE_LOOPBACK_INDEX = 1;
 
 /* The Landlock version the wrapped query reports unless a case says otherwise. */
 static constexpr int FAKE_LANDLOCK_VERSION = 8;
@@ -251,6 +257,8 @@ struct behaviour {
     char unix_path[32];         /* when not empty, the path a faked UNIX address names */
     /* the listen the supervisor runs itself, and the socket address it reads first */
     int notif_listen_backlog;
+    int notif_option_level;     /* the level and name a setsockopt notification carries */
+    int notif_option_name;
     int listen_result;
     int listen_errno;
     int listen_calls;
@@ -259,6 +267,33 @@ struct behaviour {
     int getsockname_result;
     int getsockname_family;
     uint16_t getsockname_port;
+    int getsockname_calls;
+    int getsockname_fail_at;    /* the 1-based getsockname call that fails; 0 never */
+    char getsockname_v6_address[48];  /* when not empty, the IPv6 address getsockname reports */
+    uint32_t getsockname_scope_id;
+    /* the pin of a listener to the loopback device, and the receive filter of a datagram socket */
+    int setsockopt_calls;
+    int setsockopt_fail_level;  /* with setsockopt_fail_name, the option that fails, with setsockopt_errno */
+    int setsockopt_fail_name;
+    int setsockopt_errno;
+    int setsockopt_fail_at;     /* the 1-based setsockopt call that fails, with setsockopt_errno; 0 never */
+    int last_setsockopt_level;
+    int last_setsockopt_name;
+    char last_device_set[16];
+    unsigned short last_attached_length;
+    int attach_calls;
+    int lock_calls;
+    int no_port_cleared;
+    int bind_calls;
+    int bind_result;
+    int last_bind_family;
+    uint32_t last_bind_scope_id;
+    uint16_t bound_port;        /* the port getsockname reports once bind was called */
+    char bound_device[16];      /* what getsockopt reads back as the socket's device */
+    int device_read_fails;
+    unsigned int loopback_index;
+    int socket_fail_family;     /* a family socket() fails for, with socket_fail_errno */
+    int socket_fail_errno;
     /* the datagrams the supervisor sends itself */
     int sendto_result;          /* 0: the whole length goes; above 0: that many bytes; below 0: fail */
     int sendto_errno;
@@ -376,6 +411,10 @@ static void reset_behaviour(void) {
     ephemeral_listen_reset_for_tests();
     ephemeral_udp_bind_reset_for_tests();
     bx->getsockname_family = AF_INET;
+    bx->bound_port = FAKE_KERNEL_PORT;
+    snprintf(bx->bound_device, sizeof(bx->bound_device), "lo");
+    bx->loopback_index = FAKE_LOOPBACK_INDEX;
+    receive_filter_set_for_tests(RECEIVE_FILTER_NEEDLESS);
     bx->iov_count = 1;
     bx->segment_length = FAKE_DATAGRAM_LENGTH;
     bx->sendto_length = FAKE_DATAGRAM_LENGTH;
@@ -739,9 +778,12 @@ ssize_t __wrap_process_vm_readv(pid_t pid, const struct iovec *local, unsigned l
 }
 
 int __wrap_socket(int domain, int type, int protocol) {
-    (void)domain;
     (void)type;
     (void)protocol;
+    if (bx->socket_fail_family != 0 && domain == bx->socket_fail_family) {
+        errno = bx->socket_fail_errno;
+        return -1;
+    }
     if (bx->socket_result < 0) {
         errno = EMFILE;
         return -1;
@@ -788,20 +830,82 @@ int __wrap_listen(int fd, int backlog) {
     return 0;
 }
 
+/* Reports the socket's family and port: the arranged port until the guard has bound the socket
+ * itself, and the port the kernel picked after. An IPv6 address and scope can be arranged too. */
 int __wrap_getsockname(int fd, struct sockaddr *address, socklen_t *length) {
     (void)fd;
-    if (bx->getsockname_result != 0) {
+    bx->getsockname_calls++;
+    if (bx->getsockname_result != 0
+        || (bx->getsockname_fail_at != 0 && bx->getsockname_calls == bx->getsockname_fail_at)) {
         errno = ENOTSOCK;
         return -1;
     }
     memset(address, 0, *length);
     address->sa_family = (sa_family_t)bx->getsockname_family;
+    uint16_t port = bx->bind_calls > 0 ? bx->bound_port : bx->getsockname_port;
     if (bx->getsockname_family == AF_INET) {
-        ((struct sockaddr_in *)address)->sin_port = htons(bx->getsockname_port);
+        ((struct sockaddr_in *)address)->sin_port = htons(port);
+        *length = sizeof(struct sockaddr_in);
     } else if (bx->getsockname_family == AF_INET6) {
-        ((struct sockaddr_in6 *)address)->sin6_port = htons(bx->getsockname_port);
+        struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)address;
+        v6->sin6_port = htons(port);
+        v6->sin6_scope_id = bx->getsockname_scope_id;
+        if (bx->getsockname_v6_address[0] != '\0') {
+            inet_pton(AF_INET6, bx->getsockname_v6_address, &v6->sin6_addr);
+        }
+        *length = sizeof(struct sockaddr_in6);
     }
     return 0;
+}
+
+/* Records each socket option the guard sets: the receive filter attached and locked, the device a
+ * listener is pinned to and the option that binds without a port, and fails the arranged one. */
+int __wrap_setsockopt(int fd, int level, int name, const void *value, socklen_t length) {
+    (void)fd;
+    bx->setsockopt_calls++;
+    bx->last_setsockopt_level = level;
+    bx->last_setsockopt_name = name;
+    if (level == SOL_SOCKET && name == SO_ATTACH_FILTER) {
+        bx->attach_calls++;
+        bx->last_attached_length = ((const struct sock_fprog *)value)->len;
+    } else if (level == SOL_SOCKET && name == SO_LOCK_FILTER) {
+        bx->lock_calls++;
+    } else if (level == SOL_SOCKET && name == SO_BINDTODEVICE) {
+        snprintf(bx->last_device_set, sizeof(bx->last_device_set), "%.*s", (int)length, (const char *)value);
+    } else if (level == IPPROTO_IP && name == IP_BIND_ADDRESS_NO_PORT && *(const int *)value == 0) {
+        bx->no_port_cleared++;
+    }
+    if ((bx->setsockopt_fail_level == level && bx->setsockopt_fail_name == name && name != 0)
+        || (bx->setsockopt_fail_at != 0 && bx->setsockopt_calls == bx->setsockopt_fail_at)) {
+        errno = bx->setsockopt_errno;
+        return -1;
+    }
+    return 0;
+}
+
+/* The bind the guard makes itself before a listener without a port listens. */
+int __wrap_bind(int fd, const struct sockaddr *address, socklen_t length) {
+    (void)fd;
+    (void)length;
+    bx->bind_calls++;
+    bx->last_bind_family = address->sa_family;
+    if (address->sa_family == AF_INET6) {
+        bx->last_bind_scope_id = ((const struct sockaddr_in6 *)address)->sin6_scope_id;
+    }
+    if (bx->bind_result != 0) {
+        errno = EADDRINUSE;
+        return -1;
+    }
+    return 0;
+}
+
+/* The loopback interface's index, or 0, with ENODEV, for a namespace that has none. */
+unsigned int __wrap_if_nametoindex(const char *name) {
+    (void)name;
+    if (bx->loopback_index == 0) {
+        errno = ENODEV;
+    }
+    return bx->loopback_index;
 }
 
 ssize_t __wrap_readlink(const char *path, char *buffer, size_t size) {
@@ -1270,8 +1374,15 @@ int __wrap_poll(struct pollfd *fds, nfds_t count, int timeout) {
 
 int __wrap_getsockopt(int fd, int level, int name, void *value, socklen_t *length) {
     (void)fd;
-    (void)level;
-    (void)name;
+    if (level == SOL_SOCKET && name == SO_BINDTODEVICE) {
+        if (bx->device_read_fails) {
+            errno = EINVAL;
+            return -1;
+        }
+        snprintf(value, *length, "%s", bx->bound_device);
+        *length = (socklen_t)strlen(bx->bound_device) + 1;
+        return 0;
+    }
     if (bx->getsockopt_result != 0) {
         errno = EINVAL;
         return -1;
@@ -1324,6 +1435,10 @@ int __wrap_ioctl(int fd, unsigned long request, ...) {
         } else if (bx->notif_recv_nr == __NR_listen) {
             req->data.args[0] = bx->notif_recv_target_fd;
             req->data.args[1] = (uint64_t)bx->notif_listen_backlog;
+        } else if (bx->notif_recv_nr == __NR_setsockopt) {
+            req->data.args[0] = bx->notif_recv_target_fd;
+            req->data.args[1] = (uint64_t)bx->notif_option_level;
+            req->data.args[2] = (uint64_t)bx->notif_option_name;
         } else {
             req->data.args[0] = bx->notif_recv_target_fd;
             req->data.args[1] = FAKE_ADDRESS_POINTER;
@@ -3618,6 +3733,8 @@ static void test_argument_errors(void) {
  * form this filter does not use, and answering zero for it makes the case fail rather than
  * quietly pass. Assumes a case has already run the child, so a filter was captured. */
 static uint64_t filter_fifth_argument = 0;
+static uint64_t filter_second_argument;
+static uint64_t filter_third_argument;
 
 static uint32_t run_captured_filter(const struct sock_filter *program, unsigned short length,
                                     uint32_t audit_arch, int syscall_number,
@@ -3627,6 +3744,8 @@ static uint32_t run_captured_filter(const struct sock_filter *program, unsigned 
     data.arch = audit_arch;
     data.nr = syscall_number;
     data.args[0] = first_argument;
+    data.args[1] = filter_second_argument;
+    data.args[2] = filter_third_argument;
     data.args[4] = filter_fifth_argument;
     uint32_t accumulator = 0;
     for (unsigned short at = 0; at < length; at++) {
@@ -4002,6 +4121,7 @@ static void test_parent_paths(void) {
     check("the supervisor takes SIGTERM, SIGHUP, SIGINT and SIGQUIT, passes each on to the command while it exists and to no one once it is reaped",
           signals_taken_and_passed_on(argv) == SIGNALS_PASSED_ON);
 }
+
 
 /* Runs every case. stdout is line-buffered so a forked test-child never inherits a
  * partial buffer and re-emits it on exit, which would otherwise print every line several
@@ -4924,6 +5044,519 @@ static void test_supervisor_answers_the_three_kinds_of_trap(void) {
     check("and unknown for a socket it never saw", tracked_socket_type(FAKE_COMMAND_PID, 6) == -1);
 }
 
+/* ------------------------------------------------------------ the local sockets */
+
+/* What run_socket_filter answers for an instruction this program never uses, so a case fails. */
+static constexpr uint32_t UNKNOWN_FILTER_INSTRUCTION = 0xdeadbeef;
+/* The ifindex of an interface that is not loopback, as eth0 is. */
+static constexpr uint32_t OTHER_INTERFACE = 2;
+/* The length of the longest network header the cases build, IPv6's. */
+static constexpr size_t IPV6_HEADER_LENGTH = 40;
+
+/* A network header as the receive filter reads it, its source address in place, and the interface
+ * it arrived on. */
+struct test_packet {
+    uint8_t header[IPV6_HEADER_LENGTH];
+    uint32_t ifindex;
+};
+
+/* A header from this source, IPv4 or IPv6 by how the text reads, arriving on this interface. A
+ * version other than 4 or 6 can be put in by a case afterwards. */
+static struct test_packet packet_from(const char *source, uint32_t ifindex) {
+    struct test_packet packet;
+    memset(&packet, 0, sizeof(packet));
+    packet.ifindex = ifindex;
+    struct in_addr v4;
+    if (inet_pton(AF_INET, source, &v4) == 1) {
+        packet.header[0] = 0x45;
+        memcpy(&packet.header[12], &v4, sizeof(v4));
+    } else {
+        packet.header[0] = 0x60;
+        inet_pton(AF_INET6, source, &packet.header[8]);
+    }
+    return packet;
+}
+
+/* Runs a socket filter over a packet the way the kernel runs one on a datagram it received: a load
+ * below SKF_NET_OFF's range reads the network header, SKF_AD_IFINDEX the interface, and the scratch
+ * slots M[] hold what the program stores. Answers what it returns. */
+static uint32_t run_socket_filter(const struct sock_filter *program, size_t length,
+                                  const struct test_packet *packet) {
+    uint32_t accumulator = 0;
+    uint32_t scratch[BPF_MEMWORDS];
+    memset(scratch, 0, sizeof(scratch));
+    for (size_t at = 0; at < length; at++) {
+        const struct sock_filter *instruction = &program[at];
+        int32_t offset = (int32_t)instruction->k - SKF_NET_OFF;
+        switch (instruction->code) {
+        case BPF_LD | BPF_B | BPF_ABS:
+            accumulator = packet->header[offset];
+            break;
+        case BPF_LD | BPF_W | BPF_ABS:
+            if (instruction->k == (uint32_t)(SKF_AD_OFF + SKF_AD_IFINDEX)) {
+                accumulator = packet->ifindex;
+            } else {
+                uint32_t word;
+                memcpy(&word, &packet->header[offset], sizeof(word));
+                accumulator = ntohl(word);
+            }
+            break;
+        case BPF_ALU | BPF_RSH | BPF_K:
+            accumulator >>= instruction->k;
+            break;
+        case BPF_ALU | BPF_AND | BPF_K:
+            accumulator &= instruction->k;
+            break;
+        case BPF_ST:
+            scratch[instruction->k] = accumulator;
+            break;
+        case BPF_LD | BPF_MEM:
+            accumulator = scratch[instruction->k];
+            break;
+        case BPF_JMP | BPF_JEQ | BPF_K:
+            at += accumulator == instruction->k ? instruction->jt : instruction->jf;
+            break;
+        case BPF_JMP | BPF_JA:
+            at += instruction->k;
+            break;
+        case BPF_RET | BPF_K:
+            return instruction->k;
+        default:
+            return UNKNOWN_FILTER_INSTRUCTION;
+        }
+    }
+    return UNKNOWN_FILTER_INSTRUCTION;
+}
+
+static struct sock_filter test_program[RECEIVE_FILTER_MAXIMUM];
+static size_t test_program_length = 0;
+
+/* Builds the program for the rules the table holds now, with loopback at FAKE_LOOPBACK_INDEX. */
+static void build_test_program(void) {
+    test_program_length = build_receive_filter(test_program, FAKE_LOOPBACK_INDEX);
+}
+
+/* Whether the program last built takes a datagram from this source on this interface whole. */
+static bool takes(const char *source, uint32_t ifindex) {
+    struct test_packet packet = packet_from(source, ifindex);
+    return run_socket_filter(test_program, test_program_length, &packet) == 0xffffffff;
+}
+
+/* Whether it drops it. */
+static bool drops(const char *source, uint32_t ifindex) {
+    struct test_packet packet = packet_from(source, ifindex);
+    return run_socket_filter(test_program, test_program_length, &packet) == 0;
+}
+
+/* Whether, under one UDP rule naming this host, a loopback source arriving anywhere but on the
+ * loopback interface is still dropped and one arriving on it still taken. */
+static bool loopback_gate_holds_under(const char *host) {
+    connect_rules_reset_for_tests();
+    remember_rule(host, "*", true);
+    build_test_program();
+    return drops("127.0.0.1", OTHER_INTERFACE) && drops("127.255.0.9", OTHER_INTERFACE)
+           && drops("::1", OTHER_INTERFACE) && drops("::ffff:127.0.0.1", OTHER_INTERFACE)
+           && takes("127.0.0.1", FAKE_LOOPBACK_INDEX) && takes("::1", FAKE_LOOPBACK_INDEX);
+}
+
+static void test_receive_filter_program(void) {
+    reset_behaviour();
+    build_test_program();
+    check("with no rule a datagram socket still needs the filter, for loopback alone",
+          needs_receive_filter() && test_program_length > 0);
+    check("a loopback source is taken whole on the loopback interface, IPv4, IPv6 and mapped",
+          takes("127.0.0.1", FAKE_LOOPBACK_INDEX) && takes("127.8.9.10", FAKE_LOOPBACK_INDEX)
+              && takes("::1", FAKE_LOOPBACK_INDEX) && takes("::ffff:127.0.0.1", FAKE_LOOPBACK_INDEX));
+    check("and dropped on any other interface, where only a route_localnet host would let it arrive",
+          drops("127.0.0.1", OTHER_INTERFACE) && drops("::1", OTHER_INTERFACE)
+              && drops("::ffff:127.0.0.1", OTHER_INTERFACE));
+    check("a source no rule names is dropped, on loopback too, so the host's own other address is not local",
+          drops("10.0.0.1", FAKE_LOOPBACK_INDEX) && drops("10.0.0.1", OTHER_INTERFACE)
+              && drops("2001:db8::1", OTHER_INTERFACE) && drops("::2", FAKE_LOOPBACK_INDEX)
+              && drops("::ffff:10.0.0.1", FAKE_LOOPBACK_INDEX));
+    struct test_packet unknown_version = packet_from("127.0.0.1", FAKE_LOOPBACK_INDEX);
+    unknown_version.header[0] = 0x55;
+    check("a header of another version is dropped",
+          run_socket_filter(test_program, test_program_length, &unknown_version) == 0);
+
+    reset_behaviour();
+    remember_rule("192.0.2.7", "53", true);
+    build_test_program();
+    check("a UDP rule naming an address lets its answers in on any interface, and only its",
+          takes("192.0.2.7", OTHER_INTERFACE) && drops("192.0.2.8", OTHER_INTERFACE)
+              && drops("127.0.0.1", OTHER_INTERFACE));
+
+    reset_behaviour();
+    remember_rule("192.0.2.7", "53", false);
+    build_test_program();
+    check("a TCP rule lets no datagram in", drops("192.0.2.7", OTHER_INTERFACE));
+
+    reset_behaviour();
+    remember_rule("198.51.100.0/23", "*", true);
+    build_test_program();
+    check("an IPv4 range is compared under its mask",
+          takes("198.51.100.5", OTHER_INTERFACE) && takes("198.51.101.250", OTHER_INTERFACE)
+              && drops("198.51.102.5", OTHER_INTERFACE) && drops("198.51.99.5", OTHER_INTERFACE));
+
+    reset_behaviour();
+    remember_rule("2001:db8::/33", "*", true);
+    remember_rule("2001:db8:ffff::5", "*", true);
+    build_test_program();
+    check("an IPv6 range is compared under a mask that ends inside a word, and an IPv6 address exactly",
+          takes("2001:db8:7fff::1", OTHER_INTERFACE) && drops("2001:db8:8000::1", OTHER_INTERFACE)
+              && takes("2001:db8:ffff::5", OTHER_INTERFACE) && drops("2001:db8:ffff::6", OTHER_INTERFACE));
+
+    reset_behaviour();
+    remember_rule("::ffff:192.0.2.9", "*", true);
+    remember_rule("::ffff:203.0.113.0/120", "*", true);
+    build_test_program();
+    check("an IPv4-mapped address or range lets the IPv4 source it stands for in",
+          takes("192.0.2.9", OTHER_INTERFACE) && takes("203.0.113.77", OTHER_INTERFACE)
+              && drops("203.0.114.1", OTHER_INTERFACE) && drops("192.0.2.10", OTHER_INTERFACE));
+
+    reset_behaviour();
+    remember_rule("::/80", "*", true);
+    build_test_program();
+    check("an IPv6 range that holds every mapped address lets every IPv4 source in, loopback still excepted",
+          takes("10.0.0.1", OTHER_INTERFACE) && takes("::5", OTHER_INTERFACE)
+              && drops("2001:db8::1", OTHER_INTERFACE) && drops("127.0.0.1", OTHER_INTERFACE));
+
+    reset_behaviour();
+    remember_rule("localhost", "53", true);
+    build_test_program();
+    check("localhost adds nothing beyond what the interface check admits",
+          needs_receive_filter() && takes("127.0.0.1", FAKE_LOOPBACK_INDEX) && drops("127.0.0.1", OTHER_INTERFACE));
+
+    check("no rule readmits a loopback source the interface check refused: a literal, a mapped literal, "
+          "the loopback range, a range spanning it, and a wide IPv6 range",
+          loopback_gate_holds_under("127.0.0.1") && loopback_gate_holds_under("::ffff:127.0.0.1")
+              && loopback_gate_holds_under("127.0.0.0/8") && loopback_gate_holds_under("0.0.0.0/1")
+              && loopback_gate_holds_under("::1") && loopback_gate_holds_under("::/80"));
+
+    reset_behaviour();
+    remember_rule("*", "53", true);
+    check("a UDP rule with a wildcard host allows an answer from anywhere, so no filter is built",
+          !needs_receive_filter() && build_receive_filter(test_program, FAKE_LOOPBACK_INDEX) == 0);
+    reset_behaviour();
+    remember_rule("dns.example.test", "53", true);
+    check("and so does a UDP rule naming a host the guard was not given resolved",
+          !needs_receive_filter());
+    reset_behaviour();
+    remember_rule("dns.example.test", "443", false);
+    check("a TCP rule naming such a host does not", needs_receive_filter());
+
+    reset_behaviour();
+    char host[64];
+    for (unsigned int index = 0; index < MAXIMUM_RULES; index++) {
+        snprintf(host, sizeof(host), "2001:db8:%x::/127", index);
+        remember_rule(host, "*", true);
+    }
+    build_test_program();
+    check("a full table of the longest rules fits the kernel's limit, and its last rule is reached past the long jumps",
+          connect_rules_count_for_tests() == MAXIMUM_RULES && test_program_length <= RECEIVE_FILTER_MAXIMUM
+              && takes("2001:db8:0::1", OTHER_INTERFACE) && takes("2001:db8:ff::1", OTHER_INTERFACE)
+              && drops("2001:db8:ff::2", OTHER_INTERFACE) && takes("127.0.0.1", FAKE_LOOPBACK_INDEX));
+}
+
+static void test_receive_filter_start(void) {
+    reset_behaviour();
+    remember_rule("*", "53", true);
+    check("a run whose rules need no filter starts without one", configure_receive_filter());
+    check("and attaches nothing to a datagram socket", attach_receive_filter(HELD_DATAGRAM_DESCRIPTOR) && bx->attach_calls == 0);
+
+    reset_behaviour();
+    check("a run whose rules need one probes an IPv4 and an IPv6 socket, attaching and locking it on each",
+          configure_receive_filter() && bx->attach_calls == 2 && bx->lock_calls == 2);
+    build_test_program();
+    check("and then attaches and locks that very program on a datagram socket",
+          attach_receive_filter(HELD_DATAGRAM_DESCRIPTOR) && bx->attach_calls == 3 && bx->lock_calls == 3
+              && bx->last_attached_length == test_program_length);
+    bx->setsockopt_fail_level = SOL_SOCKET;
+    bx->setsockopt_fail_name = SO_ATTACH_FILTER;
+    bx->setsockopt_errno = ENOMEM;
+    set_verbose(true);
+    capture_stderr_begin();
+    bool attached = attach_receive_filter(HELD_DATAGRAM_DESCRIPTOR);
+    capture_stderr_end();
+    set_verbose(false);
+    check("a socket the program cannot be attached to is answered false", !attached);
+
+    reset_behaviour();
+    bx->socket_fail_family = AF_INET6;
+    bx->socket_fail_errno = EAFNOSUPPORT;
+    check("a kernel without IPv6 is probed on IPv4 alone", configure_receive_filter() && bx->attach_calls == 1);
+
+    reset_behaviour();
+    bx->socket_fail_family = AF_INET;
+    bx->socket_fail_errno = EMFILE;
+    capture_stderr_begin();
+    bool started = configure_receive_filter();
+    const char *out = capture_stderr_end();
+    check("a probe socket that cannot be opened for another reason refuses the run",
+          !started && strstr(out, "cannot be opened") != NULL);
+
+    reset_behaviour();
+    bx->socket_fail_family = AF_INET6;
+    bx->socket_fail_errno = EPERM;
+    capture_stderr_begin();
+    started = configure_receive_filter();
+    out = capture_stderr_end();
+    check("and one refused with EPERM is never read as a kernel that refuses socket filters",
+          !started && strstr(out, "cannot be opened") != NULL && strstr(out, "are not filtered") == NULL);
+
+    reset_behaviour();
+    bx->loopback_index = 0;
+    capture_stderr_begin();
+    started = configure_receive_filter();
+    out = capture_stderr_end();
+    check("a namespace without a loopback interface refuses the run", !started && strstr(out, "no loopback interface") != NULL);
+
+    reset_behaviour();
+    bx->setsockopt_fail_level = SOL_SOCKET;
+    bx->setsockopt_fail_name = SO_ATTACH_FILTER;
+    bx->setsockopt_errno = EPERM;
+    capture_stderr_begin();
+    started = configure_receive_filter();
+    out = capture_stderr_end();
+    check("a kernel that refuses socket filters on datagram sockets leaves the run unfiltered and says so",
+          started && strstr(out, "datagram sockets are not filtered by their source in this run") != NULL);
+    check("and then hands datagram sockets out without a filter",
+          attach_receive_filter(HELD_DATAGRAM_DESCRIPTOR) && bx->attach_calls == 1);
+
+    reset_behaviour();
+    bx->setsockopt_fail_level = SOL_SOCKET;
+    bx->setsockopt_fail_name = SO_LOCK_FILTER;
+    bx->setsockopt_errno = ENOPROTOOPT;
+    capture_stderr_begin();
+    started = configure_receive_filter();
+    capture_stderr_end();
+    check("so does one that will not lock it", started && attach_receive_filter(HELD_DATAGRAM_DESCRIPTOR));
+
+    reset_behaviour();
+    bx->setsockopt_fail_level = SOL_SOCKET;
+    bx->setsockopt_fail_name = SO_ATTACH_FILTER;
+    bx->setsockopt_errno = EINVAL;
+    capture_stderr_begin();
+    started = configure_receive_filter();
+    out = capture_stderr_end();
+    check("a program the kernel rejects refuses the run rather than leave it unfiltered",
+          !started && strstr(out, "cannot be attached") != NULL);
+
+    reset_behaviour();
+    receive_filter_set_for_tests(RECEIVE_FILTER_UNDECIDED);
+    set_verbose(true);
+    capture_stderr_begin();
+    attached = attach_receive_filter(HELD_DATAGRAM_DESCRIPTOR);
+    capture_stderr_end();
+    set_verbose(false);
+    check("before start-up decided, no datagram socket is handed out", !attached && bx->attach_calls == 0);
+
+    reset_behaviour();
+    bx->loopback_index = 0;
+    capture_stderr_begin();
+    int status = run_main((char *[]){ "guard", "--", "cmd", NULL });
+    capture_stderr_end();
+    check("a guard whose receive filter cannot be decided does not start the command", status == EXIT_CODE_SETUP_ERROR);
+}
+
+/* Points the next notification at a socket() of an INET datagram socket, in a run whose rules need
+ * the receive filter and whose start-up attached it to its probes. */
+static void arrange_filtered_datagram_socket(void) {
+    reset_behaviour();
+    (void)configure_receive_filter();
+    bx->notif_recv_nr = __NR_socket;
+    bx->notif_socket_domain = AF_INET;
+    bx->notif_socket_type = SOCK_DGRAM;
+    bx->readlink_inode = CREATED_UDP_INODE;
+}
+
+static void test_datagram_socket_filtered(void) {
+    arrange_filtered_datagram_socket();
+    service_once();
+    check("a datagram socket carries the locked receive filter before the command holds it",
+          bx->answers == 1 && bx->last_answer_val == FAKE_ADDFD_DESCRIPTOR && bx->attach_calls == 3
+              && bx->lock_calls == 3 && held_socket_descriptor(CREATED_UDP_INODE) == FAKE_OUTWARD_SOCKET_DESCRIPTOR);
+
+    arrange_filtered_datagram_socket();
+    bx->setsockopt_fail_at = 5;
+    bx->setsockopt_errno = ENOMEM;
+    capture_stderr_begin();
+    service_once();
+    const char *out = capture_stderr_end();
+    check("one the filter cannot be attached to is refused, never handed out, and named",
+          answered_not_continued() && bx->last_answer_error == -EACCES && bx->addfd_calls == 0
+              && held_sockets_count_for_tests() == 0 && holds_line(out, "open the Socket Type unfiltered (AF_INET, SOCK_DGRAM)"));
+
+    arrange_filtered_datagram_socket();
+    bx->notif_socket_type = SOCK_STREAM;
+    bx->readlink_inode = CREATED_TCP_INODE;
+    service_once();
+    check("a stream socket carries no receive filter", bx->answers == 1 && bx->attach_calls == 2);
+}
+
+/* A held socket of this family and port, and the next notification pointed at its listen(). */
+static void arrange_pinned_listen(int family, uint16_t port) {
+    reset_behaviour();
+    hold_socket(HELD_BOUND_INODE, HELD_DESCRIPTOR);
+    arrange_listen(HELD_BOUND_INODE);
+    bx->getsockname_family = family;
+    bx->getsockname_port = port;
+    configure_ephemeral_listen(true);
+}
+
+/* Whether the listen was refused because the socket could not be pinned, and named so. */
+static bool refused_unpinned(const char *out) {
+    return answered_not_continued() && bx->last_answer_error == -EACCES && bx->listen_calls == 0
+           && holds_line(out, "listen outside the Loopback Interface");
+}
+
+/* Services the listen arranged, with standard error captured, and answers what it printed. */
+static const char *service_pinned_listen(void) {
+    capture_stderr_begin();
+    service_once();
+    return capture_stderr_end();
+}
+
+static void test_listen_pinned_to_loopback(void) {
+    arrange_pinned_listen(AF_INET, FAKE_BOUND_PORT);
+    service_once();
+    check("a socket bound to a port is pinned to the loopback device, then listens",
+          answered_not_continued() && bx->last_answer_error == 0 && bx->listen_calls == 1
+              && strcmp(bx->last_device_set, "lo") == 0 && bx->bind_calls == 0);
+
+    arrange_pinned_listen(AF_INET, 0);
+    service_once();
+    check("a socket with no port is bound by the guard to a port the kernel picks, with the no-port option cleared, then pinned",
+          bx->last_answer_error == 0 && bx->listen_calls == 1 && bx->bind_calls == 1 && bx->no_port_cleared == 1
+              && bx->last_bind_family == AF_INET && strcmp(bx->last_device_set, "lo") == 0);
+
+    arrange_pinned_listen(AF_INET6, 0);
+    bx->getsockname_scope_id = 7;
+    service_once();
+    check("an IPv6 socket is bound with no scope, whatever scope it held",
+          bx->last_answer_error == 0 && bx->bind_calls == 1 && bx->last_bind_family == AF_INET6
+              && bx->last_bind_scope_id == 0);
+
+    arrange_pinned_listen(AF_INET6, 0);
+    snprintf(bx->getsockname_v6_address, sizeof(bx->getsockname_v6_address), "fe80::1");
+    const char *out = service_pinned_listen();
+    check("an address that needs a scope is never bound, and the listen is refused and named",
+          refused_unpinned(out) && bx->bind_calls == 0);
+    arrange_pinned_listen(AF_INET6, 0);
+    snprintf(bx->getsockname_v6_address, sizeof(bx->getsockname_v6_address), "ff02::1");
+    out = service_pinned_listen();
+    check("nor is a link-local multicast one", refused_unpinned(out) && bx->bind_calls == 0);
+    arrange_pinned_listen(AF_INET6, 0);
+    snprintf(bx->getsockname_v6_address, sizeof(bx->getsockname_v6_address), "ff01::1");
+    out = service_pinned_listen();
+    check("nor an interface-local multicast one", refused_unpinned(out) && bx->bind_calls == 0);
+
+    arrange_pinned_listen(AF_INET, 0);
+    bx->bind_result = -1;
+    out = service_pinned_listen();
+    check("a bind the kernel refuses refuses the listen", refused_unpinned(out));
+
+    arrange_pinned_listen(AF_INET, 0);
+    bx->bound_port = 0;
+    out = service_pinned_listen();
+    check("a socket still without a port after the bind, the no-port option set again, is refused", refused_unpinned(out));
+
+    arrange_pinned_listen(AF_INET, 0);
+    bx->setsockopt_fail_level = IPPROTO_IP;
+    bx->setsockopt_fail_name = IP_BIND_ADDRESS_NO_PORT;
+    bx->setsockopt_errno = EINVAL;
+    out = service_pinned_listen();
+    check("a no-port option that cannot be cleared refuses the listen", refused_unpinned(out) && bx->bind_calls == 0);
+
+    for (int failing = 2; failing <= 4; failing++) {
+        arrange_pinned_listen(AF_INET, 0);
+        bx->getsockname_fail_at = failing;
+        out = service_pinned_listen();
+        check(failing == 2 ? "an address that cannot be read when pinning refuses the listen"
+              : failing == 3 ? "nor can one that cannot be read before the guard's bind"
+                             : "nor one that cannot be read after it",
+              refused_unpinned(out));
+    }
+
+    arrange_pinned_listen(AF_INET, FAKE_BOUND_PORT);
+    bx->setsockopt_fail_level = SOL_SOCKET;
+    bx->setsockopt_fail_name = SO_BINDTODEVICE;
+    bx->setsockopt_errno = EPERM;
+    out = service_pinned_listen();
+    check("a device the kernel will not change, as for an unprivileged guard, refuses the listen", refused_unpinned(out));
+
+    arrange_pinned_listen(AF_INET, FAKE_BOUND_PORT);
+    bx->device_read_fails = 1;
+    out = service_pinned_listen();
+    check("a device that cannot be read back refuses the listen", refused_unpinned(out));
+
+    arrange_pinned_listen(AF_INET, FAKE_BOUND_PORT);
+    snprintf(bx->bound_device, sizeof(bx->bound_device), "eth0");
+    out = service_pinned_listen();
+    check("a device read back as another one refuses the listen", refused_unpinned(out));
+
+    reset_behaviour();
+    hold_socket(HELD_UNIX_INODE, HELD_DESCRIPTOR);
+    arrange_listen(HELD_UNIX_INODE);
+    bx->getsockname_family = AF_UNIX;
+    service_once();
+    check("a UNIX socket is not pinned, it has no device",
+          bx->last_answer_error == 0 && bx->listen_calls == 1 && bx->setsockopt_calls == 0);
+}
+
+/* The setsockopt the filter is asked about: the level and name as its second and third arguments. */
+
+static uint32_t socket_option_answer(uint64_t level, uint64_t name) {
+    filter_second_argument = level;
+    filter_third_argument = name;
+    uint32_t answer = run_captured_filter(bx->installed_filter, bx->installed_filter_length,
+                                          GUARD_NATIVE_AUDIT_ARCH, __NR_setsockopt, 3);
+    filter_second_argument = 0;
+    filter_third_argument = 0;
+    return answer;
+}
+
+static void test_socket_option_filter(void) {
+    install_filter_for_inspection();
+    check("setsockopt of SO_BINDTODEVICE and SO_BINDTOIFINDEX is refused",
+          socket_option_answer(SOL_SOCKET, SO_BINDTODEVICE) == SECCOMP_RET_USER_NOTIF
+              && socket_option_answer(SOL_SOCKET, SO_BINDTOIFINDEX) == SECCOMP_RET_USER_NOTIF);
+    check("setsockopt of IP_RECVERR and IPV6_RECVERR is refused",
+          socket_option_answer(IPPROTO_IP, IP_RECVERR) == SECCOMP_RET_USER_NOTIF
+              && socket_option_answer(IPPROTO_IPV6, IPV6_RECVERR) == SECCOMP_RET_USER_NOTIF);
+    check("a level and name with high words set are refused all the same, the kernel reads ints",
+          socket_option_answer(((uint64_t)1 << 32) | SOL_SOCKET, ((uint64_t)1 << 32) | SO_BINDTODEVICE)
+              == SECCOMP_RET_USER_NOTIF);
+    check("every other option is allowed, a refused option's number at another level included",
+          socket_option_answer(SOL_SOCKET, SO_REUSEADDR) == SECCOMP_RET_ALLOW
+              && socket_option_answer(IPPROTO_IP, IP_TOS) == SECCOMP_RET_ALLOW
+              && socket_option_answer(IPPROTO_IPV6, IPV6_V6ONLY) == SECCOMP_RET_ALLOW
+              && socket_option_answer(IPPROTO_TCP, SO_BINDTODEVICE) == SECCOMP_RET_ALLOW
+              && socket_option_answer(IPPROTO_IPV6, IP_RECVERR) == SECCOMP_RET_ALLOW);
+    filter_fifth_argument = FAKE_ADDRESS_POINTER;
+    check("the blocks after it still see their own calls",
+          filter_answer(GUARD_NATIVE_AUDIT_ARCH, __NR_sendto) == SECCOMP_RET_USER_NOTIF
+              && filter_answer_fd(GUARD_NATIVE_AUDIT_ARCH, __NR_sendmsg, FAKE_BOOTSTRAP_DESCRIPTOR + 1)
+                     == SECCOMP_RET_USER_NOTIF);
+    filter_fifth_argument = 0;
+
+    reset_behaviour();
+    bx->notif_recv_nr = __NR_setsockopt;
+    bx->notif_option_level = SOL_SOCKET;
+    bx->notif_option_name = SO_BINDTODEVICE;
+    configure_group_lock_attribution(true);
+    capture_stderr_begin();
+    service_once();
+    report_summary();
+    const char *out = capture_stderr_end();
+    configure_group_lock_attribution(false);
+    check("a refused option is answered EACCES, never continued, named, and counted for the network layer",
+          answered_not_continued() && bx->last_answer_error == -EACCES
+              && holds_line(out, "set the Socket Option SO_BINDTODEVICE")
+              && strstr(out, "0 in the filesystem layer, 1 in the network layer and 0 in the timeout layer") != NULL);
+}
+
+
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     bx = mmap(NULL, sizeof(*bx), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
@@ -4969,6 +5602,11 @@ int main(void) {
     test_guard_refusals_are_reported();
     test_guard_refusals_that_stay_quiet();
     test_supervisor_answers_the_three_kinds_of_trap();
+    test_receive_filter_program();
+    test_receive_filter_start();
+    test_datagram_socket_filtered();
+    test_listen_pinned_to_loopback();
+    test_socket_option_filter();
 
     printf("\n%d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;

@@ -199,7 +199,13 @@ are integration requirements on the grader:
   character-set modules through a relative `LOCPATH` or `GCONV_PATH` before they are cleaned for
   everything after it.
 
-The simplest way to meet both is a minimal environment of absolute values:
+- **Start Phobos with no network socket the command could reach.** The connect guard pins and
+  filters the sockets it creates; one the command inherits, on any descriptor, standard input,
+  output and error included, or receives later over an inherited UNIX socket, was never in its
+  hands. Phobos does not close the descriptors it is started with, so the grader must not hand
+  it one.
+
+The simplest way to meet the first two is a minimal environment of absolute values:
 `env -i PATH=/usr/local/bin:/usr/bin:/bin /var/tmp/opt/core/phobos.sh --config exercise.cfg -- ./gradlew test`,
 adding back only what the command needs.
 
@@ -264,13 +270,13 @@ the same class as the filesystem or egress layers, and enabling it changes the r
   gives up the hard no-network backstop the rest of the sandbox leans on; egress is then contained
   only by the connect guard, the Landlock TCP-port rules, the egress broker when it is on and
   whatever the integrator firewalls, not by the absence of a network.
-- **Phobos hard-locks the listening port, not its reachability.** With `[bind]` naming only the
-  backend port, Landlock refuses the student a listener on any other port, the public port
-  included, in the kernel and against raw system calls. But Landlock's bind right is per port, not
-  per address, so the student may bind the backend port on all interfaces; that the backend is
-  reachable *only* through the filter is provided by the container's network isolation, not by
-  Phobos. That isolation must be concrete: a dedicated network with inter-container communication
-  disabled, only the public port published, no other or UDP port exposed. `[accept]` covers TCP
+- **Phobos locks the listening port, and keeps the listener on loopback.** With `[bind]` naming
+  only the backend port, Landlock refuses the student a listener on any other port, the public
+  port included, in the kernel and against raw system calls. Landlock's bind right is per port,
+  not per address, so the student may bind the backend port on all interfaces, but the connect
+  guard pins every listener it lets listen to the loopback device (below), so the backend is
+  reached from this host only, the inbound filter's own forwarding to `127.0.0.1` included. The
+  container still decides what is published: only the public port, and `[accept]` covers TCP
   only.
 - **The connect guard closes the listen that never binds.** Landlock judges `bind()`, but the
   kernel also gives a socket that was never bound a port of its own choosing when it calls
@@ -281,6 +287,51 @@ the same class as the filesystem or egress layers, and enabling it changes the r
   A swap of another socket under the descriptor cannot create a listener, because the guard never
   lets the kernel run the command's own `listen()`. With `--no-networksystem-restriction` the
   guard is absent and so is this.
+- **The connect guard keeps a submission's sockets local, from inside.** Phobos must hold in a
+  container it did not start, so it does not leave a submission's inbound reach to an outer
+  `--network none`:
+  - *A listener is pinned to the loopback device.* Within the `listen()` it runs itself, the
+    guard first binds a socket that has no port to the address it holds and a port the kernel
+    picks (the grant `--allow-ephemeral-listen` already gives), with `IP_BIND_ADDRESS_NO_PORT`
+    cleared, and refuses the listen when the socket still has no port; then it sets
+    `SO_BINDTODEVICE "lo"`, reads it back and only then listens. A socket bound to `lo` takes a
+    connection only from this host, over IPv4, IPv6 and IPv4-mapped alike, whatever address it
+    bound, and every socket it accepts inherits the device. The bind comes first because the
+    IPv6 bind of a scoped address sets a socket's device with no privilege and keeps it when
+    the bind fails, and the kernel refuses every bind of a socket that already has a port before
+    it reads the scope. A listen the guard cannot pin, because an unprivileged guard cannot
+    change a device the command set or the device reads back as another, is refused.
+  - *A datagram socket receives only from the host and from the peers a UDP rule names.* Before
+    the command holds a datagram socket, the guard attaches a classic BPF socket filter to it and
+    locks it (`SO_LOCK_FILTER`), so it cannot be detached, replaced or unlocked, by root either,
+    and it stays with the socket however the descriptor is duplicated, closed or evicted. A
+    source in 127.0.0.0/8 or ::1 is taken if and only if it arrived on the loopback interface,
+    whatever a rule says, so a `route_localnet` configuration that admits such a source from
+    outside does not readmit it; any other source is taken only when a UDP `[connect]` rule names
+    it by address or range. A UDP rule whose host the guard cannot tie to an address (a wildcard,
+    or a name it was not given resolved) allows an answer from anywhere, so then no filter is
+    attached. A kernel or security module that refuses socket filters on datagram sockets
+    (EPERM, EACCES or ENOPROTOOPT at start-up) gets a warning and an unfiltered run, the best
+    effort a kernel without a Landlock right gets too; any other failure ends the run, so a
+    defect never becomes an unfiltered run. Classic socket filters on TCP need `CAP_NET_ADMIN`
+    since kernel commit 5d39580f68e6, which is why a listener is pinned instead.
+  - *The command cannot undo either.* The guard's filter refuses `setsockopt` of
+    `SO_BINDTODEVICE` and `SO_BINDTOIFINDEX`, which would move a socket off `lo`, and of
+    `IP_RECVERR` and `IPV6_RECVERR`, because a socket's error queue takes the quoted payload of an
+    ICMP error past its receive filter. Each refusal is reported.
+
+  What this leaves: a run with the network layer off has none of it; a datagram that spoofs the
+  address of a peer a UDP rule names is received, since UDP has no handshake; ICMP errors and
+  path-MTU feedback still reach a socket as kernel-generated information (an `errno` on a
+  connected datagram socket, `IPV6_PATHMTU`), never as quoted payload; an answer to a multicast
+  or broadcast send comes from a unicast address the rule does not name and is dropped, so a
+  policy that needs such answers names their sources too; a client connecting to the
+  container's own non-loopback address, as `InetAddress.getLocalHost()` gives it, is refused for
+  TCP and not answered for UDP; and a network socket the guard did not create is neither pinned
+  nor filtered, which the integration requirement on network descriptors below rules out. The
+  suites read the device, the lock and the refusals back from the kernel, with a control without
+  the guard for each; reaching a listener from a second host is shown by a measurement with two
+  containers, not yet by a suite.
 - **The connect guard makes every datagram connect and send itself.** A destination behind a
   pointer cannot be checked and then left to the kernel: re-running the call reads the pointer
   again, and a second thread of the command can show the check one address and the kernel
@@ -311,12 +362,13 @@ the same class as the filesystem or egress layers, and enabling it changes the r
   layer always applies a network-only Landlock ruleset that handles TCP and UDP bind with nothing
   granted, so a run with no `[bind]` rule, or given no `--config`, binds and listens on nothing.
   Port 0 grants only a port the kernel chooses. The shipped Java policy carries `allow 0` and
-  `allow 0 udp` for Gradle, so a submission under it can still take a kernel-chosen port, on every
-  interface, but cannot name one; because policies are additive, an exercise that names only
-  `allow 8080` gets port 0 from that base as well. A kernel below Landlock version 4 (TCP) or 10
-  (UDP) cannot close the direction: the enforcer says so on every run and leaves it open, and the
-  container's network isolation is the only boundary there. `--minimum-landlock-version` in the tail
-  flags turns that into a refusal. At the time of writing none of the kernels the project's CI
+  `allow 0 udp` for Gradle, so a submission under it can still take a kernel-chosen port, which
+  the guard pins to loopback when it listens, but cannot name one; because policies are additive,
+  an exercise that names only `allow 8080` gets port 0 from that base as well. A kernel below
+  Landlock version 4 (TCP) or 10 (UDP) cannot close the direction: the enforcer says so on every
+  run and leaves the port open, while a listener on it is still pinned and a datagram socket still
+  filtered, so what stays open is the port, not the reach from outside. `--minimum-landlock-version`
+  in the tail flags turns that into a refusal. At the time of writing none of the kernels the project's CI
   and local runs use offers version 10, so the UDP half has been exercised against a recording of the
   kernel's calls only.
 - **A source address is weak authentication.** It resists spoofing only for an established
@@ -333,6 +385,8 @@ asked for. Concretely:
 
 - a submission reaching a file, or a TCP or (on Landlock version 10) UDP port Landlock was given,
   that the active allow-list does not permit
+- a listener the connect guard let listen, or a datagram socket it created, taking from outside
+  the host what the section on inbound filtering says it cannot
 - the sandbox failing open, that is, running the tests unconfined while reporting success
 - the pruning phase writing an allow-list that grants more than the runs it observed required
 - privilege escalation out of the sandbox onto the host
@@ -340,8 +394,9 @@ asked for. Concretely:
   the working tree they were pointed at
 
 Out of scope: the deliberately dangerous code listed above, anything the container's own
-settings are responsible for rather than Phobos (external network and UDP, which
-`--network none` closes, and the hard resource caps, which cgroups set), JVM-internal
+settings are responsible for rather than Phobos (the residuals of the network layer that the
+section on inbound filtering names, which `--network none` closes, and the hard resource caps,
+which cgroups set), JVM-internal
 attacks that never touch the operating system, which are Ares's responsibility, and anything
 that follows from running the discovery phase against a project you were not willing to have
 repeatedly broken.

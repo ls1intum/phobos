@@ -121,15 +121,15 @@ only then is the full `[bind]` set known:
 An `[accept]` rule changes the run's posture, and Phobos says so loudly on standard error.
 
 - **It removes `--network none`.** An external client cannot reach a container with no network.
-- **Phobos locks the port, not its reachability.** Landlock refuses the command a listener on
-  any other port, in the kernel and against raw system calls, and the connect guard refuses a
-  `listen()` on a socket that was never bound, which the kernel would otherwise give a port of
-  its own choosing, unless the base policy names port 0. The shipped Java policy does, so a Java
-  run can still listen on a port the kernel chooses. The bind right is per port rather
-  than per address, so the command may bind the backend port on every interface. That the
-  backend is reachable only through the filter comes from the container's network isolation: a
-  dedicated network with inter-container communication disabled, only the public port
-  published, nothing else exposed.
+- **Phobos locks the port and keeps the backend on loopback.** Landlock refuses the command a
+  listener on any other port, in the kernel and against raw system calls. The connect guard
+  refuses a `listen()` on a socket that was never bound, unless the base policy names port 0,
+  because the kernel would give that socket a port of its own choosing. The shipped Java policy
+  names port 0, so a Java run can still listen on a port the kernel chooses. The bind right is per
+  port rather than per address, so the command may bind the backend port on every interface. The
+  guard pins every listener to the loopback device, though, so only this host reaches the backend,
+  the filter's own forwarding to `127.0.0.1` included. The container publishes the public port
+  and nothing else.
 - **A source address is weak authentication.** It resists spoofing only for an established
   handshake, and network address translation makes it coarse.
 :::

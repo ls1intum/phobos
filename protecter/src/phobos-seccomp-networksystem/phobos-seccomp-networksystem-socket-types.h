@@ -46,6 +46,25 @@ uint64_t fd_socket_inode(pid_t owner_pid, int descriptor);
  * report the address. */
 bool socket_local_port(int descriptor, int *family, uint16_t *port);
 
+/* Pins an INET or INET6 socket of this process to the loopback device right before the supervisor
+ * lets it listen, so that only a client on this host can reach it, whatever address it bound and
+ * without an outer container that has no network. A socket of any other family is left as it is.
+ *
+ * A socket that has no port yet is first bound here, to the address it holds and a port the kernel
+ * picks, which grants what the kernel's own bind at listen() would (the caller has checked that
+ * the policy grants a port the kernel picks), so that the IPv6 bind of a scoped address, which sets
+ * a socket's device without any privilege and keeps it when the bind fails, can no longer reach
+ * it: the kernel refuses every bind of a socket with a port before it reads the scope. The option
+ * that binds an address without a port is cleared first, and a socket still without a port after
+ * the bind is refused. Then SO_BINDTODEVICE names "lo" and is read back.
+ *
+ * Answers whether the socket is pinned or needs no pin. A false answer leaves the socket unfit to
+ * listen: an address that needs a scope, a bind the kernel refuses, a device the kernel will not
+ * change (a socket the command moved to another device, where this supervisor is unprivileged), or
+ * one it reads back as something else. Assumes the command cannot set the socket's device itself,
+ * which the guard's filter refuses. */
+bool pin_listener_to_loopback(int descriptor);
+
 #ifdef PHOBOS_CONNECT_GUARD_UNIT_TEST
 /* Forgets every recorded socket, so each test case starts from an empty table. */
 void socket_types_reset_for_tests(void);

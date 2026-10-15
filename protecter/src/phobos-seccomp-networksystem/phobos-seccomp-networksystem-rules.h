@@ -75,6 +75,11 @@ bool rule_host_matches(const struct connect_rule *rule, int family, const void *
  * permits the other. */
 bool connection_permitted(int family, const void *address, uint16_t port, bool is_udp);
 
+/* How many rules the table holds, and the rule at an index below that count, so the receive filter
+ * can be built from the same allow-list the sends are held to. */
+size_t connect_rule_count_held(void);
+const struct connect_rule *connect_rule_at(size_t index);
+
 #ifdef PHOBOS_CONNECT_GUARD_UNIT_TEST
 /* Forgets every rule, so each test case starts from an empty table. */
 void connect_rules_reset_for_tests(void);

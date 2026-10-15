@@ -333,6 +333,33 @@ allow_case "a [bind] row for one port lets that port be bound and served, with a
 deny_case "and not another port" net "$c_bind_port" bind_tcp "$DENIED_ERRNOS" -- "$P" bind 127.0.0.1 "$BIND_OTHER" tcp
 deny_case "an explicit port row does not open the kernel's own choice of port" net "$c_bind_port" bind_tcp "$DENIED_ERRNOS" -- "$P" bind 127.0.0.1 0 tcp
 deny_case "an explicit port row does not let an unbound socket listen" net "$c_bind_port" listen_unbound "$DENIED_ERRNOS" -- "$P" listen_unbound
+run_direct "$P" serve -1
+device_control="$(grep -c '^DEVICE \[\]$' "$PM_OUT")"
+run_pm --config "$c_bind0" -- "$P" serve -1
+device_protected="$(grep -c '^DEVICE \[lo\]$' "$PM_OUT")"
+accepted_protected="$(op_ok accept && echo 1 || echo 0)"
+run_pm --no-networksystem-restriction --config "$c_bind0" -- "$P" serve -1
+device_layer_off="$(grep -c '^DEVICE \[\]$' "$PM_OUT")"
+if [[ "$device_control" == 1 && "$device_protected" == 1 && "$accepted_protected" == 1 && "$device_layer_off" == 1 ]]; then
+  ok "a listener is pinned to the loopback device by the guard and still serves a local client (unpinned without Phobos and with the network layer off)"
+else
+  bad "a listener is pinned to the loopback device by the guard" "control=${device_control} protected=${device_protected} accepted=${accepted_protected} layer-off=${device_layer_off}: $(pm_describe)"
+fi
+deny_case "SO_BINDTODEVICE is refused, so a listener cannot be moved off loopback" net "$c_none" bindtodevice "$DENIED_ERRNOS" -- "$P" sockopts
+deny_case "IP_RECVERR is refused, so no ICMP error quotes a payload past the receive filter" net "$c_none" recverr "$DENIED_ERRNOS" -- "$P" sockopts
+deny_case "and so is IPV6_RECVERR" net "$c_none" recverr6 "$DENIED_ERRNOS" -- "$P" sockopts
+allow_case "another socket option, SO_REUSEADDR, is set as before" "$c_none" reuseaddr -- "$P" sockopts
+run_direct "$P" sockopts
+lock_control="$(grep -c '^LOCKED 0$' "$PM_OUT")"
+run_pm --config "$c_none" -- "$P" sockopts
+lock_protected="$(grep -c '^LOCKED 1$' "$PM_OUT")"
+run_pm --no-networksystem-restriction --config "$c_none" -- "$P" sockopts
+lock_layer_off="$(grep -c '^LOCKED 0$' "$PM_OUT")"
+if [[ "$lock_control" == 1 && "$lock_protected" == 1 && "$lock_layer_off" == 1 ]]; then
+  ok "a datagram socket carries a locked receive filter from the guard (none without Phobos and with the network layer off)"
+else
+  bad "a datagram socket carries a locked receive filter from the guard" "control=${lock_control} protected=${lock_protected} layer-off=${lock_layer_off}: $(pm_describe)"
+fi
 c_bind_race="$(cfg bindrace <<EOF2
 [bind]
 allow $RACE_BIND

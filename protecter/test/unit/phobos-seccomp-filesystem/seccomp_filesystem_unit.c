@@ -3026,6 +3026,24 @@ static void test_the_refusal_class(void) {
     struct seccomp_data x32 = native_call((int)(__X32_SYSCALL_BIT | __NR_openat), 0, 0, 0, 0, 0);
     check("an x32 number is one", is_filter_refusal(&x32));
 #endif
+    struct seccomp_data device = native_call(__NR_setsockopt, 3, SOL_SOCKET, SO_BINDTODEVICE, 0, 0);
+    struct seccomp_data index = native_call(__NR_setsockopt, 3, SOL_SOCKET, SO_BINDTOIFINDEX, 0, 0);
+    struct seccomp_data error_queue = native_call(__NR_setsockopt, 3, IPPROTO_IP, IP_RECVERR, 0, 0);
+    struct seccomp_data error_queue6 = native_call(__NR_setsockopt, 3, IPPROTO_IPV6, IPV6_RECVERR, 0, 0);
+    check("a setsockopt of SO_BINDTODEVICE, SO_BINDTOIFINDEX, IP_RECVERR or IPV6_RECVERR is one",
+          is_filter_refusal(&device) && is_filter_refusal(&index) && is_filter_refusal(&error_queue)
+              && is_filter_refusal(&error_queue6));
+    struct seccomp_data high_words = native_call(__NR_setsockopt, 3, ((uint64_t)1 << 32) | SOL_SOCKET,
+                                                 ((uint64_t)1 << 32) | SO_BINDTODEVICE, 0, 0);
+    check("and so is one whose level and name carry high words, which the kernel never reads",
+          is_filter_refusal(&high_words));
+    struct seccomp_data reuse = native_call(__NR_setsockopt, 3, SOL_SOCKET, SO_REUSEADDR, 0, 0);
+    struct seccomp_data same_number = native_call(__NR_setsockopt, 3, IPPROTO_TCP, SO_BINDTODEVICE, 0, 0);
+    struct seccomp_data other_ip = native_call(__NR_setsockopt, 3, IPPROTO_IP, IP_TOS, 0, 0);
+    struct seccomp_data other_ipv6 = native_call(__NR_setsockopt, 3, IPPROTO_IPV6, IPV6_V6ONLY, 0, 0);
+    check("any other option is not, a refused option's number at another level included",
+          !is_filter_refusal(&reuse) && !is_filter_refusal(&same_number) && !is_filter_refusal(&other_ip)
+              && !is_filter_refusal(&other_ipv6));
 }
 
 /* Answers one refusal and answers what it printed. */
@@ -3107,6 +3125,21 @@ static void test_answering_refusals(void) {
     report_summary();
     check("the refusals are counted for the layer given",
           strstr(capture_stderr_end(), "1 in the network layer and ") != NULL);
+    check("a refused socket option is named",
+          strcmp(refusal_answered(native_call(__NR_setsockopt, 3, SOL_SOCKET, SO_BINDTODEVICE, 0, 0),
+                                  REPORT_LAYER_NETWORK),
+                 "Phobos Security Error: the program tried to illegally set the Socket Option "
+                 "SO_BINDTODEVICE but was blocked by Phobos.\n")
+              == 0
+              && strstr(refusal_answered(native_call(__NR_setsockopt, 3, SOL_SOCKET, SO_BINDTOIFINDEX, 0, 0),
+                                         REPORT_LAYER_NETWORK),
+                        "set the Socket Option SO_BINDTOIFINDEX but") != NULL
+              && strstr(refusal_answered(native_call(__NR_setsockopt, 3, IPPROTO_IP, IP_RECVERR, 0, 0),
+                                         REPORT_LAYER_NETWORK),
+                        "set the Socket Option IP_RECVERR but") != NULL
+              && strstr(refusal_answered(native_call(__NR_setsockopt, 3, IPPROTO_IPV6, IPV6_RECVERR, 0, 0),
+                                         REPORT_LAYER_NETWORK),
+                        "set the Socket Option IPV6_RECVERR but") != NULL);
 }
 
 /* -------------------------------------------------------------------------- the filter */

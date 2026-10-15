@@ -8,8 +8,8 @@ description: "The local ports a command may listen on, one bare port per line."
 The room has no sockets in the wall unless the policy puts one there, and the work may plug
 into those and no others.
 
-Which of them can be reached from the corridor is a different question, settled by the
-building rather than by the socket.
+Whatever the work plugs in only reaches the rest of the room. Anyone in the corridor has to come
+through the door the policy puts in, [`[accept]`](accept.md).
 :::
 
 ## Position in the example policy file
@@ -95,9 +95,10 @@ allow 0
 ## Why a rule may not name an address
 
 Landlock enforces a bind by port and cannot narrow it to a local address. A rule that names an
-address is therefore refused with `PHB-EPOLICY` rather than accepted and half-enforced. A
-listener's reachability from outside is governed by [`[accept]`](accept.md) and by the
-container's network isolation, never by the address it bound.
+address is therefore refused with `PHB-EPOLICY` rather than accepted and half-enforced. The
+address does not decide who reaches a listener either. The connect guard pins every listener to
+the loopback device, so only a client on this host reaches it, whatever address it bound.
+[`[accept]`](accept.md) is the way in from outside.
 
 ## Bind is closed unless a row opens it
 
@@ -122,6 +123,14 @@ a port of the kernel's choosing when it calls `listen()`, with no `bind()` at al
 traps `listen()` and runs it itself, on a socket it created, and refuses an unbound socket
 unless a tcp `[bind]` row names port 0, because that row already grants the same port.
 
+**The guard pins every listener to the loopback device.** Within that same `listen()`, the guard binds
+a socket that has no port to a port the kernel picks, then sets `SO_BINDTODEVICE "lo"` on it and
+reads it back, and only then listens. The listener takes connections from `127.0.0.1`, `::1` and
+`::ffff:127.0.0.1`, and from nowhere else, without a container that has no network. The kernel
+refuses a client that connects to the container's own non-loopback address, as
+`InetAddress.getLocalHost()` gives it. The command cannot move the socket off `lo`: the guard refuses `SO_BINDTODEVICE` and
+`SO_BINDTOIFINDEX`.
+
 ## The ephemeral source port
 
 A `udp` connect rule brings the ephemeral UDP grant with it. The kernel auto-binds an ephemeral
@@ -137,20 +146,21 @@ loopback rule with no port in `[connect]` lifts that for a connect rule only, ne
 `[bind]` row.
 
 **A kernel too old to close bind leaves it open and says so.** Below Landlock version 4 for TCP
-and version 10 for UDP, the enforcer prints a warning on every run, and the container's network
-isolation is the only boundary there. `--minimum-landlock-version` in the tail flags turns the
+and version 10 for UDP, the enforcer prints a warning on every run and the port stays open. A
+listener on it is still pinned to loopback, and a datagram socket that carries its receive filter
+still takes datagrams only from the host and the peers a UDP rule names. `--minimum-landlock-version` in the tail flags turns the
 warning into a refusal. An explicit port rule still refuses a kernel that cannot handle it,
 where a port 0 grant never does.
 
 **Policies are additive.** An exercise that names only `allow 8080` still gets port 0 from the
-shipped Java policy, so it can still take a port the kernel chooses, on every interface.
+shipped Java policy, so it can still take a port the kernel chooses, pinned to loopback.
 
 **The shipped Python policy grants no bind.** A Python exercise that starts a server needs
 `allow 0` of its own.
 
-**Binding is not accepting.** A port named here may be listened on. Whether anything outside
-can reach it is the container's question, and [`[accept]`](accept.md) is the filter in front
-of it.
+**Binding is not accepting.** A port named here may be listened on, from this host. A client
+outside reaches it only through [`[accept]`](accept.md), which fronts it with a filter whose public
+port the container publishes.
 
 ## Further reading
 

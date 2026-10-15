@@ -40,6 +40,7 @@ MODULES=(
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-handoff.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-held-sockets.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-options.c"
+  "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-receive-filter.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-resolve.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-rules.c"
   "${CORE}/phobos-seccomp-networksystem/phobos-seccomp-networksystem-socket-types.c"
@@ -96,6 +97,9 @@ WRAPS=(
   -Wl,--wrap=fcntl
   -Wl,--wrap=listen
   -Wl,--wrap=getsockname
+  -Wl,--wrap=setsockopt
+  -Wl,--wrap=bind
+  -Wl,--wrap=if_nametoindex
   -Wl,--wrap=readlink
   -Wl,--wrap=sendto
   -Wl,--wrap=process_vm_writev

@@ -30,8 +30,8 @@ enum guard_report_mode {
     GUARD_REPORT_FILESYSTEM,
 };
 
-/* Room for the longest filter built here: the enforced calls, every observation trap and the two
- * blocks that handle the sends. */
+/* Room for the longest filter built here: the enforced calls, every observation trap, the block
+ * that refuses socket options and the two blocks that handle the sends. */
 static constexpr size_t GUARD_FILTER_MAXIMUM = 192;
 
 /* Writes the guard's whole filter into instructions, which holds GUARD_FILTER_MAXIMUM, with the

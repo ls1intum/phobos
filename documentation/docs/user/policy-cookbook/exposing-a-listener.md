@@ -75,12 +75,11 @@ source follows it; a line without it is not an `[accept]` rule at all.
 
 :::warning[An `[accept]` rule changes the run's posture]
 It removes `--network none`, because an external client cannot reach a container that has no
-network. It locks the listening port, not its reachability: Landlock's bind right is per port
-rather than per address, so the command may bind its backend port on every interface. That the
-backend is reachable only through the filter comes from the container's network isolation, and
-that isolation has to be concrete: a dedicated network with inter-container communication
-disabled, only the public port published, nothing else exposed. A source address is a filter,
-never an identity.
+network. Phobos locks the listening port, and the connect guard keeps the listener on loopback.
+Landlock's bind right is per port rather than per address, so the command may bind its backend
+port on every interface. The guard pins every listener to the loopback device, so only this host
+reaches the backend, through the filter. The container publishes the public port and nothing
+else. A source address is a filter, never an identity.
 :::
 
 - A `[bind]` rule takes a bare port. A rule that names an address is refused, because Landlock

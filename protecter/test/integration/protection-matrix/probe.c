@@ -21,6 +21,7 @@
 #include <linux/filter.h>
 #include <linux/seccomp.h>
 #include <netdb.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
@@ -1072,6 +1073,10 @@ static int cmd_serve(int argc, char **argv) {
     if (listening < 0) {
         return finish();
     }
+    char device[IFNAMSIZ] = { 0 };
+    socklen_t device_length = sizeof(device);
+    getsockopt(descriptor, SOL_SOCKET, SO_BINDTODEVICE, device, &device_length);
+    printf("DEVICE [%s]\n", device);
     struct sockaddr_in bound;
     socklen_t length = sizeof(bound);
     getsockname(descriptor, (struct sockaddr *)&bound, &length);
@@ -1084,6 +1089,25 @@ static int cmd_serve(int argc, char **argv) {
     int accepted = poll(&waiting, 1, 2000) > 0 ? accept(descriptor, NULL, NULL) : -1;
     op("accept", accepted, NULL);
     printf("PORT %d\n", ntohs(bound.sin_port));
+    return finish();
+}
+
+/* The socket options the connect guard refuses, and one it does not, set on a fresh datagram socket, and
+ * whether that socket carries a locked receive filter: LOCKED 1 when it does. */
+static int cmd_sockopts(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    int datagram = socket(AF_INET, SOCK_DGRAM, 0);
+    int datagram6 = socket(AF_INET6, SOCK_DGRAM, 0);
+    int one = 1;
+    int locked = 0;
+    socklen_t length = sizeof(locked);
+    getsockopt(datagram, SOL_SOCKET, SO_LOCK_FILTER, &locked, &length);
+    printf("LOCKED %d\n", locked);
+    op("bindtodevice", setsockopt(datagram, SOL_SOCKET, SO_BINDTODEVICE, "lo", 3), NULL);
+    op("recverr", setsockopt(datagram, IPPROTO_IP, IP_RECVERR, &one, sizeof(one)), NULL);
+    op("recverr6", setsockopt(datagram6, IPPROTO_IPV6, IPV6_RECVERR, &one, sizeof(one)), NULL);
+    op("reuseaddr", setsockopt(datagram, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)), NULL);
     return finish();
 }
 
@@ -1733,6 +1757,7 @@ int main(int argc, char **argv) {
         { "udp_race", cmd_udp_race },
         { "bind", cmd_bind },
         { "serve", cmd_serve },
+        { "sockopts", cmd_sockopts },
         { "resolve", cmd_resolve },
         { "tcpserver", cmd_tcpserver },
         { "udp_arrivals", cmd_udp_arrivals },
