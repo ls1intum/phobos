@@ -4,8 +4,11 @@ the two checks of a policy on a newer kernel, and what main.py writes and ends w
 from __future__ import annotations
 
 import dataclasses
+import errno
+import gzip
 import hashlib
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -34,6 +37,8 @@ UDP_RECORD = "audit: type=1423 audit(1.0:2): domain=a blockers=net.bind_udp lpor
 POLICY = cfgfile.Policy(fs={"/a": frozenset({"read"}), "/b": frozenset({"read"}), "/c": frozenset({"read"})},
                         connect=(), bind=("allow 0",),
                         limits={"cpu": 30, "timeout": 150, "mem_mb": 2048, "nproc": 64, "nofile": 512, "fsize_mb": 16})
+# Where a stand-in phase would keep an observed run's trace; a test that reaches the observed run passes its own.
+KEPT = pathlib.Path("/nonexistent/java_fixture.abi10.observed.trace.gz")
 
 
 def run_of(found: verdict.Verdict, status: int = 0) -> runner.RunResult:
@@ -204,7 +209,7 @@ def fake_pruning(monkeypatch, tmp_path):
 def test_the_joint_verification_passing_on_the_new_kernel_adds_nothing(monkeypatch, tmp_path):
     seen: list[cfgfile.Policy] = []
     monkeypatch.setattr(kvm, "joint_verification", lambda pruning, policy: seen.append(policy) or True)
-    final, rows = kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture())
+    final, rows = kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture(), KEPT)
     assert final == POLICY and rows == []
     assert seen == [POLICY]
 
@@ -244,7 +249,7 @@ def failing_then_passing(monkeypatch, decision: object, records: list[str]) -> l
 def test_a_udp_bind_the_kernel_refused_becomes_exactly_one_row_and_the_run_then_passes(monkeypatch, tmp_path):
     decision = type("Decision", (), {"bind": ("allow 5000 udp",), "connect": ()})()
     runs = failing_then_passing(monkeypatch, decision, [UDP_RECORD])
-    final, rows = kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture([], [UDP_RECORD]))
+    final, rows = kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture([], [UDP_RECORD]), KEPT)
     assert [row["rule"] for row in rows] == ["allow 5000 udp"]
     assert final.bind == ("allow 0", "allow 5000 udp")
     assert len(runs) == 3
@@ -267,7 +272,8 @@ def test_a_joint_run_that_ran_out_of_time_is_followed_by_one_observed_run_whose_
                                                                                                     tmp_path):
     log = tmp_path / "run-0002-layers.log"
     log.write_text("Fetching swift-ast\n")
-    log.with_suffix(".trace").write_text("7 wait4(-1, <unfinished ...>\n")
+    whole = "".join(f"7 link(\"/opt/swift-deps/pack-{number}\", ...) = -1 EXDEV\n" for number in range(1000))
+    log.with_suffix(".trace").write_text(whole + "7 wait4(-1, <unfinished ...>\n")
     shapes: list[runner.RunShape] = []
 
     def time_out(pruning, policy):
@@ -279,12 +285,65 @@ def test_a_joint_run_that_ran_out_of_time_is_followed_by_one_observed_run_whose_
         return dataclasses.replace(run_of(TIMED_OUT, 14), log_path=log)
     monkeypatch.setattr(kvm, "joint_verification", time_out)
     monkeypatch.setattr(stages.Pruning, "run", observe)
+    kept = tmp_path / "java_fixture.abi10.observed.trace.gz"
     with pytest.raises(kvm.Inconclusive, match="joint verification") as undecided:
-        kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture([], [UDP_RECORD]))
+        kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture([], [UDP_RECORD]), kept)
     assert shapes == [stages.OBSERVED_JOINT]
     observed = undecided.value.evidence["observed"]
-    assert observed["trace_tail"] == ["7 wait4(-1, <unfinished ...>"] and observed["log_tail"] == ["Fetching swift-ast"]
+    assert observed["trace_tail"][-1] == "7 wait4(-1, <unfinished ...>" and len(observed["trace_tail"]) == 300
+    assert observed["log_tail"] == ["Fetching swift-ast"]
     assert observed["audit"] == [UDP_RECORD] and undecided.value.evidence["run"] == "joint verification"
+    assert observed["trace_file"] == kept.name and "trace_file_failed" not in observed
+    assert gzip.decompress(kept.read_bytes()).decode() == whole + "7 wait4(-1, <unfinished ...>\n"
+
+
+class LateBrokenCapture(FakeCapture):
+    """A capture whose kernel ring can be read before the observed run and no longer after it."""
+
+    def collect(self) -> list[str]:
+        """Nothing the first time, then fails as a ring that skipped records does."""
+        if self.batches:
+            return self.batches.pop(0)
+        raise kvm.Indeterminate("the message ring skipped from record 4 to 9")
+
+
+def test_records_that_cannot_be_read_after_the_observed_run_still_leave_its_trace_kept(monkeypatch, tmp_path):
+    log = tmp_path / "run-0005-layers.log"
+    log.write_text("Fetching swift-ast\n")
+    log.with_suffix(".trace").write_text("7 wait4(-1, <unfinished ...>\n")
+
+    def time_out(pruning, policy):
+        raise kvm.Inconclusive("the joint verification on the guest kernel ran out of time",
+                               kvm.run_evidence(run_of(TIMED_OUT, 14), "joint verification"))
+    monkeypatch.setattr(kvm, "joint_verification", time_out)
+    monkeypatch.setattr(stages.Pruning, "run",
+                        lambda self, policy, shape, stage: dataclasses.replace(run_of(TIMED_OUT, 14), log_path=log))
+    kept = tmp_path / "java_fixture.abi10.observed.trace.gz"
+    with pytest.raises(kvm.Inconclusive, match="joint verification") as undecided:
+        kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, LateBrokenCapture([]), kept)
+    observed = undecided.value.evidence["observed"]
+    assert observed["audit_failed"].startswith("Indeterminate") and "audit" not in observed
+    assert observed["trace_file"] == kept.name and gzip.decompress(kept.read_bytes()) == b"7 wait4(-1, <unfinished ...>\n"
+
+
+@pytest.mark.parametrize("failure", ["missing", "disk full", "no reserve"])
+def test_a_trace_that_cannot_be_kept_is_named_in_the_record_and_leaves_no_file(monkeypatch, tmp_path, failure):
+    trace = tmp_path / "run-0004-layers.trace"
+    if failure != "missing":
+        trace.write_text("7 wait4(-1, <unfinished ...>\n")
+    if failure == "no reserve":
+        monkeypatch.setattr(kvm.os, "statvfs", lambda path: os.statvfs_result((4096, 4096, 0, 0, 1, 0, 0, 0, 0, 255)))
+    if failure == "disk full":
+
+        def full(source, target):
+            target.write(b"7 wait4")
+            target.flush()
+            raise OSError(errno.ENOSPC, "No space left on device")
+        monkeypatch.setattr(kvm.shutil, "copyfileobj", full)
+    kept = tmp_path / "java_fixture.abi10.observed.trace.gz"
+    found = kvm.keep_trace(trace, kept)
+    assert found["trace_file_failed"].startswith("FileNotFoundError" if failure == "missing" else "OSError")
+    assert "trace_file" not in found and not kept.exists()
 
 
 class BrokenCapture(FakeCapture):
@@ -307,7 +366,7 @@ def test_an_observed_run_that_fails_keeps_the_timeout_it_was_to_explain(monkeypa
     monkeypatch.setattr(stages.Pruning, "run", broken)
     capture = FakeCapture([]) if failure == "run" else BrokenCapture()
     with pytest.raises(kvm.Inconclusive, match="joint verification") as undecided:
-        kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, capture)
+        kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, capture, KEPT)
     assert undecided.value.evidence["run"] == "joint verification" and "observed" not in undecided.value.evidence
     assert undecided.value.evidence["observed_failed"].startswith("PrunerDefect" if failure == "run" else "Indeterminate")
 
@@ -331,7 +390,7 @@ def test_a_diagnosis_run_that_ran_out_of_time_is_inconclusive_rather_than_a_diff
     monkeypatch.setattr(kvm, "joint_verification", lambda pruning, policy: False)
     monkeypatch.setattr(stages.Pruning, "run", lambda self, policy, shape, stage: run_of(TIMED_OUT, 14))
     with pytest.raises(kvm.Inconclusive, match="ran out of time") as undecided:
-        kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture([]))
+        kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture([]), KEPT)
     assert undecided.value.evidence["run"] == "diagnosis run"
     assert undecided.value.evidence["verdict"]["exit_class"] == "timeout"
 
@@ -351,7 +410,7 @@ def test_a_reference_run_that_ran_out_of_time_makes_the_guest_baseline_inconclus
 def test_a_refused_udp_connect_is_no_difference_since_the_guard_refuses_it_on_every_kernel(monkeypatch, tmp_path):
     decision = type("Decision", (), {"bind": ("allow 5000 udp",), "connect": ("allow 127.0.0.1:53 udp",)})()
     failing_then_passing(monkeypatch, decision, [UDP_RECORD])
-    final, rows = kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture([], [UDP_RECORD]))
+    final, rows = kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture([], [UDP_RECORD]), KEPT)
     assert [row["rule"] for row in rows] == ["allow 5000 udp"]
     assert final.connect == POLICY.connect
 
@@ -368,7 +427,7 @@ def test_any_other_difference_between_the_kernels_aborts_instead_of_adding_a_row
     decision = type("Decision", (), {"bind": bind, "connect": connect})()
     failing_then_passing(monkeypatch, decision, lines)
     with pytest.raises(search.PruneAbort, match="more than a UDP bind port") as aborted:
-        kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture([], lines))
+        kvm.abi10_phase(fake_pruning(monkeypatch, tmp_path), POLICY, FakeCapture([], lines), KEPT)
     assert aborted.value.evidence["status"] == 1
     assert aborted.value.evidence["verdict"]["exit_class"] == "tests-failed"
     assert aborted.value.evidence["verdict"]["tests"] == (("T.a", "failed"),)
@@ -532,6 +591,7 @@ def kernel_run(monkeypatch, tmp_path, capture: object, results: list):
     output = tmp_path / "out"
     output.mkdir()
     (output / "java_fixture.abi10.cfg").write_text("stale")
+    (output / "java_fixture.abi10.observed.trace.gz").write_text("stale")
     status = main.main(["--kernel-observer", "audit", "--testing-root", str(tmp_path / "exercises"), "--output-dir",
                         str(output), "java"])
     return status, output
@@ -543,6 +603,28 @@ def test_the_record_and_the_sidecar_are_written_and_a_stale_sidecar_is_removed(m
     assert status == 0
     assert json.loads((output / "java_fixture.abi10.json").read_text()) == entry
     assert not (output / "java_fixture.abi10.cfg").exists()
+    assert not (output / "java_fixture.abi10.observed.trace.gz").exists()
+
+
+class Keeping(list):
+    """Results for kernel_run whose exercise keeps a fresh trace while it is verified, as an observed run does."""
+
+    def __init__(self, output: pathlib.Path, *results: tuple) -> None:
+        """Keeps the results and the directory the trace is written to."""
+        super().__init__(results)
+        self.output = output
+
+    def pop(self, index: int = -1) -> tuple:
+        """The next result, after writing the trace its verification kept."""
+        (self.output / "java_fixture.abi10.observed.trace.gz").write_bytes(gzip.compress(b"fresh\n"))
+        return super().pop(index)
+
+
+def test_a_trace_the_exercise_keeps_now_survives_the_removal_of_the_stale_one(monkeypatch, tmp_path):
+    undecided = ({"verified": False, "inconclusive": True}, None, "the joint verification ran out of time")
+    status, output = kernel_run(monkeypatch, tmp_path, FakeCapture(), Keeping(tmp_path / "out", undecided))
+    assert status == kvm.EXIT_INDETERMINATE
+    assert gzip.decompress((output / "java_fixture.abi10.observed.trace.gz").read_bytes()) == b"fresh\n"
 
 
 def test_a_sidecar_is_written_where_the_exercise_added_a_row(monkeypatch, tmp_path):
