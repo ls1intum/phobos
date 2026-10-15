@@ -112,7 +112,8 @@ Each exercise gets `<key>_<exercise>.cfg`, a complete Phobos configuration, and
 `<key>_<exercise>.json`. The record lists every run, every denial with the grant it produced or
 the reason it produced none, every widening and every containment check. An exercise that aborts
 gets `<key>_<exercise>.aborted.json` and no configuration. The policy stays only as good as the
-reference: the grading layers refuse a code path that the reference never took.
+reference: its rows grant particular rights on the paths they name and beneath the directories among them, which
+can cover paths the reference never reached.
 
 An exercise lives in `exercises/<family>/<exercise>/`, and the folder only groups related exercises. The exercise
 names its key with `"key"` in its `prune.json`; without one, the key is the family's folder name. That is why
