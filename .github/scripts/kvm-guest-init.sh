@@ -7,9 +7,9 @@
 # command line names the key to verify. The data disk holds exercises/, helpers/, manifest/ (the
 # manifest of a pinned read root, for java-maven only, mounted read-only when it holds one), path_sets/
 # (the artefacts of the default prune, which this run reads and adds to), setup.sh and env.sh, as
-# stage-prune-inputs.sh made them. What the guest writes to the serial console is the host's log, ending
-# with the line "PHOBOS-KVM-STATUS <n>" for whoever reads it. The host takes the observer's status from
-# phobos-kvm-status at the root of the data disk instead, since kernel messages can land inside that line.
+# stage-prune-inputs.sh made them. What the guest writes to the serial console is the host's log; it also
+# prints the line "PHOBOS-KVM-STATUS <n>" there for whoever reads it. The host takes the observer's status
+# from phobos-kvm-status at the root of the data disk instead, since kernel messages can land inside that line.
 set -u
 
 # The status the guest reports when it could not even start the observer.
