@@ -114,7 +114,8 @@ fi
 grep -a '^PHOBOS-KVM-KERNEL ' "${WORK}/console.log" || true
 status="$(cat "${WORK}/status")"
 if [[ ! "${status}" =~ ^(0|[1-9][0-9]{0,2})$ ]] || (( status > 255 )); then
-  printf 'the guest reported a status that is not an exit status: %q\n' "${status}" >&2
+  printf 'the guest reported a status that is not an exit status: %q; the last lines of its console:\n' "${status}" >&2
+  tail -20 "${WORK}/console.log" >&2
   exit "${EXIT_INDETERMINATE}"
 fi
 printf 'the observer in the guest ended with status %s\n' "${status}"
