@@ -11,7 +11,9 @@
 #
 # It asserts first, through pruner/shared/test/integration/infrastructure/runner-capability-probe.sh --assert-kvm, that a guest boots under KVM at
 # all, and ends with status 3 where that cannot be told or the guest could not observe Landlock's audit
-# records (the observer's own status 3), never with a pass. The guest's console log is kept in the path_sets
+# records (the observer's own status 3), never with a pass. The observer's status is read from the file
+# phobos-kvm-status the guest leaves at the root of the data disk, not from its console, where kernel
+# messages can interleave with the status line. The guest's console log is kept in the path_sets
 # directory as kvm-console.log. Needs qemu-system-x86, e2fsprogs and sudo without a password.
 set -euo pipefail
 
@@ -100,17 +102,19 @@ if ! debugfs -R "rdump /path_sets ${WORK}" "${WORK}/data.img" > "${WORK}/rdump.l
 fi
 cp -R "${WORK}/path_sets/." "${PATH_SETS}/"
 
-# The serial console ends its lines with a carriage return, and a kernel message can sit before the word.
-status_line="$(grep -a 'PHOBOS-KVM-STATUS [0-9]' "${WORK}/console.log" | tail -1 | tr -d '\r' || true)"
-if [[ -z "${status_line}" ]]; then
+# debugfs ends with status 0 even when the file is missing, so what counts is the file it wrote. A status
+# is an exit status: a decimal from 0 to 255 without leading zeros, so that it is never read as octal.
+debugfs -R "dump /phobos-kvm-status ${WORK}/status" "${WORK}/data.img" > "${WORK}/status-dump.log" 2>&1 || true
+if [[ ! -s "${WORK}/status" ]]; then
   printf 'the guest ended without reporting (QEMU status %s); the last lines of its console:\n' "${qemu_status}" >&2
+  cat "${WORK}/status-dump.log" >&2
   tail -20 "${WORK}/console.log" >&2
   exit "${EXIT_INDETERMINATE}"
 fi
 grep -a '^PHOBOS-KVM-KERNEL ' "${WORK}/console.log" || true
-status="${status_line##*PHOBOS-KVM-STATUS }"
-if [[ ! "${status}" =~ ^[0-9]+$ ]]; then
-  printf 'the guest reported a status that is not a number: %s\n' "${status_line}" >&2
+status="$(cat "${WORK}/status")"
+if [[ ! "${status}" =~ ^(0|[1-9][0-9]{0,2})$ ]] || (( status > 255 )); then
+  printf 'the guest reported a status that is not an exit status: %q\n' "${status}" >&2
   exit "${EXIT_INDETERMINATE}"
 fi
 printf 'the observer in the guest ended with status %s\n' "${status}"

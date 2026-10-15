@@ -7,8 +7,9 @@
 # command line names the key to verify. The data disk holds exercises/, helpers/, manifest/ (the
 # manifest of a pinned read root, for java-maven only, mounted read-only when it holds one), path_sets/
 # (the artefacts of the default prune, which this run reads and adds to), setup.sh and env.sh, as
-# stage-prune-inputs.sh made them. What the guest writes to the serial console is the host's log; the
-# line "PHOBOS-KVM-STATUS <n>" is the status of the observer and the last thing printed before power off.
+# stage-prune-inputs.sh made them. What the guest writes to the serial console is the host's log, ending
+# with the line "PHOBOS-KVM-STATUS <n>" for whoever reads it. The host takes the observer's status from
+# phobos-kvm-status at the root of the data disk instead, since kernel messages can land inside that line.
 set -u
 
 # The status the guest reports when it could not even start the observer.
@@ -25,9 +26,12 @@ cmdline_value() {
   return 0
 }
 
-# Ends the guest: the status line first, then everything written, then power off. The data disk is
-# unmounted after the directories bound from it, which would otherwise keep it busy.
+# Ends the guest: the status on the data disk and on the console, then everything written, then power
+# off. Where the data disk was never mounted, the status file lands on the root disk, which the host never
+# reads, so the host reports the run as indeterminate. The data disk is unmounted after the directories
+# bound from it, which would otherwise keep it busy.
 finish() {
+  printf '%s\n' "$1" > /mnt/data/phobos-kvm-status
   printf 'PHOBOS-KVM-STATUS %s\n' "$1"
   sync
   umount /var/tmp/path_sets 2>/dev/null
