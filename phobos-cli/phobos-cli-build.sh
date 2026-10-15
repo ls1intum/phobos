@@ -12,11 +12,11 @@ command_build() {
     help_text 1
     exit 0
   fi
-  (( $# == 1 )) || fail_usage "build takes exactly one language: java, python, c-fact, r, swift, c-gcc or cpp"
+  (( $# == 1 )) || fail_usage "build takes exactly one language: java, python, c-fact, r, swift, c-gcc, cpp or generic"
   language="$1"
   case "$language" in
-    java | python | c-fact | r | swift | c-gcc | cpp) ;;
-    *) fail_usage "build takes java, python, c-fact, r, swift, c-gcc or cpp, not '$language'" ;;
+    java | python | c-fact | r | swift | c-gcc | cpp | generic) ;;
+    *) fail_usage "build takes java, python, c-fact, r, swift, c-gcc, cpp or generic, not '$language'" ;;
   esac
   if [[ "$MODE" == "image" ]]; then
     fail_environment "build needs a host with Docker; there is no docker inside an image"

@@ -182,6 +182,14 @@ runs the C++ reference exercise under the base the image ships: CMake configures
 pass, a pseudo-terminal works, and a canary, an overwrite of a file beside the working directory and an unnamed
 address are refused. A file the run writes can be executed in the tests directory and nowhere else.
 
+## The generic run-phase image, run by the `run-phase-generic` job of `build.yml`
+
+The generic run-phase image (`docker/protecter/generic/`) is built when the Python image is, and held to `generic-policy-test.sh` and to `reporting.sh`. The
+first runs the shell reference exercise under the base the image ships: exactly its twelve cases pass, and gcc's
+driver starts. A C compilation that succeeds outside Phobos is refused at `cc1`, no row of the base reaches gcc's
+internals or the C headers, and a canary, a write into `/usr/bin` and an unnamed address are refused. A file the run
+creates cannot be executed directly, though bash may run it as a script.
+
 ## The environment variables the suites read
 
 | Variable | Read by | Meaning |

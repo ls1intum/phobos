@@ -31,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       key:
-        description: "The key to prune: java-gradle, java-maven, python, c-fact, r, swift, c-gcc, cpp, or all"
+        description: "The key to prune: java-gradle, java-maven, python, c-fact, r, swift, c-gcc, cpp, generic, or all"
         required: true
         default: java-gradle
         type: string
@@ -69,7 +69,7 @@ jobs:
         run: |
           if [ "${KEY}" = "all" ]; then
             combinations='[{"key":"java-gradle","source":"fixture"}'
-            for key in java-gradle java-maven python c-fact r swift c-gcc cpp; do
+            for key in java-gradle java-maven python c-fact r swift c-gcc cpp generic; do
               combinations="${combinations},{\"key\":\"${key}\",\"source\":\"reference\"}"
             done
             combinations="${combinations}]"

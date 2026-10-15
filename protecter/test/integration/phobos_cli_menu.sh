@@ -232,14 +232,14 @@ echo "== run a command under an existing policy, on a host"
 if [[ -e "${IMAGE_HOME}" ]]; then
   skip "the host form of the menu" "${IMAGE_HOME} exists, so this is an image"
 else
-  menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "1|" "0|"
+  menu --dry-run -- "0|" "0|1" "0|3" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "1|" "0|"
   check "the walk through ends with 0" 0 "${STATUS}"
   walked="$(blocks_of "${OUT}")"
   on_terminal "${STUBS}:/usr/bin:/bin" --dry-run run --language java --exercise "${WORK}/exercise" --config "${WORK}/policies/exercise.cfg" -- ./gradlew test
   direct="$(blocks_of "${OUT}")"
   check "it starts exactly what the same call on the command line starts" "${direct}" "${walked}"
   if [[ -n "${walked}" ]]; then ok "which is a command"; else bad "which is a command" "nothing"; fi
-  menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "1|" "0|"
+  menu --dry-run -- "0|" "0|1" "0|3" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "1|" "0|"
   if grep -qF -- "phobos-cli.sh --dry-run run --language java --exercise ${WORK}/exercise --config ${WORK}/policies/exercise.cfg -- ./gradlew test (ended with status 0)" <<<"${OUT}"; then
     ok "the menu prints the call it ran, with its status"
   else
@@ -248,64 +248,64 @@ else
   if asked "${WORK}/policies" && asked './exercise.cfg' && asked './nested/policy.yaml'; then ok "the policies beneath the policy directory are offered"; else bad "the policies beneath the policy directory are offered" "$(cat "${DIALOG_LOG}")"; fi
   if asked 'planted.cfg'; then bad "a policy outside the policy directory is not offered" "$(cat "${DIALOG_LOG}")"; else ok "a policy outside the policy directory is not offered"; fi
 
-  menu --dry-run -- "0|" "0|1" "0|2" "0|${WORK}/exercise" "0|${WORK}/policies" "0|2" "0|sub" "0|python3 -m pytest" "1|" "0|"
+  menu --dry-run -- "0|" "0|1" "0|4" "0|${WORK}/exercise" "0|${WORK}/policies" "0|2" "0|sub" "0|python3 -m pytest" "1|" "0|"
   check "an Ares 2 policy with a project root ends with 0" 0 "${STATUS}"
   has_pair --project-root /var/tmp/testing-dir/sub && ok "the project root reaches phobos.sh inside the exercise" || bad "the project root reaches phobos.sh inside the exercise" "${OUT}"
   has_pair --config /srv/phobos-cli/config/1/policy.yaml && ok "the Ares 2 policy keeps its suffix" || bad "the Ares 2 policy keeps its suffix" "${OUT}"
   if grep -qx 'phobos-run-phase-python' <<<"${OUT}"; then ok "the language chooses the image"; else bad "the language chooses the image" "${OUT}"; fi
 
-  menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "0|" "0|4g\n512\n\nbridge-1\n10.0.0.53:53" "0|" "0|"
+  menu --dry-run -- "0|" "0|1" "0|3" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "0|" "0|4g\n512\n\nbridge-1\n10.0.0.53:53" "0|" "0|"
   check "advanced options end with 0" 0 "${STATUS}"
   has_pair --memory 4g && has_pair --pids-limit 512 && has_pair --network bridge-1 && ok "the limits and the network reach docker" || bad "the limits and the network reach docker" "${OUT}"
   has_pair --resolver 10.0.0.53:53 && grep -qx -- '--debug' <<<"${OUT}" && ok "the resolver and the debug report reach phobos.sh" || bad "the resolver and the debug report reach phobos.sh" "${OUT}"
   if grep -qx -- '--cpus' <<<"${OUT}"; then bad "an empty field adds no option" "${OUT}"; else ok "an empty field adds no option"; fi
 
-  menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "0|" "0|8g\n1024\n\nhost\n" "0|" "0|"
+  menu --dry-run -- "0|" "0|1" "0|3" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "0|" "0|8g\n1024\n\nhost\n" "0|" "0|"
   check "a network the command line refuses is refused through the menu too" "${PHB_EXIT_USAGE}" "${STATUS}"
   if grep -q '^COMMAND$' <<<"${OUT}"; then bad "and starts nothing" "${OUT}"; else ok "and starts nothing"; fi
   if grep -q 'ended with status 2' <<<"${OUT}"; then ok "and the menu reports the refused call"; else bad "and the menu reports the refused call" "${OUT}"; fi
 
-  menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/exercise" "0|1" "1|" "5|" "5|" "5|" "5|" "5|"
+  menu --dry-run -- "0|" "0|1" "0|3" "0|${WORK}/exercise" "0|${WORK}/exercise" "0|1" "1|" "5|" "5|" "5|" "5|" "5|"
   check "declining a policy inside the exercise ends with 0" 0 "${STATUS}"
   if asked 'inside the exercise'; then ok "a policy inside the exercise is warned about"; else bad "a policy inside the exercise is warned about" "$(cat "${DIALOG_LOG}")"; fi
   if grep -q -- '--defaultno' "${DIALOG_LOG}"; then ok "with No as the default answer"; else bad "with No as the default answer" "$(cat "${DIALOG_LOG}")"; fi
   if grep -q '^COMMAND$' <<<"${OUT}"; then bad "and declining it starts nothing" "${OUT}"; else ok "and declining it starts nothing"; fi
-  menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/exercise" "0|1" "0|" "0|./gradlew test" "1|" "0|"
+  menu --dry-run -- "0|" "0|1" "0|3" "0|${WORK}/exercise" "0|${WORK}/exercise" "0|1" "0|" "0|./gradlew test" "1|" "0|"
   if grep -q '^COMMAND$' <<<"${OUT}"; then ok "confirming it runs the command"; else bad "confirming it runs the command" "${OUT}"; fi
 
-  menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/missing" "0|" "5|" "5|"
+  menu --dry-run -- "0|" "0|1" "0|3" "0|${WORK}/missing" "0|" "5|" "5|"
   if asked 'not an existing directory'; then ok "a directory that does not exist is asked for again"; else bad "a directory that does not exist is asked for again" "$(cat "${DIALOG_LOG}")"; fi
   if asked 'A dry run creates nothing' && ! asked 'Create it?'; then ok "a dry run does not offer to create it, and says why"; else bad "a dry run does not offer to create it, and says why" "$(cat "${DIALOG_LOG}")"; fi
   if [[ -e "${WORK}/missing" ]]; then bad "and creates nothing" "${WORK}/missing exists"; else ok "and creates nothing"; fi
-  menu -- "0|" "0|1" "0|1" "0|${WORK}/created/deep" "0|"
+  menu -- "0|" "0|1" "0|3" "0|${WORK}/created/deep" "0|"
   check "creating the exercise directory and then leaving the menu ends with 0" 0 "${STATUS}"
   if asked 'created/deep does not exist. Create it?'; then ok "a directory that does not exist is offered to be created"; else bad "a directory that does not exist is offered to be created" "$(cat "${DIALOG_LOG}")"; fi
   if [[ -d "${WORK}/created/deep" ]]; then ok "and Yes creates it with its parents"; else bad "and Yes creates it with its parents" "${WORK}/created/deep is missing"; fi
   if asked 'Policy directory'; then ok "and the walk goes on with it"; else bad "and the walk goes on with it" "$(cat "${DIALOG_LOG}")"; fi
   if grep -q '^COMMAND$' <<<"${OUT}"; then bad "and starts nothing" "${OUT}"; else ok "and starts nothing"; fi
-  menu -- "0|" "0|1" "0|1" "0|${WORK}/declined/deep" "1|"
+  menu -- "0|" "0|1" "0|3" "0|${WORK}/declined/deep" "1|"
   if [[ -e "${WORK}/declined" ]]; then bad "No creates nothing" "${WORK}/declined exists"; else ok "No creates nothing"; fi
   if sed -n 6p "${DIALOG_LOG}" | grep -q -- '--inputbox' && ! asked 'not an existing directory'; then ok "and asks for the directory again, without a refusal"; else bad "and asks for the directory again, without a refusal" "$(cat "${DIALOG_LOG}")"; fi
   : > "${WORK}/cwd/plain-file"
-  menu -- "0|" "0|1" "0|1" "0|${WORK}/cwd/plain-file" "0|"
+  menu -- "0|" "0|1" "0|3" "0|${WORK}/cwd/plain-file" "0|"
   if asked 'Create it?'; then bad "a path that names a file is not offered to be created" "$(cat "${DIALOG_LOG}")"; else ok "a path that names a file is not offered to be created"; fi
   if asked 'not an existing directory'; then ok "and is refused"; else bad "and is refused" "$(cat "${DIALOG_LOG}")"; fi
-  menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/cwd/plain-file" "0|"
+  menu --dry-run -- "0|" "0|1" "0|3" "0|${WORK}/cwd/plain-file" "0|"
   if asked 'A dry run creates nothing'; then bad "a dry run does not claim a file would be offered to be created" "$(cat "${DIALOG_LOG}")"; else ok "a dry run does not claim a file would be offered to be created"; fi
   ln -s "${WORK}/nowhere" "${WORK}/cwd/dangling.link"
-  menu -- "0|" "0|1" "0|1" "0|${WORK}/cwd/dangling.link" "0|"
+  menu -- "0|" "0|1" "0|3" "0|${WORK}/cwd/dangling.link" "0|"
   if asked 'Create it?'; then bad "a dangling link is not offered to be created" "$(cat "${DIALOG_LOG}")"; else ok "a dangling link is not offered to be created"; fi
   if [[ -e "${WORK}/nowhere" ]]; then bad "and nothing is created through it" "${WORK}/nowhere exists"; else ok "and nothing is created through it"; fi
-  menu -- "0|" "0|1" "0|1" "0|${WORK}/escaped" "5|"
+  menu -- "0|" "0|1" "0|3" "0|${WORK}/escaped" "5|"
   if [[ -e "${WORK}/escaped" ]]; then bad "Esc on the question creates nothing" "${WORK}/escaped exists"; else ok "Esc on the question creates nothing"; fi
   if sed -n 6p "${DIALOG_LOG}" | grep -q -- '--inputbox'; then ok "and asks for the directory again"; else bad "and asks for the directory again" "$(cat "${DIALOG_LOG}")"; fi
-  menu -- "0|" "0|1" "0|1" "0|${WORK}/cwd/plain-file/below" "0|" "0|"
+  menu -- "0|" "0|1" "0|3" "0|${WORK}/cwd/plain-file/below" "0|" "0|"
   if asked 'could not be created'; then ok "a directory that cannot be created is said to be so"; else bad "a directory that cannot be created is said to be so" "$(cat "${DIALOG_LOG}")"; fi
   if sed -n 7p "${DIALOG_LOG}" | grep -q -- '--inputbox' && ! asked 'not an existing directory'; then ok "and is asked for again"; else bad "and is asked for again" "$(cat "${DIALOG_LOG}")"; fi
-  menu -- "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/new-policies" "0|"
+  menu -- "0|" "0|1" "0|3" "0|${WORK}/exercise" "0|${WORK}/new-policies" "0|"
   if [[ -d "${WORK}/new-policies" ]]; then ok "the policy directory is created on Yes too"; else bad "the policy directory is created on Yes too" "$(cat "${DIALOG_LOG}")"; fi
 
-  menu --dry-run -- "0|" "0|1" "0|0" "0|bad name" "0|" "0|registry.example/phobos:1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "1|" "0|"
+  menu --dry-run -- "0|" "0|1" "0|2" "0|bad name" "0|" "0|registry.example/phobos:1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "1|" "0|"
   check "a run in an image named in the menu ends with 0" 0 "${STATUS}"
   walked="$(blocks_of "${OUT}")"
   if asked 'Other image (name it)'; then ok "the language list offers an image by name"; else bad "the language list offers an image by name" "$(cat "${DIALOG_LOG}")"; fi
@@ -314,24 +314,32 @@ else
   direct="$(blocks_of "${OUT}")"
   check "it starts exactly what the same call with --image starts" "${direct}" "${walked}"
   if grep -qx 'registry.example/phobos:1' <<<"${walked}"; then ok "which runs the image named"; else bad "which runs the image named" "${walked}"; fi
-  menu --dry-run -- "0|" "0|1" "0|0" "5|" "0|1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "1|" "0|"
+  menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|make test" "1|" "0|"
+  check "a run of an exercise in no listed language ends with 0" 0 "${STATUS}"
+  if asked 'Unknown / None of the following' && grep -qx 'phobos-run-phase-generic' <<<"${OUT}"; then ok "Unknown is offered and runs the generic image"; else bad "Unknown is offered and runs the generic image" "${OUT}"; fi
+  if asked '1 Unknown / None of the following 2 Other image (name it) 3 Java (Gradle or Maven)'; then ok "the list starts with 1 Unknown, 2 Other image, 3 Java"; else bad "the list starts with 1 Unknown, 2 Other image, 3 Java" "$(cat "${DIALOG_LOG}")"; fi
+  for pair in "3 java" "4 python" "5 c-fact" "6 r" "7 swift" "8 c-gcc" "9 cpp"; do
+    menu --dry-run -- "0|" "0|1" "0|${pair%% *}" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|true" "1|" "0|"
+    if grep -qx "phobos-run-phase-${pair##* }" <<<"${OUT}"; then ok "tag ${pair%% *} runs the ${pair##* } image"; else bad "tag ${pair%% *} runs the ${pair##* } image" "${OUT}"; fi
+  done
+  menu --dry-run -- "0|" "0|1" "0|2" "5|" "0|3" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "1|" "0|"
   check "Esc on the image name goes back to the languages" 0 "${STATUS}"
   if sed -n 5p "${DIALOG_LOG}" | grep -q 'Language' && grep -qx 'phobos-run-phase-java' <<<"${OUT}" && ! grep -qx -- '--image' <<<"${OUT}"; then ok "and a language chosen then runs its own image"; else bad "and a language chosen then runs its own image" "${OUT}"; fi
-  menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew\\001 test" "0|" "0|./gradlew test" "1|" "0|"
+  menu --dry-run -- "0|" "0|1" "0|3" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew\\001 test" "0|" "0|./gradlew test" "1|" "0|"
   if asked 'without control characters'; then ok "a command with a control character is asked for again"; else bad "a command with a control character is asked for again" "$(cat "${DIALOG_LOG}")"; fi
   has_pair ./gradlew test && ok "and the command given then is the one run" || bad "and the command given then is the one run" "${OUT}"
-  menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "1|" "1|" "5|" "5|" "5|" "5|" "5|" "5|" "5|" "5|"
+  menu --dry-run -- "0|" "0|1" "0|3" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "1|" "1|" "5|" "5|" "5|" "5|" "5|" "5|" "5|" "5|"
   if grep -q '^COMMAND$' <<<"${OUT}"; then bad "No at the last question starts nothing" "${OUT}"; else ok "No at the last question starts nothing"; fi
-  menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|3" "0|${WORK}/policies/exercise.cfg" "0|./gradlew test" "1|" "0|"
+  menu --dry-run -- "0|" "0|1" "0|3" "0|${WORK}/exercise" "0|${WORK}/policies" "0|3" "0|${WORK}/policies/exercise.cfg" "0|./gradlew test" "1|" "0|"
   has_pair --config /srv/phobos-cli/config/1/exercise.cfg && ok "a policy given by its path is used" || bad "a policy given by its path is used" "${OUT}"
-  menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|3" "0|${WORK}/policies/into-exercise.link" "1|" "5|" "5|" "5|" "5|" "5|"
+  menu --dry-run -- "0|" "0|1" "0|3" "0|${WORK}/exercise" "0|${WORK}/policies" "0|3" "0|${WORK}/policies/into-exercise.link" "1|" "5|" "5|" "5|" "5|" "5|"
   if asked 'inside the exercise'; then ok "a link from the policy directory into the exercise is warned about"; else bad "a link from the policy directory into the exercise is warned about" "$(cat "${DIALOG_LOG}")"; fi
   if grep -q '^COMMAND$' <<<"${OUT}"; then bad "and declining it starts nothing" "${OUT}"; else ok "and declining it starts nothing"; fi
-  menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|3" "0|${WORK}/cwd/beside.link" "0|./gradlew test" "1|" "0|"
+  menu --dry-run -- "0|" "0|1" "0|3" "0|${WORK}/exercise" "0|${WORK}/policies" "0|3" "0|${WORK}/cwd/beside.link" "0|./gradlew test" "1|" "0|"
   if asked 'inside the exercise'; then bad "a link to a policy outside the exercise is not warned about" "$(cat "${DIALOG_LOG}")"; else ok "a link to a policy outside the exercise is not warned about"; fi
   has_pair --config /srv/phobos-cli/config/1/beside.link && ok "and is used" || bad "and is used" "${OUT}"
   for chain in chain.link through.dir/exercise.cfg newline.link; do
-    menu --dry-run -- "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|3" "0|${WORK}/cwd/${chain}" "1|" "5|" "5|" "5|" "5|" "5|"
+    menu --dry-run -- "0|" "0|1" "0|3" "0|${WORK}/exercise" "0|${WORK}/policies" "0|3" "0|${WORK}/cwd/${chain}" "1|" "5|" "5|" "5|" "5|" "5|"
     if asked 'inside the exercise'; then ok "a path through a link inside the exercise is warned about (${chain})"; else bad "a path through a link inside the exercise is warned about (${chain})" "$(cat "${DIALOG_LOG}")"; fi
   done
 
@@ -339,7 +347,7 @@ else
   DOCKER_WAIT="${WORK}/docker.wait"
   rm -f "${DOCKER_WAIT}" "${DOCKER_WAIT}.menu"
   : > "${DIALOG_LOG}"
-  printf '%s\n' "0|" "0|1" "0|1" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "1|" "0|" > "${DIALOG_PLAN}"
+  printf '%s\n' "0|" "0|1" "0|3" "0|${WORK}/exercise" "0|${WORK}/policies" "0|1" "0|./gradlew test" "1|" "0|" > "${DIALOG_PLAN}"
   ( on_terminal "${STUBS}:/usr/bin:/bin"; printf '%s' "${STATUS}" > "${WORK}/signal.status"; printf '%s\n' "${OUT}" > "${WORK}/signal.out" ) &
   terminal_pid=$!
   waited=0
@@ -352,6 +360,7 @@ else
     kill -TERM "${menu_pid}"
     wait "${terminal_pid}"
     check "a SIGTERM to the menu alone ends it with 143" 143 "$(cat "${WORK}/signal.status")"
+    if grep -q ' phobos-run-phase-java ' "${DOCKER_LOG}"; then ok "the run it interrupted was the Java run the answers chose"; else bad "the run it interrupted was the Java run the answers chose" "$(cat "${DOCKER_LOG}")"; fi
     if grep -q terminated "${DOCKER_WAIT}"; then ok "and reaches the command the menu runs"; else bad "and reaches the command the menu runs" "$(cat "${DOCKER_WAIT}")"; fi
     if grep -q 'the menu was interrupted' "${WORK}/signal.out" && grep -q 'ended with status' "${WORK}/signal.out"; then ok "and the interrupted call is reported"; else bad "and the interrupted call is reported" "$(cat "${WORK}/signal.out")"; fi
   else
@@ -366,7 +375,7 @@ if [[ -e "${IMAGE_HOME}" ]]; then
   skip "the host form of the policy assistant" "${IMAGE_HOME} exists, so this is an image"
 else
   written=$'[read]\n/srv/data\n[connect]\nallow repo.example.org:443\n[limits]\ntimeout=120\nmem_mb=2048\n'
-  menu --dry-run -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/new.cfg" "0|1\n10\n13" \
+  menu --dry-run -- "0|" "0|2" "0|3" "0|${WORK}/exercise" "0|${WORK}/out/new.cfg" "0|1\n10\n13" \
     "0|1" "0|/srv/data" "0|3" "0|1" "0|repo.example.org:443" "0|1" "0|3" "0|120\n\n2048\n\n\n" "0|"
   check "a dry run through the assistant ends with 0" 0 "${STATUS}"
   shown="$(awk 'found { print } /would have been saved to/ { found = 1 }' <<<"${OUT}" | sed '/^$/d')"
@@ -375,7 +384,7 @@ else
   if grep -q '^COMMAND$' <<<"${OUT}"; then bad "and starts nothing" "${OUT}"; else ok "and starts nothing"; fi
 
   : > "${DOCKER_LOG}"
-  menu -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/new.cfg" "0|1\n10\n13" \
+  menu -- "0|" "0|2" "0|3" "0|${WORK}/exercise" "0|${WORK}/out/new.cfg" "0|1\n10\n13" \
     "0|1" "0|/srv/data" "0|3" "0|1" "0|repo.example.org:443" "0|1" "0|3" "0|120\n\n2048\n\n\n" "0|" \
     "0|" "0|" "0|./gradlew test" "1|" "0|"
   check "the assistant saves, checks and runs, ending with the status of the run" 0 "${STATUS}"
@@ -386,21 +395,21 @@ else
   if asked 'accepted the policy'; then ok "a check that ended with 0 says so"; else bad "a check that ended with 0 says so" "$(cat "${DIALOG_LOG}")"; fi
 
   : > "${DOCKER_LOG}"
-  menu -- "0|" "0|2" "0|0" "0|registry.example/phobos:1" "0|${WORK}/exercise" "0|${WORK}/out/imaged.cfg" "0|1\n10\n13" \
+  menu -- "0|" "0|2" "0|2" "0|registry.example/phobos:1" "0|${WORK}/exercise" "0|${WORK}/out/imaged.cfg" "0|1\n10\n13" \
     "0|1" "0|/srv/data" "0|3" "0|1" "0|repo.example.org:443" "0|1" "0|3" "0|120\n\n2048\n\n\n" "0|" \
     "0|" "0|" "0|./gradlew test" "1|" "0|"
   check "writing a policy for an image named in the menu ends with 0" 0 "${STATUS}"
   if [[ "$(grep -c -- ' registry.example/phobos:1 ' "${DOCKER_LOG}")" == 2 ]] && ! grep -q -- 'phobos-run-phase-' "${DOCKER_LOG}"; then ok "the check and the run both start the image named"; else bad "the check and the run both start the image named" "$(cat "${DOCKER_LOG}")"; fi
 
   DOCKER_STATUS=7
-  menu -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/failing.cfg" "0|1" \
+  menu -- "0|" "0|2" "0|3" "0|${WORK}/exercise" "0|${WORK}/out/failing.cfg" "0|1" \
     "0|1" "0|/srv/data" "0|3" "0|" "0|" "0|" "1|" "0|./gradlew test" "1|" "0|"
   DOCKER_STATUS=0
   check "after a failed check that is kept, the menu ends with the status of the run" 7 "${STATUS}"
   if asked 'The check ended with status 7'; then ok "a failed check shows its status"; else bad "a failed check shows its status" "$(cat "${DIALOG_LOG}")"; fi
   if asked 'Go back and change the policy'; then ok "and offers to change the policy"; else bad "and offers to change the policy" "$(cat "${DIALOG_LOG}")"; fi
 
-  menu --dry-run -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/exercise/inside.cfg" "0|" \
+  menu --dry-run -- "0|" "0|2" "0|3" "0|${WORK}/exercise" "0|${WORK}/exercise/inside.cfg" "0|" \
     "0|${WORK}/out/policy.yaml" "0|" "0|${WORK}/out/existing.cfg" "1|" "5|" "5|" "5|" "5|"
   check "refused places end the way with 0" 0 "${STATUS}"
   if asked 'inside the exercise directory'; then ok "a policy is never saved inside the exercise"; else bad "a policy is never saved inside the exercise" "$(cat "${DIALOG_LOG}")"; fi
@@ -408,7 +417,7 @@ else
   if asked 'exists. Replace it?'; then ok "an existing file is replaced only after a question"; else bad "an existing file is replaced only after a question" "$(cat "${DIALOG_LOG}")"; fi
   check "and No leaves it as it was" $'[read]\n/kept\nx' "$(cat "${WORK}/out/existing.cfg"; printf x)"
 
-  menu --dry-run -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/e.cfg" "0|1\n11\n12\n13" \
+  menu --dry-run -- "0|" "0|2" "0|3" "0|${WORK}/exercise" "0|${WORK}/out/e.cfg" "0|1\n11\n12\n13" \
     "0|1" "0|relative/path" "0|" "0|/srv/x" "0|3" \
     "0|1" "0|70000" "0|" "0|8080" "0|1" "0|3" \
     "0|1" "0|80\n8080\n198.51.100.0/24" "0|" "0|18080\n8080\n198.51.100.0/24, 203.0.113.1" "0|3" \
@@ -419,17 +428,17 @@ else
     if asked "${refusal}"; then ok "the assistant says '${refusal}'"; else bad "the assistant says '${refusal}'" "$(cat "${DIALOG_LOG}")"; fi
   done
 
-  menu --dry-run -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/r.cfg" "0|1\n10" \
+  menu --dry-run -- "0|" "0|2" "0|3" "0|${WORK}/exercise" "0|${WORK}/out/r.cfg" "0|1\n10" \
     "0|1" "0|/a" "0|2" "0|/b" "0|1" "0|" "0|3" \
     "0|1" "0|host:0" "0|" "0|[2001:db8::1]:443" "0|2" "0|3" "0|"
   shown="$(awk 'found { print } /would have been saved to/ { found = 1 }' <<<"${OUT}" | sed '/^$/d')"
   check "an entry removed is gone, and an address of the sixth version keeps its brackets" $'[read]\n/b\n[connect]\nallow [2001:db8::1]:443 udp' "${shown}"
   if asked 'from 1 to 65535, or *'; then ok "a [connect] port of 0 is refused"; else bad "a [connect] port of 0 is refused" "$(cat "${DIALOG_LOG}")"; fi
-  menu --dry-run -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/u.cfg" "0|1\n13" \
+  menu --dry-run -- "0|" "0|2" "0|3" "0|${WORK}/exercise" "0|${WORK}/out/u.cfg" "0|1\n13" \
     "0|1" "0|/a" "0|3" "0|120\n\n\n\n\n" "5|" "5|" "0|1" "0|3" "0|"
   shown="$(awk 'found { print } /would have been saved to/ { found = 1 }' <<<"${OUT}" | sed '/^$/d')"
   check "a section unticked after it was filled grants nothing" $'[read]\n/a' "${shown}"
-  menu --dry-run -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/z.cfg" "0|13" \
+  menu --dry-run -- "0|" "0|2" "0|3" "0|${WORK}/exercise" "0|${WORK}/out/z.cfg" "0|13" \
     "0|0.000\n\n\n\n\n" "1|" "0|120\n\n\n\n\n" "0|"
   shown="$(awk 'found { print } /would have been saved to/ { found = 1 }' <<<"${OUT}" | sed '/^$/d')"
   if asked 'whatever the base names: timeout'; then ok "a timeout of 0.000 is confirmed like 0"; else bad "a timeout of 0.000 is confirmed like 0" "$(cat "${DIALOG_LOG}")"; fi
@@ -439,7 +448,7 @@ else
   HOOK="${WORK}/hook.sh"
   HOOK_CALL=10
   before_exercise="$(find "${WORK}/exercise" | sort)"
-  menu -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/planted.cfg" "0|1" "0|1" "0|/srv/data" "0|3" "0|" "0|" \
+  menu -- "0|" "0|2" "0|3" "0|${WORK}/exercise" "0|${WORK}/out/planted.cfg" "0|1" "0|1" "0|/srv/data" "0|3" "0|" "0|" \
     "5|" "5|" "5|" "5|" "5|" "5|"
   HOOK=""
   HOOK_CALL=""
@@ -450,7 +459,7 @@ else
   printf 'printf "[read]\\n/appeared\\n" > %q\n' "${WORK}/out/appeared.cfg" > "${WORK}/hook.sh"
   HOOK="${WORK}/hook.sh"
   HOOK_CALL=10
-  menu -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/appeared.cfg" "0|1" "0|1" "0|/srv/data" "0|3" "0|" "1|" \
+  menu -- "0|" "0|2" "0|3" "0|${WORK}/exercise" "0|${WORK}/out/appeared.cfg" "0|1" "0|1" "0|/srv/data" "0|3" "0|" "1|" \
     "5|" "5|" "5|" "5|" "5|" "5|"
   HOOK=""
   HOOK_CALL=""
@@ -462,7 +471,7 @@ else
   rm -f "${DOCKER_WAIT}" "${DOCKER_WAIT}.menu"
   captures_before="$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'phobos-cli-check.*' | wc -l | tr -d ' ')"
   : > "${DIALOG_LOG}"
-  printf '%s\n' "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/interrupted.cfg" "0|1" "0|1" "0|/srv/data" "0|3" "0|" "0|" > "${DIALOG_PLAN}"
+  printf '%s\n' "0|" "0|2" "0|3" "0|${WORK}/exercise" "0|${WORK}/out/interrupted.cfg" "0|1" "0|1" "0|/srv/data" "0|3" "0|" "0|" > "${DIALOG_PLAN}"
   ( on_terminal "${STUBS}:/usr/bin:/bin"; printf '%s' "${STATUS}" > "${WORK}/check.status" ) &
   terminal_pid=$!
   waited=0
@@ -475,13 +484,14 @@ else
     kill -TERM "${menu_pid}"
     wait "${terminal_pid}"
     check "a SIGTERM during the check ends the menu with 143" 143 "$(cat "${WORK}/check.status")"
+    if grep -q ' phobos-run-phase-java ' "${DOCKER_LOG}"; then ok "the check it interrupted ran in the Java image the answers chose"; else bad "the check it interrupted ran in the Java image the answers chose" "$(cat "${DOCKER_LOG}")"; fi
     check "and leaves no output of the check behind" "${captures_before}" "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'phobos-cli-check.*' | wc -l | tr -d ' ')"
   else
     bad "the check the menu runs was started" "no PID within 20 seconds"
     wait "${terminal_pid}"
   fi
   DOCKER_WAIT=""
-  menu --dry-run -- "0|" "0|2" "0|1" "0|${WORK}/exercise" "0|${WORK}/out/t.cfg" "0|1\n99"
+  menu --dry-run -- "0|" "0|2" "0|3" "0|${WORK}/exercise" "0|${WORK}/out/t.cfg" "0|1\n99"
   check "a section the checklist did not offer ends the menu" "${PHB_ERUNTIME}" "${STATUS}"
 fi
 
@@ -496,11 +506,15 @@ else
   if grep -q '^COMMAND$' <<<"${OUT}"; then bad "and declining starts nothing" "${OUT}"; else ok "and declining starts nothing"; fi
   if sed -n 4p "${DIALOG_LOG}" | grep -q 'Main menu'; then ok "and leads straight back to the main menu"; else bad "and leads straight back to the main menu" "$(cat "${DIALOG_LOG}")"; fi
 
-  menu --dry-run -- "0|" "0|3" "0|" "0|1" "0|${WORK}/exercise" "1|" "0|bad name" "0|" "0|tool" "0|./build_script.sh"
+  menu --dry-run -- "0|" "0|3" "0|" "0|3" "0|${WORK}/exercise" "1|" "0|bad name" "0|" "0|tool" "0|./build_script.sh"
   check "a dry run through recording ends with 0" 0 "${STATUS}"
   walked="$(blocks_of "${OUT}")"
   if asked 'up to 64'; then ok "a recording name the recording pruner refuses is asked for again"; else bad "a recording name the recording pruner refuses is asked for again" "$(cat "${DIALOG_LOG}")"; fi
   if asked 'Other image'; then bad "recording offers no image by name, since record takes no --image" "$(cat "${DIALOG_LOG}")"; else ok "recording offers no image by name, since record takes no --image"; fi
+  menu --dry-run -- "0|" "0|3" "0|" "0|2"
+  check "the record list does not offer tag 2" "${PHB_ERUNTIME}" "${STATUS}"
+  menu --dry-run -- "0|" "0|3" "0|" "0|1" "0|${WORK}/exercise" "1|" "0|tool" "0|./build_script.sh"
+  if grep -qx 'RUN_PHASE_IMAGE=phobos-run-phase-generic' <<<"${OUT}"; then ok "recording an exercise in no listed language uses the generic image"; else bad "recording an exercise in no listed language uses the generic image" "${OUT}"; fi
   if grep -q 'A dry run records nothing' <<<"${OUT}"; then ok "and says there is no policy to save"; else bad "and says there is no policy to save" "${OUT}"; fi
   on_terminal "${STUBS}:/usr/bin:/bin" --dry-run record --language java --exercise "${WORK}/exercise" record --name tool -- ./build_script.sh
   direct="$(blocks_of "${OUT}")"
@@ -511,7 +525,7 @@ else
   mkdir -p "${REPOSITORY}/build/pruner/recordings/${RECORDING}"
   printf '[read]\n/recorded\n' > "${REPOSITORY}/build/pruner/recordings/${RECORDING}/policy.cfg"
   : > "${DOCKER_LOG}"
-  menu -- "0|" "0|3" "0|" "0|1" "0|${WORK}/exercise" "1|" "0|${RECORDING}" "0|./build_script.sh" \
+  menu -- "0|" "0|3" "0|" "0|3" "0|${WORK}/exercise" "1|" "0|${RECORDING}" "0|./build_script.sh" \
     "1|" "0|" "0|${WORK}/out/recorded.cfg" "0|" "0|./build_script.sh" "1|" "0|"
   check "recording, generating, replaying, saving and running ends with the status of the run" 0 "${STATUS}"
   check "four calls reached docker" 4 "$(wc -l < "${DOCKER_LOG}" | tr -d ' ')"
@@ -527,29 +541,29 @@ else
 
   DOCKER_STATUSES="0 0 9"
   : > "${DOCKER_LOG}"
-  menu -- "0|" "0|3" "0|" "0|1" "0|${WORK}/exercise" "1|" "0|${RECORDING}" "0|./build_script.sh" "1|" "0|" "1|"
+  menu -- "0|" "0|3" "0|" "0|3" "0|${WORK}/exercise" "1|" "0|${RECORDING}" "0|./build_script.sh" "1|" "0|" "1|"
   check "a failed replay whose policy is not kept ends the menu with its status" 9 "${STATUS}"
   check "and nothing follows it" 3 "$(wc -l < "${DOCKER_LOG}" | tr -d ' ')"
   check "and no further question is asked" 11 "$(wc -l < "${DIALOG_LOG}" | tr -d ' ')"
   DOCKER_STATUSES="0 5"
   : > "${DOCKER_LOG}"
-  menu -- "0|" "0|3" "0|" "0|1" "0|${WORK}/exercise" "1|" "0|${RECORDING}" "0|./build_script.sh" "1|"
+  menu -- "0|" "0|3" "0|" "0|3" "0|${WORK}/exercise" "1|" "0|${RECORDING}" "0|./build_script.sh" "1|"
   check "a failed generate ends the menu with its status" 5 "${STATUS}"
   check "and nothing follows it" 2 "$(wc -l < "${DOCKER_LOG}" | tr -d ' ')"
   check "and no further question is asked" 9 "$(wc -l < "${DIALOG_LOG}" | tr -d ' ')"
   DOCKER_STATUSES="3"
   : > "${DOCKER_LOG}"
-  menu -- "0|" "0|3" "0|" "0|1" "0|${WORK}/exercise" "1|" "0|${RECORDING}" "0|./build_script.sh" "1|"
+  menu -- "0|" "0|3" "0|" "0|3" "0|${WORK}/exercise" "1|" "0|${RECORDING}" "0|./build_script.sh" "1|"
   check "a session that ended with a status not kept ends the menu with it" 3 "${STATUS}"
   check "and nothing follows it" 1 "$(wc -l < "${DOCKER_LOG}" | tr -d ' ')"
   check "and no further question is asked" 9 "$(wc -l < "${DIALOG_LOG}" | tr -d ' ')"
   DOCKER_STATUSES=""
   : > "${DOCKER_LOG}"
-  menu -- "0|" "0|3" "0|" "0|1" "0|${WORK}/exercise" "0|" "0|${RECORDING}" "0|./build_script.sh" "1|" "0|" "0|10.0.0.53" "5|"
+  menu -- "0|" "0|3" "0|" "0|3" "0|${WORK}/exercise" "0|" "0|${RECORDING}" "0|./build_script.sh" "1|" "0|" "0|10.0.0.53" "5|"
   if sed -n 1p "${DOCKER_LOG}" | grep -qF -- "--profile record run --build --rm record_networked record --name ${RECORDING}"; then ok "a program that needs the network is recorded on the networked service"; else bad "a program that needs the network is recorded on the networked service" "$(cat "${DOCKER_LOG}")"; fi
   if sed -n 3p "${DOCKER_LOG}" | grep -qF -- "check --name ${RECORDING} --resolver 10.0.0.53 -- ./build_script.sh"; then ok "and its replay gets the resolver given"; else bad "and its replay gets the resolver given" "$(cat "${DOCKER_LOG}")"; fi
   : > "${DOCKER_LOG}"
-  menu -- "0|" "0|3" "0|" "0|1" "0|${WORK}/exercise" "0|" "0|${RECORDING}" "0|./build_script.sh" "1|" "0|" "5|" "5|"
+  menu -- "0|" "0|3" "0|" "0|3" "0|${WORK}/exercise" "0|" "0|${RECORDING}" "0|./build_script.sh" "1|" "0|" "5|" "5|"
   check "Esc at the resolver starts no replay" 2 "$(wc -l < "${DOCKER_LOG}" | tr -d ' ')"
   DOCKER_STATUSES=""
   rm -rf -- "${REPOSITORY}/build/pruner/recordings/${RECORDING}"

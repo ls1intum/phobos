@@ -1490,3 +1490,110 @@ jobs:
             --entrypoint python3 phobos-prune-layers-cpp:ci \
             /var/tmp/helpers/exercise_pruner/src/interface/main.py cpp
           test -n "$(find "${output}" -maxdepth 1 -name '*cpp-reference.cfg' -size +0)"
+
+  # The run-phase image for an exercise in none of the languages above, on native runners. Like the Python, C and R
+  # images it is not built for a pull request: the weekly run builds it for amd64, and a dispatch with scope full for
+  # amd64 and arm64. The shipped generic base is derived from the shell reference exercise, so the job holds the image
+  # to that exercise in both directions, proves the layer pruner still prunes it, and verifies the shipped base itself
+  # with the pruner as grading applies it, which on amd64 and arm64 checks the union of the two observations natively.
+  run-phase-generic:
+    name: Build the generic run-phase image (${{ matrix.platform }}) and hold it to the shell reference exercise
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.scope == 'full') }}
+    runs-on: ${{ matrix.platform == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-26.04' }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(github.event_name == 'schedule' && '["amd64"]' || '["amd64", "arm64"]') }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assemble the build context
+        run: .github/scripts/assemble-run-phase-context.sh "${RUNNER_TEMP}/run-phase-context"
+
+      - name: Build the generic run-phase image
+        id: build
+        uses: ./.github/actions/build-run-phase-image
+        with:
+          name: generic
+          dockerfile: docker/protecter/generic/Dockerfile
+          tag: phobos-run-phase-generic:ci
+          context: ${{ runner.temp }}/run-phase-context
+          fresh: ${{ env.FRESH_BUILD }}
+          cache: "false"
+          buildkit-image: ${{ env.BUILDKIT_IMAGE }}
+
+      - name: The shipped generic base runs the shell reference exercise both ways
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none -v "${PWD}/protecter/test:/tests:ro" \
+            -v "${PWD}/exercises/generic/shell-reference:/exercise:ro" \
+            phobos-run-phase-generic:ci \
+            bash /tests/integration/landlock-filesystem-and-networksystem-acceptance/generic-policy-test.sh
+
+      - name: The reporter reports each blocked action on the generic image and changes no outcome
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm --network none --memory 3g --pids-limit 1024 -v "${PWD}/protecter/test:/tests:ro" \
+            phobos-run-phase-generic:ci bash /tests/integration/protection-matrix/reporting.sh
+
+      - name: Build the prune image on the generic run-phase image
+        id: prune-build
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker build --build-arg RUN_PHASE_IMAGE=phobos-run-phase-generic:ci \
+            -f docker/pruner/layers/Dockerfile -t phobos-prune-layers-generic:ci .
+
+      - name: The layer pruner prunes the shell reference exercise on the generic image
+        id: prune
+        if: ${{ !cancelled() && steps.prune-build.outcome == 'success' }}
+        timeout-minutes: 30
+        run: |
+          output="$(mktemp -d)"
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}/exercises:/srv/phobos-prune-exercises:ro" \
+            -v "${PWD}/pruner:/var/tmp/helpers:ro" -v "${output}:/var/tmp/path_sets" \
+            --entrypoint python3 phobos-prune-layers-generic:ci \
+            /var/tmp/helpers/exercise_pruner/src/interface/main.py generic
+          test -n "$(find "${output}" -maxdepth 1 -name '*shell-reference.cfg' -size +0)"
+          echo "output=${output}" >> "${GITHUB_OUTPUT}"
+
+      - name: The orchestrator derives the generic exercise's remainder from that prune
+        id: remainder
+        if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
+        env:
+          PRUNED: ${{ steps.prune.outputs.output }}
+        run: |
+          core="$(mktemp -d)"
+          docker run --rm --network none -v "${PWD}/pruner:/var/tmp/helpers:ro" \
+            -v "${PRUNED}:/var/tmp/path_sets" -v "${core}:/var/tmp/phobos-core-out" \
+            --entrypoint python3 phobos-prune-layers-generic:ci \
+            /var/tmp/helpers/exercise_pruner/src/interface/orchestrate.py --langs generic \
+            --path-dir /var/tmp/path_sets --core-dir /var/tmp/phobos-core-out --helpers-dir /var/tmp/helpers
+          test -s "${core}/exercises/generic_shell-reference.cfg"
+          echo "core=${core}" >> "${GITHUB_OUTPUT}"
+
+      - name: The shipped generic base, applied as grading applies it, passes the pruner's verification
+        if: ${{ !cancelled() && steps.remainder.outcome == 'success' }}
+        timeout-minutes: 30
+        env:
+          CORE: ${{ steps.remainder.outputs.core }}
+        run: |
+          records="$(mktemp -d)"
+          # The prune image's own base, BasePrune.cfg, grants nothing, so the shipped base mounted beside it is
+          # exactly what grading applies; the record names the digest of each.
+          docker run --rm --network none --memory 3g --pids-limit 1024 \
+            -v "${PWD}/exercises:/srv/phobos-prune-exercises:ro" -v "${PWD}/pruner:/var/tmp/helpers:ro" \
+            -v "${PWD}/protecter/src/config/BaseLanguage-generic.cfg:/var/tmp/opt/core/BaseLanguage-generic.cfg:ro" \
+            -v "${CORE}/exercises:/srv/phobos-remainder:ro" -v "${records}:/var/tmp/path_sets" \
+            --entrypoint python3 phobos-prune-layers-generic:ci \
+            /var/tmp/helpers/exercise_pruner/src/interface/main.py \
+            --verify-policy /srv/phobos-remainder/generic_shell-reference.cfg generic
+          record="$(find "${records}" -name 'generic_shell-reference.json' -print -quit)"
+          test -n "${record}"
+          grep -q '"verified": true' "${record}"

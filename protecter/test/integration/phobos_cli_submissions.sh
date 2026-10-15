@@ -279,6 +279,11 @@ if grep -qx 'COMMAND' <<<"${OUT}" && grep -qx 'build' <<<"${OUT}"; then ok "it p
 submissions STUB_IMAGE_MISSING=1
 check "without the run-phase image the call cannot start" "${PHB_ERUNTIME}" "${STATUS}"
 if grep -q 'phobos-cli.sh build c-gcc' <<<"${ERR}"; then ok "and says how to build it"; else bad "and says how to build it" "${ERR}"; fi
+fresh
+printf '{"key": "generic"}\n' > "${FRESH}/template/prune.json"
+submissions STUB_IMAGE_MISSING=1
+check "a template of the key generic needs the generic run-phase image" "${PHB_ERUNTIME}" "${STATUS}"
+if grep -q 'phobos-cli.sh build generic' <<<"${ERR}"; then ok "and says how to build that image"; else bad "and says how to build that image" "${ERR}"; fi
 
 echo "== a run"
 fresh

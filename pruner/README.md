@@ -131,6 +131,14 @@ The prune image is built on the C++ run-phase image there and prunes `exercises/
 end in a policy. That exercise declares the same three settings as the GCC one, and `compiled_programs_directory`
 as `test`, because CMake builds into the tests directory. The seed `cpp.cfg` grants `/tmp`.
 
+## The generic run-phase image, run by the `run-phase-generic` job of `build.yml`
+
+The prune image is built on the generic run-phase image there and prunes `exercises/generic/shell-reference`, which
+has to end in a policy. That exercise declares none of the settings above. The seed `generic.cfg` grants `/tmp`,
+where `mktemp` names its files at random. The job then derives the exercise's remainder with the orchestrator and
+verifies the shipped base with `main.py --verify-policy`, the base beside `phobos.sh` as grading applies it, so the
+union of the aarch64 and x86_64 observations is checked natively on both architectures.
+
 ## The environment variables the suites read
 
 | Variable | Read by | Meaning |

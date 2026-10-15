@@ -26,10 +26,11 @@ env:
   PRUNE_SOURCE: ${{ inputs.source }}
   # The suffix of every artefact this call keeps, unique among the calls of one run.
   SUFFIX: ${{ inputs.key }}-${{ inputs.source }}
-  # The run-phase image follows the key: python, c-fact, r, swift, c-gcc and cpp have their own, every other key is a
-  # Java one. Folded to stay inside the line length yamllint enforces.
+  # The run-phase image follows the key: python, c-fact, r, swift, c-gcc, cpp and generic have their own, every other
+  # key is a Java one. Folded to stay inside the line length yamllint enforces.
   RUN_PHASE: >-
-    ${{ contains(fromJSON('["python","c-fact","r","swift","c-gcc","cpp"]'), inputs.key) && inputs.key || 'java' }}
+    ${{ contains(fromJSON('["python","c-fact","r","swift","c-gcc","cpp",
+    "generic"]'), inputs.key) && inputs.key || 'java' }}
   # The BuildKit image the run-phase image is built with, as in build.yml, whose layer cache this run shares.
   BUILDKIT_IMAGE: moby/buildkit:v0.34.0@sha256:b059f8d7226d0b326bc871af489a5dddf65e36af4d20d14251b072974d9ee87c
 
