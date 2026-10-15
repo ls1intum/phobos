@@ -165,7 +165,10 @@ The Swift run-phase image (`docker/protecter/swift/`) is built when the Python i
 `swift-policy-test.sh` and to `reporting.sh`.
 The first runs the Swift reference exercise under the base the image ships: the ten tests of the template pass, a
 canary, an overwrite of a file beside the working directory and an unnamed address are refused, and a file the run
-writes can be executed in the solution's directory and nowhere else.
+writes can be executed in the solution's directory and nowhere else. It holds the base's `/dev/urandom` row to both
+directions: a run reads from it, a program compiled under the base makes two different UUIDs, and the build passes
+again with SwiftPM's queue narrowed to one operation, while opening `/dev/urandom` for writing and opening
+`/dev/random` are refused.
 
 ## The GCC run-phase image, run by the `run-phase-c-gcc` job of `build.yml`
 

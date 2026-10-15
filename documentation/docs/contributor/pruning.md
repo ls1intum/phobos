@@ -237,6 +237,11 @@ directory, so nothing under `/usr` is writable and no file the run writes can be
 Swift template, on the Swift run-phase image. The exercise declares `runs_compiled_programs`, so the base keeps
 execute on the solution's directory beside write, as the FACT base does. The control replay confirms an `execve`
 refused on a program that the build wrote and removed again, but only beneath that declared directory.
+One row is kept by hand: `[read] /dev/urandom`. Foundation 6.2 reads every UUID from it without checking the open,
+and with equal UUIDs SwiftPM's repository queue loses a fetch that waits. Where Swift sees 2 CPUs or fewer, the queue
+runs one operation at a time, so two overlapping fetches are enough. The reference hung that way in a KVM guest with
+2 CPUs. On the 4-CPU runner it passes without the row, so the
+minimisation drops it, and whoever adopts a new prune keeps it until the pruner can keep a seeded row.
 
 `protecter/src/config/BaseLanguage-c-gcc.cfg` is the result for the C reference exercise built with Artemis's
 GCC template, on the GCC run-phase image. The exercise declares `runs_compiled_programs`, so the base keeps execute

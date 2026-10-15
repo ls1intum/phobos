@@ -8,6 +8,13 @@
 # directory the base only reads is refused, a connection to an address no rule names is refused, and a file the run
 # writes can be executed in the directory of the solution and nowhere else.
 #
+# /dev/urandom, the one row of the base kept by hand: Foundation 6.2 reads the bytes of every UUID() from it without
+# checking the open, and SwiftPM's repository queue loses a waiting fetch when its UUIDs are equal. Permitted direction:
+# a run reads 16 bytes from it, a program compiled under the base makes two different UUIDs, and the build passes again
+# with SwiftPM's queue narrowed to one operation (SWIFTPM_MAX_CONCURRENT_OPERATIONS=1, as with 2 CPUs), which runs the
+# fetches one at a time whenever they overlap. Containment direction: opening /dev/urandom for writing and /dev/random,
+# which no row names, are refused with EACCES, where the same opens succeed outside Phobos.
+#
 # It needs the Swift run-phase image with the exercise mounted read-only at /exercise, and an ordinary container: no
 # --privileged, no --cap-add, no --security-opt, and --network none.
 set -uo pipefail
@@ -94,6 +101,62 @@ if [[ "$(cat /usr/lib/phobos-swift-probe)" == original ]]; then
   ok "and the file in the read-only directory is unchanged"
 else
   bad "and the file in the read-only directory is unchanged" "$(cat /usr/lib/phobos-swift-probe)"
+fi
+
+OPEN_PROBE='import os, sys
+flags = os.O_WRONLY if sys.argv[2] == "write" else os.O_RDONLY
+try:
+    fd = os.open(sys.argv[1], flags)
+except PermissionError as refusal:
+    print("errno", refusal.errno)
+else:
+    if sys.argv[2] == "read":
+        print("read", len(os.read(fd, 16)))
+    else:
+        print("opened")
+    os.close(fd)'
+under_base "${WORK}/urandom-read.out" python3 -c "${OPEN_PROBE}" /dev/urandom read
+if grep -q "^read 16$" "${WORK}/urandom-read.out"; then
+  ok "a run reads 16 bytes from /dev/urandom under the base"
+else
+  bad "a run reads 16 bytes from /dev/urandom under the base" "$(cat "${WORK}/urandom-read.out")"
+fi
+for probe in "/dev/urandom write" "/dev/random open"; do
+  read -r device mode <<< "${probe}"
+  outside="$(python3 -c "${OPEN_PROBE}" "${device}" "${mode}" 2>&1)"
+  under_base "${WORK}/device.out" python3 -c "${OPEN_PROBE}" "${device}" "${mode}"
+  if [[ "${outside}" == "opened" ]] && grep -q "^errno 13$" "${WORK}/device.out"; then
+    ok "opening ${device} to ${mode} is refused with EACCES under the base and succeeds outside Phobos"
+  else
+    bad "opening ${device} to ${mode} is refused with EACCES under the base and succeeds outside Phobos" \
+      "outside: ${outside}; under the base: $(cat "${WORK}/device.out")"
+  fi
+done
+
+UUID_PROBE="${EXERCISE}/assignment/uuid-probe"
+printf 'import Foundation\nlet first = UUID()\nlet second = UUID()\nprint(first == second ? "equal \\(first)" : "distinct")\n' \
+  > "${UUID_PROBE}.swift"
+under_base "${WORK}/uuid-build.out" env HOME="${EXERCISE}/home" TMPDIR="${EXERCISE}/assignment/.tmp" \
+  swiftc -o "${UUID_PROBE}" "${UUID_PROBE}.swift"
+under_base "${WORK}/uuid.out" "${UUID_PROBE}"
+outside="$("${UUID_PROBE}" 2>&1)"
+if [[ "$(cat "${WORK}/uuid-build.out.status")" == 0 ]] && [[ "${outside}" == distinct ]] \
+    && grep -q "^distinct$" "${WORK}/uuid.out"; then
+  ok "a program compiled under the base makes two different UUIDs there, as it does outside Phobos"
+else
+  bad "a program compiled under the base makes two different UUIDs there, as it does outside Phobos" \
+    "outside: ${outside}; under the base: $(cat "${WORK}/uuid.out"); build: $(tail -5 "${WORK}/uuid-build.out")"
+fi
+
+rm -rf "${EXERCISE:?}"/*
+cp -a "${EXERCISE_SOURCE}/." "${EXERCISE}/"
+under_base "${WORK}/narrow.out" env SWIFTPM_MAX_CONCURRENT_OPERATIONS=1 bash build_script.sh
+check "the build script ends with status 0 with SwiftPM's queue narrowed to one operation" 0 \
+  "$(cat "${WORK}/narrow.out.status")"
+if [[ -s "${REPORT}" ]] && [[ "$(grep -c '<testcase ' "${REPORT}")" == 10 ]] && ! grep -q '<failure' "${REPORT}"; then
+  ok "and its JUnit report holds 10 tests and no failure"
+else
+  bad "and its JUnit report holds 10 tests and no failure" "$(head -c 600 "${REPORT}" 2>&1; tail -12 "${WORK}/narrow.out")"
 fi
 rm -rf "${WORK}" "${CANARY}" /usr/lib/phobos-swift-probe
 finish
