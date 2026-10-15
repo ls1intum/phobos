@@ -1903,6 +1903,187 @@ else
   skip "the network layer holds a udp name rule to the addresses it resolved to" "/etc/hosts is not writable here"
 fi
 
+echo
+echo "== a listener is pinned to loopback, a datagram socket is filtered, and neither can be moved off =="
+# The guard pins every listener it lets listen to the loopback device and attaches a locked receive
+# filter to every datagram socket it creates, so that neither can be reached from outside the host
+# without an outer container that has no network. Reaching them from a second host is the
+# two-container suite's to show (listener_reach_docker.sh); here the kernel's own answers are read
+# back: the device a listener is bound to, the lock on the filter, and the refusal of the options
+# that would undo either. Each is shown beside the same program without the guard.
+cat > "$WORK/localsock.c" <<'C'
+#define _GNU_SOURCE
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+/* The status for a listen the guard refused, and for a call made the wrong way. */
+enum { LOCAL_REFUSED = 10, LOCAL_USAGE = 2 };
+/* How long the datagram it sends itself may take to arrive, in milliseconds. */
+enum { ARRIVAL_WAIT_MS = 2000 };
+/* Prints the name of the error a call ended with, or OK. */
+static void say(const char *what, int result) {
+    printf("%s=%s\n", what, result == 0 ? "OK" : strerrorname_np(errno));
+}
+/* A dual-stack TCP socket listens, unbound or on the port given, says which device it is bound to,
+ * and accepts a client of its own on 127.0.0.1 and on ::1. */
+static int listen_and_connect(const char *port_text) {
+    int server = socket(AF_INET6, SOCK_STREAM, 0);
+    int zero = 0;
+    setsockopt(server, IPPROTO_IPV6, IPV6_V6ONLY, &zero, sizeof(zero));
+    if (port_text != NULL) {
+        int one = 1;
+        setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+        struct sockaddr_in6 any = { .sin6_family = AF_INET6, .sin6_port = htons((unsigned short)atoi(port_text)) };
+        if (bind(server, (struct sockaddr *)&any, sizeof(any)) != 0) {
+            printf("BIND-FAILED %s\n", strerror(errno));
+        }
+    }
+    if (listen(server, 4) != 0) {
+        printf("LISTEN-REFUSED %s\n", strerror(errno));
+        return LOCAL_REFUSED;
+    }
+    char device[16] = { 0 };
+    socklen_t length = sizeof(device);
+    getsockopt(server, SOL_SOCKET, SO_BINDTODEVICE, device, &length);
+    printf("DEVICE [%s]\n", device);
+    struct sockaddr_in6 bound;
+    length = sizeof(bound);
+    getsockname(server, (struct sockaddr *)&bound, &length);
+    struct sockaddr_in to4 = { .sin_family = AF_INET, .sin_port = bound.sin6_port, .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
+    int client4 = socket(AF_INET, SOCK_STREAM, 0);
+    if (connect(client4, (struct sockaddr *)&to4, sizeof(to4)) == 0 && accept(server, NULL, NULL) >= 0) {
+        printf("LOCAL4-OK\n");
+    }
+    struct sockaddr_in6 to6 = { .sin6_family = AF_INET6, .sin6_port = bound.sin6_port, .sin6_addr = IN6ADDR_LOOPBACK_INIT };
+    int client6 = socket(AF_INET6, SOCK_STREAM, 0);
+    if (connect(client6, (struct sockaddr *)&to6, sizeof(to6)) == 0 && accept(server, NULL, NULL) >= 0) {
+        printf("LOCAL6-OK\n");
+    }
+    return 0;
+}
+/* Sets the options the guard refuses, and one it does not. */
+static int options(void) {
+    int datagram = socket(AF_INET, SOCK_DGRAM, 0);
+    int datagram6 = socket(AF_INET6, SOCK_DGRAM, 0);
+    int one = 1;
+    say("BINDTODEVICE", setsockopt(datagram, SOL_SOCKET, SO_BINDTODEVICE, "lo", 3));
+    say("RECVERR", setsockopt(datagram, IPPROTO_IP, IP_RECVERR, &one, sizeof(one)));
+    say("RECVERR6", setsockopt(datagram6, IPPROTO_IPV6, IPV6_RECVERR, &one, sizeof(one)));
+    say("REUSEADDR", setsockopt(datagram, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)));
+    return 0;
+}
+/* A dual-stack datagram socket says whether it carries a locked filter, tries to detach it, and
+ * receives a datagram another socket sends it on 127.0.0.1. */
+static int datagram_to_itself(void) {
+    int receiver = socket(AF_INET6, SOCK_DGRAM, 0);
+    int zero = 0;
+    setsockopt(receiver, IPPROTO_IPV6, IPV6_V6ONLY, &zero, sizeof(zero));
+    struct sockaddr_in6 any = { .sin6_family = AF_INET6 };
+    bind(receiver, (struct sockaddr *)&any, sizeof(any));
+    int locked = 0;
+    socklen_t length = sizeof(locked);
+    getsockopt(receiver, SOL_SOCKET, SO_LOCK_FILTER, &locked, &length);
+    printf("LOCKED=%d\n", locked);
+    say("DETACH", setsockopt(receiver, SOL_SOCKET, SO_DETACH_FILTER, &zero, sizeof(zero)));
+    struct sockaddr_in6 bound;
+    length = sizeof(bound);
+    getsockname(receiver, (struct sockaddr *)&bound, &length);
+    struct sockaddr_in to = { .sin_family = AF_INET, .sin_port = bound.sin6_port, .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
+    int sender = socket(AF_INET, SOCK_DGRAM, 0);
+    say("SEND", sendto(sender, "x", 1, 0, (struct sockaddr *)&to, sizeof(to)) == 1 ? 0 : -1);
+    struct pollfd waiting = { .fd = receiver, .events = POLLIN };
+    char payload = 0;
+    if (poll(&waiting, 1, ARRIVAL_WAIT_MS) == 1 && recv(receiver, &payload, 1, 0) == 1 && payload == 'x') {
+        printf("UDP-LOCAL-OK\n");
+    }
+    return 0;
+}
+int main(int argc, char **argv) {
+    if (argc >= 2 && strcmp(argv[1], "listen") == 0) {
+        return listen_and_connect(argc >= 3 ? argv[2] : NULL);
+    }
+    if (argc >= 2 && strcmp(argv[1], "options") == 0) {
+        return options();
+    }
+    if (argc >= 2 && strcmp(argv[1], "udp") == 0) {
+        return datagram_to_itself();
+    }
+    return LOCAL_USAGE;
+}
+C
+if "$compiler" -O2 -o "$WORK/localsock" "$WORK/localsock.c" 2>"$WORK/localsock-cc.log"; then
+  # A port of this section's own, which no earlier connection has left in TIME_WAIT.
+  LOCAL_PORT=39377
+  printf '127.0.0.1 *\n::1 *\n127.0.0.1 * udp\n' > "$WORK/local.rules"
+  out="$("$WORK/guard" --rules "$WORK/local.rules" --allow-ephemeral-listen -- "$WORK/localsock" listen 2>&1)"
+  if [[ "$out" == *"DEVICE [lo]"* && "$out" == *LOCAL4-OK* && "$out" == *LOCAL6-OK* ]]; then
+    ok "a listener the kernel gives a port is bound by the guard, pinned to lo, and reached on 127.0.0.1 and ::1"
+  else
+    bad "a listener the kernel gives a port is bound by the guard, pinned to lo, and reached on 127.0.0.1 and ::1" "$out"
+  fi
+  out="$("$WORK/guard" --rules "$WORK/local.rules" -- "$WORK/localsock" listen "$LOCAL_PORT" 2>&1)"
+  if [[ "$out" == *"DEVICE [lo]"* && "$out" == *LOCAL4-OK* && "$out" == *LOCAL6-OK* ]]; then
+    ok "a listener on a port it bound is pinned to lo too, and still reached"
+  else
+    bad "a listener on a port it bound is pinned to lo too, and still reached" "$out"
+  fi
+  out="$("$WORK/localsock" listen 2>&1)"
+  if [[ "$out" == *"DEVICE []"* && "$out" == *LOCAL4-OK* ]]; then
+    ok "without the guard the same listener is bound to no device (control)"
+  else
+    bad "without the guard the same listener is bound to no device (control)" "$out"
+  fi
+
+  out="$("$WORK/guard" --rules "$WORK/local.rules" -- "$WORK/localsock" options 2>&1)"
+  if [[ "$out" == *"BINDTODEVICE=EACCES"* && "$out" == *"RECVERR=EACCES"* && "$out" == *"RECVERR6=EACCES"* \
+        && "$out" == *"REUSEADDR=OK"* && "$out" == *"set the Socket Option SO_BINDTODEVICE"* ]]; then
+    ok "SO_BINDTODEVICE, IP_RECVERR and IPV6_RECVERR are refused and named, SO_REUSEADDR is not"
+  else
+    bad "SO_BINDTODEVICE, IP_RECVERR and IPV6_RECVERR are refused and named, SO_REUSEADDR is not" "$out"
+  fi
+  out="$("$WORK/localsock" options 2>&1)"
+  if [[ "$out" == *"BINDTODEVICE=OK"* && "$out" == *"RECVERR=OK"* && "$out" == *"RECVERR6=OK"* ]]; then
+    ok "without the guard the kernel sets all three (control)"
+  else
+    bad "without the guard the kernel sets all three (control)" "$out"
+  fi
+
+  out="$("$WORK/guard" --rules "$WORK/local.rules" --allow-ephemeral-udp-bind -- "$WORK/localsock" udp 2>&1)"
+  if [[ "$out" == *"LOCKED=1"* && "$out" == *"DETACH=EPERM"* && "$out" == *"SEND=OK"* && "$out" == *UDP-LOCAL-OK* ]]; then
+    ok "a datagram socket carries a locked filter it cannot detach, and still takes a datagram from 127.0.0.1"
+  else
+    bad "a datagram socket carries a locked filter it cannot detach, and still takes a datagram from 127.0.0.1" "$out"
+  fi
+  printf '127.0.0.1 * udp\n198.51.100.0/23 * udp\n192.0.2.7 53 udp\n2001:db8::/33 * udp\n::/80 * udp\n::ffff:203.0.113.0/120 * udp\n' > "$WORK/wide.rules"
+  out="$("$WORK/guard" --rules "$WORK/wide.rules" --allow-ephemeral-udp-bind -- "$WORK/localsock" udp 2>&1)"
+  if [[ "$out" == *"LOCKED=1"* && "$out" == *UDP-LOCAL-OK* ]]; then
+    ok "the kernel takes the filter built from addresses, IPv4 and IPv6 ranges and a wide range, and loopback still arrives"
+  else
+    bad "the kernel takes the filter built from addresses, IPv4 and IPv6 ranges and a wide range, and loopback still arrives" "$out"
+  fi
+  printf '127.0.0.1 * udp\n* 53 udp\n' > "$WORK/open.rules"
+  out="$("$WORK/guard" --rules "$WORK/open.rules" --allow-ephemeral-udp-bind -- "$WORK/localsock" udp 2>&1)"
+  if [[ "$out" == *"LOCKED=0"* && "$out" == *UDP-LOCAL-OK* ]]; then
+    ok "a UDP rule with a wildcard host leaves datagram sockets unfiltered, the residual SECURITY.md names"
+  else
+    bad "a UDP rule with a wildcard host leaves datagram sockets unfiltered, the residual SECURITY.md names" "$out"
+  fi
+  out="$("$WORK/localsock" udp 2>&1)"
+  if [[ "$out" == *"LOCKED=0"* && "$out" == *UDP-LOCAL-OK* ]]; then
+    ok "without the guard the same socket carries no filter (control)"
+  else
+    bad "without the guard the same socket carries no filter (control)" "$out"
+  fi
+else
+  bad "the local socket probe builds" "$(cat "$WORK/localsock-cc.log")"
+fi
+
 kill "$stub_pid" 2>/dev/null
 wait "$stub_pid" 2>/dev/null
 

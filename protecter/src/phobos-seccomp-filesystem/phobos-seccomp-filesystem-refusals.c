@@ -8,6 +8,9 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <sys/syscall.h>
 
 /* The only response this file ever sends, but for the notification's id: the call fails with
@@ -31,6 +34,27 @@ static bool refused_native_call(int number) {
     }
 }
 
+/* The name of a socket option the connect guard's filter refuses, or nullptr for any other. The
+ * level and the name are the kernel's int arguments, read from their low words as the filter
+ * compares them. */
+static const char *refused_socket_option(const struct seccomp_data *data) {
+    int level = (int)(uint32_t)data->args[1];
+    int name = (int)(uint32_t)data->args[2];
+    if (level == SOL_SOCKET && name == SO_BINDTODEVICE) {
+        return "SO_BINDTODEVICE";
+    }
+    if (level == SOL_SOCKET && name == SO_BINDTOIFINDEX) {
+        return "SO_BINDTOIFINDEX";
+    }
+    if (level == IPPROTO_IP && name == IP_RECVERR) {
+        return "IP_RECVERR";
+    }
+    if (level == IPPROTO_IPV6 && name == IPV6_RECVERR) {
+        return "IPV6_RECVERR";
+    }
+    return nullptr;
+}
+
 /* Whether a native-ABI number is in fact an x32 one. */
 static bool x32_number(int number) {
 #ifdef __X32_SYSCALL_BIT
@@ -44,6 +68,9 @@ static bool x32_number(int number) {
 bool is_filter_refusal(const struct seccomp_data *data) {
     if (data->arch != REPORT_NATIVE_AUDIT_ARCH) {
         return true;
+    }
+    if (data->nr == __NR_setsockopt) {
+        return refused_socket_option(data) != nullptr;
     }
     return x32_number(data->nr) || refused_native_call(data->nr);
 }
@@ -72,6 +99,8 @@ static void report_refusal(const struct seccomp_data *data, enum report_layer la
         report_blocked(layer, "leave", "Session", "", false, NULL);
     } else if (data->nr == __NR_setpgid) {
         report_blocked(layer, "leave", "Process Group", "", false, NULL);
+    } else if (data->nr == __NR_setsockopt) {
+        report_blocked(layer, "set", "Socket Option", refused_socket_option(data), false, NULL);
     } else {
         report_blocked(layer, "use", "Kernel Interface", "io_uring", false, NULL);
     }

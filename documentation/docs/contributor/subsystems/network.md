@@ -29,7 +29,8 @@ where the network restriction is enabled, so there is no enable flag to read ins
 | `phobos-seccomp-networksystem/phobos-seccomp-networksystem-resolve.c` | the resolve mode: the addresses of the host names a `udp` rule holds, looked up once |
 | `phobos-seccomp-networksystem/phobos-seccomp-networksystem-rules.c` | the allow-list and the decision on a destination |
 | `phobos-seccomp-networksystem/phobos-seccomp-networksystem-destination.c` | a destination read out of the command's memory |
-| `phobos-seccomp-networksystem/phobos-seccomp-networksystem-socket-types.c` | the type of every socket, remembered by inode |
+| `phobos-seccomp-networksystem/phobos-seccomp-networksystem-socket-types.c` | the type of every socket, remembered by inode, and the pin of a listener to the loopback device |
+| `phobos-seccomp-networksystem/phobos-seccomp-networksystem-receive-filter.c` | the locked socket filter a datagram socket receives through, built from the `udp` rules |
 | `phobos-seccomp-networksystem/phobos-seccomp-networksystem-held-sockets.c` | the sockets the supervisor created and still holds, least recently used first out, and the ones it let listen |
 | `phobos-seccomp-networksystem/phobos-seccomp-networksystem-options.c` | the command line |
 | `phobos-seccomp-networksystem/phobos-seccomp-networksystem-diagnostics.c` | the setup exit status and the verbose lines |
@@ -139,6 +140,29 @@ When the command calls `listen`, the supervisor runs it on that descriptor, and 
 socket is bound to a port `[bind]` named or is unbound and the policy allowed an ephemeral port.
 A socket the supervisor does not hold, such as an inherited or accepted descriptor, or one
 evicted from the full table, cannot listen. That fails closed.
+
+Within the same notification the supervisor pins the listener to the loopback device
+(`pin_listener_to_loopback`). It first binds a socket that has no port to a port the kernel picks.
+It clears `IP_BIND_ADDRESS_NO_PORT` for that and requires a port afterwards. Then it sets
+`SO_BINDTODEVICE "lo"`, reads it back and listens. The bind comes first for a reason. The IPv6
+bind of a scoped address sets a socket's device without privilege and keeps it when the bind
+fails. Once the socket has a port, the kernel refuses that bind before it reads the scope. The
+supervisor refuses a socket it cannot pin. The filter refuses `SO_BINDTODEVICE` and
+`SO_BINDTOIFINDEX`, so the command cannot move the socket off again.
+
+## The receive filter
+
+A datagram socket the supervisor creates carries a classic BPF socket filter. The supervisor
+attaches it and locks it with `SO_LOCK_FILTER` before it hands the socket over. The program reads
+the network-layer source address. It takes a loopback source if and only if it arrived on the
+loopback interface, and any other source only where a `udp` `[connect]` rule names it.
+`configure_receive_filter` builds the program once at start-up and probes it on an IPv4 and an IPv6
+socket. A `udp` rule whose host the guard cannot tie to an address needs no filter. A kernel or
+security module that refuses socket filters on datagram sockets gets a warning and an unfiltered
+run, and any other failure ends the run. The guard's seccomp filter refuses `IP_RECVERR` and
+`IPV6_RECVERR`, because the error queue takes the quoted payload of an ICMP error past the socket
+filter. Classic filters on TCP sockets need `CAP_NET_ADMIN`, which is why the guard pins a listener
+rather than filters it.
 
 ## The guard, stage by stage
 

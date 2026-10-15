@@ -9,8 +9,11 @@
  * which the supervisor makes itself from copies of what the command named, so a destination
  * cannot change after it was judged and TCP Fast Open cannot open a connection past one; io_uring, a second syscall interface that would reach connect unseen; listen(), which
  * the supervisor runs itself, so a socket that was never bound cannot become a listener on a
- * port no bind rule judged; and setsid/setpgid, which would take the command out of the group
- * an outer timeout kills.
+ * port no bind rule judged, and which it pins to the loopback device first, so a listener is
+ * reachable from this host only; the receive side of a datagram socket, which carries a locked
+ * filter that takes datagrams from the host and the peers a UDP rule names only; the socket
+ * options that would move a socket off that device or open its error queue to a sender outside;
+ * and setsid/setpgid, which would take the command out of the group an outer timeout kills.
  * phobos-seccomp-networksystem-child.h holds the filter and says how sendmsg is trapped without
  * parking the child's own handoff of the notification descriptor.
  *
@@ -72,6 +75,7 @@
  *   phobos-seccomp-networksystem-handoff.h         the listener's handoff, signals, reaping, status
  *   phobos-seccomp-networksystem-destination.h     a destination read out of the command's memory
  *   phobos-seccomp-networksystem-datagram.h        the datagram connects and sends the supervisor makes
+ *   phobos-seccomp-networksystem-receive-filter.h  the filter a datagram socket receives through
  *   phobos-seccomp-networksystem-held-sockets.h    the sockets the supervisor created and still holds
  *   phobos-seccomp-networksystem-socket-types.h    the type of every socket, remembered by inode
  *   phobos-seccomp-networksystem-seccomp-compat.h  the seccomp names older headers lack
@@ -103,6 +107,7 @@
 #include "phobos-seccomp-networksystem-diagnostics.h"
 #include "phobos-seccomp-networksystem-handoff.h"
 #include "phobos-seccomp-networksystem-options.h"
+#include "phobos-seccomp-networksystem-receive-filter.h"
 #include "phobos-seccomp-networksystem-resolve.h"
 #include "phobos-seccomp-networksystem-rules.h"
 #include "phobos-seccomp-networksystem-supervisor.h"
@@ -195,6 +200,9 @@ int main(int argument_count, char *arguments[]) {
         return EXIT_CODE_SETUP_ERROR;
     }
     if (!adopt_broker_log_from(&options)) {
+        return EXIT_CODE_SETUP_ERROR;
+    }
+    if (!configure_receive_filter()) {
         return EXIT_CODE_SETUP_ERROR;
     }
 

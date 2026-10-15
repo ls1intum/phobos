@@ -20,9 +20,11 @@
 #include <linux/seccomp.h>
 
 /* Whether this notification belongs to the class a Phobos filter refuses outright: a foreign
- * arch or x32 number, io_uring_setup, io_uring_enter, io_uring_register, setsid or setpgid.
- * Decided from the arch first, so a foreign number equal to a native one is never read as it,
- * then from the number. Shared by both supervisors. */
+ * arch or x32 number, io_uring_setup, io_uring_enter, io_uring_register, setsid, setpgid, or a
+ * setsockopt of SO_BINDTODEVICE, SO_BINDTOIFINDEX, IP_RECVERR or IPV6_RECVERR. Decided from the
+ * arch first, so a foreign number equal to a native one is never read as it, then from the
+ * number, and for setsockopt from its level and name, so another option is never read as one.
+ * Shared by both supervisors. */
 bool is_filter_refusal(const struct seccomp_data *data);
 
 /* Answers such a notification with error -EACCES, value 0 and flags 0, and reports it with the

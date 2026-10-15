@@ -8,6 +8,7 @@
 #include "phobos-seccomp-networksystem-diagnostics.h"
 #include "phobos-seccomp-networksystem-handoff.h"
 #include "phobos-seccomp-networksystem-held-sockets.h"
+#include "phobos-seccomp-networksystem-receive-filter.h"
 #include "phobos-seccomp-networksystem-report.h"
 #include "phobos-seccomp-networksystem-rules.h"
 #include "phobos-seccomp-networksystem-seccomp-compat.h"
@@ -113,14 +114,14 @@ void configure_reporting(const char *landlock_bin, int landlock_version) {
     reporter_use_socket_types(tracked_socket_type);
 }
 
-/* The layer a refused call is counted for: io_uring for the network layer, which refuses it alone,
- * and setsid, setpgid and every foreign-ABI call for the timeout layer when its group lock refuses
- * them too, and for the network layer otherwise. */
+/* The layer a refused call is counted for: io_uring and the refused socket options for the network
+ * layer, which refuses them alone, and setsid, setpgid and every foreign-ABI call for the timeout
+ * layer when its group lock refuses them too, and for the network layer otherwise. */
 static enum report_layer refusal_layer(const struct seccomp_data *data) {
-    bool io_uring = data->arch == GUARD_NATIVE_AUDIT_ARCH
-                    && (data->nr == __NR_io_uring_setup || data->nr == __NR_io_uring_enter
-                        || data->nr == __NR_io_uring_register);
-    if (io_uring || !group_lock_counted_for_timeout) {
+    bool network_only = data->arch == GUARD_NATIVE_AUDIT_ARCH
+                        && (data->nr == __NR_io_uring_setup || data->nr == __NR_io_uring_enter
+                            || data->nr == __NR_io_uring_register || data->nr == __NR_setsockopt);
+    if (network_only || !group_lock_counted_for_timeout) {
         return REPORT_LAYER_NETWORK;
     }
     return REPORT_LAYER_TIMEOUT;
@@ -411,7 +412,9 @@ static void service_connect(int notify_descriptor, struct seccomp_notif *request
  * connect and send hooks, a packet socket, a raw socket and an ICMP datagram socket (which any
  * user may open here because the container's ping_group_range spans every group). An INET
  * stream or datagram socket is created here and injected, so its type is tracked. A datagram
- * socket is held, because every datagram connect and send is made by this supervisor on it. A
+ * socket is held, because every datagram connect and send is made by this supervisor on it, and
+ * it carries the receive filter before the command holds it, so it takes datagrams only from the
+ * host and from the peers a UDP rule names; one the filter cannot be attached to is refused. A
  * stream or sequenced-packet socket of the INET, INET6 or UNIX family is held too: it is the only
  * kind that can listen, and a listen() is only ever run by this supervisor, on a socket it made
  * and still holds. Any other socket is left to the kernel. The arguments are the kernel's own scalar
@@ -449,6 +452,12 @@ static void service_socket(int notify_descriptor, struct seccomp_notif *request,
         if (flags >= 0) {
             (void)fcntl(made, F_SETFL, flags | O_NONBLOCK);
         }
+    }
+    if (tracked && base_type == SOCK_DGRAM && !attach_receive_filter(made)) {
+        report_refused_unfiltered_socket(domain, type);
+        answer(notify_descriptor, response, request->id, 0, -EACCES);
+        close(made);
+        return;
     }
     struct seccomp_notif_addfd addfd;
     memset(&addfd, 0, sizeof(addfd));
@@ -505,7 +514,10 @@ static bool listen_permitted(int held_descriptor) {
 /* Decide one trapped listen(). The call is never continued: whatever the check saw, the command
  * could have swapped another socket onto the descriptor before the kernel ran it, one that was
  * never bound, so the supervisor runs listen() itself, on the descriptor it holds for the socket
- * the command's descriptor named when it was read, and answers with the result. A socket this
+ * the command's descriptor named when it was read, and answers with the result. Right before, it
+ * pins an INET or INET6 socket to the loopback device (pin_listener_to_loopback), within this one
+ * notification, so the listener is reachable from this host only; a socket it cannot pin is
+ * refused and never listens. A socket this
  * supervisor never created (an inherited descriptor, an accepted socket, one evicted from the
  * table) is refused. A socket it has already let listen is answered 0 without calling the kernel:
  * that covers a listen() repeated to change the backlog and one the command retries after a
@@ -533,6 +545,12 @@ static void service_listen(int notify_descriptor, struct seccomp_notif *request,
     if (!listen_permitted(held)) {
         log_verbose("refusing listen on a socket bound to no port, fd %d", target_descriptor);
         report_refused_listen();
+        answer(notify_descriptor, response, request->id, 0, -EACCES);
+        return;
+    }
+    if (!pin_listener_to_loopback(held)) {
+        log_verbose("refusing listen on a socket that cannot be pinned to loopback, fd %d", target_descriptor);
+        report_refused_unpinned_listen();
         answer(notify_descriptor, response, request->id, 0, -EACCES);
         return;
     }

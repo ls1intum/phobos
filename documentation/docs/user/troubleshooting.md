@@ -322,8 +322,8 @@ A kernel too old to close bind gets a warning on standard error instead of a ref
 
 ```
 [phobos-landlock-filesystem-and-networksystem] warning: Landlock version 3 cannot close TCP bind
-(that needs version 4); a command can still bind and listen on any TCP port, so the container's
-network isolation is the only boundary there. Pass --minimum-landlock-version 4 to refuse such a
+(that needs version 4); a command can still bind any TCP port; under the network layer the connect
+guard still pins a listener on it to loopback. Pass --minimum-landlock-version 4 to refuse such a
 kernel instead.
 ```
 

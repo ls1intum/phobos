@@ -107,9 +107,9 @@ WHAT IT REPORTS
 WHEN A CONTAINER MUST HAVE A NETWORK
   Both the egress broker and the inbound filter need one, so a [connect] rule that names a
   host, or any [accept] rule, removes the --network none posture the rest of the sandbox
-  relies on. The layer says so loudly before it starts either. In that posture the outer
-  network isolation the operator provides, not Phobos, keeps the backend reachable only
-  through the filter.
+  relies on. The layer says so loudly before it starts either. The backend stays reachable
+  only through the filter even then, because the connect guard pins every listener to the
+  loopback device; the operator publishes only the public port.
 
 EXIT STATUS
   0 to 255  the command's own status, passed through unchanged
@@ -341,13 +341,13 @@ fi
 
 # Any [accept] rule fronts a student's listener with an inbound filter on a public port. This
 # only works in a NETWORKED container, so turning it on removes the --network none default the
-# rest of the sandbox relies on, and the run is then contained only by the outer network
-# isolation the operator provides. Say so loudly, then start the filter, refusing the run if it
+# rest of the sandbox relies on; the backend is still kept off every interface but loopback by the
+# connect guard's pin. Say so loudly, then start the filter, refusing the run if it
 # cannot start rather than leave the listener unfiltered. It is a sibling of the command, so it is
 # started here and stopped by end_network_layer, like the egress broker.
 ACCEPT_RULES="${SPEC_DIR}/accept.rules"
 if [[ -s "$ACCEPT_RULES" ]]; then
-  _log "NOTICE: an [accept] rule is present, so this run fronts a listener on a public port and assumes a NETWORKED container with the required isolation (only the public port reachable from outside, no other path to the backend port). This removes the --network none default; the outer network isolation, not Phobos, keeps the backend reachable only through the filter."
+  _log "NOTICE: an [accept] rule is present, so this run fronts a listener on a public port and assumes a NETWORKED container with the required isolation (only the public port reachable from outside, no other path to the backend port). This removes the --network none default; the connect guard pins the backend to loopback, so it is reachable only through the filter."
   if ! start_inbound_haproxy "$SPEC_DIR" "$ACCEPT_RULES" "${HAPROXY_BIN_OPT:-haproxy}" INBOUND_PID "$broker_log"; then
     report "The inbound filter could not be started; refusing to run rather than expose the listener unfiltered. (PHB-ERUNTIME)"
     exit "${PHB_ERUNTIME}"

@@ -95,8 +95,8 @@ destination and redirected the connection; a command that could reach the networ
 guard would not meet the broker at all.
 
 The inbound filter is defence in depth. It sees only the connections that arrive at it, and
-that the backend is reachable *only* through it comes from the container's network isolation
-rather than from HAProxy.
+that the backend is reachable *only* through it comes from the connect guard, which pins every
+listener to the loopback device, rather than from HAProxy.
 
 ## Further reading
 

@@ -77,8 +77,23 @@ process. Three things sit outside that:
   host is held to the addresses the name had when the run began, because a datagram carries no
   Transport Layer Security (TLS) host name to check. An address the name gains later is not
   reachable through that rule, and the container's isolation is the boundary beyond it.
-- **Inbound connections no `[accept]` rule fronts.** The inbound filter covers the ports it is
-  given, on the Transmission Control Protocol only.
+- **What still reaches a socket from outside.** The connect guard pins every listener to the
+  loopback device and filters what a datagram socket receives. Six things remain:
+  - A datagram that spoofs the address of a peer a `udp` rule names gets in, since UDP has no
+    handshake.
+  - ICMP errors and path-MTU feedback still arrive as kernel-generated information, never as
+    quoted payload.
+  - A `udp` rule with a wildcard host, or a name the guard did not get resolved, leaves datagram
+    sockets unfiltered.
+  - The filter drops an answer to a multicast or broadcast send, because it comes from a unicast
+    address the rule does not name. A policy that needs such answers names their sources too.
+  - A kernel or security module that refuses socket filters on datagram sockets leaves them
+    unfiltered, with a warning.
+  - The guard neither pins nor filters a network socket it did not create, one inherited or
+    received over a descriptor. SECURITY.md makes that an integration requirement.
+
+  The inbound filter of `[accept]` covers the ports its rules name, on the Transmission Control
+  Protocol only.
 - **UDP bind on a kernel below Landlock version 10.** The guard still holds UDP connect and send
   by host and port, but the kernel cannot close UDP bind there, so the enforcer warns and the
   bind stays open. A `udp` `[connect]` or `[bind]` rule that names a port is refused on such a
@@ -86,8 +101,8 @@ process. Three things sit outside that:
   loopback rule with no port, which the guard alone holds, and a `udp` `[bind]` row of port 0.
 
 A deployment that wants no network at all starts the container with `--network none`, under
-which only loopback exists. A deployment that needs `[accept]` gives that up and has to provide
-the isolation itself.
+which only loopback exists. A deployment that needs `[accept]` gives that up; it then publishes
+only the public port, and the residuals above are what remains.
 
 ## Inbound filtering is defence in depth, not a boundary
 
@@ -96,12 +111,13 @@ addresses the rule names. Three limits come with it:
 
 - **It removes `--network none`.** An external client cannot reach a container that has no
   network, so the rule only works where the container has a real one.
-- **Phobos locks the listening port, not its reachability.** Landlock refuses the command a
-  listener on any port `[bind]` does not name, in the kernel and against raw system calls, and
-  the connect guard refuses a `listen()` on a socket that was never bound. The
-  bind right is per port rather than per address, though, so the command may bind its backend
-  port on every interface. That the backend is reachable *only* through the filter comes from
-  the container's network isolation.
+- **Phobos locks the listening port and keeps the listener on loopback.** Landlock refuses the
+  command a listener on any port `[bind]` does not name, in the kernel and against raw system
+  calls. The connect guard refuses a `listen()` on a socket that was never bound. The bind right
+  is per port rather than per address, so the command may bind its backend port on every
+  interface. The guard pins the listener to the loopback device, though, so only this host
+  reaches it, the filter's forwarding included. The kernel refuses a client that connects to the
+  container's own non-loopback address as well.
 - **A source address is weak authentication.** It resists spoofing only for an established
   handshake, and network address translation makes it coarse. Treat it as a filter, never as an
   identity.
@@ -156,8 +172,8 @@ loses stays reachable until the run ends.
 ## A kernel too old to close bind leaves it open
 
 Landlock can close TCP bind from version 4 and UDP bind from version 10. Below that, the enforcer
-warns on every run and the bind stays open, so the container's network isolation is the only
-boundary there. `--minimum-landlock-version` in the tail flags turns the warning into a refusal.
+warns on every run and the port stays open. A listener on it is still pinned to loopback, and a
+datagram socket still takes datagrams only from this host and the peers a `udp` rule names. `--minimum-landlock-version` in the tail flags turns the warning into a refusal.
 At the time of writing none of the kernels this project's tests run on offers version 10, so the
 UDP half has been exercised against a recording of the kernel's calls only.
 

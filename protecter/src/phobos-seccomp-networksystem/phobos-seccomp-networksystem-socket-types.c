@@ -6,8 +6,12 @@
 #include <unistd.h>
 
 #include <arpa/inet.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+
+/* The loopback device every network namespace has, which a listener is pinned to. */
+static const char LOOPBACK_DEVICE[] = "lo";
 
 /* Long enough for "/proc/<pid>/fd/<descriptor>" and for the "socket:[<inode>]" it points to. */
 static constexpr size_t PROC_FD_LINK_LENGTH = 64;
@@ -84,6 +88,61 @@ bool socket_local_port(int descriptor, int *family, uint16_t *port) {
     }
     *family = bound.ss_family;
     return true;
+}
+
+/* Whether an IPv6 address can only be bound together with a device, as the kernel reads it: a
+ * link-local unicast address, and a link-local or interface-local multicast one. */
+static bool address_needs_scope(const struct in6_addr *address) {
+    return IN6_IS_ADDR_LINKLOCAL(address) || IN6_IS_ADDR_MC_LINKLOCAL(address)
+           || IN6_IS_ADDR_MC_NODELOCAL(address);
+}
+
+/* Binds a socket that has no port to the address it holds and a port the kernel picks, with the
+ * option that would leave the port out cleared, and answers whether it then has a port. */
+static bool bind_kernel_port(int descriptor) {
+    struct sockaddr_storage local;
+    int keep_port = 0;
+    int family;
+    uint16_t port = 0;
+    memset(&local, 0, sizeof(local));
+    socklen_t length = sizeof(local);
+    if (getsockname(descriptor, (struct sockaddr *)&local, &length) != 0
+        || setsockopt(descriptor, IPPROTO_IP, IP_BIND_ADDRESS_NO_PORT, &keep_port, sizeof(keep_port)) != 0) {
+        return false;
+    }
+    if (local.ss_family == AF_INET6) {
+        struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&local;
+        if (address_needs_scope(&v6->sin6_addr)) {
+            return false;
+        }
+        v6->sin6_scope_id = 0;
+    }
+    if (bind(descriptor, (const struct sockaddr *)&local, length) != 0) {
+        return false;
+    }
+    return socket_local_port(descriptor, &family, &port) && port != 0;
+}
+
+bool pin_listener_to_loopback(int descriptor) {
+    char device[IFNAMSIZ];
+    int family;
+    uint16_t port = 0;
+    memset(device, 0, sizeof(device));
+    socklen_t device_length = sizeof(device);
+    if (!socket_local_port(descriptor, &family, &port)) {
+        return false;
+    }
+    if (family != AF_INET && family != AF_INET6) {
+        return true;
+    }
+    if (port == 0 && !bind_kernel_port(descriptor)) {
+        return false;
+    }
+    if (setsockopt(descriptor, SOL_SOCKET, SO_BINDTODEVICE, LOOPBACK_DEVICE, sizeof(LOOPBACK_DEVICE)) != 0
+        || getsockopt(descriptor, SOL_SOCKET, SO_BINDTODEVICE, device, &device_length) != 0) {
+        return false;
+    }
+    return strcmp(device, LOOPBACK_DEVICE) == 0;
 }
 
 #ifdef PHOBOS_CONNECT_GUARD_UNIT_TEST

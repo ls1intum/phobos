@@ -543,6 +543,13 @@ else
   else
     bad "a raw socket is refused and named" "$(pm_describe)"
   fi
+  run_pm --config "$c_net" -- "$P" sockopts
+  if op_failed_with bindtodevice EACCES && [[ "$(exact_lines "set the Socket Option SO_BINDTODEVICE")" == 1 ]] \
+     && [[ "$(exact_lines "set the Socket Option IP_RECVERR")" == 1 ]] && [[ "$(exact_lines "set the Socket Option IPV6_RECVERR")" == 1 ]]; then
+    ok "a refused socket option is named, each once"
+  else
+    bad "a refused socket option is named, each once" "$(pm_describe)"
+  fi
   run_pm --config "$c_net" -- "$P" listen_unbound
   if op_failed_with listen_unbound EACCES && [[ "$(exact_lines "listen on the Port chosen by the kernel over TCP")" == 1 ]]; then
     ok "a listen on a socket bound to no port is refused and named"

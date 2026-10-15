@@ -11,6 +11,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <netinet/in.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
@@ -64,11 +65,17 @@ static constexpr int BOOTSTRAP_DESCRIPTOR_FLOOR = 1023;
  * runs every listen itself, on a socket it created. A sendto whose address pointer is null names no
  * destination, is the send() of a connected socket, and is allowed: its connect was the
  * supervisor's, so the peer is one the guard vetted, and its registers are a copy the command
- * cannot change, so there is nothing to race. Everything else is allowed.
+ * cannot change, so there is nothing to race. It refuses four socket options: SO_BINDTODEVICE and
+ * SO_BINDTOIFINDEX, because the supervisor pins every listener to the loopback device and the
+ * command must not move it off again, and IP_RECVERR and IPV6_RECVERR, because a socket's error
+ * queue takes the quoted payload of an ICMP error past the receive filter of a datagram socket.
+ * Its level and name are the kernel's int arguments, so their low words are compared, and every
+ * other setsockopt is allowed. Everything else is allowed.
  *
  * Three kinds of trap, each with exactly one answer. The enforcement traps (socket, connect,
  * listen and the sends) are decided by the guard. The refusal traps (a foreign ABI, io_uring,
- * setsid and setpgid) are answered with EACCES and never with anything else. The observation traps
+ * setsid, setpgid and the four socket options) are answered with EACCES and never with anything
+ * else. The observation traps
  * (the path calls, bind and the arming call, from the denial reporter, and only in a report mode)
  * are answered with CONTINUE and never with anything else, so they decide nothing. The three sets
  * are disjoint, and the unit suite holds them so.
@@ -95,7 +102,9 @@ static constexpr int BOOTSTRAP_DESCRIPTOR_FLOOR = 1023;
  * the first instruction of each skips the whole block when the call is not its own, and the loads
  * of an argument's two words only clobber the accumulator on that block's own path, where no
  * later instruction reads it. The sendto block reads the address pointer as two 32-bit words for
- * the same reason the sendmsg block reads the descriptor so. */
+ * the same reason the sendmsg block reads the descriptor so. The setsockopt block sits before them
+ * and is built the same way: once it has loaded an argument, every path out of it returns, so no
+ * later block reads what it loaded. */
 
 /* Writes the first part, up to and including the enforcement traps, and answers its length. */
 static size_t append_enforced_calls(struct sock_filter *out) {
@@ -117,6 +126,41 @@ static size_t append_enforced_calls(struct sock_filter *out) {
         GUARD_TRAP_SYSCALL(__NR_socket),
         GUARD_TRAP_SYSCALL(__NR_listen),
         GUARD_TRAP_SYSCALL(__NR_sendmmsg),
+    };
+    memcpy(out, instructions, sizeof(instructions));
+    return sizeof(instructions) / sizeof(instructions[0]);
+}
+
+/* Writes the setsockopt block and answers its length. It traps the four refused options by level
+ * and name and allows every other setsockopt; a call that is not setsockopt skips all fourteen
+ * instructions. Each comparison jumps forward by a counted distance, so the layout is fixed:
+ *
+ *   0  not setsockopt: skip the block       7  load the name
+ *   1  load the level                       8  IP_RECVERR: trap, else allow
+ *   2  not SOL_SOCKET: to 6                 9  not IPPROTO_IPV6: allow
+ *   3  load the name                       10  load the name
+ *   4  SO_BINDTODEVICE: trap               11  IPV6_RECVERR: trap, else allow
+ *   5  SO_BINDTOIFINDEX: trap, else allow  12  the trap
+ *   6  not IPPROTO_IP: to 9                13  allow
+ *
+ * The level stays in the accumulator from 1 to 9, because only the branch that matched a level
+ * loads the name. */
+static size_t append_socket_option_block(struct sock_filter *out) {
+    const struct sock_filter instructions[] = {
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_setsockopt, 0, 13),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[1])),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SOL_SOCKET, 0, 3),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[2])),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SO_BINDTODEVICE, 7, 0),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SO_BINDTOIFINDEX, 6, 7),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, IPPROTO_IP, 0, 2),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[2])),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, IP_RECVERR, 3, 4),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, IPPROTO_IPV6, 0, 3),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[2])),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, IPV6_RECVERR, 0, 1),
+        GUARD_REFUSE,
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
     };
     memcpy(out, instructions, sizeof(instructions));
     return sizeof(instructions) / sizeof(instructions[0]);
@@ -166,6 +210,7 @@ size_t build_connect_filter(struct sock_filter *instructions, int bootstrap_desc
         used += append_group_traps(&instructions[used]);
     }
     used += append_observation_traps(&instructions[used], GUARD_FILTER_MAXIMUM - used, mode);
+    used += append_socket_option_block(&instructions[used]);
     used += append_send_blocks(&instructions[used], bootstrap_descriptor);
     return used;
 }

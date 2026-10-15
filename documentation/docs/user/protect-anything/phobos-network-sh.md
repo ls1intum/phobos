@@ -155,6 +155,11 @@ The connect guard is the run's one supervisor when this layer is on, so it print
   `connect to the Endpoint 93.184.216.34:443 over TCP` or `send to the Endpoint ... over UDP`. A
   socket the guard refuses to open gives `open the Socket Type raw (AF_INET, SOCK_RAW)`, and a
   listen on a socket bound to no port gives `listen on the Port chosen by the kernel over TCP`.
+  Three more come from keeping sockets local. A listen on a socket the guard cannot pin to the
+  loopback device gives `listen outside the Loopback Interface`. A datagram socket its receive
+  filter cannot be attached to gives `open the Socket Type unfiltered (AF_INET, SOCK_DGRAM)`. A
+  refused socket option gives `set the Socket Option SO_BINDTODEVICE`, and the same for
+  `SO_BINDTOIFINDEX`, `IP_RECVERR` and `IPV6_RECVERR`.
 - **A UNIX socket.** The guard refuses every connect to a UNIX socket. It prints `connect to the
   Socket File '<path>'` only for the command and what the command started. Each layer's shell asks
   the name service cache for the user at start-up, and the guard refuses that as well, but those
