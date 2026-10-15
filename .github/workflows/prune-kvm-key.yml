@@ -1,7 +1,8 @@
 # One key of the KVM run of the layer pruner, called by prune-kvm.yml once per key and source; prune-kvm.yml says
 # what the run is for. Three jobs, which hand over artefacts and never share a directory:
 #   prune  the default prune in an ordinary container on an x86 runner: the .cfg and .json of every exercise;
-#   kvm    the audit observer in the guest, on ubuntu-24.04 and ubuntu-26.04: the .abi10.json and .abi10.cfg;
+#   kvm    the audit observer in the guest, on ubuntu-24.04 and ubuntu-26.04: the .abi10.json and .abi10.cfg,
+#          and after a timeout the .abi10.observed.trace.gz, which the orchestrator does not read;
 #   merge  the orchestrator over both sets in one directory: BaseLanguage-<key>.cfg with the rows folded in.
 # Every call of one run shares one artefact namespace, so each artefact name ends in -<key>-<source>. The guest
 # kernel comes from prune-kvm.yml's kernel job, built or restored once per runner image for the whole run.

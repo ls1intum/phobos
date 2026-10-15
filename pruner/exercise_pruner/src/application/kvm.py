@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import dataclasses
 import errno
+import gzip
 import hashlib
 import json
 import os
 import pathlib
 import platform
+import shutil
 import subprocess  # nosec B404
 import time
 from collections.abc import Callable
@@ -67,6 +69,12 @@ TIMEOUT = "timeout"
 LOG_TAIL_LINES = 60
 TRACE_TAIL_LINES = 300
 TAIL_BYTES = 262144
+# The whole strace trace of the observed run after a timeout, compressed, beside the exercise's `.abi10.json`: a tail
+# shows where the run stopped, but not what the processes were refused on their way there.
+OBSERVED_TRACE_SUFFIX = ".abi10.observed.trace.gz"
+# What the kept trace must leave free on the disk it is written to, so that the records written after it, a few
+# kilobytes each, still fit; a trace that would leave less is not kept.
+RECORD_RESERVE_BYTES = 16 * 1024 * 1024
 
 
 class Indeterminate(Exception):
@@ -266,39 +274,68 @@ def joint_verification(pruning: stages.Pruning, policy: cfgfile.Policy) -> bool:
     return True
 
 
-def observed_timeout(pruning: stages.Pruning, policy: cfgfile.Policy, capture: Capture) -> dict:
+def keep_trace(trace: pathlib.Path, kept: pathlib.Path) -> dict:
+    """Writes the whole trace compressed to `kept`; its file name, or why it was not written, for the record.
+
+    A trace that cannot be copied, missing or too large for the disk, or one that leaves less than
+    RECORD_RESERVE_BYTES free there, leaves no file behind, so that the records written after it still fit and the
+    one that names the failure is the only thing written about it.
+    """
+    try:
+        with open(trace, "rb") as source, gzip.open(kept, "wb") as target:
+            shutil.copyfileobj(source, target)
+        disk = os.statvfs(kept.parent)
+        if disk.f_bavail * disk.f_frsize < RECORD_RESERVE_BYTES:
+            raise OSError(errno.ENOSPC, f"keeping it would leave less than {RECORD_RESERVE_BYTES} bytes free")
+    except OSError as failure:
+        kept.unlink(missing_ok=True)
+        return {"trace_file_failed": f"{type(failure).__name__}: {failure}"}
+    return {"trace_file": kept.name}
+
+
+def observed_timeout(pruning: stages.Pruning, policy: cfgfile.Policy, capture: Capture, kept: pathlib.Path) -> dict:
     """One observed run with every layer on after a joint run ran out of time; its evidence and the kernel's records.
 
     An unobserved run leaves no trace, so this run is what shows where the command stopped: the last lines of its
-    strace trace name the calls the processes were in when its time ran out.
+    strace trace name the calls the processes were in when its time ran out, and the whole trace, kept at `kept`,
+    what they were refused before. The trace is kept before the kernel's records are read, and whatever ends their
+    reading is kept as `audit_failed` beside it, since the records only add to what the trace shows; the broad
+    except is for that reason.
     """
     capture.collect()
     observed = pruning.run(policy, stages.OBSERVED_JOINT, "kvm timeout diagnosis")
-    records, _, _ = read_records(capture)
-    return {**run_evidence(observed, "observed run after the timeout"), "audit": [item.raw for item in records][:20]}
+    found = {**run_evidence(observed, "observed run after the timeout"),
+             **keep_trace(observed.log_path.with_suffix(".trace"), kept)}
+    try:
+        records, _, _ = read_records(capture)
+    except Exception as failure:  # noqa: BLE001
+        return {**found, "audit_failed": f"{type(failure).__name__}: {failure}"}
+    return {**found, "audit": [item.raw for item in records][:20]}
 
 
 def with_observed_timeout(undecided: Inconclusive, pruning: stages.Pruning, policy: cfgfile.Policy,
-                          capture: Capture) -> Inconclusive:
+                          capture: Capture, kept: pathlib.Path) -> Inconclusive:
     """The joint run's Inconclusive with the observed run's evidence added under `observed`.
 
     The observed run only explains the timeout, so whatever ends it, a defect of the run, an unreadable trace or a
-    capture that cannot read the kernel's records, is kept as `observed_failed` instead of replacing the timeout.
+    capture that cannot read the kernel's records before it, is kept as `observed_failed` instead of replacing the
+    timeout.
     The broad except is for that reason.
     """
     try:
-        found: dict = {"observed": observed_timeout(pruning, policy, capture)}
+        found: dict = {"observed": observed_timeout(pruning, policy, capture, kept)}
     except Exception as failure:  # noqa: BLE001
         found = {"observed_failed": f"{type(failure).__name__}: {failure}"}
     return Inconclusive(undecided.reason, {**undecided.evidence, **found})
 
 
-def abi10_phase(pruning: stages.Pruning, policy: cfgfile.Policy, capture: Capture) -> tuple[cfgfile.Policy, list[dict]]:
+def abi10_phase(pruning: stages.Pruning, policy: cfgfile.Policy, capture: Capture,
+                kept: pathlib.Path) -> tuple[cfgfile.Policy, list[dict]]:
     """The joint verification on this kernel; the policy it ends with and the UDP bind rows it added, each with its audit record.
 
     A joint or diagnosis run that ran out of time raises Inconclusive, with the end of its log and, after a joint
-    run, one observed run of the same policy whose trace shows where it stopped. A failing run is diagnosed with one
-    observed run. Only a UDP bind the kernel names as refused, whose
+    run, one observed run of the same policy whose trace shows where it stopped and is kept whole at `kept`. A
+    failing run is diagnosed with one observed run. Only a UDP bind the kernel names as refused, whose
     rule the strace derivation also asks for, is added (port 0 included, which its record names by no
     port); any other rule, or a failure with no refusal to explain it, aborts, because then the two
     kernels differ in something this run may not decide. The abort names the diagnosis run's status and
@@ -311,7 +348,7 @@ def abi10_phase(pruning: stages.Pruning, policy: cfgfile.Policy, capture: Captur
         try:
             held = joint_verification(pruning, current)
         except Inconclusive as undecided:
-            raise with_observed_timeout(undecided, pruning, current, capture) from undecided
+            raise with_observed_timeout(undecided, pruning, current, capture, kept) from undecided
         if held:
             return current, added
         capture.collect()
@@ -350,7 +387,9 @@ def verify_exercise(directory: pathlib.Path, key: str, environment: runner.Envir
     held. A failure is a mismatch of the cross-check, an abort or a defect, each named by `describe`,
     which turns the exception into the record's reason and evidence. A run that ran out of time makes the
     exercise inconclusive instead (`inconclusive` in the record, no sidecar), unless the cross-check already
-    found a failure, which then stays the reason and keeps the timeout beside it as `abi10_inconclusive`.
+    found a failure, which then stays the reason and keeps the timeout beside it as `abi10_inconclusive`. After a
+    joint run that ran out of time, the one file it writes itself is the observed run's whole trace, as
+    `<key>_<exercise>` and OBSERVED_TRACE_SUFFIX in `output`.
     """
     base = f"{key}_{directory.name}"
     entry: dict = {"schema_version": ABI10_SCHEMA, "key": key, "exercise": directory.name, "provenance": origin,
@@ -383,7 +422,7 @@ def verify_exercise(directory: pathlib.Path, key: str, environment: runner.Envir
                                "the kernels differ", {name: entry["cross_check"][name] for name in
                                                       ("run", "status", "verdict", "log_tail", "trace_tail")})
         try:
-            _, entry["rows"] = abi10_phase(pruning, policy, capture)
+            _, entry["rows"] = abi10_phase(pruning, policy, capture, output / f"{base}{OBSERVED_TRACE_SUFFIX}")
         except Inconclusive as undecided:
             if reason is None:
                 raise

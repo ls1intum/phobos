@@ -274,11 +274,12 @@ def kernel_observe(options: argparse.Namespace, environment: runner.Environment,
             proof = kvm.selftest(environment, capture, int(origin["landlock_abi"]), pathlib.Path(scratch))
             print(f"the guest observes Landlock: {proof['selftest_record']}", flush=True)
             for directory in exercises:
+                base = f"{options.key}_{directory.name}"
+                for stale in (output / f"{base}.abi10.cfg", output / f"{base}.abi10.json",
+                              output / f"{base}{kvm.OBSERVED_TRACE_SUFFIX}"):
+                    stale.unlink(missing_ok=True)
                 entry, sidecar, reason = kvm.verify_exercise(directory, options.key, environment, output, pristine,
                                                              origin, capture, abort_record)
-                base = f"{options.key}_{directory.name}"
-                for stale in (output / f"{base}.abi10.cfg", output / f"{base}.abi10.json"):
-                    stale.unlink(missing_ok=True)
                 if sidecar is not None:
                     write_atomically(output / f"{base}.abi10.cfg", sidecar)
                 write_atomically(output / f"{base}.abi10.json", json.dumps(entry, indent=2, sort_keys=True) + "\n")
