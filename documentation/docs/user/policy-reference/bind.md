@@ -140,17 +140,17 @@ no `udp` connect rule gains nothing.
 
 ## Notes
 
-**A datagram bind on a port other than 0 needs Landlock version 10**, the same as a datagram
-connect rule that names a port. Below it the enforcer ends the run with exit status 125. A `udp`
-loopback rule with no port in `[connect]` lifts that for a connect rule only, never for a
-`[bind]` row.
+**The kernel holds a datagram bind on a port other than 0 only from Landlock version 10**, the
+same as a datagram connect rule that names a port. Below it the run goes on, the enforcer warns
+that it cannot enforce UDP port rules, and every UDP port stays bindable, the named one among
+them. `--minimum-landlock-version 10` in the tail flags refuses such a kernel instead.
 
 **A kernel too old to close bind leaves it open and says so.** Below Landlock version 4 for TCP
 and version 10 for UDP, the enforcer prints a warning on every run and the port stays open. A
 listener on it is still pinned to loopback, and a datagram socket that carries its receive filter
 still takes datagrams only from the host and the peers a UDP rule names. `--minimum-landlock-version` in the tail flags turns the
-warning into a refusal. An explicit port rule still refuses a kernel that cannot handle it,
-where a port 0 grant never does.
+warning into a refusal. An explicit TCP port rule still refuses a kernel below version 4, where
+a port 0 grant never does; an explicit UDP port rule runs below version 10 with a warning.
 
 **Policies are additive.** An exercise that names only `allow 8080` still gets port 0 from the
 shipped Java policy, so it can still take a port the kernel chooses, pinned to loopback.

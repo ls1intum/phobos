@@ -73,7 +73,11 @@ static void allow_reparenting_everywhere(int ruleset_descriptor, int landlock_ve
 
 /* ------------------------------------------------ stage: add the port rules */
 
-static void add_port_rules(int ruleset_descriptor, const struct options *options) {
+/* Adds one rule per port the command line names, for the directions the ruleset handles only:
+ * the kernel refuses a rule for an access the ruleset does not handle, and below version 10 the
+ * UDP directions are left out (handled_network_access), so their ports are not added either. */
+static void add_port_rules(int ruleset_descriptor, const struct options *options,
+                           uint64_t handled_network) {
     for (size_t port_index = 0; port_index < options->connect_tcp_port_count; port_index++) {
         add_port_rule(ruleset_descriptor, options->connect_tcp_ports[port_index],
                       LANDLOCK_ACCESS_NETWORK_CONNECT_TCP, "connect", "tcp");
@@ -82,13 +86,17 @@ static void add_port_rules(int ruleset_descriptor, const struct options *options
         add_port_rule(ruleset_descriptor, options->bind_tcp_ports[port_index],
                       LANDLOCK_ACCESS_NETWORK_BIND_TCP, "bind", "tcp");
     }
-    for (size_t port_index = 0; port_index < options->connect_udp_port_count; port_index++) {
-        add_port_rule(ruleset_descriptor, options->connect_udp_ports[port_index],
-                      LANDLOCK_ACCESS_NETWORK_CONNECT_SEND_UDP, "connect", "udp");
+    if ((handled_network & LANDLOCK_ACCESS_NETWORK_CONNECT_SEND_UDP) != 0) {
+        for (size_t port_index = 0; port_index < options->connect_udp_port_count; port_index++) {
+            add_port_rule(ruleset_descriptor, options->connect_udp_ports[port_index],
+                          LANDLOCK_ACCESS_NETWORK_CONNECT_SEND_UDP, "connect", "udp");
+        }
     }
-    for (size_t port_index = 0; port_index < options->bind_udp_port_count; port_index++) {
-        add_port_rule(ruleset_descriptor, options->bind_udp_ports[port_index],
-                      LANDLOCK_ACCESS_NETWORK_BIND_UDP, "bind", "udp");
+    if ((handled_network & LANDLOCK_ACCESS_NETWORK_BIND_UDP) != 0) {
+        for (size_t port_index = 0; port_index < options->bind_udp_port_count; port_index++) {
+            add_port_rule(ruleset_descriptor, options->bind_udp_ports[port_index],
+                          LANDLOCK_ACCESS_NETWORK_BIND_UDP, "bind", "udp");
+        }
     }
 }
 
@@ -154,7 +162,7 @@ int main(int argument_count, char *arguments[]) {
 
     parse_arguments(argument_count, arguments, &options);
     int landlock_version =
-        detect_landlock_version(options.minimum_landlock_version, network_rules_wanted(&options),
+        detect_landlock_version(options.minimum_landlock_version, tcp_rules_wanted(&options),
                                 udp_rules_wanted(&options));
 
     /* With --no-filesystem this ruleset governs the network alone, so it handles no filesystem
@@ -165,7 +173,7 @@ int main(int argument_count, char *arguments[]) {
     uint64_t handled_filesystem =
         options.no_filesystem ? 0 : filesystem_rights_for_version(landlock_version);
     uint64_t handled_network =
-        handled_network_access(&options) | close_bind_access(&options, landlock_version);
+        handled_network_access(&options, landlock_version) | close_bind_access(&options, landlock_version);
 
     report_unenforceable_rights(landlock_version, handled_filesystem != 0);
 
@@ -196,7 +204,7 @@ int main(int argument_count, char *arguments[]) {
     } else if (reparenting_only) {
         allow_reparenting_everywhere(ruleset_descriptor, landlock_version);
     }
-    add_port_rules(ruleset_descriptor, &options);
+    add_port_rules(ruleset_descriptor, &options, handled_network);
     add_ephemeral_bind_rules(ruleset_descriptor, &options, handled_network);
     enter_working_directory(&options);
     apply_restriction(ruleset_descriptor, restrict_self_flags(landlock_version));

@@ -35,10 +35,11 @@ bool parse_number_checked(const char *text, unsigned long lowest, unsigned long 
 /* Rights available at the given Landlock version. */
 uint64_t filesystem_rights_for_version(int landlock_version);
 
-/* The directions the command line actually spoke about. Only these are handed
- * to the kernel as handled, because a handled direction with no rule is a
- * blanket denial nobody asked for. */
-uint64_t handled_network_access(const struct options *options);
+/* The directions the command line actually spoke about that this kernel can handle: TCP from
+ * Landlock version 4, UDP from version 10. Only these are handed to the kernel as handled,
+ * because a handled direction with no rule is a blanket denial nobody asked for, and a right the
+ * kernel does not know makes it refuse the whole ruleset. */
+uint64_t handled_network_access(const struct options *options, int landlock_version);
 
 /* The bind directions --close-bind asks for that this kernel can handle: TCP from Landlock
  * version 4, UDP from version 10. Nothing is granted by them, so a direction that is handled

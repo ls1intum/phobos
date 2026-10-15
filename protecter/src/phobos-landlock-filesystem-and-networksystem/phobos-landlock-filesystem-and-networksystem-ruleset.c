@@ -27,7 +27,7 @@ size_t ruleset_attributes_size_for_version(int landlock_version) {
     return sizeof(struct landlock_ruleset_attributes);
 }
 
-int detect_landlock_version(int minimum_landlock_version, bool network_rules_wanted,
+int detect_landlock_version(int minimum_landlock_version, bool tcp_rules_wanted,
                             bool udp_rules_wanted) {
     long landlock_version = query_landlock_version();
     if (landlock_version < 0) {
@@ -47,15 +47,17 @@ int detect_landlock_version(int minimum_landlock_version, bool network_rules_wan
                          "(refusing to run unprotected)",
                          landlock_version, minimum_landlock_version);
     }
-    if (network_rules_wanted && landlock_version < FIRST_VERSION_WITH_NETWORK) {
+    if (tcp_rules_wanted && landlock_version < FIRST_VERSION_WITH_NETWORK) {
         exit_with_format("network rules require Landlock version %d (kernel 6.7)",
                          FIRST_VERSION_WITH_NETWORK);
     }
-    /* UDP port rules are refused on a kernel too old to handle them, rather than run with UDP
-     * left unrestricted: a policy that named a UDP port must be enforced or the run must stop. */
     if (udp_rules_wanted && landlock_version < FIRST_VERSION_WITH_UDP) {
-        exit_with_format("UDP network rules require Landlock version %d",
-                         FIRST_VERSION_WITH_UDP);
+        warn_always("warning: Landlock version %ld cannot enforce UDP port rules (that needs "
+                    "version %d); under the network layer the connect guard alone holds UDP "
+                    "[connect] rules by host and port, and a UDP [bind] row adds nothing to the "
+                    "UDP ports that stay open. Pass --minimum-landlock-version %d to refuse such a "
+                    "kernel instead.",
+                    landlock_version, FIRST_VERSION_WITH_UDP, FIRST_VERSION_WITH_UDP);
     }
     return (int)landlock_version;
 }

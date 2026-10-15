@@ -85,8 +85,8 @@ layer is on. The second line names these ports, so you see a port you expected t
 hold.
 
 The two transports are separate. On every kernel the guard alone holds a udp rule that names a
-port beside a udp loopback wildcard, so it needs no Landlock version 10. The same rule on its
-own does need it.
+port beside a udp loopback wildcard. The same rule on its own gets a kernel-enforced port from
+Landlock version 10, and below it the guard alone holds it too.
 
 ### A path is relative, has a wildcard or does not exist
 
@@ -180,15 +180,16 @@ carry the program's own prefix and none of the `PHB-` codes.
 ### A datagram rule on a kernel below Landlock version 10
 
 ```
-[phobos-landlock-filesystem-and-networksystem] UDP network rules require Landlock version 10
+[phobos-landlock-filesystem-and-networksystem] warning: Landlock version 8 cannot enforce UDP port
+rules (that needs version 10); under the network layer the connect guard alone holds UDP [connect]
+rules by host and port, and a UDP [bind] row adds nothing to the UDP ports that stay open. Pass
+--minimum-landlock-version 10 to refuse such a kernel instead.
 ```
 
-A `udp` rule that names a port is refused rather than left unenforced. Either run on a kernel
-that carries the version 10 rights or drop the rule. A `udp` `[connect]` rule beside a `udp`
-loopback rule with no port is the exception: the guard alone holds it, on any kernel. A `udp`
-`[bind]` row of port 0 never stops a run either. Below version 10 the enforcer cannot close UDP
-bind, so it warns and leaves the bind open. The same status and prefix carry every other refusal
-from that program, `--minimum-landlock-version` among them.
+The run goes on. The connect guard still holds where a datagram goes, and below version 10 every
+UDP port can be bound, whether a `[bind]` row names it or not. A grader that wants the
+kernel-enforced ports refuses such a kernel with `--minimum-landlock-version 10` in the tail
+flags, which ends the run with exit status 125, as every refusal of that program does.
 
 ## PHB-ERUNTIME: something Phobos needs is missing
 

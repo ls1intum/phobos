@@ -93,10 +93,11 @@ for line in "allow example.org:443" "allow example.org.:443" "allow -bad.example
   "allow LOCALHOST:80" "allow 0x7f.1:80"; do
   refused "[connect] ${line}" "$PHB_ERUNTIME" "[connect]" "$line"
 done
-if (( PM_ABI >= 10 )); then
-  accepted "[connect] allow 127.0.0.1:80 udp on a kernel with Landlock version 10" "[connect]" "allow 127.0.0.1:80 udp"
-else
-  refused "[connect] allow 127.0.0.1:80 udp below Landlock version 10, never left unenforced" 125 "[connect]" "allow 127.0.0.1:80 udp"
+# Below Landlock version 10 a udp rule that names a port runs best effort: the guard holds where the
+# datagram goes, and the enforcer says the kernel cannot enforce the port.
+accepted "[connect] allow 127.0.0.1:80 udp, on every kernel" "[connect]" "allow 127.0.0.1:80 udp"
+if (( PM_ABI < 10 )); then
+  if grep -q 'cannot enforce UDP port rules' "$PM_ERR"; then ok "and below Landlock version 10 the enforcer says it cannot enforce the port"; else bad "and below Landlock version 10 the enforcer says it cannot enforce the port" "$(pm_describe)"; fi
 fi
 accepted "a udp rule with no port, which the guard alone enforces" "[connect]" "allow 127.0.0.1 udp"
 
@@ -110,10 +111,9 @@ for line in "allow 65536" "allow 00" "allow 080" "allow -1" "allow 127.0.0.1:80"
   "allow" "8080" "allow abc" "allow 8080:9090"; do
   refused "[bind] ${line}" "$PHB_EPOLICY" "[bind]" "$line"
 done
-if (( PM_ABI >= 10 )); then
-  accepted "[bind] allow 8080 udp on a kernel with Landlock version 10" "[bind]" "allow 8080 udp"
-else
-  refused "[bind] allow 8080 udp below Landlock version 10, never left unenforced" 125 "[bind]" "allow 8080 udp"
+accepted "[bind] allow 8080 udp, on every kernel" "[bind]" "allow 8080 udp"
+if (( PM_ABI < 10 )); then
+  if grep -q 'cannot enforce UDP port rules' "$PM_ERR"; then ok "and below Landlock version 10 the enforcer says it cannot enforce the port"; else bad "and below Landlock version 10 the enforcer says it cannot enforce the port" "$(pm_describe)"; fi
 fi
 
 echo

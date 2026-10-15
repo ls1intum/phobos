@@ -1369,8 +1369,38 @@ static void test_what_reaches_the_kernel(void) {
     mock_landlock_version = 9;
     char *udp_too_old[] = {"phobos-landlock-filesystem-and-networksystem", "--connect-udp", "53",        "--rights=r",
                            "/usr",            "--",            "/bin/true", NULL};
-    expect_exit("a udp rule on a kernel below version 10 is refused", EXIT_CODE_POLICY_ERROR,
-                udp_too_old);
+    expect_exit("a udp rule on a kernel below version 10 runs, best effort", 0, udp_too_old);
+    check("and the enforcer says so, naming the option that would refuse such a kernel",
+          stderr_says("cannot enforce UDP port rules") && stderr_says("--minimum-landlock-version 10"));
+    check("the ruleset asks the kernel for no UDP right it does not know, and adds no UDP rule",
+          (record->handled_access_network
+           & (LANDLOCK_ACCESS_NETWORK_BIND_UDP | LANDLOCK_ACCESS_NETWORK_CONNECT_SEND_UDP)) == 0
+              && record->port_rule_count == 0 && record->ruleset_attributes_size != 0);
+
+    char *udp_demanding[] = {"phobos-landlock-filesystem-and-networksystem", "--minimum-landlock-version", "10",
+                             "--connect-udp", "53", "--rights=r", "/usr", "--", "/bin/true", NULL};
+    mock_landlock_version = 9;
+    expect_exit("a demanded version of 10 still refuses such a kernel", EXIT_CODE_POLICY_ERROR, udp_demanding);
+
+    char *udp_beside_tcp[] = {"phobos-landlock-filesystem-and-networksystem", "--connect-tcp", "443", "--connect-udp",
+                              "53", "--rights=r", "/usr", "--", "/bin/true", NULL};
+    mock_landlock_version = 8;
+    expect_exit("a udp rule beside a tcp rule runs on version 8", 0, udp_beside_tcp);
+    check("the tcp rule reaches the kernel and the udp rule is left out",
+          record->port_rule_count == 1 && record->port_rule_port[0] == 443
+              && record->handled_access_network == LANDLOCK_ACCESS_NETWORK_CONNECT_TCP);
+
+    char *udp_only_network[] = {"phobos-landlock-filesystem-and-networksystem", "--no-filesystem", "--connect-udp", "53",
+                                "--", "/bin/true", NULL};
+    mock_landlock_version = 3;
+    expect_exit("a udp-only network ruleset runs on version 3, which knows no network at all", 0, udp_only_network);
+    check("there is nothing for Landlock to hold, so no ruleset is created",
+          record->ruleset_attributes_size == 0 && record->port_rule_count == 0);
+    check("and the enforcer says the udp rule is not enforced", stderr_says("cannot enforce UDP port rules"));
+    char *tcp_on_three[] = {"phobos-landlock-filesystem-and-networksystem", "--connect-tcp", "443", "--rights=r",
+                            "/usr", "--", "/bin/true", NULL};
+    mock_landlock_version = 3;
+    expect_exit("a tcp rule still refuses version 3", EXIT_CODE_POLICY_ERROR, tcp_on_three);
 
     mock_landlock_version = 9;
     expect_exit("a read rule on a version 9 kernel runs", 0, read_only);
@@ -1463,7 +1493,10 @@ static void test_close_bind(void) {
     char *explicit_udp[] = {"phobos-landlock-filesystem-and-networksystem", "--no-filesystem", "--close-bind", "--bind-udp", "5353",
                             "--", "/bin/true", NULL};
     mock_landlock_version = 8;
-    expect_exit("an explicit udp bind port still refuses a kernel below version 10", EXIT_CODE_POLICY_ERROR, explicit_udp);
+    expect_exit("an explicit udp bind port runs below version 10, best effort", 0, explicit_udp);
+    check("and adds no rule for a direction version 8 cannot handle, saying so",
+          record->port_rule_count == 0 && record->handled_access_network == LANDLOCK_ACCESS_NETWORK_BIND_TCP
+              && stderr_says("cannot enforce UDP port rules"));
 
     char *with_filesystem[] = {"phobos-landlock-filesystem-and-networksystem", "--close-bind", "--rights=r", "/usr", "--", "/bin/true", NULL};
     mock_landlock_version = 8;
@@ -1794,6 +1827,14 @@ static void test_model_of_bind(void) {
 
     check("below version 10 UDP bind is not handled, so it is free",
           build_model(closed, 8, error) && model_bind_permitted(&model_under_test, true, 53));
+    char *named_udp_old[] = {"enforcer", "--no-filesystem", "--close-bind", "--bind-udp", "5353", "--",
+                             "/bin/true", NULL};
+    check("and an explicit UDP bind row changes nothing there: the named port and another are free",
+          build_model(named_udp_old, 8, error) && model_bind_permitted(&model_under_test, true, 5353)
+              && model_bind_permitted(&model_under_test, true, 53));
+    check("while on version 10 the named port is free and another is not",
+          build_model(named_udp_old, 10, error) && model_bind_permitted(&model_under_test, true, 5353)
+              && !model_bind_permitted(&model_under_test, true, 53));
 
     char *open_bind[] = {"enforcer", "--no-filesystem", "--connect-tcp", "443", "--",
                          "/bin/true", NULL};

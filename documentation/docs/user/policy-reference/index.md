@@ -115,8 +115,8 @@ configuration, and three of its entries are worth knowing about before you copy 
 - **The exact host name needs `--resolver`**, or the network layer refuses the run. It and the
   `[accept]` rule both start HAProxy, so the run needs `haproxy` installed and a container with a
   network, which replaces the `--network none` default.
-- **The two `udp` rules need a Landlock version 10 kernel**, and `phobos-landlock-filesystem-and-networksystem` refuses them
-  on an older one.
+- **The kernel holds the port of the two `udp` rules only from Landlock version 10.** Below it
+  they still run: the connect guard holds where a datagram goes, and the enforcer warns.
 
 ## How several files are combined
 
@@ -147,7 +147,7 @@ A configuration the parser cannot read ends the run with `PHB-EPOLICY` before th
 starts. A rule that parses but cannot be enforced ends it later. `PHB-ERUNTIME` covers a network
 layer or an HAProxy that cannot start, for example with an `[accept]` source HAProxy rejects or an
 exact name with no resolver. Exit status 125 covers a rule the enforcer refuses, for example a
-`udp` rule that names a port, on a kernel below Landlock version 10.
+`tcp` rule on a kernel below Landlock version 4.
 
 The message says what is wrong. For a fault on one line it names the file and the line. It
 quotes what it found, so a control character or a byte that is not text shows as an escape

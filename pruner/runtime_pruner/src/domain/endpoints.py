@@ -29,7 +29,7 @@ UNBOUND_LOOPBACK_COMMENT = ("a service outside the session listened on this port
                             "it must exist at grading time too")
 TLS_NAME_COMMENT = "TLS host name of the session's ClientHello; grading needs --resolver, the egress broker holds the name"
 ADDRESS_COMMENT = "no TLS host name was seen, so the address is held; it may change, and a name rule needs one"
-UDP_COMMENT = "an explicit UDP port rule needs Landlock ABI 10"
+UDP_COMMENT = "the kernel holds an explicit UDP port rule only from Landlock ABI 10"
 LOOKUP_COMMENT = "the session resolved a name it then reached by address; grading resolves it again"
 IOV_BASE = re.compile(r'iov_base="((?:[^"\\]|\\.)*)"')
 

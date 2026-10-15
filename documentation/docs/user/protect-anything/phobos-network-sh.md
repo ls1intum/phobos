@@ -198,8 +198,8 @@ that the listener's port is not locked either.
 ## The Landlock port rules
 
 `[connect]` and `[bind]` produce `--connect-tcp`, `--bind-tcp`, `--connect-udp` and
-`--bind-udp`. The two `udp` flags need a Landlock version 10 kernel, and below it the enforcer
-refuses the run with exit status 125. The layer applies them on a Landlock ruleset of its
+`--bind-udp`. The kernel enforces the two `udp` flags only from Landlock version 10. Below it the
+enforcer leaves them out and warns, and the connect guard alone holds where a datagram goes. The layer applies them on a Landlock ruleset of its
 own, created with `--no-filesystem`, which composes with the filesystem layer's ruleset by
 intersection. It is applied inside the guard's child lineage, after the supervisor has forked,
 so the supervisor that connects on the command's behalf stays unrestricted.

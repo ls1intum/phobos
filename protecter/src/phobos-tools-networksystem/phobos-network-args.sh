@@ -302,7 +302,8 @@ build_network_args() {
 # collapse to one flag. Landlock's bind right is per-port and knows no local address, so the parser
 # refuses a [bind] rule that names an address and this emits one --bind-tcp or --bind-udp per port.
 # Port 0 becomes --ephemeral-bind-tcp or --ephemeral-bind-udp instead, a grant that never refuses
-# a kernel too old to handle the direction, where an explicit port rule does. The host field is
+# a kernel too old to handle the direction, where an explicit TCP port rule does (an explicit UDP
+# port rule runs below Landlock version 10 with a warning). The host field is
 # always "*" and is ignored here. A port outside 0..65535 is a policy mistake and ends the run.
 build_bind_args() {
   local arguments_name="$1"

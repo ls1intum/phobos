@@ -22,9 +22,10 @@ DECLARED_HOST = re.compile(
 )
 # The highest port number.
 PORT_MAXIMUM = 65535
-# The first Landlock version that handles UDP ports. Below it the enforcer refuses, before the command
-# starts, a policy with a UDP rule that names a port, so no such rule can be derived on a kernel that
-# lacks it: the default prune runs on version 7 or 8, and the KVM run observes version 10.
+# The first Landlock version that handles UDP ports. Below it the enforcer runs a policy with a UDP rule
+# that names a port best effort, without the kernel's UDP rules, and the layer pruner by choice derives no
+# such rule there, since the kernel could not hold it: the default prune runs on version 7 or 8, and the
+# KVM run observes version 10.
 FIRST_UDP_PORT_VERSION = 10
 # The calls whose success names a local port the run holds.
 BINDING_CALLS = frozenset({"bind", "getsockname"})
@@ -161,8 +162,9 @@ def decide_connect(denial: Denial, bound: frozenset[tuple[str, int, str]], colle
         collected.wildcards.add((denial.address, denial.transport))
         return
     if denial.transport == "udp" and not udp_ports:
-        collected.reported.append(f"loopback {destination}: an exact UDP port rule needs Landlock version "
-                                  f"{FIRST_UDP_PORT_VERSION}, which this kernel lacks; not granted")
+        collected.reported.append(f"loopback {destination}: below Landlock version {FIRST_UDP_PORT_VERSION} the "
+                                  "kernel cannot hold an exact UDP port, so the layer pruner does not grant one; "
+                                  "not granted")
         return
     collected.exact.add((denial.address, denial.transport, exact_loopback(denial.address, denial.port, denial.transport)))
     collected.reported.append(f"loopback {destination}: no process of the run bound that port; granted exactly")
@@ -175,8 +177,9 @@ def decide_bind(denial: Denial, collected: Collected, udp_ports: bool = True) ->
     elif denial.port == 0:
         collected.binds.add("allow 0" + transport_marker(denial.transport))
     elif denial.transport == "udp" and not udp_ports:
-        collected.reported.append(f"bind of UDP port {denial.port}: an explicit UDP port rule needs Landlock version "
-                                  f"{FIRST_UDP_PORT_VERSION}, which this kernel lacks; not granted")
+        collected.reported.append(f"bind of UDP port {denial.port}: below Landlock version {FIRST_UDP_PORT_VERSION} "
+                                  "the kernel cannot hold an explicit UDP port, so the layer pruner does not grant one; "
+                                  "not granted")
     elif denial.port is not None and denial.address is not None and loopback_kind(denial.address) in ("inet", "inet6"):
         collected.binds.add(f"allow {denial.port}" + transport_marker(denial.transport))
     else:
@@ -212,8 +215,8 @@ def network_rules(denials: list[Denial], bound: frozenset[tuple[str, int, str]],
     external destination is never granted, whatever the declared hosts: a declared host is a name, a
     record holds addresses, and the guard holds a name rule to its port, so a destination it refused
     is one no declared rule names. `declared_hosts` is named in the report when it is. With `udp_ports`
-    false, a rule that would name a UDP port is reported and not granted, since the kernel's Landlock
-    could not enforce it and the enforcer would refuse the policy.
+    false, a rule that would name a UDP port is reported and not granted, by choice: the kernel's
+    Landlock could not hold it, and the enforcer would run the policy without it.
     """
     collected = Collected()
     for denial in denials:

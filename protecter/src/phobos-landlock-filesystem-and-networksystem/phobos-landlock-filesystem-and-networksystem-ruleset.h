@@ -178,10 +178,12 @@ uint64_t scoped_for_version(int landlock_version);
 
 /* Asks the kernel for its Landlock version and refuses anything below the
  * demanded minimum, so an unsupported kernel stops the run instead of quietly
- * running it unprotected. TCP network rules require version 4; UDP network rules
- * require version 10, so a policy naming a UDP port is refused rather than run
- * with UDP unrestricted on a kernel too old to handle it. */
-int detect_landlock_version(int minimum_landlock_version, bool network_rules_wanted,
+ * running it unprotected. TCP network rules require version 4. UDP network rules
+ * run best effort below version 10: the enforcer leaves them out and says so on
+ * every run, because under the network layer the connect guard holds where a
+ * datagram goes and a kernel that old leaves UDP bind open for every run anyway;
+ * --minimum-landlock-version 10 refuses such a kernel instead. */
+int detect_landlock_version(int minimum_landlock_version, bool tcp_rules_wanted,
                             bool udp_rules_wanted);
 
 /* Names every right this kernel cannot handle, and what that means in

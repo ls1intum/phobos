@@ -145,9 +145,9 @@ The guard alone holds it, and it needs no Landlock version 10.
 
 Two limits come with it:
 
-- **It needs Landlock version 10 wherever Phobos emits `--connect-udp`.** On an older kernel `phobos-landlock-filesystem-and-networksystem` refuses the run with
-  `[phobos-landlock-filesystem-and-networksystem] UDP network rules require Landlock version 10` and exit status 125, rather
-  than running with the transport left unenforced.
+- **The kernel holds its port only from Landlock version 10.** On an older kernel the run goes
+  on. `phobos-landlock-filesystem-and-networksystem` leaves the UDP port rules out and warns that
+  it cannot enforce them. The connect guard alone holds where a datagram goes, by host and port. `--minimum-landlock-version 10` in the tail flags refuses such a kernel instead.
 - **A host name in it is resolved once, at the start.** Host enforcement for a stream rests on the
   Transport Layer Security (TLS) host name, which a datagram does not carry. The network layer
   therefore looks the name up before the command starts, through `--resolver`, and holds the rule

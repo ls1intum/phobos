@@ -229,7 +229,7 @@ wizard_ask_path() {
 
 # Sets REPLY to tcp or udp, asking which transport a rule is for, and UI_MOVE to back when left.
 wizard_ask_transport() {
-  ui_menu "Transport" "Which transport is the rule for?" 1 "tcp, a stream (the default)" 2 "udp, datagrams (needs Landlock version 10 where a port is named)"
+  ui_menu "Transport" "Which transport is the rule for?" 1 "tcp, a stream (the default)" 2 "udp, datagrams (the kernel holds a named port from Landlock version 10)"
   REPLY="tcp"
   [[ "$UI_MOVE" == "next" && "$UI_RESULT" == "2" ]] && REPLY="udp"
   return 0
