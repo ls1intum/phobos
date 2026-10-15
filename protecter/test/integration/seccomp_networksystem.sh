@@ -1827,8 +1827,8 @@ echo
 echo "== through the network layer, a udp rule that names a host is held to the addresses it had at the start =="
 # The layer writes /etc/hosts, so it needs that file writable, as the run-phase image the acceptance
 # suite uses gives; where it is not, these cases are skipped. The Landlock enforcer is a stand-in
-# that runs the command: a udp rule naming a port needs Landlock version 10, which no kernel the
-# project's CI or local runs use has, and the guard is what is being proven here, not the port rules.
+# that runs the command, because the guard is what is being proven here, not the port rules, which no
+# kernel the project's CI or local runs use enforces for UDP (that needs Landlock version 10).
 if [[ -w /etc/hosts ]]; then
   stub_landlock="$WORK/stub-landlock"
   printf '#!/bin/sh\nwhile [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n' > "$stub_landlock"

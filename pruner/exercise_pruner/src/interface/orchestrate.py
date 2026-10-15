@@ -14,9 +14,10 @@ Beside an exercise's .cfg it may find the KVM run's `<lang>_<exercise>.abi10.jso
 added UDP bind rows, `<lang>_<exercise>.abi10.cfg` (A.6.9). Each is held to the record, which names
 the SHA-256 of the .cfg it verified and of the sidecar, and a sidecar that holds anything but
 `[bind] allow <port> udp` is refused. The rows are written to `Abi10-<lang>.cfg` and
-`exercises/<lang>_<exercise>.abi10.cfg`, never into the base: the enforcer refuses a UDP bind rule that
-names a port on a kernel below Landlock version 10, so a base that held one would stop every run of
-the language there. Without sidecars nothing changes.
+`exercises/<lang>_<exercise>.abi10.cfg`, never into the base: they were observed only on a kernel with
+Landlock version 10, which closes UDP bind, and below it the kernel leaves every UDP port open, so a rule
+that names one adds nothing there, and the version 10 observations stay in their own sidecars. Without
+sidecars nothing changes.
 
 The merge errs wide on purpose: an exercise is graded with what every
 other exercise of its language needed, and so with their [connect] and [bind] rules too, which is
@@ -486,9 +487,9 @@ def exercise_policies(lang_data: dict[str, LanguagePolicy], layout: Layout) -> d
 def abi10_policies(lang_data: dict[str, LanguagePolicy], layout: Layout) -> dict[Path, Policy]:
     """The UDP bind rows the KVM run added, by file: Abi10-<lang>.cfg and exercises/<lang>_<exercise>.abi10.cfg.
 
-    They are written beside the base and never into it. A UDP bind rule that names a port is refused by
-    the enforcer on a kernel below Landlock version 10, so a base that held one would stop every run of
-    that language on such a kernel; these files are for a host known to have version 10, passed with
+    They are written beside the base and never into it. They were observed only on a kernel with
+    Landlock version 10, and below it a UDP bind rule that names a port adds nothing, since that kernel
+    leaves every UDP port open; these files are for a host known to have version 10, passed with
     --config on top of the base. Neither name starts with Base, so phobos-policysystem.sh never applies
     them on its own.
     """

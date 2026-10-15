@@ -111,8 +111,9 @@ affected.
 - Phobos refuses a wildcard-label rule, `allow *.example.org:443`, with `PHB-EPOLICY`. A
   wildcard cannot resolve to an address, so the broker could only compare it with the name the
   sandboxed command presents. Name each host exactly.
-- A datagram rule, `allow 203.0.113.53:53 udp`, needs Landlock version 10, except beside a udp
-  loopback rule with no port, where the guard alone holds it. It can name a host,
+- A datagram rule, `allow 203.0.113.53:53 udp`, gets a kernel-enforced port only from Landlock
+  version 10. Below it, and beside a udp loopback rule with no port on every kernel, the guard
+  alone holds it. It can name a host,
   `allow dns.example.org:53 udp`, which is resolved once before the command starts through
   `--resolver` and held to the addresses it had then.
 - Phobos accepts a loopback rule with no port beside a rule with a concrete port. Landlock cannot

@@ -64,7 +64,7 @@ bool build_policy_model(int argument_count, char *arguments[], int landlock_vers
     if (!model->options.no_filesystem) {
         model->handled_filesystem = filesystem_rights_for_version(landlock_version);
     }
-    model->handled_network = handled_network_access(&model->options)
+    model->handled_network = handled_network_access(&model->options, landlock_version)
                              | close_bind_access(&model->options, landlock_version);
     for (size_t index = 0; index < model->options.path_rule_count; index++) {
         if (!remember_model_rule(model, &model->options.rules[index], landlock_version, error,

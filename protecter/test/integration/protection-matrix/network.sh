@@ -177,24 +177,30 @@ c_udp_port="$(cfg udpport <<EOF2
 allow 127.0.0.1:$UDP_PORT udp
 EOF2
 )"
-if (( PM_ABI >= 10 )); then
-  recv_port_other="$(start_udp_receiver 127.0.0.1 "$((UDP_PORT + 1))" 120)"
-  pids+=("$recv_port_other")
-  require_started "the UDP receiver on 127.0.0.1:$((UDP_PORT + 1))" "$recv_port_other"
-  allow_case "a udp rule that names a port lets a datagram to that port go" "$c_udp_port" sendto -- "$P" udp_send sendto 127.0.0.1 "$UDP_PORT" "PAY-port"
-  deny_case "and refuses a datagram to another port on the same address" net "$c_udp_port" sendto "$DENIED_ERRNOS" -- "$P" udp_send sendto 127.0.0.1 "$((UDP_PORT + 1))" "BAD-port"
-  sleep 1
-  check "the other port's receiver got that datagram only from the two unprotected runs, never from the protected one" "2" "$(hits "$PM/out/udp-127.0.0.1-$((UDP_PORT + 1)).log" "ARRIVED BAD-port")"
-  c_bind_udp="$(cfg bindudp <<EOF2
+# A udp rule that names a port runs on every kernel: the connect guard holds where the datagram goes, and from
+# Landlock version 10 the kernel holds the port as well. Below it the enforcer says it cannot, and UDP bind stays open.
+recv_port_other="$(start_udp_receiver 127.0.0.1 "$((UDP_PORT + 1))" 120)"
+pids+=("$recv_port_other")
+require_started "the UDP receiver on 127.0.0.1:$((UDP_PORT + 1))" "$recv_port_other"
+allow_case "a udp rule that names a port lets a datagram to that port go, on every kernel" "$c_udp_port" sendto -- "$P" udp_send sendto 127.0.0.1 "$UDP_PORT" "PAY-port"
+if (( PM_ABI < 10 )); then
+  if grep -q 'cannot enforce UDP port rules' "$PM_ERR"; then ok "and below Landlock version 10 the enforcer says it cannot enforce the port, the guard alone holds it"; else bad "and below Landlock version 10 the enforcer says it cannot enforce the port" "$(pm_describe)"; fi
+fi
+deny_case "and refuses a datagram to another port on the same address" net "$c_udp_port" sendto "$DENIED_ERRNOS" -- "$P" udp_send sendto 127.0.0.1 "$((UDP_PORT + 1))" "BAD-port"
+sleep 1
+if [[ "$(hits "$log_ok" "ARRIVED PAY-port")" -ge 1 ]]; then ok "and the permitted datagram reached its receiver"; else bad "the permitted datagram reached its receiver" "$(cat "$log_ok" 2>/dev/null | tail -3)"; fi
+check "the other port's receiver got that datagram only from the two unprotected runs, never from the protected one" "2" "$(hits "$PM/out/udp-127.0.0.1-$((UDP_PORT + 1)).log" "ARRIVED BAD-port")"
+c_bind_udp="$(cfg bindudp <<EOF2
 [bind]
 allow $BIND_PORT udp
 EOF2
 )"
-  allow_case "a [bind] row for one UDP port lets that port be bound" "$c_bind_udp" bind_udp -- "$P" bind 127.0.0.1 "$BIND_PORT" udp
+allow_case "a [bind] row for one UDP port lets that port be bound, on every kernel" "$c_bind_udp" bind_udp -- "$P" bind 127.0.0.1 "$BIND_PORT" udp
+if (( PM_ABI >= 10 )); then
   deny_case "and not another UDP port" net "$c_bind_udp" bind_udp "$DENIED_ERRNOS" -- "$P" bind 127.0.0.1 "$BIND_OTHER" udp
 else
-  run_pm --config "$c_udp_port" -- "$P" cwd
-  if (( PM_STATUS == 125 )) && ! grep -q '^START' "$PM_OUT" && grep -q 'UDP network rules require Landlock version 10' "$PM_ERR"; then ok "below Landlock version 10 a udp rule that names a port is refused before the command, not left unenforced"; else bad "a udp rule that names a port is refused below Landlock version 10" "$(pm_describe)"; fi
+  run_pm --config "$c_bind_udp" -- "$P" bind 127.0.0.1 "$BIND_OTHER" udp
+  gap_case "below Landlock version 10 a UDP port the [bind] row does not name can be bound too, and the enforcer says so" "SECURITY.md" "$(holds_if bash -c "grep -q 'cannot enforce UDP port rules' '$PM_ERR' && grep -q 'OP bind_udp ret=0' '$PM_OUT'")"
 fi
 
 c_udp_mixed="$(cfg udpmixed <<EOF2

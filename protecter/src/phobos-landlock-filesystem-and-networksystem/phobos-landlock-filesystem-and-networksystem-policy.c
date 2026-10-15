@@ -259,18 +259,20 @@ uint64_t filesystem_rights_for_version(int landlock_version) {
     return rights;
 }
 
-uint64_t handled_network_access(const struct options *options) {
+uint64_t handled_network_access(const struct options *options, int landlock_version) {
     uint64_t handled = 0;
-    if (options->connect_tcp_port_count > 0) {
+    bool tcp = landlock_version >= FIRST_VERSION_WITH_NETWORK;
+    bool udp = landlock_version >= FIRST_VERSION_WITH_UDP;
+    if (tcp && options->connect_tcp_port_count > 0) {
         handled |= LANDLOCK_ACCESS_NETWORK_CONNECT_TCP;
     }
-    if (options->bind_tcp_port_count > 0) {
+    if (tcp && options->bind_tcp_port_count > 0) {
         handled |= LANDLOCK_ACCESS_NETWORK_BIND_TCP;
     }
-    if (options->connect_udp_port_count > 0) {
+    if (udp && options->connect_udp_port_count > 0) {
         handled |= LANDLOCK_ACCESS_NETWORK_CONNECT_SEND_UDP;
     }
-    if (options->bind_udp_port_count > 0) {
+    if (udp && options->bind_udp_port_count > 0) {
         handled |= LANDLOCK_ACCESS_NETWORK_BIND_UDP;
     }
     return handled;

@@ -10,8 +10,8 @@
 #              exactly one row, `allow 5000 udp`, in a sidecar whose SHA-256 the record carries;
 #   forbidden  no other rule was added, nothing was granted for a refusal the kernel did not name, and the
 #              record names the .cfg it verified by its SHA-256, so a changed .cfg is not mistaken for it;
-#   merged     the orchestrator writes the row to Abi10-java-gradle.cfg and never into the base, which an older
-#              kernel would refuse to run under, while a sidecar changed afterwards stops the merge.
+#   merged     the orchestrator writes the row to Abi10-java-gradle.cfg and never into the base, where it would
+#              hold a row only the version 10 run observed, while a sidecar changed afterwards stops the merge.
 # Runs on the host, after the guest, with python3 and the helpers of this repository.
 set -uo pipefail
 

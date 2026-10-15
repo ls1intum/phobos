@@ -57,12 +57,13 @@ struct options {
  * parse_arguments_checked, which the enforcer uses. */
 void parse_arguments(int argument_count, char *arguments[], struct options *options);
 
-/* True when any network rule was asked for, which decides whether the run needs
- * a kernel new enough to know about network access at all. */
-bool network_rules_wanted(const struct options *options);
+/* True when a TCP network rule was asked for, which decides whether the run needs a kernel new
+ * enough (version 4) to know about network access at all. A UDP rule is not counted: below
+ * version 10 it runs best effort, which udp_rules_wanted lets the enforcer say. */
+bool tcp_rules_wanted(const struct options *options);
 
-/* True when a UDP network rule was asked for, which decides whether the run needs
- * a kernel new enough (version 10) to handle UDP access at all. */
+/* True when a UDP network rule was asked for, which decides whether the enforcer says that a
+ * kernel below version 10 cannot enforce it. */
 bool udp_rules_wanted(const struct options *options);
 
 /* Records one --rights=LETTERS option, or refuses the call. Exposed for the tests. */

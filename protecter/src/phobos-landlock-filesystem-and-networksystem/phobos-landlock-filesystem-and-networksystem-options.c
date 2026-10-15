@@ -64,9 +64,8 @@ void parse_arguments(int argument_count, char *arguments[], struct options *opti
     verbose = options->verbose;
 }
 
-bool network_rules_wanted(const struct options *options) {
-    return options->connect_tcp_port_count > 0 || options->bind_tcp_port_count > 0 ||
-           options->connect_udp_port_count > 0 || options->bind_udp_port_count > 0;
+bool tcp_rules_wanted(const struct options *options) {
+    return options->connect_tcp_port_count > 0 || options->bind_tcp_port_count > 0;
 }
 
 bool udp_rules_wanted(const struct options *options) {

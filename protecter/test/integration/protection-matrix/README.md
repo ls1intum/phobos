@@ -74,7 +74,7 @@ own on exit, so no suite depends on another and none leaves the image changed.
 | connect over TCP | `network.sh` |
 | connect over UDP | `network.sh` (on a kernel with Landlock version 10 the port rules as well; on version 8 the guard alone, which is what that kernel can offer) |
 | offer a TCP service | `network.sh` (`[bind]`, `[accept]`) |
-| offer a UDP service | `network.sh` (needs Landlock version 10 to be closed, and says so below it; the permitted-port cases run only on a kernel that has it) |
+| offer a UDP service | `network.sh` (needs Landlock version 10 to be closed, and says so below it, where a `[bind]` row naming a port runs best effort and every other port stays bindable) |
 | end after a time | `timeout.sh` |
 | bound resources | `resources.sh` |
 
