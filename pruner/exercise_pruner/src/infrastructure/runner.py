@@ -51,8 +51,8 @@ REAP_SECONDS = 10
 REAP_INTERVAL_SECONDS = 0.05
 # The keys prune.json may hold, with the type each value must have (A.6.8).
 SETTING_TYPES = {"report_globs": list, "declared_hosts": list, "heap_pinned": bool, "pinned_read_roots": list,
-                 "seed": str, "key": str, "runs_compiled_programs": bool, "uses_pseudo_terminals": bool,
-                 "address_space_unbounded": bool, "compiled_programs_directory": str}
+                 "seed": str, "kept_seed": str, "key": str, "runs_compiled_programs": bool,
+                 "uses_pseudo_terminals": bool, "address_space_unbounded": bool, "compiled_programs_directory": str}
 
 
 class PrunerDefect(Exception):
@@ -87,6 +87,7 @@ class Exercise:
     heap_pinned: bool = False
     pinned_read_roots: tuple[pinned.PinnedRoot, ...] = ()
     seed: str | None = None
+    kept_seed: str | None = None
     runs_compiled_programs: bool = False
     uses_pseudo_terminals: bool = False
     address_space_unbounded: bool = False
@@ -166,7 +167,7 @@ def read_settings(directory: pathlib.Path) -> dict:
                 pinned.parse(value, str(path))
             except ValueError as error:
                 raise ExerciseRefused(str(error)) from error
-        elif key == "seed":
+        elif key in ("seed", "kept_seed"):
             try:
                 seed.parse_name(value, str(path))
             except ValueError as error:
@@ -205,7 +206,8 @@ def read_exercise(directory: pathlib.Path) -> Exercise:
     return Exercise(name=directory.name, workdir=directory, build_script=script, report_globs=globs,
                     declared_hosts=declared, heap_pinned=bool(settings.get("heap_pinned", False)),
                     pinned_read_roots=pinned.parse(settings.get("pinned_read_roots", []), str(directory / "prune.json")),
-                    seed=settings.get("seed"), runs_compiled_programs=bool(settings.get("runs_compiled_programs", False)),
+                    seed=settings.get("seed"), kept_seed=settings.get("kept_seed"),
+                    runs_compiled_programs=bool(settings.get("runs_compiled_programs", False)),
                     uses_pseudo_terminals=bool(settings.get("uses_pseudo_terminals", False)),
                     address_space_unbounded=bool(settings.get("address_space_unbounded", False)),
                     compiled_programs_directory=settings.get("compiled_programs_directory", "assignment"))

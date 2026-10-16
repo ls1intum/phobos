@@ -28,9 +28,10 @@ import platform
 import shutil
 import subprocess  # nosec B404
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from exercise_pruner.src.application import search, stages
+from exercise_pruner.src.domain import seed
 from exercise_pruner.src.infrastructure import audit, control, runner
 from shared.src.domain import cfgfile, record
 
@@ -209,9 +210,15 @@ def selftest(environment: runner.Environment, capture: Capture, version: int, di
     return {"landlock_abi": version, "selftest_record": records[0].raw}
 
 
-def narrowed(policy: cfgfile.Policy) -> cfgfile.Policy:
-    """The policy with every second filesystem entry removed, in path order, so a run is refused many things."""
-    kept = {path: sections for position, (path, sections) in enumerate(sorted(policy.fs.items())) if position % 2 == 0}
+def narrowed(policy: cfgfile.Policy, keep: Iterable[str] = ()) -> cfgfile.Policy:
+    """The policy with every second filesystem entry removed, in path order, so a run is refused many things.
+
+    An entry named in `keep`, the paths of the exercise's kept seed, stays where the policy holds it: a build is known
+    to need it, and without it the run could hang rather than be refused (seed.py). Nothing is added.
+    """
+    held = frozenset(keep)
+    kept = {path: sections for position, (path, sections) in enumerate(sorted(policy.fs.items()))
+            if position % 2 == 0 or path in held}
     return dataclasses.replace(policy, fs=kept, comments={path: text for path, text in policy.comments.items() if path in kept})
 
 
@@ -251,7 +258,8 @@ def cross_check_run(pruning: stages.Pruning, policy: cfgfile.Policy, capture: Ca
     did before the timeout is compared all the same.
     """
     capture.collect()
-    result = pruning.run(stages.normalised(pruning, narrowed(policy)), stages.OBSERVED_FILESYSTEM, "kvm cross-check")
+    candidate = stages.normalised(pruning, narrowed(policy, pruning.kept_seed_rows))
+    result = pruning.run(candidate, stages.OBSERVED_FILESYSTEM, "kvm cross-check")
     records, unparsed, _ = read_records(capture)
     attributed = [denial for denial in stages.denials_of(pruning, result)
                   if denial.layer == record.LAYER_FILESYSTEM and control.landlock_caused(denial, pruning.exercise.uses_pseudo_terminals)]
@@ -407,6 +415,8 @@ def verify_exercise(directory: pathlib.Path, key: str, environment: runner.Envir
         policy = cfgfile.read_policy(text)
         pruning = stages.Pruning(exercise=runner.read_exercise(directory), budget=stages.Budget(),
                                  environment=environment, pristine=pristine)
+        stages.load_kept_seed(pruning, seed.SEED_DIRECTORY)
+        removed = len(policy.fs) - len(narrowed(policy, pruning.kept_seed_rows).fs)
         pruning.reference = stages.baseline(pruning, inspect=refuse_timed_out_reference)
         entry["cross_check"] = cross_check_run(pruning, policy, capture)
         entry["mismatches"] = entry["cross_check"]["mismatches"]
@@ -414,9 +424,12 @@ def verify_exercise(directory: pathlib.Path, key: str, environment: runner.Envir
         if entry["mismatches"]:
             reason = (f"the audit cross-check found {len(entry['mismatches'])} strace denial(s) the kernel's records do "
                       "not agree with")
-        elif entry["cross_check"]["strace_denials"] == 0 and len(narrowed(policy).fs) < len(policy.fs):
+        elif entry["cross_check"]["strace_denials"] == 0 and removed:
             reason = ("the cross-check run was refused nothing strace could attribute, although it ran without "
-                      f"{len(policy.fs) - len(narrowed(policy).fs)} grant(s) the policy holds, so nothing was compared")
+                      f"{removed} grant(s) the policy holds, so nothing was compared")
+        elif entry["cross_check"]["strace_denials"] == 0:
+            reason = ("the cross-check run held every grant the policy holds, since the narrowing removed none, "
+                      "so nothing was compared")
         elif entry["cross_check"]["verdict"]["exit_class"] == TIMEOUT:
             raise Inconclusive("the cross-check run on the guest kernel ran out of time, so it cannot tell whether "
                                "the kernels differ", {name: entry["cross_check"][name] for name in

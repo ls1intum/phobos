@@ -119,3 +119,11 @@ def test_the_runtime_tail_carries_the_chdir_and_nothing_else(tmp_path):
 def test_the_language_list_is_required():
     with pytest.raises(SystemExit):
         orchestrate.parse_arguments([])
+
+
+def test_a_row_of_a_kept_seed_in_a_pruned_policy_reaches_the_language_base():
+    """The union reads the pruned .cfg without its comments, so the kept row is an ordinary row there and stays."""
+    pruned = cfgfile.read_policy("# kept: [read] on /dev/urandom come from the swift-kept.cfg kept seed\n"
+                                 "[read]\n/dev/urandom\n/usr/lib\n")
+    other = cfgfile.Policy(fs={"/usr/lib": frozenset({"read"})}, connect=(), bind=(), limits={})
+    assert orchestrate.union_policy([pruned, other]).fs["/dev/urandom"] == frozenset({"read"})
