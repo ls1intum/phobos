@@ -1352,6 +1352,15 @@ jobs:
             --entrypoint python3 phobos-prune-layers-swift:ci \
             /var/tmp/helpers/exercise_pruner/src/interface/main.py swift
           test -n "$(find "${output}" -maxdepth 1 -name '*swift-reference.cfg' -size +0)"
+          # The kept seed's row survives every minimisation; read as a policy, so a comment naming it is no row.
+          python3 - "${output}/swift_swift-reference.cfg" <<'EOF'
+          import pathlib
+          import sys
+          sys.path.insert(0, "pruner")
+          from shared.src.domain import cfgfile
+          policy = cfgfile.read_policy(pathlib.Path(sys.argv[1]).read_text())
+          sys.exit(0 if "read" in policy.fs.get("/dev/urandom", ()) else "the pruned policy lacks [read] /dev/urandom")
+          EOF
 
   # The run-phase image for C exercises built with Artemis's GCC template, on native runners. Like the Python, C and
   # R images it is not built for a pull request: the weekly run builds it for amd64, and a dispatch with scope full

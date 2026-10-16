@@ -83,6 +83,8 @@ class Pruning:
     pinned_roots: dict[str, str] = dataclasses.field(default_factory=dict)
     seeded: dict[str, frozenset[str]] = dataclasses.field(default_factory=dict)
     seed_name: str | None = None
+    kept_seed_rows: dict[str, frozenset[str]] = dataclasses.field(default_factory=dict)
+    kept_seed_name: str | None = None
     pristine: generalise.Snapshot = dataclasses.field(
         default_factory=lambda: generalise.Snapshot(existing=frozenset(), directories=frozenset(), scanned=()))
 
@@ -197,10 +199,11 @@ def permissive_run(pruning: Pruning) -> None:
     ("needs external network", A.6.5). Any other failure is one without an attributable denial: the run
     held everything a policy may grant, so no refusal it still met is one a grant could undo. A refused
     UNIX-domain connect comes after the external destination because nearly every run makes one (an
-    nscd lookup) and does without it.
+    nscd lookup) and does without it. The run holds the kept seed's rows too (with_kept_seed), which every
+    later policy holds.
     """
-    policy = cfgfile.permissive_policy(pathlib.Path("/"), pruning.exercise.declared_hosts,
-                                      pruning.exercise.uses_pseudo_terminals)
+    policy = with_kept_seed(pruning, cfgfile.permissive_policy(pathlib.Path("/"), pruning.exercise.declared_hosts,
+                                                               pruning.exercise.uses_pseudo_terminals))
     result = pruning.run(policy, OBSERVED_NETWORK, "permissive")
     if pruning.matches(result):
         return
@@ -291,12 +294,34 @@ def restore_pristine(pruning: Pruning) -> list[str]:
 
 
 def at_or_below_seed(pruning: Pruning, path: str) -> bool:
-    """Whether `path` is a seeded path or lies beneath one, where the hierarchy rule copies the seed's rights down.
+    """Whether `path` is a path of the seed or the kept seed or lies beneath one, where the hierarchy rule copies
+    that seed's rights down.
 
     A directory beneath a seeded one holds the seed's rights without being in the seed, so it counts as seeded
     for the rule that no grant climbs from a seed, and it is not a root a refusal may ask write-class rights from.
+    A kept seed is a seed in this: neither is a refusal.
     """
-    return any(path == seeded or cfgfile.is_beneath(path, seeded) for seeded in pruning.seeded)
+    return seed.at_or_beneath(path, (*pruning.seeded, *pruning.kept_seed_rows))
+
+
+def kept_seed_pairs(pruning: Pruning) -> list[tuple[str, str]]:
+    """The (path, section) grants of the kept seed, which every policy of the prune holds."""
+    return sorted((path, section) for path, sections in pruning.kept_seed_rows.items() for section in sections)
+
+
+def with_kept_seed(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
+    """The policy with the kept seed's rows added, every nested strict subset raised so render accepts it."""
+    if not pruning.kept_seed_rows:
+        return policy
+    fs = dict(policy.fs)
+    for path, sections in pruning.kept_seed_rows.items():
+        fs[path] = fs.get(path, frozenset()) | sections
+    return dataclasses.replace(policy, fs=generalise.normalise_hierarchy(fs))
+
+
+def missing_kept_pairs(pruning: Pruning, policy: cfgfile.Policy) -> list[tuple[str, str]]:
+    """The kept seed's grants the policy does not hold on their own path; sections added beside them do not count."""
+    return [(path, section) for path, section in kept_seed_pairs(pruning) if section not in policy.fs.get(path, ())]
 
 
 def snapshot_for(pruning: Pruning, policy: cfgfile.Policy) -> generalise.Snapshot:
@@ -469,13 +494,16 @@ def minimise_policy_fs(pruning: Pruning, policy: cfgfile.Policy, stage: str,
     The runs are filesystem runs (filesystem_run), or with `final_network` runs under the policy's own
     [connect] and [bind] rules with the network layer on; those first prove that the whole policy passes
     under them, since a minimisation from a policy that does not pass would keep everything and fail later
-    for a reason it did not name.
+    for a reason it did not name. The kept seed's grants are never candidates for removal: every run and the
+    result hold them on their own paths, also where the compaction folded one into its parent.
     """
-    pairs = sorted((path, section) for path, sections in policy.fs.items() for section in sections)
+    required = kept_seed_pairs(pruning)
+    pairs = sorted((path, section) for path, sections in policy.fs.items() for section in sections
+                   if (path, section) not in required)
 
-    def passes(kept: list[tuple[str, str]]) -> bool:
-        """One unobserved run with only the kept grants."""
-        candidate = normalised(pruning, with_pairs(policy, kept))
+    def passes(retained: list[tuple[str, str]]) -> bool:
+        """One unobserved run with only the retained grants and the kept seed's."""
+        candidate = normalised(pruning, with_pairs(policy, retained + required))
         if final_network:
             return pruning.matches(pruning.run(candidate, UNOBSERVED_NETWORK, stage))
         return pruning.matches(filesystem_run(pruning, candidate, False, stage))
@@ -484,7 +512,7 @@ def minimise_policy_fs(pruning: Pruning, policy: cfgfile.Policy, stage: str,
         raise search.PruneAbort("the filesystem grants do not pass under the final network rules, so there is nothing "
                                 "to minimise from")
     result = search.minimise(pairs, passes)
-    final = normalised(pruning, with_pairs(policy, result.kept))
+    final = normalised(pruning, with_pairs(policy, result.kept + required))
     removed = set(pairs) - {(path, section) for path, sections in final.fs.items() for section in sections}
     pruning.removed_pairs.update(removed)
     pruning.note(f"{stage} minimisation", before=len(pairs), kept=len(result.kept), trials=result.trials,
@@ -514,26 +542,41 @@ def prune_filesystem(pruning: Pruning, start: cfgfile.Policy) -> cfgfile.Policy:
     return dataclasses.replace(minimised, comments={path: text for path, text in comments.items() if path in minimised.fs})
 
 
+def seed_notes(policy: cfgfile.Policy, rows_by_path: dict[str, frozenset[str]],
+               own: Callable[[str, frozenset[str]], str],
+               inherited: Callable[[str, str, frozenset[str]], str]) -> list[tuple[str, str]]:
+    """The (path, comment) pairs one seed's rows earn in the policy: `own` on a path of the seed that still holds
+    some of its sections, `inherited` on a path beneath one that holds some of that path's sections."""
+    notes = []
+    for path, rows in rows_by_path.items():
+        surviving = rows & policy.fs.get(path, frozenset())
+        if surviving:
+            notes.append((path, own(path, surviving)))
+    for path, sections in policy.fs.items():
+        for ancestor, rows in rows_by_path.items():
+            copied = rows & sections if cfgfile.is_beneath(path, ancestor) else frozenset()
+            if copied:
+                notes.append((path, inherited(ancestor, path, copied)))
+    return notes
+
+
 def seed_comments(pruning: Pruning, policy: cfgfile.Policy) -> cfgfile.Policy:
-    """The policy with the comment above each seeded path that still holds seeded rows.
+    """The policy with the comment above each path that still holds rows of the seed or of the kept seed.
 
     Made once, from the policy the prune ends with, because the later stages (the filesystem minimisation
     after the network, the limits, the joint verification) may drop seeded rows the first minimisation kept.
     The comment names only the seeded sections that are still there and is joined to any other comment on
-    the path; a path none of whose seeded sections remain gets none.
+    the path; a path none of whose seeded sections remain gets none. A kept row says it is kept.
     """
     comments = dict(policy.comments)
-    for path, rows in pruning.seeded.items():
-        surviving = rows & policy.fs.get(path, frozenset())
-        if surviving:
-            note = seed.comment_for(pruning.seed_name or "", path, surviving)
-            comments[path] = f"{comments[path]}; {note}" if path in comments else note
-    for path, sections in policy.fs.items():
-        for ancestor, rows in pruning.seeded.items():
-            inherited = rows & sections if cfgfile.is_beneath(path, ancestor) else frozenset()
-            if inherited:
-                note = seed.comment_inherited(pruning.seed_name or "", ancestor, path, inherited)
-                comments[path] = f"{comments[path]}; {note}" if path in comments else note
+    seed_name = pruning.seed_name or ""
+    kept_name = pruning.kept_seed_name or ""
+    notes = seed_notes(policy, pruning.seeded, lambda path, rows: seed.comment_for(seed_name, path, rows),
+                       lambda ancestor, path, rows: seed.comment_inherited(seed_name, ancestor, path, rows))
+    notes += seed_notes(policy, pruning.kept_seed_rows, lambda path, rows: seed.comment_kept(kept_name, path, rows),
+                        lambda ancestor, path, rows: seed.comment_kept_inherited(kept_name, ancestor, path, rows))
+    for path, note in notes:
+        comments[path] = f"{comments[path]}; {note}" if path in comments else note
     return dataclasses.replace(policy, comments=comments)
 
 
@@ -551,7 +594,8 @@ def widenings(pruning: Pruning, policy: cfgfile.Policy) -> list[dict[str, Any]]:
         behind = [item for item in observed if item == path or cfgfile.is_beneath(item, path)]
         found.append({"path": path, "sections": sorted(sections), "observed": behind[:WIDENING_EXAMPLES],
                       "observed_count": len(behind), "covers": entries_beneath(path),
-                      "seeded": sorted(sections & pruning.seeded.get(path, frozenset()))})
+                      "seeded": sorted(sections & pruning.seeded.get(path, frozenset())),
+                      "kept": sorted(sections & pruning.kept_seed_rows.get(path, frozenset()))})
     return found
 
 
@@ -793,30 +837,52 @@ def verify_pinned_roots(pruning: Pruning, when: str = "before the first run") ->
         pruning.note("pinned read roots", when=when, roots=checked)
 
 
-def seed_policy(pruning: Pruning, directory: str = seed.SEED_DIRECTORY) -> cfgfile.Policy:
-    """The policy the filesystem stage starts from: empty, or the exercise's language seed (seed.py).
+def protected_directories(environment: runner.Environment) -> tuple[str, ...]:
+    """The directories the pruner owns, resolved, which no seed or kept seed row may be, lie beneath or sit above."""
+    return tuple(os.path.realpath(path) for path in (
+        environment.spec_parent, environment.testing_dir, environment.candidate_dir, environment.log_dir,
+        environment.phobos_home, *environment.kept))
 
-    An exercise names its seed in prune.json. A seed that is missing or not one a seed may be aborts the
-    exercise, since the prune would otherwise fail later for a reason it did not name; this is done before
-    any run, so the seed is read before a build or the permissive run could have touched it. The record
-    says which rows were seeded, and their comments are made at the end of the prune (seed_comments).
+
+def load_kept_seed(pruning: Pruning, directory: str) -> dict[str, frozenset[str]]:
+    """The exercise's kept seed rows, recorded in the pruning, or nothing when prune.json names none; PruneAbort if
+    the kept seed named cannot be used."""
+    name = pruning.exercise.kept_seed
+    if name is None:
+        return {}
+    try:
+        kept = seed.load_kept(name, directory, protected_directories(pruning.environment))
+    except ValueError as failure:
+        raise search.PruneAbort(f"the kept seed cannot be used: {failure}", {"kept_seed": name}) from failure
+    pruning.kept_seed_name = name
+    pruning.kept_seed_rows = {entry: frozenset(sections) for entry, sections in kept.fs.items()}
+    pruning.note("kept seed", name=name, rows={entry: sorted(sections) for entry, sections in kept.fs.items()})
+    return pruning.kept_seed_rows
+
+
+def seed_policy(pruning: Pruning, directory: str = seed.SEED_DIRECTORY) -> cfgfile.Policy:
+    """The policy the filesystem stage starts from: empty, or the exercise's language seed and kept seed (seed.py).
+
+    An exercise names its seed and its kept seed in prune.json. One that is missing or not one it may be aborts
+    the exercise, since the prune would otherwise fail later for a reason it did not name; this is done before
+    any run, so both are read before a build or the permissive run could have touched them. The record
+    says which rows were seeded and kept, and their comments are made at the end of the prune (seed_comments).
     """
     name = pruning.exercise.seed
     empty = cfgfile.Policy(fs={}, connect=(), bind=(), limits={})
-    if name is None:
-        return empty
-    environment = pruning.environment
-    protected = tuple(os.path.realpath(path) for path in (
-        environment.spec_parent, environment.testing_dir, environment.candidate_dir, environment.log_dir,
-        environment.phobos_home, *environment.kept))
-    try:
-        seeded = seed.load(name, directory, protected)
-    except ValueError as failure:
-        raise search.PruneAbort(f"the language seed cannot be used: {failure}", {"seed": name}) from failure
-    pruning.seed_name = name
-    pruning.seeded = {entry: frozenset(sections) for entry, sections in seeded.fs.items()}
-    pruning.note("seed", name=name, rows={entry: sorted(sections) for entry, sections in seeded.fs.items()})
-    return dataclasses.replace(empty, fs=dict(seeded.fs))
+    fs: dict[str, frozenset[str]] = {}
+    if name is not None:
+        try:
+            seeded = seed.load(name, directory, protected_directories(pruning.environment))
+        except ValueError as failure:
+            raise search.PruneAbort(f"the language seed cannot be used: {failure}", {"seed": name}) from failure
+        pruning.seed_name = name
+        pruning.seeded = {entry: frozenset(sections) for entry, sections in seeded.fs.items()}
+        pruning.note("seed", name=name, rows={entry: sorted(sections) for entry, sections in seeded.fs.items()})
+        fs = dict(seeded.fs)
+    for entry, sections in load_kept_seed(pruning, directory).items():
+        fs[entry] = fs.get(entry, frozenset()) | sections
+    return dataclasses.replace(empty, fs=fs)
 
 
 def check_pinned_grants(pruning: Pruning, policy: cfgfile.Policy) -> None:
@@ -911,6 +977,10 @@ def prune_exercise(exercise: runner.Exercise, budget: Budget, environment: runne
             policy = verify(pruning, policy)
             check_pinned_grants(pruning, policy)
             pruning.note("containment", checks=containment.run_checks(policy, environment))
+        missing = missing_kept_pairs(pruning, policy)
+        if missing:
+            raise search.PruneAbort("a defect of the pruner: the final policy lacks rows of the kept seed",
+                                    {"missing": [list(pair) for pair in missing]})
         verify_pinned_roots(pruning, "after the last run")
     except search.PruneAbort as abort:
         abort.evidence["record"] = pruning.log

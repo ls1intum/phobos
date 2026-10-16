@@ -116,7 +116,9 @@ to end in a policy. The seed `r.cfg` grants `/tmp`, where R names its temporarie
 
 The prune image is built on the Swift run-phase image there and prunes `exercises/swift/swift-reference`, which has
 to end in a policy. That exercise declares `runs_compiled_programs`, because SwiftPM runs the package manifest it
-compiles. The seed `swift.cfg` grants `/tmp`, where the toolchain names its temporaries at random.
+compiles. The seed `swift.cfg` grants `/tmp`, where the toolchain names its temporaries at random, and the kept seed
+`swift-kept.cfg` grants reading `/dev/urandom`, which Foundation needs for distinct UUIDs and which no minimisation
+removes, so the job checks that the pruned policy still holds it.
 
 ## The GCC run-phase image, run by the `run-phase-c-gcc` job of `build.yml`
 

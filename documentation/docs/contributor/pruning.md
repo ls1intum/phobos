@@ -199,6 +199,16 @@ rows that stayed. Language-specific rows live only in such a file, never in the 
 `protecter/src/`. The Gradle reference exercise names the same seed, because Ares and Surefire
 write scratch files with random names to `/tmp` too.
 
+A kept seed, named by `"kept_seed"` in `prune.json` and kept beside the seeds, holds rows a build
+needs on some machines although the prune machine does not show it. No minimisation removes them,
+so a kept seed errs wider by design: the prune grants its rows whether or not a run here needs
+them, and the file says why each one is there. Its rows take the sections a seed takes, on an
+existing directory, regular file or character device; a file or device takes only `[read]` and
+`[write]`. The loader refuses a write-class section on or beneath `/proc` or `/sys`, and beneath
+`/dev` it accepts writing only to a character device. The pruner never climbs from a directory
+only a kept seed write-grants, as for a seed, and the KVM cross-check keeps the kept rows the
+policy holds when it narrows it.
+
 Without the Compose setup, the manual workflow `prune-maven.yml` builds both images on amd64 and
 arm64 and runs `pruner/exercise_pruner/test/integration/interface/layer_prune_maven.sh` in an ordinary container. That prunes,
 merges and verifies the exercise. It shows four wrong reasons aborting: no tests, a version the
@@ -237,11 +247,11 @@ directory, so nothing under `/usr` is writable and no file the run writes can be
 Swift template, on the Swift run-phase image. The exercise declares `runs_compiled_programs`, so the base keeps
 execute on the solution's directory beside write, as the FACT base does. The control replay confirms an `execve`
 refused on a program that the build wrote and removed again, but only beneath that declared directory.
-One row is kept by hand: `[read] /dev/urandom`. Foundation 6.2 reads every UUID from it without checking the open,
-and with equal UUIDs SwiftPM's repository queue loses a fetch that waits. Where Swift sees 2 CPUs or fewer, the queue
-runs one operation at a time, so two overlapping fetches are enough. The reference hung that way in a KVM guest with
-2 CPUs. On the 4-CPU runner it passes without the row, so the
-minimisation drops it, and whoever adopts a new prune keeps it until the pruner can keep a seeded row.
+One row comes from the kept seed `swift-kept.cfg`: `[read] /dev/urandom`. Foundation 6.2 reads every UUID from it
+without checking the open, and with equal UUIDs SwiftPM's repository queue loses a fetch that waits. Where Swift sees
+2 CPUs or fewer, the queue runs one operation at a time, so two overlapping fetches are enough. The reference hung that
+way in a KVM guest with 2 CPUs. On the 4-CPU runner it passes without the row, which is why it comes from a kept seed
+rather than from a refusal: no minimisation removes it.
 
 `protecter/src/config/BaseLanguage-c-gcc.cfg` is the result for the C reference exercise built with Artemis's
 GCC template, on the GCC run-phase image. The exercise declares `runs_compiled_programs`, so the base keeps execute
