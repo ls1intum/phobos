@@ -195,8 +195,9 @@ grants from a refusal. The exercise's `prune.json` therefore names a seed, `"see
 a file kept under `pruner/config/seeds/` and copied into the prune image (`java.cfg`) that
 starts the first policy with `[read]`, `[write]`, `[create]` and `[delete]` on `/tmp`. The
 minimisation drops a row the build does not need, and one comment above the path names the seeded
-rows that stayed. Language-specific rows live only in such a file, never in the pruner or in
-`protecter/src/`. The Gradle reference exercise names the same seed, because Ares and Surefire
+rows that stayed. A seed writes nothing on or beneath `/proc`, `/sys` or `/dev`: the loader
+refuses a write-class section there. Language-specific rows live only in such a file, never in
+the pruner or in `protecter/src/`. The Gradle reference exercise names the same seed, because Ares and Surefire
 write scratch files with random names to `/tmp` too.
 
 A kept seed, named by `"kept_seed"` in `prune.json` and kept beside the seeds, holds rows a build

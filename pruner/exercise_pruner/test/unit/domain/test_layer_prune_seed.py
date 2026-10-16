@@ -87,6 +87,21 @@ def test_a_seed_that_names_more_than_scratch_rows_on_existing_real_directories_i
             seed.load("java.cfg", write_seed(scratch, text), NOTHING)
 
 
+@pytest.mark.parametrize("root", ["UNWRITABLE_ROOTS", "DEVICE_ROOT"])
+@pytest.mark.parametrize("section", ["write", "create", "delete"])
+def test_a_seed_writes_nothing_on_or_beneath_a_pseudo_file_system_or_the_devices_but_may_read_there(scratch,
+                                                                                                   monkeypatch,
+                                                                                                   root, section):
+    pseudo = scratch / "scratch" / "pseudo"
+    (pseudo / "inside").mkdir(parents=True)
+    monkeypatch.setattr(seed, root, (str(pseudo),) if root == "UNWRITABLE_ROOTS" else str(pseudo))
+    for entry in (pseudo, pseudo / "inside"):
+        with pytest.raises(ValueError, match="which a seed may not write"):
+            seed.load("java.cfg", write_seed(scratch, f"[{section}]\n{entry}\n"), NOTHING)
+    assert seed.load("java.cfg", write_seed(scratch, f"[read]\n{pseudo / 'inside'}\n"), NOTHING).fs
+    assert seed.load("java.cfg", write_seed(scratch, rows(scratch, section)), NOTHING).fs, "elsewhere it is a seed row"
+
+
 def test_a_row_on_a_directory_the_pruner_owns_or_above_or_beneath_one_is_refused(scratch):
     owned = scratch / "scratch" / "owned"
     (owned / "inside").mkdir(parents=True)

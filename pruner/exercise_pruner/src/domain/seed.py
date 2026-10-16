@@ -11,7 +11,8 @@ The seed is a starting point, not a grant: its rows go into the first policy, so
 every row the build does not need, and each row that stays carries a comment saying it comes from the seed.
 A seed names only filesystem rows with the sections below, on existing real directories, never `/` and
 never a directory the pruner owns (the specification, working, candidate, log and Phobos directories) or an
-ancestor of one.
+ancestor of one, and never a write-class section on or beneath /proc, /sys or /dev, whose entries are the
+kernel's and its devices', not a build's scratch files.
 
 A kept seed, named by `"kept_seed": "<name>.cfg"` in prune.json and kept beside the seeds, holds rows a build
 needs on some machines although the prune machine does not show it, such as a device a runtime reads only when
@@ -41,9 +42,9 @@ SEED_SECTIONS = frozenset({"read", "write", "create", "delete"})
 SEED_COMMENT = "seed: {sections} on {path} come from the {name} seed of the prune image, not from a refusal"
 # The sections a kept row may carry on a regular file or a character device.
 KEPT_FILE_SECTIONS = frozenset({"read", "write"})
-# The pseudo file systems no kept row may carry a write-class section on or beneath.
+# The pseudo file systems no seed row or kept row may carry a write-class section on or beneath.
 UNWRITABLE_ROOTS = ("/proc", "/sys")
-# The device directory, beneath which a kept row may write only a character device.
+# The device directory: a seed row may not write on or beneath it, and a kept row may write only a character device.
 DEVICE_ROOT = "/dev"
 # The comment above a kept row, and above a path that holds a kept directory's rights through the hierarchy rule.
 KEPT_COMMENT = ("kept: {sections} on {path} come from the {name} kept seed of the prune image, which no "
@@ -99,9 +100,13 @@ def load(name: str, directory: str, protected: Iterable[str]) -> cfgfile.Policy:
     `protected` are the directories the pruner owns, which no row may be, lie beneath or sit above.
     """
     policy = read_rows("seed", name, directory, protected)
-    for entry in policy.fs:
+    for entry, sections in policy.fs.items():
         if os.path.realpath(entry) != entry or not pathlib.Path(entry).is_dir():
             raise ValueError(f"the seed {name} names {entry}, which is not an existing real directory")
+        writes = sections & set(cfgfile.WRITE_SECTIONS)
+        if writes and at_or_beneath(entry, (*UNWRITABLE_ROOTS, DEVICE_ROOT)):
+            raise ValueError(f"the seed {name} names {sorted(writes)} on {entry}, on or beneath "
+                             f"{', '.join((*UNWRITABLE_ROOTS, DEVICE_ROOT))}, which a seed may not write")
     return policy
 
 
