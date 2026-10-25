@@ -100,7 +100,7 @@ jobs:
       - name: Install linters
         id: python-tools
         if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
-        run: python3 -m pip install --quiet ruff==0.17.1 bandit==1.9.4
+        run: python3 -m pip install --quiet ruff==0.17.2 bandit==1.9.4
 
       - name: Run ruff
         if: ${{ !cancelled() && steps.python-tools.outcome == 'success' }}
