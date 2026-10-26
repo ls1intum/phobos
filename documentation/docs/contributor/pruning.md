@@ -185,7 +185,7 @@ image build fixed its files by checksum:
   right is granted under `/root/.m2`.
 
 This errs wider than the reference for that tree alone: a graded build can read any file in it.
-The manifest lists what the pre-load added, 59 files; the rest of the tree comes with the
+The manifest lists what the pre-load added, 77 files; the rest of the tree comes with the
 digest-pinned base image, and the record counts it. The result is
 `BaseLanguage-java-maven.cfg` and `exercises/java-maven_maven-reference.cfg`, a base to review and
 adopt in a pull request of its own that lists every widening.

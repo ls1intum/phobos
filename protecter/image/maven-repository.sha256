@@ -57,6 +57,16 @@ a15977e3457ff8cd803c1a37e1e53aad76e4609cd23bbca8e8f783e5c78e5fa8  org/apache/mav
 42bdc803c4fb9bf668a31ed978cf2496b7be44666b54bcd8efea5f100488933e  org/apache/maven/plugins/maven-plugins/44/_remote.repositories
 d7801d725de2abb706efb931e22eac5df4d0c7fc8c9ea9a4d9986782407aaff7  org/apache/maven/plugins/maven-plugins/44/maven-plugins-44.pom
 9014b69c313fbba6f5bf2cd94c186f445fbd29e7051bc2af2799fa3e2640e7f6  org/apache/maven/plugins/maven-plugins/44/maven-plugins-44.pom.sha1
+1fdd030785c0c02de8ec2fde7efa4bc1998d2bb9c218e2b34418905ecaae2b50  org/aspectj/aspectjrt/1.9.26/_remote.repositories
+5e98db19563b7ab2bea3e15556ca8f6079dba09e04465f8a6f99ac03655bb5fc  org/aspectj/aspectjrt/1.9.26/aspectjrt-1.9.26.jar
+7cb8dc268c847fef5cda2ab665851b563e2bd181ae3039a20abe106461bfc0d3  org/aspectj/aspectjrt/1.9.26/aspectjrt-1.9.26.jar.sha1
+efe10d4d42585942e1dbd4cc27f713c5878316f04c7c3ac07dc4b41359dd23b3  org/aspectj/aspectjrt/1.9.26/aspectjrt-1.9.26.pom
+0170026a7c24309415b8ca66f409c6e3e3d0cfc4956ac98c05e7783cd5ebae18  org/aspectj/aspectjrt/1.9.26/aspectjrt-1.9.26.pom.sha1
+dea346c01e807cff9545bcc6ddd873594373f6dade4c65e5ad839db32ac15167  org/aspectj/aspectjtools/1.9.26/_remote.repositories
+7d891a103d1e2a4811cf5dbc1058da56cca825883ce76c8cfb340a896ce63b93  org/aspectj/aspectjtools/1.9.26/aspectjtools-1.9.26.jar
+9cbe34d19d7e920f328a7cf0f5afe92ae0127c8934b0b93275224376c2f34141  org/aspectj/aspectjtools/1.9.26/aspectjtools-1.9.26.jar.sha1
+1e02a1c90be815a24c494e2978ff4564d82bea9543628e85e73e8fff848acf85  org/aspectj/aspectjtools/1.9.26/aspectjtools-1.9.26.pom
+3266c6437cdc9eda7cfbc58baded3a3566743f41b9379300ecc60aa117df3d0e  org/aspectj/aspectjtools/1.9.26/aspectjtools-1.9.26.pom.sha1
 bc19028351cb4ea3689cb3fb6ad5d19ed54cdd83d0366110fad751248bffa8a1  org/objenesis/objenesis/3.3/_remote.repositories
 02dfd0b0439a5591e35b708ed2f5474eb0948f53abf74637e959b8e4ef69bfeb  org/objenesis/objenesis/3.3/objenesis-3.3.jar
 9175206dfc17d972540336bd8ec3e549a5b19bfa5f6c12f4f70b01d481420963  org/objenesis/objenesis/3.3/objenesis-3.3.jar.sha1
