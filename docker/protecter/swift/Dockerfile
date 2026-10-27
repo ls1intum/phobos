@@ -43,7 +43,7 @@ RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
 # its commit by the commit's hash, and the clone keeps no tag but the version it was cloned for, so that the
 # resolution of a range such as `from: "2.0.0"` can only find that version. SwiftPM is pointed at the clones by the mirror file next to them, so that the
 # resolution of `from: "2.0.0"` and the like finds the versions as tags and reaches no network.
-FROM swift:6.2-noble@sha256:d6f8f6112e9a63da0a4a151d6b93acd16699d35c0b82531ac1a245f5af210197 AS swiftdeps
+FROM swift:6.2-noble@sha256:e508ef1e4be68087f720de622b91cbf1e32799a7aa96134b35e6f1a1d656db7a AS swiftdeps
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN git clone --quiet https://github.com/alexaubry/HTMLString.git /opt/swift-deps/HTMLString \
  && git -C /opt/swift-deps/HTMLString checkout --quiet --detach 373048cc4084dd7481c86e3bee41612eff93b14d \
@@ -64,7 +64,7 @@ COPY pin/swift-mirrors.json /opt/swift-deps/mirrors.json
 # their C probes inside the image they test, readelf checks the hardening below, and haproxy is the egress broker.
 # procps and openssl are what the suites look for leftover processes and send a ClientHello with, and python3 is what
 # the network probes are written in. The Swift toolchain is the one the base image brings.
-FROM swift:6.2-noble@sha256:d6f8f6112e9a63da0a4a151d6b93acd16699d35c0b82531ac1a245f5af210197
+FROM swift:6.2-noble@sha256:e508ef1e4be68087f720de622b91cbf1e32799a7aa96134b35e6f1a1d656db7a
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
