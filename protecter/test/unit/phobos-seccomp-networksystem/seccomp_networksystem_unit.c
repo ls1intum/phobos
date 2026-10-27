@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <signal.h>
@@ -333,6 +334,9 @@ struct behaviour {
     int dns_record_class;       /* when not zero, the class of the records in the reply */
     int recv_fails;
     int getrandom_fails;
+    int getrandom_eintr_once;
+    int getrandom_short_once;   /* when set, the next call fills one byte only */
+    int getrandom_calls;
     int dns_queries;
     unsigned char dns_query[512];
     size_t dns_query_length;
@@ -355,12 +359,27 @@ struct behaviour {
     int send_fails;
     int send_eintr_once;
     int send_short_once;
-    unsigned char captured_header[64];
+    unsigned char captured_header[128];
     size_t captured_header_length;
     /* the supervise loop */
     int supervise_services;
     int supervise_poll_error;
     int supervise_poll_eintr_once;
+    /* the wait for the broker's lines once supervision is over */
+    int settle_poll_calls;
+    int settle_poll_eintr_once;
+    int settle_poll_signal;     /* when set, the interrupted poll first delivers SIGTERM to the supervisor */
+    int settle_poll_error;
+    int settle_poll_hangup;     /* when set, every poll reports a hangup with nothing to read */
+    int settle_poll_last_timeout;
+    int settle_signal_blocked;  /* whether SIGTERM was blocked when the last wait began */
+    int settle_mask_admits;     /* whether the mask the last wait was given lets SIGTERM in */
+    int settle_line_fd;         /* when not zero, settle_line is written to it before the first poll */
+    int settle_close_after_write;  /* when set, settle_line_fd is closed once the line is written */
+    char settle_line[256];
+    int realloc_fails;
+    int clock_fail_at;          /* the 1-based clock_gettime call that fails; 0 never */
+    int clock_calls;
     /* what was observed */
     int last_answer_error;
     int64_t last_answer_val;
@@ -425,6 +444,7 @@ static void reset_behaviour(void) {
     reporting_reset_for_tests();
     groups_reset_for_tests();
     broker_log_reset_for_tests();
+    forwarded_signal_reset_for_tests();
     reset_report_for_tests();
     reset_reporter_for_tests();
 }
@@ -1300,16 +1320,54 @@ ssize_t __wrap_recv(int fd, void *buffer, size_t length, int flags) {
     return (ssize_t)take;
 }
 
-/* The id every query carries, so a case can build the answer that matches it or one that does not. */
+/* The id every query carries, so a case can build the answer that matches it or one that does not, in the
+ * first two bytes, and then bytes that differ from call to call, so two tokens never share their random
+ * part. A case can have it fail, be interrupted once, or fill one byte once. */
 ssize_t __wrap_getrandom(void *buffer, size_t length, unsigned int flags) {
     (void)flags;
+    bx->getrandom_calls++;
     if (bx->getrandom_fails) {
         errno = EAGAIN;
         return -1;
     }
+    if (bx->getrandom_eintr_once) {
+        bx->getrandom_eintr_once = 0;
+        errno = EINTR;
+        return -1;
+    }
+    if (bx->getrandom_short_once && length > 1) {
+        bx->getrandom_short_once = 0;
+        length = 1;
+    }
     uint16_t id = FAKE_DNS_ID;
+    unsigned char *bytes = buffer;
+    for (size_t index = 0; index < length; index++) {
+        bytes[index] = (unsigned char)(bx->getrandom_calls * 31 + (int)index);
+    }
     memcpy(buffer, &id, length < sizeof(id) ? length : sizeof(id));
     return (ssize_t)length;
+}
+
+/* Grows a block as libc does, unless a case has it fail. */
+void *__real_realloc(void *block, size_t size);
+void *__wrap_realloc(void *block, size_t size) {
+    if (bx != NULL && bx->realloc_fails) {
+        return NULL;
+    }
+    return __real_realloc(block, size);
+}
+
+/* Reads the clock as libc does, unless a case has one call of it fail. */
+int __real_clock_gettime(clockid_t clock, struct timespec *now);
+int __wrap_clock_gettime(clockid_t clock, struct timespec *now) {
+    if (bx != NULL) {
+        bx->clock_calls++;
+        if (bx->clock_fail_at != 0 && bx->clock_calls == bx->clock_fail_at) {
+            errno = EINVAL;
+            return -1;
+        }
+    }
+    return __real_clock_gettime(clock, now);
 }
 
 /* The supervise loop waits for POLLIN: hand out a readable turn for each arranged
@@ -1335,6 +1393,46 @@ static int supervise_loop_poll(struct pollfd *fds) {
     }
     fds[0].revents = POLLHUP;
     return 1;
+}
+
+/* The wait for the broker's lines once supervision is over waits on the one pipe with ppoll: it records
+ * the timeout it was given and whether SIGTERM was blocked as the wait began and let in by its mask,
+ * writes a line into the pipe first when a case arranged one, so a line can arrive after the wait
+ * began, can then be interrupted once (with a SIGTERM delivered to the supervisor first), fail, or report
+ * a hangup, and otherwise really waits on the pipe. */
+int __real_ppoll(struct pollfd *fds, nfds_t count, const struct timespec *timeout, const sigset_t *mask);
+int __wrap_ppoll(struct pollfd *fds, nfds_t count, const struct timespec *timeout, const sigset_t *mask) {
+    sigset_t current;
+    sigprocmask(SIG_BLOCK, NULL, &current);
+    bx->settle_poll_calls++;
+    bx->settle_poll_last_timeout = (int)(timeout->tv_sec * 1000 + timeout->tv_nsec / 1000000);
+    bx->settle_signal_blocked = sigismember(&current, SIGTERM);
+    bx->settle_mask_admits = !sigismember(mask, SIGTERM);
+    if (bx->settle_line_fd != 0) {
+        ssize_t wrote = write(bx->settle_line_fd, bx->settle_line, strlen(bx->settle_line));
+        (void)wrote;
+        if (bx->settle_close_after_write) {
+            close(bx->settle_line_fd);
+        }
+        bx->settle_line_fd = 0;
+    }
+    if (bx->settle_poll_eintr_once) {
+        bx->settle_poll_eintr_once = 0;
+        if (bx->settle_poll_signal && bx->signal_handler[SIGTERM] != nullptr) {
+            bx->signal_handler[SIGTERM](SIGTERM);
+        }
+        errno = EINTR;
+        return -1;
+    }
+    if (bx->settle_poll_error) {
+        errno = EBADF;
+        return -1;
+    }
+    if (bx->settle_poll_hangup) {
+        fds[0].revents = POLLHUP;
+        return 1;
+    }
+    return __real_ppoll(fds, count, timeout, mask);
 }
 
 /* connect_within_deadline waits for POLLOUT. */
@@ -4307,11 +4405,11 @@ static void test_report_module(void) {
 }
 
 /* A broker log line for the case: the backend, the termination state, the host name or "-", the
- * address and the port. */
+ * address and the port, with no token. */
 static void broker_line(const char *backend, const char *state, const char *host_hex, const char *address,
                         const char *port) {
     char line[1024];
-    snprintf(line, sizeof(line), "PHB-BROKER %s %s %s %s %s", backend, state, host_hex, address, port);
+    snprintf(line, sizeof(line), "PHB-BROKER %s %s %s %s %s -", backend, state, host_hex, address, port);
     handle_broker_log_line(line, strlen(line));
 }
 
@@ -4369,15 +4467,15 @@ static void test_broker_log_lines(void) {
 
     reset_behaviour();
     capture_stderr_begin();
-    handle_broker_log_line("PHB-BROKER refuse PR zz 1.2.3.4", 31);
-    handle_broker_log_line("PHB-BROKER refuse PR - 1.2.3.4 443 extra", 40);
-    handle_broker_log_line("OTHER refuse PR - 1.2.3.4 443", 29);
+    handle_broker_log_line("PHB-BROKER refuse PR zz 1.2.3.4 443", 35);
+    handle_broker_log_line("PHB-BROKER refuse PR - 1.2.3.4 443 - extra", 42);
+    handle_broker_log_line("OTHER refuse PR - 1.2.3.4 443 -", 31);
     out = capture_stderr_end();
     check("a line with too few fields, too many or another marker prints nothing", count_report_lines(out) == 0);
 
     reset_behaviour();
     capture_stderr_begin();
-    const char unresolved[] = "PHB-BROKER-UNRESOLVED broker PR 616c6c6f7765642e6578616d706c65 1.2.3.4 443";
+    const char unresolved[] = "PHB-BROKER-UNRESOLVED broker PR 616c6c6f7765642e6578616d706c65 1.2.3.4 443 -";
     handle_broker_log_line(unresolved, strlen(unresolved));
     out = capture_stderr_end();
     check("a refusal under the marker the broker writes when it cannot resolve an allowed host prints nothing",
@@ -4415,7 +4513,7 @@ static void test_broker_log_pipe(void) {
     check("a pipe can be made for the broker log, read without blocking as the guard reads it",
           pipe2(pipe_ends, O_NONBLOCK) == 0);
     const char first_half[] = "PHB-BROKER refuse PR 6578616D706C65";
-    const char second_half[] = "2E6F7267 93.184.216.34 443\n";
+    const char second_half[] = "2E6F7267 93.184.216.34 443 -\n";
     capture_stderr_begin();
     check("a half line is written", write(pipe_ends[1], first_half, strlen(first_half)) > 0);
     drain_broker_log(pipe_ends[0]);
@@ -4431,7 +4529,7 @@ static void test_broker_log_pipe(void) {
     char big[1100];
     memset(big, 'a', sizeof(big) - 1);
     big[sizeof(big) - 1] = '\n';
-    const char valid[] = "PHB-BROKER refuse PR - 10.0.0.9 443\n";
+    const char valid[] = "PHB-BROKER refuse PR - 10.0.0.9 443 -\n";
     capture_stderr_begin();
     check("an overlong line is written", write(pipe_ends[1], big, sizeof(big)) > 0);
     check("and a valid one after it", write(pipe_ends[1], valid, strlen(valid)) > 0);
@@ -4449,7 +4547,7 @@ static void test_broker_log_pipe(void) {
     check("the rest of a dropped line is dropped too", count_report_lines(out) == 0);
 
     capture_stderr_begin();
-    const char exact[] = "PHB-BROKER refuse PR - 10.0.0.8 443\n";
+    const char exact[] = "PHB-BROKER refuse PR - 10.0.0.8 443 -\n";
     check("a line is written for an interrupted read", write(pipe_ends[1], exact, strlen(exact)) > 0);
     bx->read_eintr_once = 1;
     drain_broker_log(pipe_ends[0]);
@@ -4471,6 +4569,361 @@ static void test_broker_log_pipe(void) {
         check("a pipe is not adopted when one of the four fcntl calls fails", !adopt_broker_log(pipe_ends[0]));
     }
     close(null_device);
+    close(pipe_ends[0]);
+    close(pipe_ends[1]);
+}
+
+/* ------------------------------------------------- the broker's tokens and the wait for them */
+
+/* The hex of a token, as the broker logs it, into hex, which holds 2 * BROKER_TOKEN_SIZE + 1 bytes. */
+static void token_hex(const uint8_t *token, char *hex) {
+    for (size_t index = 0; index < BROKER_TOKEN_SIZE; index++) {
+        snprintf(hex + 2 * index, 3, "%02x", token[index]);
+    }
+}
+
+/* A broker line for a refused plain connection to 10.0.0.1:443 that carries the given token text. */
+static void token_line(char *line, size_t size, const char *token_text) {
+    snprintf(line, size, "PHB-BROKER refuse PR - 10.0.0.1 443 %s\n", token_text);
+}
+
+/* Hands the given line to the guard's parser, without its newline. */
+static void feed_token_line(const char *token_text) {
+    char line[256];
+    token_line(line, sizeof(line), token_text);
+    handle_broker_log_line(line, strlen(line) - 1);
+}
+
+/* Reserves a token and hands it over, as a handoff whose header was sent whole does, writing its hex.
+ * Answers whether a token was reserved. */
+static bool hand_one(char *hex) {
+    uint8_t token[BROKER_TOKEN_SIZE];
+    if (!reserve_broker_token(token)) {
+        return false;
+    }
+    hand_broker_token();
+    token_hex(token, hex);
+    return true;
+}
+
+/* Whether the wait at the end finds nothing to wait for: it is run with every poll reporting a hangup,
+ * so it ends on its first poll if it makes one, and it answers whether it made none. */
+static bool settles_without_waiting(int descriptor) {
+    bx->settle_poll_calls = 0;
+    bx->settle_poll_hangup = 1;
+    settle_broker_log(descriptor);
+    bx->settle_poll_hangup = 0;
+    return bx->settle_poll_calls == 0;
+}
+
+/* The milliseconds settle_broker_log took on the descriptor, read from the real clock. */
+static long long settle_and_time(int descriptor) {
+    struct timespec before;
+    struct timespec after;
+    __real_clock_gettime(CLOCK_MONOTONIC, &before);
+    settle_broker_log(descriptor);
+    __real_clock_gettime(CLOCK_MONOTONIC, &after);
+    return (long long)(after.tv_sec - before.tv_sec) * 1000 + (after.tv_nsec - before.tv_nsec) / 1000000;
+}
+
+/* Arranges an allowed stream connect to 192.0.2.7:443 (or the IPv6 rule host) with a broker and its pipe
+ * configured, so the handoff carries a token; the case then sets what it varies and calls service_once. */
+static void arrange_tokened_connect(int family, const char *rule_host, int pipe_read_end) {
+    reset_behaviour();
+    configure_broker("127.0.0.1:3128");
+    configure_broker_log(pipe_read_end);
+    bx->notif_recv_family = family;
+    bx->notif_recv_port = 443;
+    bx->notif_recv_v4_addr = 0xC0000207;
+    bx->notif_recv_target_fd = 6;
+    bx->process_vm_readv_result = 1;
+    bx->readlink_inode = TRACKED_STREAM_INODE;
+    record_socket_type(TRACKED_STREAM_INODE, FD_TYPE_STREAM);
+    remember_rule(rule_host, "443", false);
+}
+
+static void test_broker_token_handoff(void) {
+    int pipe_ends[2];
+    check("a pipe can be made for the token cases", pipe2(pipe_ends, O_NONBLOCK) == 0);
+
+    arrange_tokened_connect(AF_INET, "192.0.2.7", pipe_ends[0]);
+    service_once();
+    check("with a broker pipe, the IPv4 header carries the token as a UNIQUE_ID TLV after the addresses",
+          bx->addfd_calls == 1 && bx->last_answer_error == 0 && bx->captured_header_length == 55
+              && bx->captured_header[14] == 0 && bx->captured_header[15] == 39
+              && bx->captured_header[28] == 0x05 && bx->captured_header[29] == 0
+              && bx->captured_header[30] == 24);
+    bool first_sequence = true;
+    for (size_t index = 31; index < 39; index++) {
+        first_sequence = first_sequence && bx->captured_header[index] == 0;
+    }
+    check("the first handoff's token opens with sequence number zero", first_sequence);
+    char hex[2 * BROKER_TOKEN_SIZE + 1];
+    token_hex(&bx->captured_header[31], hex);
+    check("a handoff whose line has not come back is waited for", !settles_without_waiting(pipe_ends[0]));
+    capture_stderr_begin();
+    feed_token_line(hex);
+    const char *out = capture_stderr_end();
+    check("its line, refused, is worded as before",
+          holds_line(out, "connect to the Endpoint 10.0.0.1:443 over TCP"));
+    check("and once it has come back the wait at the end has nothing to wait for",
+          settles_without_waiting(pipe_ends[0]));
+
+    arrange_tokened_connect(AF_INET6, "2001:db8::1", pipe_ends[0]);
+    service_once();
+    check("the IPv6 header carries the token too, its length field naming the addresses and the TLV",
+          bx->captured_header_length == 79 && bx->captured_header[14] == 0
+              && bx->captured_header[15] == 63 && bx->captured_header[52] == 0x05
+              && bx->captured_header[54] == 24);
+
+    drive_broker_stream_connect(AF_INET, 443, "127.0.0.1");
+    check("without a broker pipe the header carries no token", bx->captured_header_length == 28);
+
+    arrange_tokened_connect(AF_INET, "192.0.2.7", pipe_ends[0]);
+    bx->getrandom_fails = 1;
+    service_once();
+    check("a token the kernel gives no random bytes for is left out, and the connection is still made",
+          bx->captured_header_length == 28 && bx->addfd_calls == 1 && bx->last_answer_error == 0);
+
+    arrange_tokened_connect(AF_INET, "192.0.2.7", pipe_ends[0]);
+    bx->send_fails = 1;
+    service_once();
+    check("a token whose header could not be sent is never waited for",
+          bx->last_answer_error == -ECONNREFUSED && settles_without_waiting(pipe_ends[0]));
+    close(pipe_ends[0]);
+    close(pipe_ends[1]);
+}
+
+static void test_broker_token_answers(void) {
+    int pipe_ends[2];
+    char first[2 * BROKER_TOKEN_SIZE + 1];
+    char second[2 * BROKER_TOKEN_SIZE + 1];
+    char unhanded[2 * BROKER_TOKEN_SIZE + 1];
+    uint8_t token[BROKER_TOKEN_SIZE];
+    check("a pipe can be made for the answer cases", pipe2(pipe_ends, O_NONBLOCK) == 0);
+
+    reset_behaviour();
+    check("two tokens are reserved and handed over", hand_one(first) && hand_one(second));
+    check("their random parts differ", strcmp(first + 16, second + 16) != 0);
+    check("their sequence numbers are zero and one",
+          strncmp(first, "0000000000000000", 16) == 0 && strncmp(second, "0000000000000001", 16) == 0);
+    check("the third token is reserved but never handed over", reserve_broker_token(token));
+    token_hex(token, unhanded);
+    char wrong_nonce[sizeof(second)];
+    memcpy(wrong_nonce, second, sizeof(second));
+    wrong_nonce[2 * BROKER_TOKEN_SIZE - 1] = wrong_nonce[2 * BROKER_TOKEN_SIZE - 1] == '0' ? '1' : '0';
+    char beyond[sizeof(second)];
+    memcpy(beyond, second, sizeof(second));
+    beyond[15] = '9';
+    char not_hex[sizeof(second)];
+    memset(not_hex, 'z', sizeof(not_hex) - 1);
+    not_hex[sizeof(not_hex) - 1] = '\0';
+    char not_hex_low[sizeof(second)];
+    memcpy(not_hex_low, second, sizeof(second));
+    not_hex_low[1] = 'z';
+    capture_stderr_begin();
+    feed_token_line("-");
+    feed_token_line("00");
+    feed_token_line(not_hex);
+    feed_token_line(not_hex_low);
+    feed_token_line(beyond);
+    feed_token_line(unhanded);
+    feed_token_line(wrong_nonce);
+    feed_token_line(first);
+    feed_token_line(first);
+    const char *out = capture_stderr_end();
+    check("every line is still worded on its own fields, whatever its token",
+          count_report_lines(out) >= 1 && holds_line(out, "connect to the Endpoint 10.0.0.1:443 over TCP"));
+    check("no token, a short one, one not hex, one past the last handed over, one never handed over, one "
+          "whose random part differs, and the first one twice leave the second unanswered",
+          !settles_without_waiting(pipe_ends[0]));
+    capture_stderr_begin();
+    feed_token_line(second);
+    (void)capture_stderr_end();
+    check("and the second one's own line answers it", settles_without_waiting(pipe_ends[0]));
+
+    reset_behaviour();
+    char hex[2 * BROKER_TOKEN_SIZE + 1];
+    char last[2 * BROKER_TOKEN_SIZE + 1];
+    bool all = true;
+    capture_stderr_begin();
+    for (int index = 0; index < 65; index++) {
+        all = all && hand_one(hex);
+        feed_token_line(hex);
+    }
+    memcpy(last, hex, sizeof(hex));
+    (void)capture_stderr_end();
+    check("more handoffs than the first room holds are each counted back", all && settles_without_waiting(pipe_ends[0]));
+    check("the sixty-fifth carries sequence number sixty-four", strncmp(last, "0000000000000040", 16) == 0);
+
+    reset_behaviour();
+    bx->getrandom_eintr_once = 1;
+    bx->getrandom_short_once = 1;
+    check("a draw of random bytes that is interrupted or short is made again", hand_one(hex));
+
+    reset_behaviour();
+    bx->getrandom_fails = 1;
+    check("a token the kernel gives no random bytes for is not reserved", !reserve_broker_token(token));
+    bx->getrandom_fails = 0;
+    check("and counting stays lost for the rest of the run", !reserve_broker_token(token));
+    check("so the wait at the end waits, though nothing was handed over", !settles_without_waiting(pipe_ends[0]));
+
+    reset_behaviour();
+    bx->realloc_fails = 1;
+    check("a token there is no room for is not reserved", !reserve_broker_token(token));
+
+    reset_behaviour();
+    broker_token_limit_for_tests(1);
+    check("the most handoffs the guard keeps count of are reserved", reserve_broker_token(token));
+    check("and one more is not", !reserve_broker_token(token));
+    close(pipe_ends[0]);
+    close(pipe_ends[1]);
+}
+
+static void test_broker_settle(void) {
+    int pipe_ends[2];
+    char hex[2 * BROKER_TOKEN_SIZE + 1];
+    char line[256];
+    check("a pipe can be made for the settle cases", pipe2(pipe_ends, O_NONBLOCK) == 0);
+
+    reset_behaviour();
+    check("a run that handed nothing over does not wait", settles_without_waiting(pipe_ends[0]));
+
+    reset_behaviour();
+    forward_signals_to(FAKE_CHILD_PID);
+    check("a token is handed over before a signal comes", hand_one(hex));
+    bx->signal_handler[SIGTERM](SIGTERM);
+    check("a forwarded signal is remembered", forwarded_signal_arrived());
+    check("and a run being ended by a signal does not wait, though a token is outstanding",
+          settles_without_waiting(pipe_ends[0]));
+
+    reset_behaviour();
+    forward_signals_to(FAKE_CHILD_PID);
+    char other_hex[2 * BROKER_TOKEN_SIZE + 1];
+    check("two tokens are handed over for an interrupted wait", hand_one(hex) && hand_one(other_hex));
+    token_line(line, sizeof(line), hex);
+    bx->settle_line_fd = pipe_ends[1];
+    snprintf(bx->settle_line, sizeof(bx->settle_line), "%s", line);
+    bx->settle_poll_eintr_once = 1;
+    bx->settle_poll_signal = 1;
+    sigset_t before_settle;
+    sigset_t after_settle;
+    sigprocmask(SIG_BLOCK, NULL, &before_settle);
+    capture_stderr_begin();
+    settle_broker_log(pipe_ends[0]);
+    const char *interrupted = capture_stderr_end();
+    sigprocmask(SIG_BLOCK, NULL, &after_settle);
+    check("a signal that interrupts the wait ends it", bx->settle_poll_calls == 1);
+    check("the forwarded signals are blocked while the guard decides to wait, and let in by the wait alone",
+          bx->settle_signal_blocked && bx->settle_mask_admits);
+    check("and given back as they were once it is done",
+          sigismember(&before_settle, SIGTERM) == sigismember(&after_settle, SIGTERM));
+    check("a line that came as the signal ended the wait is still read before the guard gives up",
+          holds_line(interrupted, "connect to the Endpoint 10.0.0.1:443 over TCP"));
+
+    reset_behaviour();
+    check("a token is handed over for an interruption with no signal", hand_one(hex));
+    broker_log_grace_for_tests(40);
+    bx->settle_poll_eintr_once = 1;
+    long long took = settle_and_time(pipe_ends[0]);
+    check("an interruption with no signal waits again, for what is left of the grace",
+          bx->settle_poll_calls == 2 && bx->settle_poll_last_timeout > 0
+              && bx->settle_poll_last_timeout <= 40 && took >= 30 && took < 1000);
+
+    reset_behaviour();
+    check("a token is handed over for a failing poll", hand_one(hex));
+    bx->settle_poll_error = 1;
+    settle_broker_log(pipe_ends[0]);
+    check("a poll that fails ends the wait", bx->settle_poll_calls == 1);
+
+    reset_behaviour();
+    check("a token is handed over for a line that comes late", hand_one(hex));
+    token_line(line, sizeof(line), hex);
+    bx->settle_line_fd = pipe_ends[1];
+    snprintf(bx->settle_line, sizeof(bx->settle_line), "%s", line);
+    capture_stderr_begin();
+    took = settle_and_time(pipe_ends[0]);
+    const char *out = capture_stderr_end();
+    check("a refusal the broker logs after supervision ended is still read and worded, and the wait then "
+          "ends at once",
+          holds_line(out, "connect to the Endpoint 10.0.0.1:443 over TCP") && bx->settle_poll_calls == 1
+              && took < 1000);
+
+    reset_behaviour();
+    check("a token is handed over for a line that never comes", hand_one(hex));
+    broker_log_grace_for_tests(30);
+    took = settle_and_time(pipe_ends[0]);
+    check("a line that never comes is waited for no longer than the grace",
+          bx->settle_poll_calls == 1 && took >= 20 && took < 1000);
+
+    reset_behaviour();
+    check("a token is handed over for a grace that is already gone", hand_one(hex));
+    broker_log_grace_for_tests(0);
+    settle_broker_log(pipe_ends[0]);
+    check("with no grace left there is no wait", bx->settle_poll_calls == 0);
+
+    reset_behaviour();
+    check("a token is handed over for a clock that cannot be read", hand_one(hex));
+    bx->clock_fail_at = 1;
+    settle_broker_log(pipe_ends[0]);
+    check("a clock that cannot be read when the wait begins means no wait",
+          bx->settle_poll_calls == 0 && bx->clock_calls == 1);
+    reset_behaviour();
+    check("a token is handed over for a clock that fails later", hand_one(hex));
+    bx->clock_fail_at = 2;
+    settle_broker_log(pipe_ends[0]);
+    check("and one that cannot be read for the time left ends it", bx->settle_poll_calls == 0 && bx->clock_calls == 2);
+
+    int closing[2];
+    reset_behaviour();
+    check("a pipe can be made whose writer closes", pipe2(closing, O_NONBLOCK) == 0);
+    char other[2 * BROKER_TOKEN_SIZE + 1];
+    check("two tokens are handed over for a pipe that hangs up", hand_one(hex) && hand_one(other));
+    token_line(line, sizeof(line), hex);
+    bx->settle_line_fd = closing[1];
+    bx->settle_close_after_write = 1;
+    snprintf(bx->settle_line, sizeof(bx->settle_line), "%s", line);
+    capture_stderr_begin();
+    settle_broker_log(closing[0]);
+    out = capture_stderr_end();
+    check("a pipe that hangs up with a line in it is read before the wait gives up on it",
+          holds_line(out, "connect to the Endpoint 10.0.0.1:443 over TCP") && bx->settle_poll_calls == 2);
+    close(closing[0]);
+
+    reset_behaviour();
+    static char filler[4096];
+    memset(filler, 'x', sizeof(filler) - 1);
+    filler[sizeof(filler) - 1] = '\n';
+    while (write(pipe_ends[1], filler, sizeof(filler)) > 0) {
+    }
+    check("a full pipe is drained a bounded number of reads at a time", drain_broker_log(pipe_ends[0]));
+    check("and the next drain finds it empty", !drain_broker_log(pipe_ends[0]));
+    close(pipe_ends[0]);
+    close(pipe_ends[1]);
+}
+
+static void test_broker_pipe_hangup_in_supervise(void) {
+    int pipe_ends[2];
+    char hex[2 * BROKER_TOKEN_SIZE + 1];
+    check("a pipe can be made for the hangup cases", pipe2(pipe_ends, O_NONBLOCK) == 0);
+
+    reset_behaviour();
+    configure_broker_log(pipe_ends[0]);
+    check("a token is handed over before a hangup with bytes", hand_one(hex));
+    bx->broker_revents = POLLIN | POLLHUP;
+    bx->settle_poll_hangup = 1;
+    supervise(FAKE_NOTIFY_DESCRIPTOR);
+    check("a pipe that hung up with bytes in it is kept, so the wait at the end still reads it",
+          bx->settle_poll_calls == 1);
+
+    reset_behaviour();
+    configure_broker_log(pipe_ends[0]);
+    check("a token is handed over before a bare hangup", hand_one(hex));
+    bx->broker_revents = POLLHUP;
+    bx->settle_poll_hangup = 1;
+    supervise(FAKE_NOTIFY_DESCRIPTOR);
+    check("a pipe that hung up with nothing in it is let go of, so nothing waits on it",
+          bx->settle_poll_calls == 0);
     close(pipe_ends[0]);
     close(pipe_ends[1]);
 }
@@ -4772,7 +5225,7 @@ static void test_broker_pipe_in_main(void) {
     check("a pipe can be made for the main case", pipe2(pipe_ends, O_NONBLOCK) == 0);
     snprintf(descriptor_text, sizeof(descriptor_text), "%d", pipe_ends[0]);
     char *argv[] = { "guard", "--broker-log-fd", descriptor_text, "--", "cmd", NULL };
-    const char line[] = "PHB-BROKER refuse PR 6578616D706C652E6F7267 93.184.216.34 443\n";
+    const char line[] = "PHB-BROKER refuse PR 6578616D706C652E6F7267 93.184.216.34 443 -\n";
     check("a broker line is written", write(pipe_ends[1], line, strlen(line)) > 0);
     bx->fork_result = FAKE_CHILD_PID;
     bx->broker_revents = POLLIN;
@@ -5594,6 +6047,10 @@ int main(void) {
     test_report_module();
     test_broker_log_lines();
     test_broker_log_pipe();
+    test_broker_token_handoff();
+    test_broker_token_answers();
+    test_broker_settle();
+    test_broker_pipe_hangup_in_supervise();
     test_filter_modes();
     test_report_modes_in_main();
     test_report_mode_decision();

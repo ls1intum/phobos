@@ -36,6 +36,9 @@ cleanup() {
   stop_haproxy_child "${sf_broker_pid:-}"
   stop_haproxy_child "${log_broker_pid:-}"
   stop_haproxy_child "${flood_broker_pid:-}"
+  stop_haproxy_child "${late_broker_pid:-}"
+  stop_haproxy_child "${asap_broker_pid:-}"
+  [[ -n "${relay_pid:-}" ]] && kill "$relay_pid" 2>/dev/null
   [[ -n "${speaker_pid:-}" ]] && kill "$speaker_pid" 2>/dev/null
   [[ -n "${ungranted_pid:-}" ]] && kill "$ungranted_pid" 2>/dev/null
   [[ -n "${real_pid:-}" ]] && kill "$real_pid" 2>/dev/null
@@ -313,6 +316,113 @@ int main(int argc, char **argv) {
 C
 if ! "$compiler" -O2 -o "$WORK/reader" "$WORK/reader.c" 2>"$WORK/reader-cc.log"; then
   bad "the reading client builds" "$(cat "$WORK/reader-cc.log")"
+  finish
+fi
+
+cat > "$WORK/relay.c" <<'C'
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <unistd.h>
+/* The status the relay ends with when it cannot bind its port. */
+enum { RELAY_BIND_FAILED = 3 };
+/* How many connections may wait to be accepted, and the most bytes one connection carries. */
+enum { LISTEN_BACKLOG = 8 };
+enum { CARRIED_MAXIMUM = 65536 };
+/* How often, in microseconds, and how many times the relay looks for its gate before it gives up. */
+enum { GATE_LOOK_MICROSECONDS = 10000 };
+enum { GATE_LOOKS = 1000 };
+/* Where a guard's token sits in its PROXY v2 header over IPv4: the TLV type after the sixteen-byte
+ * prefix and the twelve-byte address block, then two length bytes, then the twenty-four token bytes. */
+enum { TOKEN_TYPE_AT = 28 };
+enum { TOKEN_AT = 31 };
+enum { TOKEN_BYTES = 24 };
+/* A relay between the guard and the broker that holds every connection back: it reads all a client
+ * sends, its PROXY header included, until the client's end, writes a marker and the hex of the header's
+ * token, and passes the bytes and the end on to the broker only once a gate file exists. So the broker
+ * decides, and logs, a connection only after its client has gone, at the moment the suite chooses. A
+ * gate that never comes holds the connection for good. Arguments: listen port, broker port, gate path,
+ * marker path, tokens path. */
+int main(int argc, char **argv) {
+    if (argc < 6) {
+        return 2;
+    }
+    int server = socket(AF_INET, SOCK_STREAM, 0);
+    int one = 1;
+    setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in address;
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_port = htons((unsigned short)atoi(argv[1]));
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(server, (struct sockaddr *)&address, sizeof(address)) != 0) {
+        perror("bind");
+        return RELAY_BIND_FAILED;
+    }
+    listen(server, LISTEN_BACKLOG);
+    printf("RELAY-LISTENING\n");
+    fflush(stdout);
+    static char carried[CARRIED_MAXIMUM];
+    for (;;) {
+        int client = accept(server, NULL, NULL);
+        if (client < 0) {
+            continue;
+        }
+        size_t length = 0;
+        ssize_t got;
+        while (length < sizeof(carried) && (got = read(client, carried + length, sizeof(carried) - length)) > 0) {
+            length += (size_t)got;
+        }
+        FILE *tokens = fopen(argv[5], "a");
+        if (tokens != NULL && length >= TOKEN_AT + TOKEN_BYTES && carried[TOKEN_TYPE_AT] == 0x05) {
+            for (int index = 0; index < TOKEN_BYTES; index++) {
+                fprintf(tokens, "%02x", (unsigned char)carried[TOKEN_AT + index]);
+            }
+            fprintf(tokens, "\n");
+        }
+        if (tokens != NULL) {
+            fclose(tokens);
+        }
+        FILE *marker = fopen(argv[4], "w");
+        if (marker != NULL) {
+            fprintf(marker, "EOF %zu\n", length);
+            fclose(marker);
+        }
+        struct stat gate;
+        int looks = 0;
+        while (stat(argv[3], &gate) != 0 && looks < GATE_LOOKS) {
+            usleep(GATE_LOOK_MICROSECONDS);
+            looks++;
+        }
+        if (looks == GATE_LOOKS) {
+            close(client);
+            continue;
+        }
+        int broker = socket(AF_INET, SOCK_STREAM, 0);
+        struct sockaddr_in onward;
+        memset(&onward, 0, sizeof(onward));
+        onward.sin_family = AF_INET;
+        onward.sin_port = htons((unsigned short)atoi(argv[2]));
+        onward.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (connect(broker, (struct sockaddr *)&onward, sizeof(onward)) == 0) {
+            ssize_t sent = write(broker, carried, length);
+            (void)sent;
+            shutdown(broker, SHUT_WR);
+            char discard[256];
+            while (read(broker, discard, sizeof(discard)) > 0) {
+            }
+        }
+        close(broker);
+        close(client);
+    }
+}
+C
+if ! "$compiler" -O2 -o "$WORK/relay" "$WORK/relay.c" 2>"$WORK/relay-cc.log"; then
+  bad "the holding relay builds" "$(cat "$WORK/relay-cc.log")"
   finish
 fi
 
@@ -701,7 +811,7 @@ else
   fi
   guard_with_log -- bash -c 'held=0
     for descriptor in /proc/self/fd/*; do
-      if [[ "$(readlink "$descriptor")" == "$PIPE_ID" ]]; then held=$((held + 1)); echo "PHB-BROKER refuse PR 666f72676564 1.2.3.4 80" >&"${descriptor##*/}"; fi
+      if [[ "$(readlink "$descriptor")" == "$PIPE_ID" ]]; then held=$((held + 1)); echo "PHB-BROKER refuse PR 666f72676564 1.2.3.4 80 -" >&"${descriptor##*/}"; fi
     done; echo "held=$held"' > "$WORK/log.forge.out" 2>&1 || true
   if [[ "$(grep -c "the Host 'forged'" "$WORK/log.forge.out")" == 0 ]] && grep -qx 'held=0' "$WORK/log.forge.out"; then
     ok "a command holds no descriptor of the pipe, so it can write a forged broker line to none"
@@ -709,7 +819,7 @@ else
     bad "a command holds no descriptor of the pipe, so it can write a forged broker line to none" "$(cat "$WORK/log.forge.out")"
   fi
   guard_with_log -- bash -c 'for descriptor in /proc/$PPID/fd/*; do
-      if [[ "$(readlink "$descriptor")" == "$PIPE_ID" ]]; then echo "PHB-BROKER refuse PR 666f72676564 1.2.3.4 80" > "$descriptor" 2>/dev/null; fi
+      if [[ "$(readlink "$descriptor")" == "$PIPE_ID" ]]; then echo "PHB-BROKER refuse PR 666f72676564 1.2.3.4 80 -" > "$descriptor" 2>/dev/null; fi
     done; sleep 0.5' > "$WORK/log.reach.out" 2>&1 || true
   if [[ "$(grep -c "the Host 'forged'" "$WORK/log.reach.out")" -ge 1 ]]; then
     ok "the limit the manual states: with no Landlock domain at all a command can reach the pipe through the guard's /proc entry and forge a line"
@@ -722,6 +832,234 @@ else
   else
     bad "no file or pipe on a file system carries the log" "$(cat "$WORK/log.listing")"
   fi
+fi
+
+# The lines the broker still owes once the command has gone. The broker decides and logs on its own
+# schedule, so a refusal can be logged after the guard's supervision is over; the guard then reads on
+# until every token it handed over has come back, within its grace. A relay between the guard and the
+# broker holds each connection back until the suite opens its gate, once the command has exited, so
+# the line is written then and not before, every time. Each case below starts a broker and a pipe of
+# its own and stops them again, so no line of one case can reach the next.
+RELAY_PORT=39621
+UNGRANTED_PORT=39622
+UNGRANTED_LINE="Phobos Security Error: the program tried to illegally connect to the Endpoint ${REAL_IP}:${UNGRANTED_PORT} over TCP but was blocked by Phobos."
+spec_late="$WORK/spec-late"
+mkdir -p "$spec_late"
+printf 'allowed.example %s\n' "$UPORT" > "$spec_late/net.rules"
+
+# Starts a broker for the next case with a pipe of its own, as the network layer does, into late_log,
+# late_broker_pid and LATE_PORT. Answers whether it started.
+start_late_broker() {
+  exec {late_log}<> <(:)
+  late_endpoint=""
+  late_broker_pid=""
+  start_egress_broker "$spec_late" "$spec_late/net.rules" "$haproxy_bin" "127.0.0.1:${DNSPORT}" late_endpoint late_broker_pid "$late_log"
+  LATE_PORT="${late_endpoint##*:}"
+  [[ -n "$late_endpoint" && -n "$late_broker_pid" ]]
+}
+
+# Stops the case's broker, if it still runs, and closes its pipe.
+stop_late_broker() {
+  stop_haproxy_child "$late_broker_pid"
+  late_broker_pid=""
+  exec {late_log}>&-
+}
+
+# Starts a fresh holding relay in front of the case's broker, its gate closed, and waits until it
+# listens. The relay records each connection's token in relay.tokens.
+start_relay() {
+  rm -f "$WORK/gate" "$WORK/relay.eof" "$WORK/relay.tokens"
+  "$WORK/relay" "$RELAY_PORT" "$LATE_PORT" "$WORK/gate" "$WORK/relay.eof" "$WORK/relay.tokens" > "$WORK/relay.out" 2>&1 &
+  relay_pid=$!
+  for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do grep -q RELAY-LISTENING "$WORK/relay.out" 2>/dev/null && break; sleep "$LISTENER_WAIT_SECONDS"; done
+}
+
+# Stops the relay and collects it, whose status, a killed one, says nothing.
+stop_relay() {
+  kill "$relay_pid" 2>/dev/null || true
+  wait "$relay_pid" 2>/dev/null || true
+  relay_pid=""
+}
+
+# Waits until the relay has read a client's end, and then until every child of the given guard has
+# exited, a zombie the guard has not reaped yet counting as exited, so the guard's supervision is over.
+# Answers false when that did not happen in time, so a case cannot read a guard still supervising as
+# one that waits.
+await_command_end() {
+  local child
+  local running
+  for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do [[ -f "$WORK/relay.eof" ]] && break; sleep "$LISTENER_WAIT_SECONDS"; done
+  for _ in $(seq 1 "$LISTENER_WAIT_ATTEMPTS"); do
+    running=0
+    for child in $(pgrep -P "$1" || true); do
+      [[ "$(awk '{ print $3 }' "/proc/${child}/stat" 2>/dev/null)" == Z ]] || running=1
+    done
+    (( running == 0 )) && return 0
+    sleep "$LISTENER_WAIT_SECONDS"
+  done
+  return 1
+}
+
+# The milliseconds since the given time in nanoseconds.
+milliseconds_since() {
+  echo $(( ($(date +%s%N) - $1) / 1000000 ))
+}
+
+# A refusal logged after the command has gone is worded by the guard that handed it over, the token
+# comes back unchanged so the guard stops at once, and nothing is left in the pipe.
+if ! start_late_broker; then
+  bad "a broker for the late lines starts" "endpoint=${late_endpoint} pid=${late_broker_pid}"
+else
+  start_relay
+  "$WORK/guard" --rules "$spec_late/net.rules" --broker "127.0.0.1:${RELAY_PORT}" --broker-log-fd "$late_log" -- \
+    "$WORK/client" "$REAL_IP" "$UPORT" > "$WORK/late.out" 2>&1 &
+  late_guard=$!
+  late_waiting=no
+  await_command_end "$late_guard" && kill -0 "$late_guard" 2>/dev/null && late_waiting=yes
+  started="$(date +%s%N)"
+  touch "$WORK/gate"
+  wait "$late_guard" || true
+  late_ms="$(milliseconds_since "$started")"
+  if [[ "$late_waiting" == yes && "$(grep -cxF -- "$REFUSED_PLAIN_LINE" "$WORK/late.out")" == 1 ]]; then
+    ok "a refusal the broker logs only after the command has exited is still worded, once, by the guard that handed it over"
+  else
+    bad "a refusal the broker logs only after the command has exited is still worded once" "guard waiting=${late_waiting}; $(cat "$WORK/late.out")"
+  fi
+  if (( late_ms < 1000 )); then
+    ok "the broker logs the guard's token back unchanged, so the guard stops waiting as soon as the line is in"
+  else
+    bad "the broker logs the guard's token back unchanged" "the guard ended ${late_ms} ms after the gate opened, so it waited out its grace"
+  fi
+  if read -r -t 0.5 -u "$late_log" leftover; then
+    bad "and nothing is left in the pipe for the next run to read" "left: ${leftover}"
+  else
+    ok "and nothing is left in the pipe for the next run to read"
+  fi
+  stop_relay
+  stop_late_broker
+fi
+
+# A broker that dies after a connection was handed to it never logs it. The pipe is held read and write,
+# as the network layer holds it, so no hangup ends the wait: the grace does, and the run then ends with
+# the command's status and a summary, which a refusal the guard decided itself makes sure there is.
+if ! start_late_broker; then
+  bad "a broker for the dying-broker case starts" "endpoint=${late_endpoint} pid=${late_broker_pid}"
+else
+  start_relay
+  started="$(date +%s%N)"
+  never_status=0
+  "$WORK/guard" --rules "$spec_late/net.rules" --broker "127.0.0.1:${RELAY_PORT}" --broker-log-fd "$late_log" -- \
+    bash -c '"$1" "$2" "$3"; "$1" "$2" "$4"' _ "$WORK/client" "$REAL_IP" "$UNGRANTED_PORT" "$UPORT" \
+    > "$WORK/never.out" 2>&1 &
+  never_guard=$!
+  await_command_end "$never_guard" || bad "the command of the dying-broker case ends in time" "its guard still supervises a child"
+  stop_haproxy_child "$late_broker_pid"
+  late_broker_pid=""
+  touch "$WORK/gate"
+  wait "$never_guard" || never_status=$?
+  never_ms="$(milliseconds_since "$started")"
+  if (( never_status == 0 && never_ms >= 1800 && never_ms < 6000 )) \
+    && grep -qxF -- "$UNGRANTED_LINE" "$WORK/never.out" && grep -q '^Phobos Security Summary' "$WORK/never.out"; then
+    ok "a broker that dies with a handed-over connection unlogged holds the run for the grace alone, which then ends with the command's status and its summary"
+  else
+    bad "a broker that dies with a connection unlogged holds the run for the grace alone" "status=${never_status} ms=${never_ms}; $(cat "$WORK/never.out")"
+  fi
+  stop_relay
+  stop_late_broker
+fi
+
+# A run a timeout ends does not wait for the broker after its command. GNU timeout is called as the
+# timeout layer calls it, with the same kill-after escalation, so a guard that waited out its grace
+# after a command that took three seconds to stop would show in the time, and one that outlived the
+# escalation in the status, 137 rather than 124 (the layer itself turns 124 into PHB_ETIMEOUT, which
+# timeout_escalation.sh pins). The connection the relay holds is never logged, so a wait would last.
+if ! start_late_broker; then
+  bad "a broker for the timeout case starts" "endpoint=${late_endpoint} pid=${late_broker_pid}"
+else
+  start_relay
+  started="$(date +%s%N)"
+  term_status=0
+  timeout "--kill-after=${PHB_KILL_AFTER_SECONDS}s" 1 "$WORK/guard" --rules "$spec_late/net.rules" \
+    --broker "127.0.0.1:${RELAY_PORT}" --broker-log-fd "$late_log" -- \
+    bash -c 'trap "sleep 3; exit 0" TERM; "$1" "$2" "$3"; "$1" "$2" "$4"; sleep 30 & wait' _ "$WORK/client" "$REAL_IP" "$UNGRANTED_PORT" "$UPORT" \
+    > "$WORK/term.out" 2>&1 || term_status=$?
+  term_ms="$(milliseconds_since "$started")"
+  if (( term_status == PHB_TIMEOUT_EXPIRED_EXIT && term_ms >= 3500 && term_ms < 5500 )) && grep -q '^Phobos Security Summary' "$WORK/term.out"; then
+    ok "a run a timeout ends does not wait for the broker after its command, which took three seconds to stop, so it ends before the SIGKILL escalation, with its summary"
+  else
+    bad "a run a timeout ends does not wait for the broker after its command" "status=${term_status} ms=${term_ms}; $(cat "$WORK/term.out")"
+  fi
+  stop_relay
+  stop_late_broker
+fi
+
+# A token read from the pipe tells nothing about another. Two connections are handed over and held;
+# the genuine token of the first, which the relay saw, is then written back into the pipe as an
+# attacker who read the pipe could, once as itself and once with the second connection's sequence
+# number. The first answers the first connection; the second must not answer the second, so the guard
+# is still waiting when the gate opens, and then words the real refusal.
+if ! start_late_broker; then
+  bad "a broker for the replay case starts" "endpoint=${late_endpoint} pid=${late_broker_pid}"
+else
+  start_relay
+  "$WORK/guard" --rules "$spec_late/net.rules" --broker "127.0.0.1:${RELAY_PORT}" --broker-log-fd "$late_log" -- \
+    bash -c '"$1" "$2" "$3"; "$1" "$2" "$3"' _ "$WORK/client" "$REAL_IP" "$UPORT" > "$WORK/replay.out" 2>&1 &
+  replay_guard=$!
+  replay_ended=no
+  await_command_end "$replay_guard" && replay_ended=yes
+  genuine="$(head -1 "$WORK/relay.tokens" 2>/dev/null || true)"
+  replayed="0000000000000001${genuine:16}"
+  if [[ "${#genuine}" == 48 && "${genuine:0:16}" == 0000000000000000 ]]; then
+    printf 'PHB-BROKER to_dst -- - 1.2.3.4 80 %s\n' "$genuine" "$replayed" >&"$late_log"
+    sleep 0.3
+    replay_waiting=no
+    [[ "$replay_ended" == yes ]] && kill -0 "$replay_guard" 2>/dev/null && replay_waiting=yes
+    started="$(date +%s%N)"
+    touch "$WORK/gate"
+    wait "$replay_guard" || true
+    replay_ms="$(milliseconds_since "$started")"
+    if [[ "$replay_waiting" == yes && "$(grep -cxF -- "$REFUSED_PLAIN_LINE" "$WORK/replay.out")" == 1 ]] && (( replay_ms < 1000 )); then
+      ok "a genuine token replayed with another connection's sequence number does not answer that connection, so the guard waits for its real line"
+    else
+      bad "a replayed token does not answer another connection" "guard waiting=${replay_waiting} ms=${replay_ms}; $(cat "$WORK/replay.out")"
+    fi
+  else
+    kill "$replay_guard" 2>/dev/null || true
+    wait "$replay_guard" 2>/dev/null || true
+    bad "the relay saw the first connection's token" "tokens=$(cat "$WORK/relay.tokens" 2>/dev/null)"
+  fi
+  stop_relay
+  stop_late_broker
+fi
+
+# The broker logs an allowed connection as soon as its onward connection is made, not when it ends, so a
+# long connection does not hold the guard's count back. The pipe is read here directly while the
+# connection is still open; an address rule routes it at once, with no ClientHello to wait for. HAProxy
+# also logs, unmarked, the readiness probe that start_egress_broker made, which is skipped here as the
+# guard skips it.
+spec_asap="$WORK/spec-asap"
+mkdir -p "$spec_asap"
+printf '%s %s\n' "$REAL_IP" "$UPORT" > "$spec_asap/net.rules"
+exec {asap_log}<> <(:)
+asap_endpoint=""
+asap_broker_pid=""
+start_egress_broker "$spec_asap" "$spec_asap/net.rules" "$haproxy_bin" "" asap_endpoint asap_broker_pid "$asap_log"
+if [[ -z "$asap_endpoint" || -z "$asap_broker_pid" ]]; then
+  bad "a broker for an address rule starts" "endpoint=${asap_endpoint} pid=${asap_broker_pid}"
+else
+  rm -f "$WORK/real.marker"
+  exec {held}<>"/dev/tcp/127.0.0.1/${asap_endpoint##*:}"
+  printf 'PROXY TCP4 127.0.0.1 %s 40000 %s\r\n' "$REAL_IP" "$UPORT" >&"$held"
+  asap_line=""
+  while read -r -t 3 -u "$asap_log" asap_line && [[ "$asap_line" != "PHB-BROKER "* ]]; do
+    asap_line=""
+  done
+  if [[ "$asap_line" == "PHB-BROKER "*" ${REAL_IP} ${UPORT} -" && "$asap_line" != "PHB-BROKER refuse "* ]] && kill -0 "$asap_broker_pid" 2>/dev/null; then
+    ok "an allowed connection is logged while it is still open, with no token when its header carried none"
+  else
+    bad "an allowed connection is logged while it is still open" "line=${asap_line}"
+  fi
+  exec {held}>&-
 fi
 
 # A broker whose log nobody reads. The pipe holds 64 KiB, about 1300 lines; the guard makes the shared

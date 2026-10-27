@@ -86,7 +86,7 @@ static void answer_continue(int notify_descriptor, struct seccomp_notif_resp *re
  * network layer is the only one that refuses them (A.5.8, point 9). */
 static bool group_lock_counted_for_timeout = false;
 
-/* The descriptor of the pipe the egress broker logs its refusals to, or NO_BROKER_LOG. */
+/* The descriptor of the pipe the egress broker logs its connections to, or NO_BROKER_LOG. */
 static int broker_log_descriptor = -1;
 
 void configure_group_lock_attribution(bool timeout_layer) {
@@ -179,9 +179,13 @@ static constexpr uint8_t PROXY_V2_TCP_OVER_IPV6 = 0x21;
 /* The address block that follows the sixteen-byte prefix: two addresses and two ports. */
 static constexpr uint16_t PROXY_V2_IPV4_BLOCK = 12;
 static constexpr uint16_t PROXY_V2_IPV6_BLOCK = 36;
-/* The prefix length and the largest header, prefix plus the IPv6 block. */
+/* The TLV that carries a handoff's token to the broker, PP2_TYPE_UNIQUE_ID, which HAProxy logs back as
+ * fc_pp_unique_id, and the bytes it adds: its type, its two-byte length and the token. */
+static constexpr uint8_t PROXY_V2_TYPE_UNIQUE_ID = 0x05;
+static constexpr size_t PROXY_V2_TOKEN_TLV = 3 + BROKER_TOKEN_SIZE;
+/* The prefix length and the largest header, prefix plus the IPv6 block plus the token. */
 static constexpr size_t PROXY_V2_PREFIX = 16;
-static constexpr size_t PROXY_V2_HEADER_MAXIMUM = PROXY_V2_PREFIX + PROXY_V2_IPV6_BLOCK;
+static constexpr size_t PROXY_V2_HEADER_MAXIMUM = PROXY_V2_PREFIX + PROXY_V2_IPV6_BLOCK + PROXY_V2_TOKEN_TLV;
 /* Room for a broker's host text, an IP literal at most, IPv6's forty-five characters and a null. */
 static constexpr size_t BROKER_HOST_TEXT = 64;
 
@@ -241,21 +245,15 @@ bool configure_broker(const char *endpoint) {
     return true;
 }
 
-/* Builds into buffer a PROXY protocol version 2 header that names the original destination, so
- * the broker connects onward to it although the guard connected to the broker. The source is the
- * loopback of the destination's family with port zero: the broker routes by the destination, and
- * the guard has no source of the command's to name. Returns the header length. Assumes buffer
- * holds PROXY_V2_HEADER_MAXIMUM bytes and that the destination is IPv4 or IPv6, which service_connect
- * has already established before any connection is made on the command's behalf. */
-static size_t build_proxy_v2_header(uint8_t *buffer, const struct sockaddr_storage *destination) {
-    memcpy(buffer, PROXY_V2_SIGNATURE, sizeof(PROXY_V2_SIGNATURE));
-    buffer[12] = PROXY_V2_VERSION_COMMAND;
+/* Writes into buffer the address block of a PROXY protocol version 2 header for the destination, its
+ * transport byte included, and returns the header's length so far. The source is the loopback of the
+ * destination's family with port zero: the broker routes by the destination, and the guard has no
+ * source of the command's to name. */
+static size_t build_proxy_v2_addresses(uint8_t *buffer, const struct sockaddr_storage *destination) {
     uint16_t source_port = 0;
     if (destination->ss_family == AF_INET) {
         const struct sockaddr_in *sin = (const struct sockaddr_in *)destination;
         buffer[13] = PROXY_V2_TCP_OVER_IPV4;
-        buffer[14] = (uint8_t)(PROXY_V2_IPV4_BLOCK >> 8);
-        buffer[15] = (uint8_t)(PROXY_V2_IPV4_BLOCK & 0xff);
         uint32_t loopback = htonl(INADDR_LOOPBACK);
         memcpy(&buffer[16], &loopback, 4);
         memcpy(&buffer[20], &sin->sin_addr, 4);
@@ -265,8 +263,6 @@ static size_t build_proxy_v2_header(uint8_t *buffer, const struct sockaddr_stora
     }
     const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)destination;
     buffer[13] = PROXY_V2_TCP_OVER_IPV6;
-    buffer[14] = (uint8_t)(PROXY_V2_IPV6_BLOCK >> 8);
-    buffer[15] = (uint8_t)(PROXY_V2_IPV6_BLOCK & 0xff);
     memcpy(&buffer[16], &in6addr_loopback, 16);
     memcpy(&buffer[32], &sin6->sin6_addr, 16);
     memcpy(&buffer[48], &source_port, 2);
@@ -274,11 +270,36 @@ static size_t build_proxy_v2_header(uint8_t *buffer, const struct sockaddr_stora
     return PROXY_V2_PREFIX + PROXY_V2_IPV6_BLOCK;
 }
 
-/* Sends the whole PROXY header on the socket before the command's own bytes, retrying a short
- * write and an interruption. Returns whether all of it was sent. */
-static bool send_proxy_v2_header(int socket_descriptor, const struct sockaddr_storage *destination) {
+/* Builds into buffer a PROXY protocol version 2 header that names the original destination, so
+ * the broker connects onward to it although the guard connected to the broker, and that carries the
+ * handoff's token after the addresses when there is one, so the broker logs it back. Returns the
+ * header length. Assumes buffer holds PROXY_V2_HEADER_MAXIMUM bytes and that the destination is IPv4
+ * or IPv6, which service_connect has already established before any connection is made on the
+ * command's behalf. */
+static size_t build_proxy_v2_header(uint8_t *buffer, const struct sockaddr_storage *destination,
+                                    const uint8_t *token) {
+    memcpy(buffer, PROXY_V2_SIGNATURE, sizeof(PROXY_V2_SIGNATURE));
+    buffer[12] = PROXY_V2_VERSION_COMMAND;
+    size_t length = build_proxy_v2_addresses(buffer, destination);
+    if (token != nullptr) {
+        buffer[length] = PROXY_V2_TYPE_UNIQUE_ID;
+        buffer[length + 1] = 0;
+        buffer[length + 2] = (uint8_t)BROKER_TOKEN_SIZE;
+        memcpy(&buffer[length + 3], token, BROKER_TOKEN_SIZE);
+        length += PROXY_V2_TOKEN_TLV;
+    }
+    size_t block = length - PROXY_V2_PREFIX;
+    buffer[14] = (uint8_t)(block >> 8);
+    buffer[15] = (uint8_t)(block & 0xff);
+    return length;
+}
+
+/* Sends the whole PROXY header, with the token when there is one, on the socket before the command's
+ * own bytes, retrying a short write and an interruption. Returns whether all of it was sent. */
+static bool send_proxy_v2_header(int socket_descriptor, const struct sockaddr_storage *destination,
+                                 const uint8_t *token) {
     uint8_t header[PROXY_V2_HEADER_MAXIMUM];
-    size_t length = build_proxy_v2_header(header, destination);
+    size_t length = build_proxy_v2_header(header, destination, token);
     size_t sent = 0;
     while (sent < length) {
         ssize_t wrote = send(socket_descriptor, header + sent, length - sent, MSG_NOSIGNAL);
@@ -311,10 +332,15 @@ bool connect_on_behalf(int notify_descriptor, struct seccomp_notif_resp *respons
         struct sockaddr_storage destination;
         memset(&destination, 0, sizeof(destination));
         memcpy(&destination, address, length < sizeof(destination) ? length : sizeof(destination));
-        if (!send_proxy_v2_header(outward, &destination)) {
+        uint8_t token[BROKER_TOKEN_SIZE];
+        bool tokened = broker_log_descriptor >= 0 && reserve_broker_token(token);
+        if (!send_proxy_v2_header(outward, &destination, tokened ? token : nullptr)) {
             close(outward);
             answer(notify_descriptor, response, id, 0, -ECONNREFUSED);
             return false;
+        }
+        if (tokened) {
+            hand_broker_token();
         }
     }
     struct seccomp_notif_addfd addfd;
@@ -601,6 +627,12 @@ void service_one(int notify_descriptor, struct seccomp_notif *request,
     answer(notify_descriptor, response, request->id, 0, -EACCES);
 }
 
+/* Whether the broker pipe is done with: it failed, or it hung up with nothing left to read in it. A pipe
+ * that hung up with bytes still in it is kept, and read again on the next turn. */
+static bool broker_log_ended(short revents) {
+    return (revents & (POLLERR | POLLNVAL)) != 0 || (revents & (POLLHUP | POLLIN)) == POLLHUP;
+}
+
 void supervise(int notify_descriptor) {
     struct seccomp_notif_sizes sizes;
     memset(&sizes, 0, sizeof(sizes));
@@ -639,7 +671,7 @@ void supervise(int notify_descriptor) {
         if (watch[1].revents & POLLIN) {
             drain_broker_log(broker_log_descriptor);
         }
-        if (watch[1].revents & (POLLERR | POLLNVAL | POLLHUP)) {
+        if (broker_log_ended(watch[1].revents)) {
             broker_log_descriptor = -1;
         }
         if (watch[0].revents & POLLIN) {
@@ -650,7 +682,7 @@ void supervise(int notify_descriptor) {
         }
     }
     if (broker_log_descriptor >= 0) {
-        drain_broker_log(broker_log_descriptor);
+        settle_broker_log(broker_log_descriptor);
     }
     free(request);
     free(response);

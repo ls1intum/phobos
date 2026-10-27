@@ -45,6 +45,12 @@ void restore_child_signal(const struct sigaction *inherited);
  * itself does not stop of them: it stays until the command is gone, to reap it and map its status. */
 void forward_signals_to(pid_t command);
 
+/* Answers whether a forwarded signal has reached the supervisor since forward_signals_to, whether or
+ * not passing it on succeeded. Such a signal means the run is being ended from outside: GNU timeout
+ * sends its TERM to the whole group, the egress broker included, and starts the clock of its SIGKILL
+ * escalation then, so a supervisor that has one does not wait for anything after its command. */
+bool forwarded_signal_arrived(void);
+
 /* Waits for the command to end, still passing signals on while it runs, then reaps it with the
  * forwarded signals blocked and forgets it before they are let in again. Reaping frees the process
  * number for reuse, and a signal handled after that would be sent to whichever process took it.
@@ -63,5 +69,10 @@ bool send_notification_response(int notify_descriptor, struct seccomp_notif_resp
 /* The child's wait status, turned into an exit code the way a shell would: the command's own code,
  * or 128 plus the signal that ended it. */
 int exit_code_from_status(int status);
+
+#ifdef PHOBOS_CONNECT_GUARD_UNIT_TEST
+/* Forgets any forwarded signal, so each test case starts as a run that nothing has signalled. */
+void forwarded_signal_reset_for_tests(void);
+#endif
 
 #endif

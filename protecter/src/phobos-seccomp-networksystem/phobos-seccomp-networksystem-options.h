@@ -14,7 +14,7 @@
  * (--landlock-bin), which arms the reporter. report_filesystem (--report-filesystem) has the guard
  * report the filesystem layer's denials too, and group_lock_above (--group-lock-above) says the
  * timeout layer's group lock is above the guard, for the attribution of the calls it refuses.
- * broker_log_descriptor (--broker-log-fd) is the pipe the egress broker logs its refusals to, or
+ * broker_log_descriptor (--broker-log-fd) is the pipe the egress broker logs its connections to, or
  * NO_BROKER_LOG. */
 struct guard_options {
     char **command;

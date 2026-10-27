@@ -27,8 +27,9 @@ void configure_ephemeral_listen(bool allowed);
  * layer otherwise. This changes what a line counts for and nothing the guard answers. */
 void configure_group_lock_attribution(bool timeout_layer);
 
-/* Gives the guard the pipe the egress broker logs its refusals to, which supervise reads beside the
- * notification descriptor. A negative descriptor means there is no broker. */
+/* Gives the guard the pipe the egress broker logs its connections to, which supervise reads beside the
+ * notification descriptor, and has every handoff to the broker carry a token the broker logs back. A
+ * negative descriptor means there is no broker pipe, and a handoff then carries no token. */
 void configure_broker_log(int descriptor);
 
 /* The transport of one of the command's sockets: SOCK_STREAM or SOCK_DGRAM for a socket this guard
@@ -70,7 +71,8 @@ void service_one(int notify_descriptor, struct seccomp_notif *request,
 
 /* Wait on the notification descriptor and service it until the sandboxed lineage is
  * gone, which the kernel signals as a hangup once every process the filter covers
- * has exited. */
+ * has exited. With a broker pipe, then read on for the lines the broker still owes, as
+ * settle_broker_log says. */
 void supervise(int notify_descriptor);
 
 #ifdef PHOBOS_CONNECT_GUARD_UNIT_TEST
