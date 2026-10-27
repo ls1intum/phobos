@@ -17,6 +17,8 @@ static constexpr int SIGNALLED_EXIT_BASE = 128;
 /* The command the supervisor passes a caller's signals on to, and the signals it passes on. */
 static pid_t command_to_signal = 0;
 static constexpr int FORWARDED_SIGNALS[] = { SIGTERM, SIGHUP, SIGINT, SIGQUIT };
+/* Set by the handler the moment a forwarded signal arrives, and never cleared in a run. */
+static volatile sig_atomic_t signal_forwarded = 0;
 
 bool send_descriptor(int socket_descriptor, int descriptor_to_send) {
     char payload = 'N';
@@ -88,8 +90,9 @@ void block_forwarded_signals(sigset_t *forwarded, sigset_t *before) {
     sigprocmask(SIG_BLOCK, forwarded, before);
 }
 
-/* Passes a signal the supervisor received on to the command. */
+/* Passes a signal the supervisor received on to the command, and remembers that one came. */
 static void forward_signal_to_command(int number) {
+    signal_forwarded = 1;
     pid_t target = command_to_signal;
     if (target > 0) {
         kill(target, number);
@@ -101,6 +104,10 @@ void forward_signals_to(pid_t command) {
     for (size_t index = 0; index < sizeof(FORWARDED_SIGNALS) / sizeof(FORWARDED_SIGNALS[0]); index++) {
         signal(FORWARDED_SIGNALS[index], forward_signal_to_command);
     }
+}
+
+bool forwarded_signal_arrived(void) {
+    return signal_forwarded != 0;
 }
 
 void take_default_child_signal(struct sigaction *inherited) {
@@ -146,3 +153,9 @@ int exit_code_from_status(int status) {
     }
     return EXIT_CODE_SETUP_ERROR;
 }
+
+#ifdef PHOBOS_CONNECT_GUARD_UNIT_TEST
+void forwarded_signal_reset_for_tests(void) {
+    signal_forwarded = 0;
+}
+#endif

@@ -453,7 +453,7 @@ haproxy_allow_rules() {
 # Assumes phobos-common.sh was sourced, so PHB_SPEC_SCRATCH is set. Takes the specification
 # directory, the rules, the haproxy binary, the resolver (empty for none), then the names of the
 # variables that receive the endpoint and the process id, and last, optionally, the number of the
-# descriptor the broker logs its refusals to. That descriptor is inherited from the caller, which
+# descriptor the broker logs its connections to. That descriptor is inherited from the caller, which
 # opened it, and nothing else is passed: no path is written for the log, so no policy can grant
 # the command access to it.
 # The two results are only assigned here, through namerefs, and read by the caller, which the
@@ -523,13 +523,17 @@ emit_broker_resolvers() {
 # resolver ("ip" or "ip:port", empty when no exact-name rule needs one), and optionally the number
 # of the descriptor to log refusals to. An exact-name rule needs
 # the resolvers section; the network layer guarantees a resolver is given whenever one is present.
-# With a descriptor, the frontend logs each connection it does not complete normally to it as one
-# raw line of machine fields, "PHB-BROKER <backend> <termination state> <hex host name> <address>
-# <port>", which the connect guard reads and words as a blocked action. The host name is hex, so
-# a name the program chose cannot inject anything into the line, and a connection that completed
-# normally is not logged. The name is kept in a variable while the ClientHello is inspected,
-# because HAProxy cannot read the request buffer when the line is written, at the end of the
-# connection; a connection that sent no name logs a dash.
+# With a descriptor, the frontend logs every connection to it as one raw line of machine fields,
+# "PHB-BROKER <backend> <termination state> <hex host name> <address> <port> <hex token>", which the
+# connect guard reads, wording a refusal as a blocked action. The host name is hex, so a name the
+# program chose cannot inject anything into the line. The token is the one the guard put into the
+# connection's PROXY header, which the guard counts back so it can wait for a refusal logged after
+# the command has ended; a connection whose header carried none logs a dash. Every connection is
+# logged, not only a refused one, so each token comes back, and logged as soon as its onward
+# connection is made (logasap) rather than when it ends, so a long allowed connection does not hold
+# the guard's count back; a refused connection has no onward connection and is logged as it ends,
+# at once. The name is kept in a variable while the ClientHello is inspected, because HAProxy cannot
+# read the request buffer when the line is written; a connection that sent no name logs a dash.
 # A host name a rule allows that the broker could not resolve is refused too, but not by the policy,
 # so its line carries the marker PHB-BROKER-UNRESOLVED instead, which the guard does not word.
 # A wildcard host name ends the run before anything is written, so a half-written config never
@@ -556,8 +560,8 @@ build_haproxy_conf() {
     fi
     printf 'frontend broker\n'
     if [[ -n "$log_descriptor" ]]; then
-      printf '    option dontlog-normal\n'
-      printf '    log-format "%%[var(txn.marker)] %%b %%ts %%[var(txn.sni),hex] %%[dst] %%[dst_port]"\n'
+      printf '    option logasap\n'
+      printf '    log-format "%%[var(txn.marker)] %%b %%ts %%[var(txn.sni),hex] %%[dst] %%[dst_port] %%[fc_pp_unique_id,hex]"\n'
     fi
     printf '    bind %s accept-proxy\n' "$listen"
     printf '    tcp-request inspect-delay 5s\n'

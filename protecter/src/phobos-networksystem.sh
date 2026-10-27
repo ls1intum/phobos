@@ -95,8 +95,11 @@ WHAT IT REPORTS
   It words the connections and datagrams it refuses, the sockets it will not open, a listen on a
   socket bound to no port, the ports Landlock refuses to bind, and the calls its filter refuses
   outright (io_uring, setsid, setpgid, a foreign ABI). With a [connect] rule that names a host, the
-  egress broker logs each TLS host name it refuses to an anonymous pipe that only it and the guard
-  hold, and the guard words those too. When the run ends, one line, Phobos Security Summary,
+  egress broker logs every connection the guard hands it to an anonymous pipe that only it and the
+  guard hold, and the guard words each TLS host name it refuses too. The broker can log a refusal
+  after the command has ended, so the guard reads on for up to two seconds, until the line of every
+  connection it handed over has come back; a run that a signal is ending does not wait. When the run
+  ends, one line, Phobos Security Summary,
   counts what was blocked per layer. Every line is evidence for a person reading the log, not
   proof, because the command writes to the same stderr; and a command that could open the
   guard's descriptor through /proc could forge a broker line (no path names the pipe, and in the
@@ -232,7 +235,7 @@ RULES="${SPEC_DIR}/net.rules"
 # on its own may never have met the policy parser, and the helpers below skip UDP rows.
 refuse_wildcard_connect_names "$RULES"
 want_broker=0
-# The pipe the egress broker logs its refusals to, once there is a broker; empty until then.
+# The pipe the egress broker logs its connections to, once there is a broker; empty until then.
 broker_log=""
 mapfile -t name_rules < <(name_connect_rules "$RULES")
 if (( ${#name_rules[@]} > 0 )); then want_broker=1; fi

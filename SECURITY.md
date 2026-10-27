@@ -245,7 +245,10 @@ What a line proves is limited, and is meant for the person reading a log:
   HAProxy, the connect guard and the network layer's own shell hold, so no path names it and no
   policy can grant the command access. A command that could open the guard's descriptor through
   `/proc/<pid>/fd` could write a forged broker line, which changes what is printed and what the
-  network count says, and nothing the broker allows or refuses. Against the bare guard, with no
+  network count says, and nothing the broker allows or refuses. It could also read lines from the
+  pipe before the guard does, and so keep them from being worded or make the end of the run wait
+  out its grace; it cannot end that wait early, because each handoff's token is drawn at random for
+  that handoff alone and a token read from the pipe tells nothing about another. Against the bare guard, with no
   Landlock domain at all, it can. Under `phobos.sh` it could not in the measured runs, with every
   layer on and with `-nfr`, but what stops it is the kernel's own access rule for another process's
   `/proc` entries, not something Phobos enforces, so nothing here relies on it.
@@ -257,8 +260,16 @@ What a line proves is limited, and is meant for the person reading a log:
   profile), an `openat2` with resolve flags, an `O_TMPFILE` open, a call relative to a deleted
   directory, the interpreter the kernel opens for an `execve`, a `connect` to a UNIX socket under
   `-nnr`, process, open file and memory limits (they surface as errors the command handles), a
-  refused inbound connection (the actor is an outside client) and a broker line lost to a full
-  pipe. A doubt always ends in silence, so a run without a line may still have been refused something.
+  refused inbound connection (the actor is an outside client), a broker line lost to a full
+  pipe, one the broker writes more than two seconds after the command has ended, one owed when the
+  run was being ended by a signal (the guard then waits for nothing), and one for a handoff the
+  broker never turned into a connection. A doubt always ends in silence, so a run without a line may
+  still have been refused something.
+- The broker logs every connection the guard hands it, allowed or refused, each with a token the
+  guard counts back, and the guard reads on after the command has ended until every token has come
+  back, for at most two seconds. So a run with a [connect] rule that names a host can end up to two
+  seconds later than its command, when a connection the command made was still being resolved or
+  connected onward as it ended. Only a refusal is worded.
 
 ## Inbound filtering assumes a networked container, and is defence in depth, not a boundary
 

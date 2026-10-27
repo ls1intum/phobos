@@ -167,10 +167,14 @@ The connect guard is the run's one supervisor when this layer is on, so it print
   no UNIX connect.
 - **A port Landlock refuses to bind.** The guard sees the `bind` call, judges the port against the
   network ruleset, and words a refusal as `bind the Port 8080 over TCP`.
-- **The egress broker.** The broker logs each TLS host name it refuses, or each connection with no
-  name to an address no rule allows, to an anonymous pipe that no path names. Only HAProxy and the
-  guard hold it, and the guard words each as `connect to the Host 'example.org' on Port 443`. The
-  host name is hex in the log, so a name the program chose cannot inject anything into the line.
+- **The egress broker.** The broker logs every connection the guard hands it to an anonymous pipe
+  that no path names. Only HAProxy and the guard hold it, and the guard words each TLS host name the
+  broker refuses, or each connection with no name to an address no rule allows, as
+  `connect to the Host 'example.org' on Port 443`. The host name is hex in the log, so a name the
+  program chose cannot inject anything into the line. The broker can log a refusal after the command
+  has ended, so each connection carries a random token the broker logs back, and the guard reads on
+  after the command for up to two seconds, until every token has come back. A run that a signal is
+  ending does not wait.
   With the filesystem layer off, a command that runs as the same user can still write to the pipe
   through `/proc` and forge such a line. A forged line changes the output and never the broker's
   decisions.

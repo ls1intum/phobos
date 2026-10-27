@@ -185,13 +185,14 @@ has "it has a destination backend" "$conf" "backend to_dst"
 has "it has a refuse backend" "$conf" "backend refuse"
 
 echo
-echo "== the broker logs its refusals to a descriptor only when it is given one =="
+echo "== the broker logs every connection to a descriptor only when it is given one =="
 printf 'repo.maven.apache.org 443\n' > "$WORK/net.rules"
 build_haproxy_conf "$WORK/net.rules" "$WORK/haproxy.cfg" "127.0.0.1:3128" "127.0.0.11:53" 11
 conf="$(cat "$WORK/haproxy.cfg")"
 has "it logs raw lines to the descriptor given" "$conf" "log fd@11 format raw local0"
-has "it does not log a connection that completed normally" "$conf" "option dontlog-normal"
-has "and logs machine fields only: marker, backend, termination state, hex host name, destination" "$conf" 'log-format "%[var(txn.marker)] %b %ts %[var(txn.sni),hex] %[dst] %[dst_port]"'
+has "it logs every connection, as soon as its onward connection is made, so each token comes back" "$conf" "option logasap"
+has "and never skips a connection that completed normally" "$conf" "!dontlog-normal"
+has "and logs machine fields only: marker, backend, termination state, hex host name, destination, hex token" "$conf" 'log-format "%[var(txn.marker)] %b %ts %[var(txn.sni),hex] %[dst] %[dst_port] %[fc_pp_unique_id,hex]"'
 has "the marker is the broker's own constant" "$conf" "tcp-request content set-var(txn.marker) str(PHB-BROKER)"
 has "taking the host name from a variable set while the ClientHello is inspected" "$conf" "tcp-request content set-var(txn.sni) req.ssl_sni"
 build_haproxy_conf "$WORK/net.rules" "$WORK/haproxy.cfg" "127.0.0.1:3128" "127.0.0.11:53"
@@ -200,6 +201,7 @@ has "with no descriptor it logs nothing at all" "$conf" "!log "
 has "and sets no log format" "$conf" "!log-format"
 has "nor keeps the host name in a variable" "$conf" "!set-var(txn.sni)"
 has "nor dontlog-normal" "$conf" "!dontlog-normal"
+has "nor logasap" "$conf" "!logasap"
 
 echo
 echo "== a bare ip resolver gets the default DNS port, and no resolver emits no section =="
