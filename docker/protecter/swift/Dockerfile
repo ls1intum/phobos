@@ -7,7 +7,7 @@
 # The four C programs are compiled in a stage of their own, from a Debian image, so they are built against a C library
 # and linked static-pie, which is what makes the same binaries run on the Ubuntu image below. docker/protecter/java/Dockerfile
 # says why each flag is there.
-FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS enforcers
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS enforcers
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc-14 \
