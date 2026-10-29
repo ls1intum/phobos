@@ -172,9 +172,9 @@ The connect guard is the run's one supervisor when this layer is on, so it print
   broker refuses, or each connection with no name to an address no rule allows, as
   `connect to the Host 'example.org' on Port 443`. The host name is hex in the log, so a name the
   program chose cannot inject anything into the line. The broker can log a refusal after the command
-  has ended, so each connection carries a random token the broker logs back, and the guard reads on
-  after the command for up to two seconds, until every token has come back. A run that a signal is
-  ending does not wait.
+  has ended. Each connection therefore carries a random token the broker logs back, and the guard
+  reads on after the command for up to two seconds, until every token has come back. A run that a
+  signal is ending does not wait.
   With the filesystem layer off, a command that runs as the same user can still write to the pipe
   through `/proc` and forge such a line. A forged line changes the output and never the broker's
   decisions.
