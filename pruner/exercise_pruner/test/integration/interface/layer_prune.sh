@@ -36,6 +36,8 @@ WORK="$(mktemp -d /var/tmp/layer-prune-suite.XXXXXX)" || { echo "cannot create a
 OUTPUT="${WORK}/out"
 CFG="${OUTPUT}/java-gradle_fixture.cfg"
 PROBE_CFG="${WORK}/probe.cfg"
+# Where the pruner writes each run's log (runner.Environment's log_dir), named as its record names the run.
+RUN_LOGS=/var/tmp/layer-prune-logs
 
 # Removes the working directory however the suite ends.
 cleanup() {
@@ -196,6 +198,39 @@ PY
     "containment check passed: canary /srv/phobos-prune-canary/secret" "$(tail -1 <<<"${out}")"
 }
 
+# Prints, indented, what the verification record $1 holds: why it ended, the status and verdict of each
+# baseline and merged run, and the end of the last merged run's log. The record and the logs go with the
+# container, so without this a run that did not match the reference in CI leaves nothing to say how.
+print_verification_evidence() {
+  local record="$1"
+  [[ -f "${record}" ]] || { echo "    no verification record was written"; return; }
+  python3 - "${record}" "${RUN_LOGS}" <<'PY' 2>&1 | sed 's/^/    /'
+import json
+import pathlib
+import sys
+
+record = json.load(open(sys.argv[1]))
+evidence = record.get("evidence", {})
+log = evidence.get("record", record.get("log", []))
+print("aborted:", record.get("aborted"))
+for entry in log:
+    if entry["stage"] in ("baseline", "merged verification"):
+        print(entry["stage"], entry.get("run", f"attempt {entry.get('attempt')}"), "status", entry["status"],
+              json.dumps(entry["verdict"], sort_keys=True))
+runs = [entry["run"] for entry in log if entry["stage"] == "merged verification"]
+if runs:
+    last = pathlib.Path(sys.argv[2]) / runs[-1]
+elif "log" in evidence:
+    last = pathlib.Path(evidence["log"])
+else:
+    last = None
+if last is not None and last.is_file():
+    print(f"the end of {last}:")
+    for line in last.read_text(errors="replace").splitlines()[-30:]:
+        print("  " + line)
+PY
+}
+
 # The orchestrator merges the artefacts, the fixture passes under the merged pair, and an artefact its
 # record does not vouch for stops the merge.
 check_merged_and_verified() {
@@ -216,6 +251,7 @@ check_merged_and_verified() {
     ok "the fixture passes under the merged base and its own file, every layer on"
   else
     bad "the fixture passes under the merged base and its own file, every layer on" "$(tail -3 <<<"${out}")"
+    print_verification_evidence "${WORK}/verify-out/verify/java-gradle_fixture.json"
   fi
   local narrowed="${WORK}/core-narrowed"
   cp -r "${core}" "${narrowed}"
