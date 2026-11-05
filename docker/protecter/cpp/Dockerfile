@@ -7,7 +7,7 @@
 # The four C programs are compiled in a stage of their own, from the same base image, so they are
 # built against the C library they will run with, exactly as docker/protecter/java/Dockerfile does;
 # that file says why each flag is there.
-FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS enforcers
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS enforcers
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc-14 \
@@ -41,7 +41,7 @@ RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
 # compile their C probes inside the image they test, readelf checks the hardening below, and haproxy is the egress
 # broker. cmake, g++ and Catch2 are what the C++ template's tester runs with, with make and python3; procps and openssl are what the suites
 # look for leftover processes and send a ClientHello with.
-FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \

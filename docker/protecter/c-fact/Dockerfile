@@ -12,7 +12,7 @@
 # The four C programs are compiled in a stage of their own, from the same base image, so they are
 # built against the C library they will run with, exactly as docker/protecter/java/Dockerfile does;
 # that file says why each flag is there.
-FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS enforcers
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS enforcers
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc-14 \
@@ -44,7 +44,7 @@ RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
 
 # FACT and its Python packages, installed into /opt/python in a stage of their own, so that the image the suites test
 # holds no pip and no archive.
-FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS fact
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS fact
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     python3 \
@@ -62,7 +62,7 @@ RUN mkdir /tmp/fact-source \
 # their C probes inside the image they test, readelf checks the hardening below, and haproxy is the egress broker.
 # make and python3 are what FACT runs with, libclang what it parses with; procps and openssl are what the suites look
 # for leftover processes and send a ClientHello with.
-FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
