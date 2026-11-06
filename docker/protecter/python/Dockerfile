@@ -6,7 +6,7 @@
 # The four C programs are compiled in a stage of their own, from the same base image, so they are
 # built against the C library they will run with, exactly as docker/protecter/java/Dockerfile does;
 # that file says why each flag is there.
-FROM python:3.15-slim-trixie@sha256:8c13a3f37a6a5b71498228e902c4b9f51c1f7900d49fabf71f9a650c6120e0d0 AS enforcers
+FROM python:3.15-slim-trixie@sha256:e97b88e416c3c01eb427b21fd8cd3ebf006e6ee38afcfcc3cae1c54ee2ab0a75 AS enforcers
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc-14 \
@@ -42,7 +42,7 @@ RUN gcc-14 -std=gnu23 -O2 -Wall -Wextra -static-pie -Wl,-z,now \
 # slim Python one: the suites look for leftover processes with pgrep and send a ClientHello with
 # openssl. pytest is what a Python exercise's tests run with; it and every package it pulls in are
 # pinned, so the weekly rebuild cannot change what a pruned base names without a pull request.
-FROM python:3.15-slim-trixie@sha256:8c13a3f37a6a5b71498228e902c4b9f51c1f7900d49fabf71f9a650c6120e0d0
+FROM python:3.15-slim-trixie@sha256:e97b88e416c3c01eb427b21fd8cd3ebf006e6ee38afcfcc3cae1c54ee2ab0a75
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
