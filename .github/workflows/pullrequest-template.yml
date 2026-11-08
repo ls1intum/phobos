@@ -10,10 +10,10 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: pullrequest-template-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
+# No `concurrency` group on purpose. `edited` is among the types above, so a push and a change
+# of the body, which a Renovate rebase makes together, can start overlapping runs, and
+# cancel-in-progress would cancel one. The commit's statusCheckRollup can then report FAILURE
+# beside the run that passed. The job is light and shares no state, so nothing needs serialising.
 jobs:
   pr-template:
     name: pr-template
